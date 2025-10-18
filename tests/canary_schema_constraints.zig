@@ -7,9 +7,9 @@ const protocol = @import("../src/protocol.zig");
 test "TestCANARY_REQ_GQL_032_ConstraintEnforce" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     // Define a node constraint expecting property 'name' as string (non-nullable)
@@ -25,7 +25,7 @@ test "TestCANARY_REQ_GQL_032_ConstraintEnforce" {
     try sc.addNodeConstraint("Person", node_constraints);
 
     // Build properties map missing 'name'
-    var props = std.StringHashMap(protocol.Value).init(ally);
+    var props = std.StringHashMap(protocol.Value).init(allocator);
     defer props.deinit();
 
     const err1 = try sc.validateNode(1, "Person", props);

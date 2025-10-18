@@ -10,11 +10,11 @@ test "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv" {
     defer std.process.unsetEnvVar("GEODE_ADAPTIVE_DIFF_MIN_RATIO") catch {};
 
     // Re-run a tiny portion of the benchmark logic (factored minimal) to validate threshold application.
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const total: usize = 5_000;
-    var base = try cdc_mod.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 512, .adaptive_flush = false, .flush_interval_ms = 10_000 });
+    var base = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 512, .adaptive_flush = false, .flush_interval_ms = 10_000 });
     defer base.deinit();
-    var adapt = try cdc_mod.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 512, .adaptive_flush = true, .adapt_window_events = 256, .flush_interval_ms = 10_000 });
+    var adapt = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 512, .adaptive_flush = true, .adapt_window_events = 256, .flush_interval_ms = 10_000 });
     defer adapt.deinit();
 
     var i: usize = 0;

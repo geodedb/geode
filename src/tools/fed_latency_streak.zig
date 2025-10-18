@@ -58,10 +58,10 @@ fn fieldString(field: []const u8, line: []const u8, buf: *[128]u8) ?[]const u8 {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     var file_path: ?[]const u8 = null;
-    var args = try std.process.argsWithAllocator(ally);
+    var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.next(); // skip exe name
     while (args.next()) |a| {
@@ -92,15 +92,15 @@ pub fn main() !void {
     };
 
     const min_streak: usize = blk: {
-        if (std.process.getEnvVarOwned(ally, "FED_STREAK_MIN")) |v| {
-            defer ally.free(v);
+        if (std.process.getEnvVarOwned(allocator, "FED_STREAK_MIN")) |v| {
+            defer allocator.free(v);
             if (std.fmt.parseInt(usize, v, 10)) |n| break :blk if (n == 0) 1 else n else |_| break :blk 3;
         } else |_| {}
         break :blk 3;
     };
 
-    var buf_line = try std.ArrayList(u8).initCapacity(ally, 1024);
-    defer buf_line.deinit(ally);
+    var buf_line = try std.ArrayList(u8).initCapacity(allocator, 1024);
+    defer buf_line.deinit(allocator);
 
     var current_streak: usize = 0;
     var longest_streak: usize = 0;
@@ -125,7 +125,7 @@ pub fn main() !void {
             if (n == 0) break; // EOF
             saw_any = true;
             if (byte[0] == '\n') break; // end of line
-            try buf_line.append(ally, byte[0]);
+            try buf_line.append(allocator, byte[0]);
         }
         if (!saw_any and buf_line.items.len == 0) break; // EOF with no pending data
         total += 1;
@@ -149,8 +149,8 @@ pub fn main() !void {
     if (current_streak >= min_streak) eligible = true;
 
     const want_txt = blkfmt: {
-        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_FORMAT")) |fmt| {
-            defer ally.free(fmt);
+        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
+            defer allocator.free(fmt);
             if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
         } else |_| {}
         break :blkfmt false;

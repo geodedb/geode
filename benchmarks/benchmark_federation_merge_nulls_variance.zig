@@ -27,23 +27,23 @@ pub fn benchmarkFederationNullMergeVarianceEnvelope() !void {
     const iterations = 48;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var samples = try ally.alloc(u64, iterations);
-    defer ally.free(samples);
+    const allocator = gpa.allocator();
+    var samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(samples);
     const order_keys = &[_][]const u8{"k"};
     var fm: federation.FederationManager = undefined;
     var it: usize = 0;
     while (it < iterations) : (it += 1) {
-        const local = fabricate(ally, 500 + (it % 7), 3, 4, order_keys); // 75% nulls
-        const r1 = fabricate(ally, 400 + (it % 5), 2, 3, order_keys); // ~66% nulls
+        const local = fabricate(allocator, 500 + (it % 7), 3, 4, order_keys); // 75% nulls
+        const r1 = fabricate(allocator, 400 + (it % 5), 2, 3, order_keys); // ~66% nulls
         var rem = [_]federation.QueryResults{r1};
         const start = std.time.nanoTimestamp();
-        const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
+        const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, allocator);
         const end = std.time.nanoTimestamp();
         samples[it] = @intCast(end - start);
-        ally.free(merged.rows);
-        ally.free(local.rows);
-        ally.free(r1.rows);
+        allocator.free(merged.rows);
+        allocator.free(local.rows);
+        allocator.free(r1.rows);
     }
     // stats
     var sum: u128 = 0;

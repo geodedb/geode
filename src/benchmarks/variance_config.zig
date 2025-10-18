@@ -30,44 +30,44 @@ pub const ThresholdSet = struct {
     min_mean: f128, // 0 when not enforced
 };
 
-fn envFloat(ally: std.mem.Allocator, name: []const u8, def: f128) f128 {
-    if (std.process.getEnvVarOwned(ally, name)) |val| {
-        defer ally.free(val);
+fn envFloat(allocator: std.mem.Allocator, name: []const u8, def: f128) f128 {
+    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+        defer allocator.free(val);
         return std.fmt.parseFloat(f128, val) catch def;
     } else |_| return def;
 }
 
-pub fn load(ally: std.mem.Allocator, prefix: []const u8, default_samples: usize, default_inner: usize, default_trim: usize) Config {
+pub fn load(allocator: std.mem.Allocator, prefix: []const u8, default_samples: usize, default_inner: usize, default_trim: usize) Config {
     // Build env variable names at runtime to avoid comptime concat requirement.
-    const samples_name = buildName(ally, prefix, "_SAMPLES") catch return .{ .samples = default_samples, .inner = default_inner, .json = false, .trim_edges = default_trim };
-    defer ally.free(samples_name);
-    const inner_name = buildName(ally, prefix, "_INNER") catch unreachable;
-    defer ally.free(inner_name);
-    const trim_name = buildName(ally, prefix, "_TRIM") catch unreachable;
-    defer ally.free(trim_name);
+    const samples_name = buildName(allocator, prefix, "_SAMPLES") catch return .{ .samples = default_samples, .inner = default_inner, .json = false, .trim_edges = default_trim };
+    defer allocator.free(samples_name);
+    const inner_name = buildName(allocator, prefix, "_INNER") catch unreachable;
+    defer allocator.free(inner_name);
+    const trim_name = buildName(allocator, prefix, "_TRIM") catch unreachable;
+    defer allocator.free(trim_name);
     return Config{
-        .samples = envInt(ally, samples_name, default_samples),
-        .inner = envInt(ally, inner_name, default_inner),
-        .json = envBool(ally, "GEODE_BENCH_JSON", false),
-        .trim_edges = envInt(ally, trim_name, default_trim),
-        .legacy_mode = envBool(ally, "GEODE_BENCH_LEGACY", false),
+        .samples = envInt(allocator, samples_name, default_samples),
+        .inner = envInt(allocator, inner_name, default_inner),
+        .json = envBool(allocator, "GEODE_BENCH_JSON", false),
+        .trim_edges = envInt(allocator, trim_name, default_trim),
+        .legacy_mode = envBool(allocator, "GEODE_BENCH_LEGACY", false),
     };
 }
 
-fn buildName(ally: std.mem.Allocator, a: []const u8, b: []const u8) ![]u8 {
-    return try std.fmt.allocPrint(ally, "{s}{s}", .{ a, b });
+fn buildName(allocator: std.mem.Allocator, a: []const u8, b: []const u8) ![]u8 {
+    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ a, b });
 }
 
-fn envInt(ally: std.mem.Allocator, name: []const u8, def: usize) usize {
-    if (std.process.getEnvVarOwned(ally, name)) |val| {
-        defer ally.free(val);
+fn envInt(allocator: std.mem.Allocator, name: []const u8, def: usize) usize {
+    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+        defer allocator.free(val);
         return std.fmt.parseInt(usize, val, 10) catch def;
     } else |_| return def;
 }
 
-fn envBool(ally: std.mem.Allocator, name: []const u8, def: bool) bool {
-    if (std.process.getEnvVarOwned(ally, name)) |val| {
-        defer ally.free(val);
+fn envBool(allocator: std.mem.Allocator, name: []const u8, def: bool) bool {
+    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+        defer allocator.free(val);
         return std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "on");
     } else |_| return def;
 }
@@ -114,11 +114,11 @@ fn emitString(s: []const u8) void {
     std.debug.print("\"", .{});
 }
 
-pub fn computeStatsF128(ally: std.mem.Allocator, data: []const f128) Stats {
+pub fn computeStatsF128(allocator: std.mem.Allocator, data: []const f128) Stats {
     if (data.len == 0) return .{ .mean = 0, .median = 0, .mad = 0, .p95 = 0, .cv = 0, .p95_ratio = 0, .min = 0, .max = 0, .len = 0 };
     // Copy & sort for order statistics
-    const tmp = ally.alloc(f128, data.len) catch @panic("OOM stats alloc");
-    defer ally.free(tmp);
+    const tmp = allocator.alloc(f128, data.len) catch @panic("OOM stats alloc");
+    defer allocator.free(tmp);
     @memcpy(tmp, data);
     std.sort.pdq(f128, tmp, {}, comptime std.sort.asc(f128));
     var sum: f128 = 0;
@@ -135,8 +135,8 @@ pub fn computeStatsF128(ally: std.mem.Allocator, data: []const f128) Stats {
     const mid = data.len / 2;
     const median: f128 = if ((data.len % 2) == 1) tmp[mid] else (tmp[mid - 1] + tmp[mid]) / 2.0;
     // MAD
-    const deviations = ally.alloc(f128, data.len) catch @panic("OOM mad alloc");
-    defer ally.free(deviations);
+    const deviations = allocator.alloc(f128, data.len) catch @panic("OOM mad alloc");
+    defer allocator.free(deviations);
     var i: usize = 0;
     while (i < data.len) : (i += 1) deviations[i] = if (data[i] > median) data[i] - median else median - data[i];
     std.sort.pdq(f128, deviations, {}, comptime std.sort.asc(f128));

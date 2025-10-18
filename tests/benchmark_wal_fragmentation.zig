@@ -4,7 +4,7 @@ const std = @import("std");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Synthetic counters: we simulate wal segments metadata modifications
     var dead: u64 = 0;
@@ -17,5 +17,5 @@ pub fn main() !void {
 
     const stdout = std.io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_028_WalFragmentation\",\"dead\":{d},\"live\":{d},\"ratio\":{d:.4}}\n", .{ dead, live, ratio });
-    _ = ally;
+    _ = allocator;
 }

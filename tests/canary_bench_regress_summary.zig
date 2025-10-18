@@ -16,7 +16,7 @@ fn writeTempFile(dir: std.fs.Dir, name: []const u8, content: []const u8) ![]cons
 test "TestCANARY_REQ_GQL_010_BenchRegressionJsonSummaryEndToEnd" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     var tmp_dir_path_buf: [256]u8 = undefined;
     const tmp_dir_path = try std.fmt.bufPrint(&tmp_dir_path_buf, "bench_regress_tmp_{d}", .{std.time.milliTimestamp()});
@@ -32,7 +32,7 @@ test "TestCANARY_REQ_GQL_010_BenchRegressionJsonSummaryEndToEnd" {
     _ = try writeTempFile(tmp, "base.jsonl", baseline_content);
     _ = try writeTempFile(tmp, "cur.jsonl", current_content);
 
-    var child = std.ChildProcess.init(&[_][]const u8{ "bench_regress", tmp_dir_path ++ "/base.jsonl", tmp_dir_path ++ "/cur.jsonl", "15" }, ally);
+    var child = std.ChildProcess.init(&[_][]const u8{ "bench_regress", tmp_dir_path ++ "/base.jsonl", tmp_dir_path ++ "/cur.jsonl", "15" }, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;

@@ -22,7 +22,7 @@ fn stats(allocator: std.mem.Allocator, values: []u64) struct { mean: f64, stddev
     return .{ .mean = mean, .stddev = stddev, .cv = if (mean == 0) 0 else stddev / mean, .p95 = p95 };
 }
 
-fn runPathMultiBranch(ally: std.mem.Allocator) !void {
+fn runPathMultiBranch(allocator: std.mem.Allocator) !void {
     // TODO(planner-cost-hooks): Replace synthetic BFS workload with real planner path multi-branch expansion timings
     // once NodeScan/Expand operators expose micro-timing hooks (planned under REQ-GQL-021 cost model integration).
     // Thresholds (can be overridden via env VARIANCE_CV_MAX / VARIANCE_P95_OVER_MEAN_MAX)
@@ -30,19 +30,19 @@ fn runPathMultiBranch(ally: std.mem.Allocator) !void {
     const default_ratio_max: f64 = 2.60;
     var cv_max = default_cv_max;
     var ratio_max = default_ratio_max;
-    if (std.process.getEnvVarOwned(ally, "VARIANCE_CV_MAX")) |val| {
-        defer ally.free(val);
+    if (std.process.getEnvVarOwned(allocator, "VARIANCE_CV_MAX")) |val| {
+        defer allocator.free(val);
         const parsed = std.fmt.parseFloat(f64, val) catch null;
         if (parsed) |p| cv_max = p;
     } else |_| {}
-    if (std.process.getEnvVarOwned(ally, "VARIANCE_P95_OVER_MEAN_MAX")) |val| {
-        defer ally.free(val);
+    if (std.process.getEnvVarOwned(allocator, "VARIANCE_P95_OVER_MEAN_MAX")) |val| {
+        defer allocator.free(val);
         const parsed2 = std.fmt.parseFloat(f64, val) catch null;
         if (parsed2) |p| ratio_max = p;
     } else |_| {}
     // Simple adjacency map using fixed arrays (node ids up to 11)
-    var neighbors = try ally.alloc([]const u64, 12);
-    defer ally.free(neighbors);
+    var neighbors = try allocator.alloc([]const u64, 12);
+    defer allocator.free(neighbors);
     // Define neighbor slices (static data)
     const n1 = [_]u64{ 2, 3, 4 };
     const n2 = [_]u64{ 5, 6, 7 }; // include cross 2->7
@@ -69,27 +69,27 @@ fn runPathMultiBranch(ally: std.mem.Allocator) !void {
     const starts = [_]u64{ 1, 9 };
     // Allow tuning via environment for stabilization experiments
     const warmup: usize = blk: {
-        if (std.process.getEnvVarOwned(ally, "VARIANCE_WARMUP")) |val| {
-            defer ally.free(val);
+        if (std.process.getEnvVarOwned(allocator, "VARIANCE_WARMUP")) |val| {
+            defer allocator.free(val);
             const parsed = std.fmt.parseInt(u32, val, 10) catch break :blk 5;
             break :blk @as(usize, @intCast(parsed));
         } else |_| {}
         break :blk 5;
     };
     const runs: usize = blk: {
-        if (std.process.getEnvVarOwned(ally, "VARIANCE_RUNS")) |val| {
-            defer ally.free(val);
+        if (std.process.getEnvVarOwned(allocator, "VARIANCE_RUNS")) |val| {
+            defer allocator.free(val);
             const parsed = std.fmt.parseInt(u32, val, 10) catch break :blk 60;
             break :blk @as(usize, @intCast(parsed));
         } else |_| {}
         break :blk 80; // includes warm-up; we record only post-warmup (bumped for stabilization)
     };
-    var timings = try ally.alloc(u64, runs);
-    defer ally.free(timings);
+    var timings = try allocator.alloc(u64, runs);
+    defer allocator.free(timings);
     // BFS queue struct
     const QItem = struct { node: u64, depth: u8 };
-    var queue = try ally.alloc(QItem, 1024);
-    defer ally.free(queue);
+    var queue = try allocator.alloc(QItem, 1024);
+    defer allocator.free(queue);
     var i: usize = 0;
     var record_index: usize = 0;
     while (i < runs) : (i += 1) {
@@ -124,7 +124,7 @@ fn runPathMultiBranch(ally: std.mem.Allocator) !void {
         }
     }
     var effective = timings[0..record_index];
-    var st = stats(ally, effective); // mutable shadow for adaptive refinement
+    var st = stats(allocator, effective); // mutable shadow for adaptive refinement
     // Extra stats for schema_version=2
     var min_ns: u64 = std.math.maxInt(u64);
     var max_ns: u64 = 0;
@@ -137,8 +137,8 @@ fn runPathMultiBranch(ally: std.mem.Allocator) !void {
     var pass = (st.cv <= cv_max) and (p95_over_mean <= ratio_max);
     // Optional adaptive stabilization: if CV too high and env VARIANCE_ADAPTIVE=on, perform extra batches (capped)
     if (!pass) {
-        if (std.process.getEnvVarOwned(ally, "VARIANCE_ADAPTIVE")) |val| {
-            defer ally.free(val);
+        if (std.process.getEnvVarOwned(allocator, "VARIANCE_ADAPTIVE")) |val| {
+            defer allocator.free(val);
             if (std.mem.eql(u8, val, "on")) {
                 var extra_batches: u8 = 0;
                 while (!pass and extra_batches < 5) : (extra_batches += 1) {
@@ -148,9 +148,9 @@ fn runPathMultiBranch(ally: std.mem.Allocator) !void {
                     if (new_total_needed > timings.len) {
                         // grow timings
                         const new_cap = timings.len + add_runs * 2;
-                        var new_buf = try ally.alloc(u64, new_cap);
+                        var new_buf = try allocator.alloc(u64, new_cap);
                         @memcpy(new_buf[0..record_index], timings[0..record_index]);
-                        ally.free(timings);
+                        allocator.free(timings);
                         timings = new_buf;
                     }
                     var j: usize = 0;
@@ -182,7 +182,7 @@ fn runPathMultiBranch(ally: std.mem.Allocator) !void {
                         record_index += 1;
                     }
                     effective = timings[0..record_index];
-                    st = stats(ally, effective);
+                    st = stats(allocator, effective);
                     p95_over_mean = if (st.mean == 0) 0 else @as(f64, @floatFromInt(st.p95)) / st.mean;
                     pass = (st.cv <= cv_max) and (p95_over_mean <= ratio_max);
                     // recalc min/max on each refinement iteration for final emission
@@ -299,7 +299,7 @@ fn lcg_step(s: *u64) u32 {
     return @intCast((s.* >> 32) & 0xffffffff);
 }
 
-fn runSyntheticRaftCommitVariance(ally: std.mem.Allocator) !void {
+fn runSyntheticRaftCommitVariance(allocator: std.mem.Allocator) !void {
     // Synthetic model: we simulate a leader appending entries and advancing commit index after quorum acks.
     // We model N followers with random (bounded) ack delays from a deterministic LCG.
     // TODO(raft-real): Swap synthetic quorum delay model with real raft.Partition commit advancement once
@@ -307,8 +307,8 @@ fn runSyntheticRaftCommitVariance(ally: std.mem.Allocator) !void {
     const followers: usize = 4; // quorum = 3 of 5 (leader + 4 followers)
     const iterations: usize = 200;
     const warmup: usize = 10;
-    var timings = try ally.alloc(u64, iterations - warmup);
-    defer ally.free(timings);
+    var timings = try allocator.alloc(u64, iterations - warmup);
+    defer allocator.free(timings);
     var record_index: usize = 0;
     var seed: u64 = 0x1234abcd_9876fedc;
     var i: usize = 0;
@@ -348,7 +348,7 @@ fn runSyntheticRaftCommitVariance(ally: std.mem.Allocator) !void {
         if (v > max_ns) max_ns = v;
     }
     if (effective.len == 0) min_ns = 0;
-    const st = stats(ally, effective);
+    const st = stats(allocator, effective);
     const p95_over_mean: f64 = if (st.mean == 0) 0 else @as(f64, @floatFromInt(st.p95)) / st.mean;
     const cv_max: f64 = 0.35; // looser for synthetic distribution
     const ratio_max: f64 = 3.0;
@@ -449,12 +449,12 @@ fn runSyntheticRaftCommitVariance(ally: std.mem.Allocator) !void {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     // Dummy usage to ensure geode root module isn't optimized as unused
-    var pr = try geode.parseGql("RETURN 1", ally);
+    var pr = try geode.parseGql("RETURN 1", allocator);
     pr.deinit();
-    try runPathMultiBranch(ally);
-    try runSyntheticRaftCommitVariance(ally);
+    try runPathMultiBranch(allocator);
+    try runSyntheticRaftCommitVariance(allocator);
     // Integrate ordered pagination variance envelope benchmark (CANARY: PaginationOrderedVarianceEnvelope)
     try geode.benchmarks.pagination.benchmarkPaginationOrderedVarianceEnvelope();
     // Integrate execution pagination variance envelope benchmark (CANARY: PaginationExecutionVarianceEnvelope)

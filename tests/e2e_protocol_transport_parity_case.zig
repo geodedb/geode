@@ -4,14 +4,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 const RunResult = struct { code: i32, out: []u8, err: []u8 };
 
 fn run(args: []const []const u8) !RunResult {
-    const ally = std.testing.allocator;
-    var child = Child.init(args, ally);
+    const allocator = std.testing.allocator;
+    var child = Child.init(args, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(ally, 1 << 20);
-    const err = try child.stderr.?.readToEndAlloc(ally, 1 << 20);
+    const out = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
+    const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
     const term = try child.wait();
     const code: i32 = switch (term) {
         .Exited => |st| st,
@@ -21,11 +21,11 @@ fn run(args: []const []const u8) !RunResult {
 }
 
 fn run_server(args: []const []const u8) !struct { child: Child } {
-    const ally = std.testing.allocator;
-    var env = try std.process.getEnvMap(ally);
+    const allocator = std.testing.allocator;
+    var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
-    var child = Child.init(args, ally);
+    var child = Child.init(args, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -51,9 +51,9 @@ fn extract_rows_array(out: []const u8) ![]const u8 {
 }
 
 // Normalize rows array by splitting row objects and lex-sorting them, to ignore order.
-fn normalize_rows(ally: std.mem.Allocator, rows_json: []const u8) ![]u8 {
+fn normalize_rows(allocator: std.mem.Allocator, rows_json: []const u8) ![]u8 {
     // rows_json is like: [ {"r":"n"},{"r":"t"},{"r":"f"} ]
-    var rows = std.ArrayList([]const u8).init(ally);
+    var rows = std.ArrayList([]const u8).init(allocator);
     defer rows.deinit();
     var i: usize = 0;
     if (rows_json.len < 2 or rows_json[0] != '[' or rows_json[rows_json.len - 1] != ']') return error.Malformed;
@@ -82,14 +82,14 @@ fn normalize_rows(ally: std.mem.Allocator, rows_json: []const u8) ![]u8 {
     }
     // sort lexicographically
     const slice = try rows.toOwnedSlice();
-    defer ally.free(slice);
+    defer allocator.free(slice);
     std.sort.block([]const u8, slice, {}, struct {
         fn lessThan(_: void, a: []const u8, b: []const u8) bool {
             return std.mem.lessThan(u8, a, b);
         }
     }.lessThan);
     // join with commas inside brackets
-    var out = std.ArrayList(u8).init(ally);
+    var out = std.ArrayList(u8).init(allocator);
     defer out.deinit();
     try out.append('[');
     for (slice, 0..) |obj, idx| {

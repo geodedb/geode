@@ -3,23 +3,23 @@ const std = @import("std");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var req_ids = std.StringHashMap(void).init(ally);
+    var req_ids = std.StringHashMap(void).init(allocator);
     defer req_ids.deinit();
 
     // Scan src/ and docs/ for tokens REQ-GQL-###
-    try scanDir(ally, "src", &req_ids);
-    try scanDir(ally, "docs", &req_ids);
+    try scanDir(allocator, "src", &req_ids);
+    try scanDir(allocator, "docs", &req_ids);
 
     // Parse GAP_ANALYSIS.md ledger lines retrieving IDs
     var file = try std.fs.cwd().openFile("docs/GAP_ANALYSIS.md", .{});
     defer file.close();
-    const data = try file.readToEndAlloc(ally, 2 * 1024 * 1024);
-    defer ally.free(data);
+    const data = try file.readToEndAlloc(allocator, 2 * 1024 * 1024);
+    defer allocator.free(data);
     var in_ledger = false;
     var it = std.mem.splitScalar(u8, data, '\n');
-    var ledger_ids = std.StringHashMap(void).init(ally);
+    var ledger_ids = std.StringHashMap(void).init(allocator);
     defer ledger_ids.deinit();
     while (it.next()) |line| {
         if (std.mem.startsWith(u8, line, "| REQ-GQL-")) {
@@ -38,18 +38,18 @@ pub fn main() !void {
         }
     }
 
-    var missing = std.ArrayList([]const u8).init(ally);
+    var missing = std.ArrayList([]const u8).init(allocator);
     defer missing.deinit();
-    var extra = std.ArrayList([]const u8).init(ally);
+    var extra = std.ArrayList([]const u8).init(allocator);
     defer extra.deinit();
 
     { // missing in ledger
         var it_ids = req_ids.keyIterator();
-        while (it_ids.next()) |k| if (ledger_ids.get(k.*) == null and isReqId(k.*)) try missing.append(ally, k.*);
+        while (it_ids.next()) |k| if (ledger_ids.get(k.*) == null and isReqId(k.*)) try missing.append(allocator, k.*);
     }
     { // extra in ledger not seen in source
         var it_leg = ledger_ids.keyIterator();
-        while (it_leg.next()) |k| if (req_ids.get(k.*) == null) try extra.append(ally, k.*);
+        while (it_leg.next()) |k| if (req_ids.get(k.*) == null) try extra.append(allocator, k.*);
     }
 
     std.sort.block([]const u8, missing.items, {}, struct {
@@ -86,7 +86,7 @@ fn isReqId(s: []const u8) bool {
     return true;
 }
 
-fn scanDir(ally: std.mem.Allocator, path: []const u8, map: *std.StringHashMap(void)) !void {
+fn scanDir(allocator: std.mem.Allocator, path: []const u8, map: *std.StringHashMap(void)) !void {
     var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
     defer dir.close();
     var it = dir.iterate();
@@ -95,8 +95,8 @@ fn scanDir(ally: std.mem.Allocator, path: []const u8, map: *std.StringHashMap(vo
             if (std.mem.endsWith(u8, e.name, ".zig") or std.mem.endsWith(u8, e.name, ".md")) {
                 var f = try dir.openFile(e.name, .{});
                 defer f.close();
-                const data = try f.readToEndAlloc(ally, 1 * 1024 * 1024);
-                defer ally.free(data);
+                const data = try f.readToEndAlloc(allocator, 1 * 1024 * 1024);
+                defer allocator.free(data);
                 var idx: usize = 0;
                 while (idx < data.len) : (idx += 1) {
                     if (data[idx] == 'R' and idx + 11 <= data.len) {
@@ -106,12 +106,12 @@ fn scanDir(ally: std.mem.Allocator, path: []const u8, map: *std.StringHashMap(vo
                 }
             }
         } else if (e.kind == .directory) {
-            var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-            defer buf.deinit(ally);
-            try buf.appendSlice(ally, path);
-            try buf.append(ally, '/');
-            try buf.appendSlice(ally, e.name);
-            try scanDir(ally, buf.items, map);
+            var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            defer buf.deinit(allocator);
+            try buf.appendSlice(allocator, path);
+            try buf.append(allocator, '/');
+            try buf.appendSlice(allocator, e.name);
+            try scanDir(allocator, buf.items, map);
         }
     }
 }

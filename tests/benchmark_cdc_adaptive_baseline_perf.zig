@@ -7,8 +7,8 @@ const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveBaselinePerf" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var engine = try cdc_mod.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 2048, .flush_interval_ms = 10_000, .adaptive_flush = false });
+    const allocator = gpa.allocator();
+    var engine = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 2048, .flush_interval_ms = 10_000, .adaptive_flush = false });
     defer engine.deinit();
 
     const total: usize = 40_000;

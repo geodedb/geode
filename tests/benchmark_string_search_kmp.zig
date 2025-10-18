@@ -13,17 +13,17 @@ fn rngNext(state: *u64) u64 {
 
 // CANARY benchmark referenced by KMP CANARY line
 test "BenchmarkCANARY_REQ_GQL_070_KMP" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var state: u64 = 0x9e3779b97f4a7c15;
     const H = 20000; // haystack length
-    var hay = try ally.alloc(u8, H);
-    defer ally.free(hay);
+    var hay = try allocator.alloc(u8, H);
+    defer allocator.free(hay);
     var i: usize = 0;
     while (i < H) : (i += 1) hay[i] = @intCast((rngNext(&state) % 26) + 'a');
 
     const pattern = "abaca"; // moderate pattern with internal overlap
-    const fail = try Kmp.buildFailure(ally, pattern);
-    defer ally.free(fail);
+    const fail = try Kmp.buildFailure(allocator, pattern);
+    defer allocator.free(fail);
 
     const iterations = 4000;
     var timer = try std.time.Timer.start();

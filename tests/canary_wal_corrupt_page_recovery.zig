@@ -10,10 +10,10 @@ const wal_mod = @import("wal");
 test "TestCANARY_REQ_GQL_028_CorruptPageRecovery" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Initialize in-memory WAL (assuming wal_mod.Wal supports init without filesystem; else skip)
-    var w = try wal_mod.Wal.init(ally, .{ .in_memory = true });
+    var w = try wal_mod.Wal.init(allocator, .{ .in_memory = true });
     defer w.deinit();
 
     // Append a few records
@@ -33,14 +33,14 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecovery" {
 
     // Trigger recovery path (simulate restart). We serialize and re-load using replayFromBytes if available.
     if (@hasDecl(wal_mod.Wal, "replayFromBytes")) {
-        var tmp_bytes = std.ArrayList(u8).init(ally);
+        var tmp_bytes = std.ArrayList(u8).init(allocator);
         defer tmp_bytes.deinit();
         // serialize simple linear format (header + records) if provided else skip
         if (@hasDecl(wal_mod.Wal, "serialize")) {
             try w.serialize(tmp_bytes.writer());
-            var w2 = try wal_mod.Wal.init(ally, .{ .in_memory = true });
+            var w2 = try wal_mod.Wal.init(allocator, .{ .in_memory = true });
             defer w2.deinit();
-            const res = wal_mod.Wal.replayFromBytes(ally, tmp_bytes.items);
+            const res = wal_mod.Wal.replayFromBytes(allocator, tmp_bytes.items);
             switch (res) {
                 error.CorruptRecord => {}, // acceptable tolerance
                 else => |maybe| {

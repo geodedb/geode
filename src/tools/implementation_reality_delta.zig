@@ -5,45 +5,45 @@ const std = @import("std");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    const args_list = try std.process.argsAlloc(ally);
-    defer std.process.argsFree(ally, args_list);
+    const args_list = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args_list);
 
     const status_path = if (args_list.len > 1) args_list[1] else "status.json";
     const out_path = if (args_list.len > 2) args_list[2] else "docs/IMPLEMENTATION_REALITY.md";
     const prev_path = if (args_list.len > 3) args_list[3] else "docs/.implementation_reality_prev.json";
 
-    const curr_json = try readFile(ally, status_path);
-    defer ally.free(curr_json);
+    const curr_json = try readFile(allocator, status_path);
+    defer allocator.free(curr_json);
     var prev_json: []u8 = &[_]u8{};
     var prev_exists = true;
     std.fs.cwd().access(prev_path, .{}) catch |err| switch (err) {
         error.FileNotFound => prev_exists = false,
         else => prev_exists = false,
     };
-    if (prev_exists) prev_json = try readFile(ally, prev_path);
-    defer if (prev_json.len > 0) ally.free(prev_json);
+    if (prev_exists) prev_json = try readFile(allocator, prev_path);
+    defer if (prev_json.len > 0) allocator.free(prev_json);
 
-    var curr = try std.json.parseFromSlice(std.json.Value, ally, curr_json, .{});
+    var curr = try std.json.parseFromSlice(std.json.Value, allocator, curr_json, .{});
     defer curr.deinit();
-    var prev = if (prev_exists) try std.json.parseFromSlice(std.json.Value, ally, prev_json, .{}) else undefined;
+    var prev = if (prev_exists) try std.json.parseFromSlice(std.json.Value, allocator, prev_json, .{}) else undefined;
     defer if (prev_exists) prev.deinit();
 
-    const curr_rows = try collectRows(&curr.value, ally);
-    defer ally.free(curr_rows);
-    const prev_rows = if (prev_exists) try collectRows(&prev.value, ally) else &[_]Row{};
+    const curr_rows = try collectRows(&curr.value, allocator);
+    defer allocator.free(curr_rows);
+    const prev_rows = if (prev_exists) try collectRows(&prev.value, allocator) else &[_]Row{};
     if (prev_exists) {
-        defer ally.free(prev_rows);
+        defer allocator.free(prev_rows);
     }
 
     const now_ts = std.time.timestamp();
     var added_idx = std.ArrayListUnmanaged(usize){};
-    defer if (added_idx.items.len > 0) added_idx.deinit(ally);
+    defer if (added_idx.items.len > 0) added_idx.deinit(allocator);
     var promo_idx = std.ArrayListUnmanaged(usize){};
-    defer if (promo_idx.items.len > 0) promo_idx.deinit(ally);
+    defer if (promo_idx.items.len > 0) promo_idx.deinit(allocator);
     var promo_prior = std.ArrayListUnmanaged([]const u8){};
-    defer if (promo_prior.items.len > 0) promo_prior.deinit(ally);
+    defer if (promo_prior.items.len > 0) promo_prior.deinit(allocator);
 
     for (curr_rows, 0..) |row, ci| {
         var prior_status: []const u8 = "";
@@ -56,10 +56,10 @@ pub fn main() !void {
             }
         }
         if (prior_status.len == 0) {
-            try added_idx.append(ally, ci);
+            try added_idx.append(allocator, ci);
         } else if (!std.mem.eql(u8, prior_status, row.status)) {
-            try promo_idx.append(ally, ci);
-            try promo_prior.append(ally, prior_status);
+            try promo_idx.append(allocator, ci);
+            try promo_prior.append(allocator, prior_status);
         }
     }
 
@@ -67,27 +67,27 @@ pub fn main() !void {
     var out_file = try std.fs.cwd().createFile(out_path, .{ .read = true, .truncate = false, .mode = 0o666 });
     defer out_file.close();
     try out_file.seekFromEnd(0);
-    const line = try std.fmt.allocPrint(ally, "\n\n## Delta {d}\nAdded: {d}\n", .{ now_ts, added_idx.items.len });
-    defer ally.free(line);
+    const line = try std.fmt.allocPrint(allocator, "\n\n## Delta {d}\nAdded: {d}\n", .{ now_ts, added_idx.items.len });
+    defer allocator.free(line);
     try out_file.writeAll(line);
     if (added_idx.items.len > 0) {
         for (added_idx.items) |ai| {
             const r = curr_rows[ai];
-            const key_line = try std.fmt.allocPrint(ally, "+ {s}/{s}/{s}\n", .{ r.id, r.feature, r.aspect });
-            defer ally.free(key_line);
+            const key_line = try std.fmt.allocPrint(allocator, "+ {s}/{s}/{s}\n", .{ r.id, r.feature, r.aspect });
+            defer allocator.free(key_line);
             try out_file.writeAll(key_line);
         }
     }
-    const promo_hdr = try std.fmt.allocPrint(ally, "Promotions: {d}\n", .{promo_idx.items.len});
-    defer ally.free(promo_hdr);
+    const promo_hdr = try std.fmt.allocPrint(allocator, "Promotions: {d}\n", .{promo_idx.items.len});
+    defer allocator.free(promo_hdr);
     try out_file.writeAll(promo_hdr);
     if (promo_idx.items.len > 0) {
         var i: usize = 0;
         while (i < promo_idx.items.len) : (i += 1) {
             const r = curr_rows[promo_idx.items[i]];
             const prior = promo_prior.items[i];
-            const l2 = try std.fmt.allocPrint(ally, "* {s}/{s}/{s}:{s}->{s}\n", .{ r.id, r.feature, r.aspect, prior, r.status });
-            defer ally.free(l2);
+            const l2 = try std.fmt.allocPrint(allocator, "* {s}/{s}/{s}:{s}->{s}\n", .{ r.id, r.feature, r.aspect, prior, r.status });
+            defer allocator.free(l2);
             try out_file.writeAll(l2);
         }
     }
@@ -99,15 +99,15 @@ pub fn main() !void {
     var first = true;
     for (curr_rows) |r| {
         if (!first) try prev_file.writeAll(",\n") else first = false;
-        const line_json = try std.fmt.allocPrint(ally, "    {{ \"key\": \"{s}/{s}/{s}\", \"status\": \"{s}\" }}", .{ r.id, r.feature, r.aspect, r.status });
-        defer ally.free(line_json);
+        const line_json = try std.fmt.allocPrint(allocator, "    {{ \"key\": \"{s}/{s}/{s}\", \"status\": \"{s}\" }}", .{ r.id, r.feature, r.aspect, r.status });
+        defer allocator.free(line_json);
         try prev_file.writeAll(line_json);
     }
     try prev_file.writeAll("\n  ]\n}\n");
 }
 
-fn readFile(ally: std.mem.Allocator, path: []const u8) ![]u8 {
-    const data = try std.fs.cwd().readFileAlloc(ally, path, 10_000_000);
+fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const data = try std.fs.cwd().readFileAlloc(allocator, path, 10_000_000);
     return data;
 }
 

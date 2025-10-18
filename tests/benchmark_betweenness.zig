@@ -3,8 +3,8 @@ const geode = @import("geode");
 const builders = geode.graph.builders;
 const betw = geode.graph.betweenness;
 
-fn buildGrid(ally: std.mem.Allocator, rows: u32, cols: u32) !builders.Graph {
-    var g = builders.Graph.init(ally);
+fn buildGrid(allocator: std.mem.Allocator, rows: u32, cols: u32) !builders.Graph {
+    var g = builders.Graph.init(allocator);
     var r: u32 = 0;
     while (r < rows) : (r += 1) {
         var c: u32 = 0;

@@ -12,19 +12,19 @@ test "page_manager encryption: write/read persists encrypted and decrypts on loa
     defer tmp.cleanup();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    const base = try tmp.dir.realpathAlloc(ally, ".");
-    defer ally.free(base);
+    const allocator = gpa.allocator();
+    const base = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(base);
 
-    var pm = pm_mod.PageManager.initPersistent(ally, 512, base);
+    var pm = pm_mod.PageManager.initPersistent(allocator, 512, base);
     defer pm.deinit();
     const r = try pm.insert("secret");
     try pm.flushPage(r.page);
 
     // Raw on disk should not equal plaintext "secret" sequence
     const dir = std.fs.cwd();
-    const path = try std.fmt.allocPrint(ally, "{s}/page_{d}.bin", .{ base, r.page });
-    defer ally.free(path);
+    const path = try std.fmt.allocPrint(allocator, "{s}/page_{d}.bin", .{ base, r.page });
+    defer allocator.free(path);
     var f = try dir.openFile(path, .{ .mode = .read_only });
     defer f.close();
     var buf: [512]u8 = undefined;
@@ -32,7 +32,7 @@ test "page_manager encryption: write/read persists encrypted and decrypts on loa
     try std.testing.expect(!std.mem.indexOf(u8, &buf, "secret").?);
 
     // Load via API (which decrypts) and verify content
-    var pm2 = pm_mod.PageManager.initPersistent(ally, 512, base);
+    var pm2 = pm_mod.PageManager.initPersistent(allocator, 512, base);
     defer pm2.deinit();
     try pm2.loadPage(base, 0);
     try std.testing.expectEqualStrings("secret", try pm2.read(r));

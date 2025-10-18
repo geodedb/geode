@@ -6,12 +6,12 @@ const streaming = @import("streaming");
 test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     if (!@hasDecl(streaming, "cdc_enhanced")) return; // guard if module name differs
     const cdc = @import("streaming/cdc_enhanced.zig");
 
-    var engine = try cdc.CdcEngine.init(ally, .{ .adaptive_backpressure = true, .pending_backpressure_watermark = 8_000 });
+    var engine = try cdc.CdcEngine.init(allocator, .{ .adaptive_backpressure = true, .pending_backpressure_watermark = 8_000 });
     defer engine.deinit();
 
     // Simulate bursts of events to trigger watermark shrink/grow

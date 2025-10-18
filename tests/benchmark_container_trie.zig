@@ -29,8 +29,8 @@ fn makeKey(buf: *[16]u8, x: u64) []const u8 {
 
 // CANARY benchmark referenced by Trie CANARY line
 test "BenchmarkCANARY_REQ_GQL_068_Trie" {
-    const ally = std.testing.allocator;
-    var trie = try T.init(ally);
+    const allocator = std.testing.allocator;
+    var trie = try T.init(allocator);
     defer trie.deinit();
 
     var state: u64 = 0x1234_5678_9abc_def0;
@@ -57,11 +57,11 @@ test "BenchmarkCANARY_REQ_GQL_068_Trie" {
         const k = makeKey(&key_buf, r);
         const prefix = if (k.len >= 2) k[0..2] else k;
         const t0 = timer.read();
-        const coll = try trie.collectPrefix(ally, prefix);
+        const coll = try trie.collectPrefix(allocator, prefix);
         const t1 = timer.read();
         query_time_ns += (t1 - t0);
-        for (coll) |s| ally.free(s);
-        ally.free(coll);
+        for (coll) |s| allocator.free(s);
+        allocator.free(coll);
     }
 
     const avg_insert_ns = insert_time_ns / N;

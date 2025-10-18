@@ -22,20 +22,20 @@ const Governance = struct {
     failures: usize = 0,
 };
 
-fn readFileAlloc(ally: std.mem.Allocator, path: []const u8) ![]u8 {
+fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
     const stat = try file.stat();
-    var buf = try ally.alloc(u8, @intCast(stat.size));
+    var buf = try allocator.alloc(u8, @intCast(stat.size));
     const n = try file.readAll(buf);
     return buf[0..n];
 }
 
-fn lastLines(ally: std.mem.Allocator, path: []const u8, tail: usize) ![][]const u8 {
+fn lastLines(allocator: std.mem.Allocator, path: []const u8, tail: usize) ![][]const u8 {
     var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
     const stat = try file.stat();
-    var buf = try ally.alloc(u8, @intCast(stat.size));
+    var buf = try allocator.alloc(u8, @intCast(stat.size));
     const n = try file.readAll(buf);
     var count: usize = 0;
     var i: usize = 0;
@@ -44,7 +44,7 @@ fn lastLines(ally: std.mem.Allocator, path: []const u8, tail: usize) ![][]const 
     }
     if (i > 0 and buf[i - 1] != '\n') count += 1;
     const want = if (count <= tail) count else tail;
-    var result = try ally.alloc([]const u8, want);
+    var result = try allocator.alloc([]const u8, want);
     // second pass collecting last tail lines
     var start: usize = 0;
     var produced: usize = 0;
@@ -67,8 +67,8 @@ fn lastLines(ally: std.mem.Allocator, path: []const u8, tail: usize) ![][]const 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
-    const ally = gpa.allocator();
-    var args = try std.process.argsWithAllocator(ally);
+    const allocator = gpa.allocator();
+    var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.next();
     var aggregate_path: ?[]const u8 = null;
@@ -93,8 +93,8 @@ pub fn main() !void {
 
     var gov = Governance{};
     // Parse aggregate line with string search (no JSON DOM dependency)
-    const agg_bytes = try readFileAlloc(ally, aggregate_path.?);
-    defer ally.free(agg_bytes);
+    const agg_bytes = try readFileAlloc(allocator, aggregate_path.?);
+    defer allocator.free(agg_bytes);
     const agg_line = std.mem.trim(u8, agg_bytes, " \r\n\t");
     if (std.mem.indexOf(u8, agg_line, "\"promotion_ready\":true")) |_| {
         gov.readiness = true;
@@ -121,8 +121,8 @@ pub fn main() !void {
     }
 
     if (streak_path) |sp| {
-        const streak_bytes = try readFileAlloc(ally, sp);
-        defer ally.free(streak_bytes);
+        const streak_bytes = try readFileAlloc(allocator, sp);
+        defer allocator.free(streak_bytes);
         if (std.mem.indexOf(u8, streak_bytes, "\"current_ok_streak\":")) |idx| {
             const slice = streak_bytes[idx + 21 ..];
             gov.streak = @intFromFloat(parseFloatPrefix(slice) catch 0);
@@ -130,7 +130,7 @@ pub fn main() !void {
     }
 
     if (archive_path) |ap| {
-        const lines = lastLines(ally, ap, tail) catch null;
+        const lines = lastLines(allocator, ap, tail) catch null;
         if (lines) |ls| {
             var missing: usize = 0;
             for (ls) |line| {
@@ -141,8 +141,8 @@ pub fn main() !void {
     }
 
     const want_txt = blkfmt: {
-        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_FORMAT")) |fmt| {
-            defer ally.free(fmt);
+        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
+            defer allocator.free(fmt);
             if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
         } else |_| {}
         break :blkfmt false;

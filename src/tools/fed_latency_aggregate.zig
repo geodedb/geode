@@ -55,10 +55,10 @@ fn quartiles(sorted: []const f128) struct { q1: f128, q3: f128 } {
     return .{ .q1 = q1, .q3 = q3 };
 }
 
-fn mad(sorted: []const f128, median_val: f128, ally: std.mem.Allocator) f128 {
+fn mad(sorted: []const f128, median_val: f128, allocator: std.mem.Allocator) f128 {
     if (sorted.len == 0) return 0;
-    var deviations = ally.alloc(f128, sorted.len) catch return 0;
-    defer ally.free(deviations);
+    var deviations = allocator.alloc(f128, sorted.len) catch return 0;
+    defer allocator.free(deviations);
     var i: usize = 0;
     while (i < sorted.len) : (i += 1) {
         const d = sorted[i] - median_val;
@@ -122,18 +122,18 @@ fn parseRun(json: []const u8) RunMetrics {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     const runs: usize = blk: {
-        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_AGG_RUNS")) |v| {
-            defer ally.free(v);
+        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_AGG_RUNS")) |v| {
+            defer allocator.free(v);
             if (std.fmt.parseInt(usize, v, 10)) |parsed| break :blk if (parsed == 0) 1 else parsed else |_| break :blk 5;
         } else |_| {}
         break :blk 5;
     };
 
-    const bench_path_owned = std.process.getEnvVarOwned(ally, "FED_LATENCY_BENCH_PATH") catch null;
-    defer if (bench_path_owned) |p| ally.free(p);
+    const bench_path_owned = std.process.getEnvVarOwned(allocator, "FED_LATENCY_BENCH_PATH") catch null;
+    defer if (bench_path_owned) |p| allocator.free(p);
     const bench_path: []const u8 = bench_path_owned orelse "zig-out/bin/bench_federation_mismatch_latency";
 
     // Accumulators
@@ -148,17 +148,17 @@ pub fn main() !void {
     var all_promotion = true;
 
     // Collect per-run values for median calculations (optional future stats can reuse these vectors)
-    var cvs = try ally.alloc(f128, runs);
-    defer ally.free(cvs);
-    var p95s = try ally.alloc(f128, runs);
-    defer ally.free(p95s);
-    var trim_cvs = try ally.alloc(f128, runs);
-    defer ally.free(trim_cvs);
-    var outlier_rs = try ally.alloc(f128, runs);
-    defer ally.free(outlier_rs);
+    var cvs = try allocator.alloc(f128, runs);
+    defer allocator.free(cvs);
+    var p95s = try allocator.alloc(f128, runs);
+    defer allocator.free(p95s);
+    var trim_cvs = try allocator.alloc(f128, runs);
+    defer allocator.free(trim_cvs);
+    var outlier_rs = try allocator.alloc(f128, runs);
+    defer allocator.free(outlier_rs);
 
-    const verbose_env = std.process.getEnvVarOwned(ally, "FED_LATENCY_VERBOSE") catch null;
-    defer if (verbose_env) |v| ally.free(v);
+    const verbose_env = std.process.getEnvVarOwned(allocator, "FED_LATENCY_VERBOSE") catch null;
+    defer if (verbose_env) |v| allocator.free(v);
     const verbose = verbose_env != null;
     var verbose_storage: [4096]u8 = undefined;
     var verbose_fbs = std.io.fixedBufferStream(&verbose_storage);
@@ -166,7 +166,7 @@ pub fn main() !void {
     var aggregate_fail_mask: u32 = 0;
     var run_index: usize = 0;
     while (run_index < runs) : (run_index += 1) {
-        var proc = std.process.Child.init(&[_][]const u8{bench_path}, ally);
+        var proc = std.process.Child.init(&[_][]const u8{bench_path}, allocator);
         // Inherit environment (so FED_LATENCY_STABILIZE just propagates if exported by caller).
         proc.stdout_behavior = .Pipe;
         proc.stderr_behavior = .Pipe;
@@ -238,17 +238,17 @@ pub fn main() !void {
     const avg_outlier_ratio = if (runs > 0) total_outlier_ratio / runs_f else 0;
 
     // Compute medians using copies so original order (for verbose runs_detail indices) remains intuitive.
-    const cvs_copy = try ally.alloc(f128, runs);
-    defer ally.free(cvs_copy);
+    const cvs_copy = try allocator.alloc(f128, runs);
+    defer allocator.free(cvs_copy);
     std.mem.copyForwards(f128, cvs_copy, cvs);
-    const p95s_copy = try ally.alloc(f128, runs);
-    defer ally.free(p95s_copy);
+    const p95s_copy = try allocator.alloc(f128, runs);
+    defer allocator.free(p95s_copy);
     std.mem.copyForwards(f128, p95s_copy, p95s);
-    const trim_cvs_copy = try ally.alloc(f128, runs);
-    defer ally.free(trim_cvs_copy);
+    const trim_cvs_copy = try allocator.alloc(f128, runs);
+    defer allocator.free(trim_cvs_copy);
     std.mem.copyForwards(f128, trim_cvs_copy, trim_cvs);
-    const outlier_rs_copy = try ally.alloc(f128, runs);
-    defer ally.free(outlier_rs_copy);
+    const outlier_rs_copy = try allocator.alloc(f128, runs);
+    defer allocator.free(outlier_rs_copy);
     std.mem.copyForwards(f128, outlier_rs_copy, outlier_rs);
 
     const median_cv = median(cvs_copy);
@@ -261,14 +261,14 @@ pub fn main() !void {
     std.sort.block(f128, cvs_copy, {}, comptime std.sort.asc(f128));
     const qs = quartiles(cvs_copy);
     const cv_iqr = qs.q3 - qs.q1;
-    const cv_mad = mad(cvs_copy, median_cv, ally);
+    const cv_mad = mad(cvs_copy, median_cv, allocator);
 
     var buf: [2048]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const w = fbs.writer();
     const want_txt = blk_format: {
-        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_FORMAT")) |fmt| {
-            defer ally.free(fmt);
+        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
+            defer allocator.free(fmt);
             if (std.mem.eql(u8, fmt, "txt")) break :blk_format true;
         } else |_| {}
         break :blk_format false;
@@ -326,8 +326,8 @@ pub fn main() !void {
             std.fs.File{ .handle = std.posix.STDOUT_FILENO };
         try stdout.writeAll(out_txt);
         if (!all_promotion) {
-            if (std.process.getEnvVarOwned(ally, "FED_LATENCY_AGG_REQUIRE")) |v| {
-                defer ally.free(v);
+            if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_AGG_REQUIRE")) |v| {
+                defer allocator.free(v);
                 if (v.len > 0 and v[0] == '1') return error.AggregatePromotionNotReady;
             } else |_| {}
         }
@@ -393,12 +393,12 @@ pub fn main() !void {
     try stdout2.writeAll(line_out);
 
     // Optional archival append & rotation.
-    if (std.process.getEnvVarOwned(ally, "FED_LATENCY_ARCHIVE_PATH") catch null) |ap| {
-        defer ally.free(ap);
+    if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_ARCHIVE_PATH") catch null) |ap| {
+        defer allocator.free(ap);
         var need_rotate = false;
         var max_lines: usize = 1000;
-        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_ARCHIVE_MAX_LINES") catch null) |ml| {
-            defer ally.free(ml);
+        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_ARCHIVE_MAX_LINES") catch null) |ml| {
+            defer allocator.free(ml);
             if (std.fmt.parseInt(usize, ml, 10)) |parsed| {
                 if (parsed > 0) max_lines = parsed;
             } else |_| {}
@@ -450,8 +450,8 @@ pub fn main() !void {
     }
 
     if (!all_promotion) {
-        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_AGG_REQUIRE")) |v| {
-            defer ally.free(v);
+        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_AGG_REQUIRE")) |v| {
+            defer allocator.free(v);
             if (v.len > 0 and v[0] == '1') return error.AggregatePromotionNotReady;
         } else |_| {}
     }

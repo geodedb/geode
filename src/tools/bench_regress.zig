@@ -14,9 +14,9 @@ pub const Metric = struct {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    const args = try std.process.argsAlloc(ally);
-    defer std.process.argsFree(ally, args);
+    const allocator = gpa.allocator();
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
     if (args.len < 3) {
         std.log.err("usage: bench_regress <baseline.jsonl> <current.jsonl> [tolerance_pct=15] [--write-baseline <out.jsonl>] [--force]", .{});
         return error.InvalidArgs;
@@ -48,15 +48,15 @@ pub fn main() !void {
         }
     }
 
-    var baseline_map = try loadFile(ally, baseline_path);
-    defer freeMetricMap(ally, &baseline_map);
-    var current_map = try loadFile(ally, current_path);
-    defer freeMetricMap(ally, &current_map);
+    var baseline_map = try loadFile(allocator, baseline_path);
+    defer freeMetricMap(allocator, &baseline_map);
+    var current_map = try loadFile(allocator, current_path);
+    defer freeMetricMap(allocator, &current_map);
 
     var failures: usize = 0;
     var total_compared: usize = 0;
-    var regression_list = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer regression_list.deinit(ally);
+    var regression_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer regression_list.deinit(allocator);
     var it = baseline_map.iterator();
     while (it.next()) |entry| {
         const kind = entry.key_ptr.*;
@@ -71,8 +71,8 @@ pub fn main() !void {
                     total_compared += 1;
                     if (!withinTolerance(base_val, cur_val, tolerance_pct)) {
                         failures += 1;
-                        const msg = try std.fmt.allocPrint(ally, "{s}:{s}", .{ kind, metric_name });
-                        try regression_list.append(ally, msg);
+                        const msg = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ kind, metric_name });
+                        try regression_list.append(allocator, msg);
                         std.log.err("REGRESSION kind={s} metric={s} baseline={d} current={d} tol_pct={d:.2}", .{ kind, metric_name, base_val, cur_val, tolerance_pct });
                     }
                 }
@@ -98,13 +98,13 @@ pub fn main() !void {
 }
 
 /// Exposed helper for test to exercise writeBaseline path deterministically without CLI args
-pub fn testWriteBaseline(ally: std.mem.Allocator, out_path: []const u8) !void {
+pub fn testWriteBaseline(allocator: std.mem.Allocator, out_path: []const u8) !void {
     // create minimal metric map with single kind and metric
-    var m = MetricMap.init(ally);
-    defer freeMetricMap(ally, &m);
-    var inner = std.StringHashMap(u64).init(ally);
-    try inner.put(try allyDup(ally, "elapsed_ns"), 1234);
-    try m.put(try allyDup(ally, "KIND1"), inner);
+    var m = MetricMap.init(allocator);
+    defer freeMetricMap(allocator, &m);
+    var inner = std.StringHashMap(u64).init(allocator);
+    try inner.put(try allyDup(allocator, "elapsed_ns"), 1234);
+    try m.put(try allyDup(allocator, "KIND1"), inner);
     try writeBaseline(out_path, &m);
 }
 
@@ -117,35 +117,35 @@ fn withinTolerance(base: u64, cur: u64, tol_pct: f64) bool {
 
 const MetricMap = std.StringHashMap(std.StringHashMap(u64)); // kind -> (metric -> value)
 
-fn loadFile(ally: std.mem.Allocator, path: []const u8) !MetricMap {
-    var map = MetricMap.init(ally);
+fn loadFile(allocator: std.mem.Allocator, path: []const u8) !MetricMap {
+    var map = MetricMap.init(allocator);
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
     const stat = try file.stat();
     const cap = @min(stat.size, 10_000_000); // 10MB safety
-    var buf = try ally.alloc(u8, cap);
-    defer ally.free(buf);
+    var buf = try allocator.alloc(u8, cap);
+    defer allocator.free(buf);
     const read_len = try file.readAll(buf);
     var slice = buf[0..read_len];
     while (slice.len > 0) {
         const nl_idx = std.mem.indexOfScalar(u8, slice, '\n') orelse slice.len;
         const line = slice[0..nl_idx];
         if (line.len > 0) {
-            parseLine(ally, line, &map) catch {};
+            parseLine(allocator, line, &map) catch {};
         }
         if (nl_idx == slice.len) break;
         slice = slice[nl_idx + 1 ..];
     }
     return map;
 }
-fn parseLine(ally: std.mem.Allocator, line: []const u8, map: *MetricMap) !void {
+fn parseLine(allocator: std.mem.Allocator, line: []const u8, map: *MetricMap) !void {
     // naive scan: extract kind string and any top-level numeric fields (u64)
     const kind_key = "\"kind\":\"";
     const kind_pos = std.mem.indexOfPos(u8, line, 0, kind_key) orelse return error.Skip;
     const kind_start = kind_pos + kind_key.len;
     const end_quote = std.mem.indexOfScalarPos(u8, line, kind_start, '"') orelse return error.Skip;
     const kind = line[kind_start..end_quote];
-    var metrics = std.StringHashMap(u64).init(ally);
+    var metrics = std.StringHashMap(u64).init(allocator);
     // scan for pattern "<name>":<number>
     var scan_index: usize = 0;
     while (scan_index < line.len) : (scan_index += 1) {
@@ -165,30 +165,30 @@ fn parseLine(ally: std.mem.Allocator, line: []const u8, map: *MetricMap) !void {
                 if (std.fmt.parseInt(u64, num_slice, 10)) |val| {
                     // skip kind itself (string) and timestamp-like big ints only if name not recognized? we keep all numeric
                     if (!std.mem.eql(u8, name, "ts_ms")) { // exclude timestamp from regression comparison
-                        try metrics.put(try allyDup(ally, name), val);
+                        try metrics.put(try allyDup(allocator, name), val);
                     }
                 } else |_| {}
                 scan_index = k;
             }
         }
     }
-    try map.put(try allyDup(ally, kind), metrics);
+    try map.put(try allyDup(allocator, kind), metrics);
 }
 
-fn allyDup(ally: std.mem.Allocator, s: []const u8) ![]u8 {
-    return ally.dupe(u8, s);
+fn allyDup(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+    return allocator.dupe(u8, s);
 }
 
-fn freeMetricMap(ally: std.mem.Allocator, map: *MetricMap) void {
+fn freeMetricMap(allocator: std.mem.Allocator, map: *MetricMap) void {
     var it = map.iterator();
     while (it.next()) |entry| {
         // free nested metrics map
         var inner_it = entry.value_ptr.*.iterator();
         while (inner_it.next()) |m_entry| {
-            ally.free(m_entry.key_ptr.*);
+            allocator.free(m_entry.key_ptr.*);
         }
         entry.value_ptr.*.deinit();
-        ally.free(entry.key_ptr.*);
+        allocator.free(entry.key_ptr.*);
     }
     map.deinit();
 }
@@ -201,9 +201,9 @@ fn writeBaseline(path: []const u8, map: *MetricMap) !void {
         const metrics = entry.value_ptr.*;
         var line_buf: [2048]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&line_buf);
-        const ally = fba.allocator();
-        var arr = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-        const w = arr.writer(ally);
+        const allocator = fba.allocator();
+        var arr = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        const w = arr.writer(allocator);
         try std.fmt.format(w, "{{\"kind\":\"{s}\"", .{entry.key_ptr.*});
         var m_it = metrics.iterator();
         while (m_it.next()) |m_entry| {
@@ -222,31 +222,31 @@ fn emitSummary(paths: *const struct { baseline_path: []const u8, current_path: [
         std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     var buf: [4096]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
-    const ally = fba.allocator();
-    var arr = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
+    const allocator = fba.allocator();
+    var arr = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
     const tol_int: u64 = @intFromFloat(tol_pct + 0.5);
     // Build JSON manually to avoid format brace escaping issues.
-    try arr.appendSlice(ally, "{\"type\":\"bench_regress_summary\",");
-    try arr.appendSlice(ally, "\"baseline\":\"");
-    try arr.appendSlice(ally, paths.baseline_path);
-    try arr.appendSlice(ally, "\",\"current\":\"");
-    try arr.appendSlice(ally, paths.current_path);
-    try arr.appendSlice(ally, "\",\"tolerance_pct\":");
-    try appendInt(ally, &arr, tol_int);
-    try arr.appendSlice(ally, ",\"compared\":");
-    try appendInt(ally, &arr, total);
-    try arr.appendSlice(ally, ",\"regressions\":");
-    try appendInt(ally, &arr, failures);
-    try arr.appendSlice(ally, ",\"regression_keys\":[");
+    try arr.appendSlice(allocator, "{\"type\":\"bench_regress_summary\",");
+    try arr.appendSlice(allocator, "\"baseline\":\"");
+    try arr.appendSlice(allocator, paths.baseline_path);
+    try arr.appendSlice(allocator, "\",\"current\":\"");
+    try arr.appendSlice(allocator, paths.current_path);
+    try arr.appendSlice(allocator, "\",\"tolerance_pct\":");
+    try appendInt(allocator, &arr, tol_int);
+    try arr.appendSlice(allocator, ",\"compared\":");
+    try appendInt(allocator, &arr, total);
+    try arr.appendSlice(allocator, ",\"regressions\":");
+    try appendInt(allocator, &arr, failures);
+    try arr.appendSlice(allocator, ",\"regression_keys\":[");
     for (regressions, 0..) |key, idx| {
-        if (idx > 0) try arr.appendSlice(ally, ",");
-        try arr.appendSlice(ally, "\"");
-        try arr.appendSlice(ally, key);
-        try arr.appendSlice(ally, "\"");
+        if (idx > 0) try arr.appendSlice(allocator, ",");
+        try arr.appendSlice(allocator, "\"");
+        try arr.appendSlice(allocator, key);
+        try arr.appendSlice(allocator, "\"");
     }
-    try arr.appendSlice(ally, "],\"ts_ms\":");
-    try appendInt(ally, &arr, ts);
-    try arr.appendSlice(ally, "}\n");
+    try arr.appendSlice(allocator, "],\"ts_ms\":");
+    try appendInt(allocator, &arr, ts);
+    try arr.appendSlice(allocator, "}\n");
     try stdout_file.writeAll(arr.items);
 }
 
@@ -255,10 +255,10 @@ fn writeAll(w: anytype, data: []const u8) !void {
     _ = data;
 }
 
-fn appendInt(ally: std.mem.Allocator, list: *std.ArrayList(u8), value: anytype) !void {
+fn appendInt(allocator: std.mem.Allocator, list: *std.ArrayList(u8), value: anytype) !void {
     var tmp: [32]u8 = undefined;
     const written = try std.fmt.bufPrint(&tmp, "{d}", .{value});
-    try list.appendSlice(ally, written);
+    try list.appendSlice(allocator, written);
 }
 
 test "TestCANARY_REQ_GQL_010_BenchRegressionCompare" {
@@ -271,19 +271,19 @@ test "TestCANARY_REQ_GQL_010_BenchRegressionJsonSummary" {
     // Build small in-memory metric maps and emit summary
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var baseline = MetricMap.init(ally);
-    defer freeMetricMap(ally, &baseline);
-    var cur = MetricMap.init(ally);
-    defer freeMetricMap(ally, &cur);
-    var inner_b = std.StringHashMap(u64).init(ally);
-    try inner_b.put(try allyDup(ally, "elapsed_ns"), 1000);
-    try baseline.put(try allyDup(ally, "K1"), inner_b);
-    var inner_c = std.StringHashMap(u64).init(ally);
-    try inner_c.put(try allyDup(ally, "elapsed_ns"), 1090);
-    try cur.put(try allyDup(ally, "K1"), inner_c);
-    var regressions = std.ArrayList([]const u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer regressions.deinit(ally);
+    const allocator = gpa.allocator();
+    var baseline = MetricMap.init(allocator);
+    defer freeMetricMap(allocator, &baseline);
+    var cur = MetricMap.init(allocator);
+    defer freeMetricMap(allocator, &cur);
+    var inner_b = std.StringHashMap(u64).init(allocator);
+    try inner_b.put(try allyDup(allocator, "elapsed_ns"), 1000);
+    try baseline.put(try allyDup(allocator, "K1"), inner_b);
+    var inner_c = std.StringHashMap(u64).init(allocator);
+    try inner_c.put(try allyDup(allocator, "elapsed_ns"), 1090);
+    try cur.put(try allyDup(allocator, "K1"), inner_c);
+    var regressions = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer regressions.deinit(allocator);
     // Should be within tolerance 15%
     // call emitSummary to ensure JSON summary path works
     try emitSummary(&.{ .baseline_path = "b", .current_path = "c" }, 15.0, 0, 1, regressions.items);

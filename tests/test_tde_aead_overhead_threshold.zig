@@ -5,18 +5,18 @@ const keyprov = @import("../src/security/key_provider.zig");
 // CANARY: REQ=REQ-GQL-TDE-OVERHEAD-THRESH-001; FEATURE="TDE AEAD overhead threshold"; ASPECT=PERF; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_OVERHEAD_THRESH_001; OWNER=security; UPDATED=2025-09-26
 // Ensures AES-256-GCM page encryption overhead remains within 5% of memcpy baseline for small representative sample.
 
-fn measureRatio(ally: std.mem.Allocator) !f64 {
+fn measureRatio(allocator: std.mem.Allocator) !f64 {
     var provider = keyprov.Provider.init(.MockKms);
-    const km_opt = try provider.fetch(ally);
+    const km_opt = try provider.fetch(allocator);
     if (km_opt == null) return error.MissingKeyMaterial;
     const data_key = km_opt.?.data_key;
 
     const page_count: usize = 512; // smaller for test speed
     const page_size: usize = 4096;
-    var plain = try ally.alloc(u8, page_count * page_size);
-    defer ally.free(plain);
-    var enc = try ally.alloc(u8, page_count * page_size);
-    defer ally.free(enc);
+    var plain = try allocator.alloc(u8, page_count * page_size);
+    defer allocator.free(plain);
+    var enc = try allocator.alloc(u8, page_count * page_size);
+    defer allocator.free(enc);
 
     var prng = std.rand.DefaultPrng.init(0xFEED_CAFE_D00D_BEEF);
     prng.random().bytes(plain);

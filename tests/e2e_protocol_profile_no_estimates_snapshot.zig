@@ -15,8 +15,8 @@ fn run(args: []const []const u8) ![]u8 {
 }
 
 // Use shared normalization (not strictly needed here but keeps consistency if extended later)
-fn signature(ally: std.mem.Allocator, line: []const u8) ![]u8 {
-    return util.normalizeNumbers(ally, line);
+fn signature(allocator: std.mem.Allocator, line: []const u8) ![]u8 {
+    return util.normalizeNumbers(allocator, line);
 }
 
 // Snapshot ensures removing estimates does not alter other structural aspects

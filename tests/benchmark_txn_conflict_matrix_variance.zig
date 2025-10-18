@@ -7,8 +7,8 @@ const txn = @import("txn");
 // measure stability of conflict detection timings. It records multiple runs and enforces a
 // coefficient of variation (CV) guard along with p95 < 3x mean invariant.
 
-fn simulateConflicts(ally: std.mem.Allocator, writers: usize, iters: usize) !u64 {
-    var manager = try txn.Manager.init(ally, .{});
+fn simulateConflicts(allocator: std.mem.Allocator, writers: usize, iters: usize) !u64 {
+    var manager = try txn.Manager.init(allocator, .{});
     defer manager.deinit();
     var i: usize = 0;
     const start = std.time.nanoTimestamp();

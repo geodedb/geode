@@ -29,12 +29,12 @@ fn stats(values: []i128) struct { mean: f64, stddev: f64, cv: f64, p95: i128 } {
 test "BenchmarkCANARY_REQ_GQL_012_HashAggSpillVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const runs = 36;
-    var build = try ally.alloc(i128, runs);
-    defer ally.free(build);
-    var emit = try ally.alloc(i128, runs);
-    defer ally.free(emit);
+    var build = try allocator.alloc(i128, runs);
+    defer allocator.free(build);
+    var emit = try allocator.alloc(i128, runs);
+    defer allocator.free(emit);
 
     // Query: GROUP BY g RETURN SUM(a)
     const g = ast.Expr{ .Ident = "g" };
@@ -46,7 +46,7 @@ test "BenchmarkCANARY_REQ_GQL_012_HashAggSpillVarianceEnvelope" {
     const names = &.{ "a", "g" };
 
     // Build large dataset to exceed memory limit of HashAggregator quickly.
-    var data = std.ArrayList([]const exec.BindingValue).init(ally);
+    var data = std.ArrayList([]const exec.BindingValue).init(allocator);
     defer data.deinit();
     var gi: usize = 0;
     while (gi < 4000) : (gi += 1) { // many groups to pressure memory
@@ -59,15 +59,15 @@ test "BenchmarkCANARY_REQ_GQL_012_HashAggSpillVarianceEnvelope" {
     var run: usize = 0;
     while (run < runs) : (run += 1) {
         // Convert BindingValue rows to eval.Value rows for runGroupedQuery input (needs raw eval.Value matrix)
-        var eval_rows = std.ArrayList([]const eval.Value).init(ally);
+        var eval_rows = std.ArrayList([]const eval.Value).init(allocator);
         defer eval_rows.deinit();
         for (data.items) |r| {
             const v = [_]eval.Value{ .{ .Int = r[0].Int }, if (r[1] == .Str) .{ .Str = r[1].Str } else .{ .Str = "?" } };
             try eval_rows.append(v[0..]);
         }
         var timings: exec.AggStageTimings = .{};
-        const out = try exec.runGroupedQuery(ally, q, names, eval_rows.items, &.{}, &.{}, &timings);
-        defer ally.free(out);
+        const out = try exec.runGroupedQuery(allocator, q, names, eval_rows.items, &.{}, &.{}, &timings);
+        defer allocator.free(out);
         build[run] = timings.build_ns;
         emit[run] = timings.emit_ns;
     }

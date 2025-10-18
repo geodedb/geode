@@ -6,15 +6,15 @@ const planner = @import("../src/planner.zig");
 test "TestCANARY_REQ_GQL_016_PathExpandBfs" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var adj = planner.AdjacencyList.init(ally);
-    defer adj.deinit(ally);
-    try adj.addEdge(1, 2, 10, ally);
-    try adj.addEdge(2, 3, 20, ally);
+    const allocator = gpa.allocator();
+    var adj = planner.AdjacencyList.init(allocator);
+    defer adj.deinit(allocator);
+    try adj.addEdge(1, 2, 10, allocator);
+    try adj.addEdge(2, 3, 20, allocator);
 
     const pe = planner.PathExpand{ .min_hops = 1, .max_hops = 2 };
-    const results = try pe.execute(&[_]u64{1}, &adj, ally);
-    defer ally.free(results);
+    const results = try pe.execute(&[_]u64{1}, &adj, allocator);
+    defer allocator.free(results);
     // We expect at least one path of length 1 (1->2) and one path length 2 (1->3)
     var got_len1 = false;
     var got_len2 = false;

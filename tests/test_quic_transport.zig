@@ -9,13 +9,13 @@ const repl_dispatch = geode.repl.repl_dispatch;
 // CANARY: REQ=REQ-REPL-QUIC-003; FEATURE="REPL QUIC Transport Tests"; ASPECT=UnitTests; STATUS=IMPL; TEST=test_transport_interface; OWNER=repl; UPDATED=2025-10-05
 
 test "transport interface - mock transport connectivity" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test the mock transport implementation
     const transport = &repl_dispatch.mock_transport;
 
     // Test connection creation
-    var connection = transport.connect(ally, "127.0.0.1:3141") catch |err| {
+    var connection = transport.connect(allocator, "127.0.0.1:3141") catch |err| {
         std.debug.print("Failed to create mock connection: {s}\n", .{@errorName(err)});
         return err;
     };
@@ -24,18 +24,18 @@ test "transport interface - mock transport connectivity" {
     // Test basic operations
     try connection.writeAll("test message");
 
-    const response = try connection.readLine(ally, 1024);
-    defer ally.free(response);
+    const response = try connection.readLine(allocator, 1024);
+    defer allocator.free(response);
 
     // Mock should return a JSON response
     try testing.expect(std.mem.indexOf(u8, response, "MOCK_RESPONSE") != null);
 }
 
 test "transport interface - client session with mock transport" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test ClientSession with mock transport
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     // Test connection
@@ -51,10 +51,10 @@ test "transport interface - client session with mock transport" {
 }
 
 test "transport interface - error handling" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test error handling with uninitialized session
-    var session = try repl_dispatch.ClientSession.init(ally, "invalid:address", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "invalid:address", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     // Test operations before connection should fail
@@ -114,7 +114,7 @@ test "address parsing - invalid addresses" {
 }
 
 test "json escaping - repl dispatch" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test JSON escaping similar to what's used in repl_dispatch
     const test_cases = [_]struct {
@@ -129,8 +129,8 @@ test "json escaping - repl dispatch" {
 
     for (test_cases) |case| {
         // Create a simple message similar to repl_dispatch
-        const msg = try std.fmt.allocPrint(ally, "{{\"type\":\"TEST\",\"text\":\"{s}\"}}", .{case.input});
-        defer ally.free(msg);
+        const msg = try std.fmt.allocPrint(allocator, "{{\"type\":\"TEST\",\"text\":\"{s}\"}}", .{case.input});
+        defer allocator.free(msg);
 
         // If input has special characters, the output should contain escaped versions
         if (!std.mem.eql(u8, case.input, case.expected_contains)) {
@@ -140,10 +140,10 @@ test "json escaping - repl dispatch" {
 }
 
 test "transport interface - connection lifecycle" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test complete connection lifecycle
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     // Test initial state
@@ -174,10 +174,10 @@ test "transport interface - connection lifecycle" {
 }
 
 test "transport interface - comprehensive error scenarios" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test operations on unconnected session
-    var session = try repl_dispatch.ClientSession.init(ally, "invalid:1234", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "invalid:1234", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     // These should fail before connection
@@ -214,7 +214,7 @@ test "address parsing - comprehensive edge cases" {
 }
 
 test "protocol messages - comprehensive validation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test all protocol messages used by REPL
     const test_messages = [_]struct {
@@ -230,7 +230,7 @@ test "protocol messages - comprehensive validation" {
     };
 
     for (test_messages) |test_case| {
-        const parsed = try std.json.parseFromSlice(std.json.Value, ally, test_case.msg, .{});
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, test_case.msg, .{});
         defer parsed.deinit();
 
         const root = parsed.value.object;

@@ -20,12 +20,12 @@ fn makeQuery(pattern_variant: usize) planner_root.ast.Query {
 pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    const cfg = varcfg.load(ally, "GEODE_PATHCACHE", 128, 8, 2); // increase trim edges to 2 for stability
+    const allocator = gpa.allocator();
+    const cfg = varcfg.load(allocator, "GEODE_PATHCACHE", 128, 8, 2); // increase trim edges to 2 for stability
     const total_variants = cfg.samples;
     const repetitions_per_variant = cfg.inner;
-    var per_variant_means = try ally.alloc(f128, total_variants);
-    defer ally.free(per_variant_means);
+    var per_variant_means = try allocator.alloc(f128, total_variants);
+    defer allocator.free(per_variant_means);
     var v: usize = 0;
     while (v < total_variants) : (v += 1) {
         var r: usize = 0;
@@ -33,14 +33,14 @@ pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
         const q = makeQuery(v);
         while (r < repetitions_per_variant) : (r += 1) {
             const t0 = std.time.nanoTimestamp();
-            const key = structural_key.deriveStructuralKey(ally, q) catch break; // ignore failures (OOM would throw)
+            const key = structural_key.deriveStructuralKey(allocator, q) catch break; // ignore failures (OOM would throw)
             var acc_db: usize = 0;
             var idx2: usize = 0;
             while (idx2 + 1 < key.len) : (idx2 += 1) {
                 if (key[idx2] == 'D' and key[idx2 + 1] == 'B') acc_db +%= 1;
             }
             if (acc_db == 0xFFFF) std.mem.doNotOptimizeAway(&acc_db);
-            ally.free(key);
+            allocator.free(key);
             const t1 = std.time.nanoTimestamp();
             inner_sum += @as(f128, @floatFromInt(t1 - t0));
         }
@@ -64,8 +64,8 @@ pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
             const q2 = makeQuery(v2);
             while (r2 < adaptive_inner) : (r2 += 1) {
                 const t0b = std.time.nanoTimestamp();
-                const key2 = structural_key.deriveStructuralKey(ally, q2) catch continue;
-                ally.free(key2);
+                const key2 = structural_key.deriveStructuralKey(allocator, q2) catch continue;
+                allocator.free(key2);
                 const t1b = std.time.nanoTimestamp();
                 inner_sum2 += @as(f128, @floatFromInt(t1b - t0b));
             }

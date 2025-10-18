@@ -6,14 +6,14 @@ const std = @import("std");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const cwd = std.fs.cwd();
     // Create a temp data dir
-    const tmpdir_name = try std.fmt.allocPrint(ally, "spilltest-{d}", .{std.time.milliTimestamp()});
-    defer ally.free(tmpdir_name);
+    const tmpdir_name = try std.fmt.allocPrint(allocator, "spilltest-{d}", .{std.time.milliTimestamp()});
+    defer allocator.free(tmpdir_name);
     try cwd.makeDir(tmpdir_name);
     // Spawn server process with env override
-    var arena = std.heap.ArenaAllocator.init(ally);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var env_map = std.process.getEnvMap(arena.allocator()) catch unreachable;
     try env_map.put("GEODE_SPILL_THRESHOLD_BYTES", "1024"); // very low
@@ -33,7 +33,7 @@ pub fn main() !void {
     }
     // Read some output lines until we observe totals or timeout
     var buf: [8192]u8 = undefined;
-    var out_acc = std.ArrayList(u8).init(ally);
+    var out_acc = std.ArrayList(u8).init(allocator);
     defer out_acc.deinit();
     const deadline = std.time.nanoTimestamp() + 5_000_000_000; // 5s
     while (true) {

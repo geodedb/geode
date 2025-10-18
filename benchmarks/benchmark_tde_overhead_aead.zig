@@ -10,20 +10,20 @@ const keyprov = @import("src/security/key_provider.zig");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Acquire key material
     var provider = keyprov.Provider.init(.MockKms);
-    const km_opt = try provider.fetch(ally);
+    const km_opt = try provider.fetch(allocator);
     if (km_opt == null) return error.MissingKeyMaterial;
     const data_key = km_opt.?.data_key;
 
     const page_count: usize = 4096; // fewer pages than synthetic to keep runtime modest
     const page_size: usize = 4096;
-    var plain = try ally.alloc(u8, page_count * page_size);
-    defer ally.free(plain);
-    var enc = try ally.alloc(u8, page_count * page_size);
-    defer ally.free(enc);
+    var plain = try allocator.alloc(u8, page_count * page_size);
+    defer allocator.free(plain);
+    var enc = try allocator.alloc(u8, page_count * page_size);
+    defer allocator.free(enc);
 
     var prng = std.rand.DefaultPrng.init(0xA0B1_C2D3_E4F5_1234);
     prng.random().bytes(plain);
@@ -59,7 +59,7 @@ pub fn main() !void {
     const ratio = if (baseline_ns == 0) 0.0 else @as(f64, @floatFromInt(enc_ns)) / @as(f64, @floatFromInt(baseline_ns));
 
     var stdout = std.io.getStdOut().writer();
-    try stdout.print("{s}\n", .{try std.json.stringifyAlloc(ally, .{
+    try stdout.print("{s}\n", .{try std.json.stringifyAlloc(allocator, .{
         .bench = "TDE_AEAD_Overhead",
         .pages = page_count,
         .page_bytes = page_size,

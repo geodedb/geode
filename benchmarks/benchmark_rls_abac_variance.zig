@@ -14,8 +14,8 @@ const rls_tests = @import("tests/canary_rls_abac.zig");
 
 const Policy = rls_tests.Policy;
 
-fn buildPolicies(ally: std.mem.Allocator) ![]Policy {
-    var pols = try ally.alloc(Policy, 2);
+fn buildPolicies(allocator: std.mem.Allocator) ![]Policy {
+    var pols = try allocator.alloc(Policy, 2);
     pols[0] = .{ .id = "p1", .expr = "label=Person;attr=region:eu" };
     pols[1] = .{ .id = "p2", .expr = "label=Account;attr=tier:gold" };
     return pols;
@@ -30,8 +30,8 @@ fn enforce(policies: []const Policy, label: []const u8, attr: []const u8) bool {
 
 const Metrics = struct { iterations: usize, mean_ns: f128, p95_ns: u64, p999_ns: u64, cv: f128, trim_cv: f128, p95_mean_ratio: f128, p999_mean_ratio: f128 };
 
-fn sample(ally: std.mem.Allocator, policies: []const Policy, iterations: usize) ![]u64 {
-    var times = try ally.alloc(u64, iterations);
+fn sample(allocator: std.mem.Allocator, policies: []const Policy, iterations: usize) ![]u64 {
+    var times = try allocator.alloc(u64, iterations);
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         const label = if (i % 2 == 0) "Person" else "Account";
@@ -97,12 +97,12 @@ fn computeMetrics(samples: []u64) Metrics {
 pub fn runRlsAbacVariance() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
-    const ally = gpa.allocator();
-    const policies = try buildPolicies(ally);
-    defer ally.free(policies);
+    const allocator = gpa.allocator();
+    const policies = try buildPolicies(allocator);
+    defer allocator.free(policies);
     const iterations: usize = 4000;
-    const samples = try sample(ally, policies, iterations);
-    defer ally.free(samples);
+    const samples = try sample(allocator, policies, iterations);
+    defer allocator.free(samples);
     const m = computeMetrics(samples);
     var buf: [512]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);

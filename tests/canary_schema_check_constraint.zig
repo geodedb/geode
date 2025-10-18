@@ -7,9 +7,9 @@ const protocol = @import("../src/protocol.zig");
 test "TestCANARY_REQ_GQL_032_CheckConstraint" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const check_ok = constraints_mod.SchemaConstraints.CheckConstraint{ .name = "country_us", .expression = "country=US", .error_message = "country must be US" };
@@ -23,7 +23,7 @@ test "TestCANARY_REQ_GQL_032_CheckConstraint" {
     };
     try sc.addNodeConstraint("User", node_constraints);
 
-    var props = std.StringHashMap(protocol.Value).init(ally);
+    var props = std.StringHashMap(protocol.Value).init(allocator);
     defer props.deinit();
     try props.put("country", .{ .String = "US" });
     try props.put("role", .{ .String = "admin" });

@@ -6,9 +6,9 @@ const txn = @import("../src/txn/manager.zig");
 test "TestCANARY_REQ_GQL_013_TxnCommit" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     var mgr: txn.Manager = undefined;
-    mgr.init(ally);
+    mgr.init(allocator);
     defer mgr.deinit();
 
     var t = mgr.begin();

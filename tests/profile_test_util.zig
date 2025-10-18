@@ -8,13 +8,13 @@ pub fn findProfileLine(out: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn normalizeNumbers(ally: std.mem.Allocator, line: []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(ally, line.len) catch return error.OutOfMemory;
+pub fn normalizeNumbers(allocator: std.mem.Allocator, line: []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, line.len) catch return error.OutOfMemory;
     var i: usize = 0;
     while (i < line.len) : (i += 1) {
         const c = line[i];
         if (c >= '0' and c <= '9') {
-            if (buf.items.len == 0 or buf.items[buf.items.len - 1] != '0') buf.append(ally, '0') catch return error.OutOfMemory;
+            if (buf.items.len == 0 or buf.items[buf.items.len - 1] != '0') buf.append(allocator, '0') catch return error.OutOfMemory;
             var j = i + 1;
             while (j < line.len and ((line[j] >= '0' and line[j] <= '9') or line[j] == '.')) : (j += 1) {}
             i = j - 1;
@@ -25,15 +25,15 @@ pub fn normalizeNumbers(ally: std.mem.Allocator, line: []const u8) ![]u8 {
             else => buf.appendAssumeCapacity(c),
         }
     }
-    return buf.toOwnedSlice(ally) catch error.OutOfMemory;
+    return buf.toOwnedSlice(allocator) catch error.OutOfMemory;
 }
 
 /// Produce a concise diff string between two normalized signature strings.
 /// Strategy: find first differing index; capture up to 48 chars of context
 /// around that index for both expected and actual so failures are actionable
 /// without dumping full gigantic JSON lines.
-pub fn signatureDiff(ally: std.mem.Allocator, expected: []const u8, actual: []const u8) ![]u8 {
-    if (std.mem.eql(u8, expected, actual)) return ally.dupe(u8, "<no-diff>") catch return error.OutOfMemory;
+pub fn signatureDiff(allocator: std.mem.Allocator, expected: []const u8, actual: []const u8) ![]u8 {
+    if (std.mem.eql(u8, expected, actual)) return allocator.dupe(u8, "<no-diff>") catch return error.OutOfMemory;
     var i: usize = 0;
     const min_len = @min(expected.len, actual.len);
     while (i < min_len and expected[i] == actual[i]) : (i += 1) {}
@@ -41,8 +41,8 @@ pub fn signatureDiff(ally: std.mem.Allocator, expected: []const u8, actual: []co
     const ctx_before: usize = if (diff_index > 16) diff_index - 16 else 0;
     const ctx_after_e: usize = @min(expected.len, diff_index + 32);
     const ctx_after_a: usize = @min(actual.len, diff_index + 32);
-    var out = std.ArrayList(u8).initCapacity(ally, 256) catch return error.OutOfMemory;
-    const w = out.writer(ally);
+    var out = std.ArrayList(u8).initCapacity(allocator, 256) catch return error.OutOfMemory;
+    const w = out.writer(allocator);
     w.print("diff_at={d}\nexpected_ctx=", .{diff_index}) catch {};
     w.writeAll(expected[ctx_before..ctx_after_e]) catch {};
     w.writeAll("\nactual_ctx=") catch {};
@@ -50,7 +50,7 @@ pub fn signatureDiff(ally: std.mem.Allocator, expected: []const u8, actual: []co
     if (expected.len != actual.len) {
         w.print("\nlen_expected={d} len_actual={d}", .{ expected.len, actual.len }) catch {};
     }
-    return out.toOwnedSlice(ally) catch error.OutOfMemory;
+    return out.toOwnedSlice(allocator) catch error.OutOfMemory;
 }
 
 // Extract a substring representing the planner_estimates JSON object (without trailing commas)
@@ -99,21 +99,21 @@ pub fn sliceMemory(profile_line: []const u8) ?[]const u8 {
 }
 
 // Unified CLI runner for tests (geodec). Accepts argv slice, returns stdout or error if exit!=0
-pub fn runCli(ally: std.mem.Allocator, args: []const []const u8) ![]u8 {
-    var child = std.process.Child.init(args, ally);
+pub fn runCli(allocator: std.mem.Allocator, args: []const []const u8) ![]u8 {
+    var child = std.process.Child.init(args, allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(ally, 1 << 21);
-    _ = try child.stderr.?.readToEndAlloc(ally, 1 << 19); // drain
+    const out = try child.stdout.?.readToEndAlloc(allocator, 1 << 21);
+    _ = try child.stderr.?.readToEndAlloc(allocator, 1 << 19); // drain
     const term = try child.wait();
     if (term != .Exited or term.Exited != 0) return error.NonZeroExit;
     return out;
 }
 
 // Parse op order from PROFILE line (returns slice of string slices owned by arena allocator)
-pub fn parseOpNames(ally: std.mem.Allocator, profile_line: []const u8) ![][]const u8 {
-    var parsed = try std.json.parseFromSlice(std.json.Value, ally, profile_line, .{});
+pub fn parseOpNames(allocator: std.mem.Allocator, profile_line: []const u8) ![][]const u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, profile_line, .{});
     defer parsed.deinit();
     const root = parsed.value.object;
     const result_val = root.get("result") orelse return error.MissingResult;
@@ -124,14 +124,14 @@ pub fn parseOpNames(ally: std.mem.Allocator, profile_line: []const u8) ![][]cons
     const ops_val = prof_obj.get("ops") orelse return error.MissingOps;
     if (ops_val.* != .array) return error.BadOps;
     const ops_arr = ops_val.array.items;
-    var list = std.ArrayList([]const u8).init(ally);
+    var list = std.ArrayList([]const u8).init(allocator);
     for (ops_arr) |opv| {
         if (opv != .object) return error.OpNotObject;
         const o = opv.object;
         const name_val = o.get("op") orelse return error.MissingOpName;
         if (name_val.* != .string) return error.OpNameNotString;
         // copy name into arena to ensure stable
-        const dup = try ally.dupe(u8, name_val.string);
+        const dup = try allocator.dupe(u8, name_val.string);
         try list.append(dup);
     }
     return try list.toOwnedSlice();

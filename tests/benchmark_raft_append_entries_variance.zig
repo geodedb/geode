@@ -26,10 +26,10 @@ fn stats(times: []u64) struct { mean: f64, p95: u64, cv: f64 } {
     return .{ .mean = mean64, .p95 = buf[idx95], .cv = cv };
 }
 
-fn makeNode(ally: std.mem.Allocator, id: u64, peers: []const u64) !*raft.RaftNode {
-    var builder = raft.RaftBuilder.init(ally, .{});
+fn makeNode(allocator: std.mem.Allocator, id: u64, peers: []const u64) !*raft.RaftNode {
+    var builder = raft.RaftBuilder.init(allocator, .{});
     defer builder.deinit();
-    var p = try ally.alloc(raft.PeerConfig, peers.len);
+    var p = try allocator.alloc(raft.PeerConfig, peers.len);
     for (peers, 0..) |pid, i| p[i] = .{ .id = pid, .address = "" };
     return try builder.buildNode(id, p);
 }
@@ -37,16 +37,16 @@ fn makeNode(ally: std.mem.Allocator, id: u64, peers: []const u64) !*raft.RaftNod
 test "BenchmarkCANARY_REQ_GQL_070_AppendEntriesVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    const leader = try makeNode(ally, 1, &.{2});
+    const allocator = gpa.allocator();
+    const leader = try makeNode(allocator, 1, &.{2});
     defer leader.deinit();
-    const follower = try makeNode(ally, 2, &.{1});
+    const follower = try makeNode(allocator, 2, &.{1});
     defer follower.deinit();
     leader.state = .leader;
     leader.current_term = 7;
 
-    var times = try ally.alloc(u64, Iter);
-    defer ally.free(times);
+    var times = try allocator.alloc(u64, Iter);
+    defer allocator.free(times);
     var i: usize = 0;
     while (i < Iter) : (i += 1) {
         const entry = raft.LogEntry{ .term = 7, .index = i + 1, .command = "cmd" };

@@ -5,10 +5,10 @@ const std = @import("std");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 
 fn run_quic() !struct { code: i32, out: []u8, err: []u8 } {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     // Start server in QUIC mode
-    var srv = Child.init(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567", "--test-exit-after-first-request" }, ally);
+    var srv = Child.init(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567", "--test-exit-after-first-request" }, allocator);
     srv.stdin_behavior = .Inherit;
     srv.stdout_behavior = .Inherit;
     srv.stderr_behavior = .Inherit;
@@ -20,14 +20,14 @@ fn run_quic() !struct { code: i32, out: []u8, err: []u8 } {
     while (i < 10_000_000) : (i += 1) {}
 
     // Client uses QUIC by default
-    var cli = Child.init(&.{ "./zig-out/bin/geodec", "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", "127.0.0.1:7567" }, ally);
+    var cli = Child.init(&.{ "./zig-out/bin/geodec", "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", "127.0.0.1:7567" }, allocator);
     cli.stdin_behavior = .Ignore;
     cli.stdout_behavior = .Pipe;
     cli.stderr_behavior = .Pipe;
     try cli.spawn();
 
-    const out = try cli.stdout.?.readToEndAlloc(ally, 1 << 20);
-    const err = try cli.stderr.?.readToEndAlloc(ally, 1 << 20);
+    const out = try cli.stdout.?.readToEndAlloc(allocator, 1 << 20);
+    const err = try cli.stderr.?.readToEndAlloc(allocator, 1 << 20);
     const term = try cli.wait();
     const code: i32 = switch (term) {
         .Exited => |st| st,

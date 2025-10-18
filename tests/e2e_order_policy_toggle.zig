@@ -2,8 +2,8 @@ const std = @import("std");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 
 fn run(args: []const []const u8, gql: []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    const ally = std.testing.allocator;
-    var child = Child.init(args, ally);
+    const allocator = std.testing.allocator;
+    var child = Child.init(args, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -11,7 +11,7 @@ fn run(args: []const []const u8, gql: []const u8) !struct { code: i32, out: []u8
 
     // HELLO
     try child.stdin.?.writeAll("{\"type\":\"HELLO\",\"client_name\":\"test\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}\n");
-    _ = try child.stdout.?.readToEndAlloc(ally, 1 << 20);
+    _ = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
 
     // RUN_GQL
     try child.stdin.?.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
@@ -19,8 +19,8 @@ fn run(args: []const []const u8, gql: []const u8) !struct { code: i32, out: []u8
     try child.stdin.?.writeAll("\"}\n");
 
     // Read first response (SCHEMA or ERROR)
-    const resp = try child.stdout.?.readToEndAlloc(ally, 1 << 20);
-    defer ally.free(resp);
+    const resp = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
+    defer allocator.free(resp);
 
     child.stdin.?.close();
     child.stdout.?.close();
@@ -29,7 +29,7 @@ fn run(args: []const []const u8, gql: []const u8) !struct { code: i32, out: []u8
         .Exited => |st| st,
         else => 2,
     };
-    return .{ .code = code, .out = resp, .err = try ally.dupe(u8, "") };
+    return .{ .code = code, .out = resp, .err = try allocator.dupe(u8, "") };
 }
 
 test "ORDER policy: expr forbidden by default" {

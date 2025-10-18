@@ -7,9 +7,9 @@ const protocol = @import("../src/protocol.zig");
 test "TestCANARY_REQ_GQL_032_UniqueEnforce" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const node_constraints = constraints_mod.SchemaConstraints.NodeConstraints{
@@ -21,14 +21,14 @@ test "TestCANARY_REQ_GQL_032_UniqueEnforce" {
     try sc.addNodeConstraint("User", node_constraints);
 
     // First user OK
-    var props1 = std.StringHashMap(protocol.Value).init(ally);
+    var props1 = std.StringHashMap(protocol.Value).init(allocator);
     defer props1.deinit();
     try props1.put("username", .{ .String = "alice" });
     const e1 = try sc.validateNode(1, "User", props1);
     try std.testing.expect(e1 == null);
 
     // Second user with same username should violate uniqueness
-    var props2 = std.StringHashMap(protocol.Value).init(ally);
+    var props2 = std.StringHashMap(protocol.Value).init(allocator);
     defer props2.deinit();
     try props2.put("username", .{ .String = "alice" });
     const e2 = try sc.validateNode(2, "User", props2);

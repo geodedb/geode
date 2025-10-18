@@ -13,7 +13,7 @@ const planner = @import("planner.zig");
 // RETURN g, COUNT(DISTINCT a) AS c
 
 test "TestCANARY_REQ_GQL_012_HavingCountDistinctFilter" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     // Build AST for: SELECT g, COUNT(DISTINCT a) AS c FROM input GROUP BY g HAVING COUNT(DISTINCT a) > 1
     // In internal AST form: Query with group_by keys=[g], return items [g, countDistinct(a) AS c], having countDistinct(a) > 1
     const g_ident = ast.Expr{ .Ident = "g" };
@@ -59,8 +59,8 @@ test "TestCANARY_REQ_GQL_012_HavingCountDistinctFilter" {
     // Validate plan (ensures legality checks pass)
     _ = try planner.planQuery(q, .{});
 
-    const out = try exec.runGroupedQuery(ally, q, names, input_rows, &.{}, &.{}, null);
-    defer ally.free(out);
+    const out = try exec.runGroupedQuery(allocator, q, names, input_rows, &.{}, &.{}, null);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 1);
     const r = out[0];
     // Expect columns: g, countDistinct(a)

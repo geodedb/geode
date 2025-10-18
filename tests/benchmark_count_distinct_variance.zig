@@ -7,14 +7,14 @@ const ast = @import("gql/ast.zig");
 // Simple variance bench for COUNT DISTINCT over synthetic data sets comparing repeated runs.
 // Measures CV and p95/mean ratio of build+emit timings across iterations.
 
-fn benchOnce(ally: std.mem.Allocator, rows: usize, distinct_ratio: f64) !i128 {
+fn benchOnce(allocator: std.mem.Allocator, rows: usize, distinct_ratio: f64) !i128 {
     // Build synthetic rows with controlled duplication for a single group.
     const cal = ast.Expr{ .Ident = "countDistinct" };
     const a_id = ast.Expr{ .Ident = "a" };
     var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Call = .{ .callee = &cal, .args = &.{&a_id} } }, .alias = null }};
     const g = ast.Expr{ .Ident = "g" };
     const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
-    var input = try ally.alloc([]const exec.BindingValue, rows);
+    var input = try allocator.alloc([]const exec.BindingValue, rows);
     var i: usize = 0;
     const distinct_target = @max(@as(usize, @intFromFloat(@as(f64, @floatFromInt(rows)) * distinct_ratio)), 1);
     while (i < rows) : (i += 1) {
@@ -22,19 +22,19 @@ fn benchOnce(ally: std.mem.Allocator, rows: usize, distinct_ratio: f64) !i128 {
         input[i] = &.{ .{ .Int = val }, .{ .Str = "X" } };
     }
     var timings = exec.AggStageTimings{};
-    _ = try exec.runGroupedQuery(ally, q, &.{ "a", "g" }, input, &.{}, &.{}, &timings);
-    ally.free(input);
+    _ = try exec.runGroupedQuery(allocator, q, &.{ "a", "g" }, input, &.{}, &.{}, &timings);
+    allocator.free(input);
     return timings.build_ns + timings.emit_ns;
 }
 
 test "BenchmarkCANARY_REQ_GQL_012_CountDistinctVarianceEnvelope" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const iters: usize = 25;
-    var samples = try ally.alloc(f64, iters);
-    defer ally.free(samples);
+    var samples = try allocator.alloc(f64, iters);
+    defer allocator.free(samples);
     var i: usize = 0;
     while (i < iters) : (i += 1) {
-        const t = try benchOnce(ally, 2000, 0.3);
+        const t = try benchOnce(allocator, 2000, 0.3);
         samples[i] = @as(f64, @floatFromInt(t));
     }
     // compute mean, variance, p95

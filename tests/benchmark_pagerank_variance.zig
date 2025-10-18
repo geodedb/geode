@@ -7,10 +7,10 @@ const pr = geode.graph.pagerank;
 test "BenchmarkCANARY_REQ_GQL_067_PageRankVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Build a small deterministic graph that exercises convergence (star + cycle mix)
-    var g = try pr.Graph.init(ally, 0);
+    var g = try pr.Graph.init(allocator, 0);
     defer g.deinit();
     // center 0 -> leaves 1..9, add cycle among 1..4
     var i: usize = 1;
@@ -29,8 +29,8 @@ test "BenchmarkCANARY_REQ_GQL_067_PageRankVarianceEnvelope" {
     var idx: usize = 0;
     while (idx < Runs) : (idx += 1) {
         const start = std.time.nanoTimestamp();
-        var result = try pr.compute(ally, &g, .{ .damping = 0.85, .epsilon = 1e-7, .max_iters = 80 });
-        defer result.deinit(ally);
+        var result = try pr.compute(allocator, &g, .{ .damping = 0.85, .epsilon = 1e-7, .max_iters = 80 });
+        defer result.deinit(allocator);
         const end = std.time.nanoTimestamp();
         samples[idx] = @intCast(end - start);
     }

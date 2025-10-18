@@ -5,13 +5,13 @@ const diag = @import("../src/diagnostics.zig");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     var timer = try std.time.Timer.start();
     const iterations: usize = 5_000; // fewer iterations but much larger arrays
     const width: usize = 256; // wide diagnostic batches
 
-    var arr = try ally.alloc(diag.Diagnostic, width);
-    defer ally.free(arr);
+    var arr = try allocator.alloc(diag.Diagnostic, width);
+    defer allocator.free(arr);
 
     var seed: u64 = 0x1234_5678_ABCD_EF00;
     inline for (.{}) |_| {} // placeholder for potential compile-time config

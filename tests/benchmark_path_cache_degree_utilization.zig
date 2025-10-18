@@ -15,27 +15,27 @@ fn simulateAccess(cache: *path_cache.PathCache, keys: [][]const u8) void {
 test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeUtilization" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var cache = try path_cache.PathCache.init(ally, 256);
+    var cache = try path_cache.PathCache.init(allocator, 256);
     defer cache.deinit();
     try cache.enableDistribution(64);
 
-    var keys_hot = try ally.alloc([]const u8, 1024);
-    var keys_cold = try ally.alloc([]const u8, 1024);
-    defer ally.free(keys_hot);
-    defer ally.free(keys_cold);
+    var keys_hot = try allocator.alloc([]const u8, 1024);
+    var keys_cold = try allocator.alloc([]const u8, 1024);
+    defer allocator.free(keys_hot);
+    defer allocator.free(keys_cold);
 
     var i: usize = 0;
     while (i < 1024) : (i += 1) {
-        keys_hot[i] = try std.fmt.allocPrint(ally, "hot-{d}", .{i});
-        keys_cold[i] = try std.fmt.allocPrint(ally, "cold-{d}", .{i});
+        keys_hot[i] = try std.fmt.allocPrint(allocator, "hot-{d}", .{i});
+        keys_cold[i] = try std.fmt.allocPrint(allocator, "cold-{d}", .{i});
     }
     defer {
         var j: usize = 0;
         while (j < 1024) : (j += 1) {
-            ally.free(keys_hot[j]);
-            ally.free(keys_cold[j]);
+            allocator.free(keys_hot[j]);
+            allocator.free(keys_cold[j]);
         }
     }
 

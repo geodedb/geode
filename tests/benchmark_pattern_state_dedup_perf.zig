@@ -8,7 +8,7 @@ const constraints = @import("../src/storage/constraints.zig");
 test "BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Rough memory accounting snapshot before
     const before_ast = gpa.getStats();
@@ -46,5 +46,5 @@ test "BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf" {
     const used_bytes = after_ast.allocated - before_ast.allocated; // net allocated (approx)
     const stdout = std.io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf\",\"elapsed_ns\":{d},\"matches\":{d},\"net_alloc_bytes\":{d}}\n", .{ elapsed, total_matches, used_bytes });
-    _ = ally;
+    _ = allocator;
 }

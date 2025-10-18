@@ -56,14 +56,14 @@ fn prngFloat(state: *u64) f64 {
 pub fn benchmarkAdaptiveReplanAutotuneVarianceEnvelope() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    const max_iters: usize = envOr(ally, "GEODE_ADAPT_REPLAN_MAX_ITERS", 8000); // total safety cap
-    const window: usize = envOr(ally, "GEODE_ADAPT_REPLAN_WINDOW", 16); // moving average window
-    const stable_windows_needed: usize = envOr(ally, "GEODE_ADAPT_REPLAN_STABLE_WINDOWS", 4);
-    const stable_samples_target: usize = envOr(ally, "GEODE_ADAPT_REPLAN_STABLE_SAMPLES", 48);
-    const seed_val: u64 = envOrU64(ally, "GEODE_ADAPT_REPLAN_SEED", 0xABCDEF0123456789);
-    const initial_drift_ppm: usize = envOr(ally, "GEODE_ADAPT_REPLAN_DRIFT", 9000); // parts-per-million
+    const max_iters: usize = envOr(allocator, "GEODE_ADAPT_REPLAN_MAX_ITERS", 8000); // total safety cap
+    const window: usize = envOr(allocator, "GEODE_ADAPT_REPLAN_WINDOW", 16); // moving average window
+    const stable_windows_needed: usize = envOr(allocator, "GEODE_ADAPT_REPLAN_STABLE_WINDOWS", 4);
+    const stable_samples_target: usize = envOr(allocator, "GEODE_ADAPT_REPLAN_STABLE_SAMPLES", 48);
+    const seed_val: u64 = envOrU64(allocator, "GEODE_ADAPT_REPLAN_SEED", 0xABCDEF0123456789);
+    const initial_drift_ppm: usize = envOr(allocator, "GEODE_ADAPT_REPLAN_DRIFT", 9000); // parts-per-million
 
     var rng_state: u64 = seed_val;
 
@@ -72,8 +72,8 @@ pub fn benchmarkAdaptiveReplanAutotuneVarianceEnvelope() !void {
     var ratio_drift_ppm: f64 = @as(f64, @floatFromInt(initial_drift_ppm));
 
     // Circular buffer for last window intervals
-    var interval_window = try ally.alloc(f64, window);
-    defer ally.free(interval_window);
+    var interval_window = try allocator.alloc(f64, window);
+    defer allocator.free(interval_window);
     var iw_index: usize = 0;
     var intervals_recorded: usize = 0;
     var last_window_mean: f64 = 0.0;
@@ -81,8 +81,8 @@ pub fn benchmarkAdaptiveReplanAutotuneVarianceEnvelope() !void {
     var collecting_stable = false;
 
     // Storage for stable intervals
-    var stable_intervals = try ally.alloc(f64, stable_samples_target);
-    defer ally.free(stable_intervals);
+    var stable_intervals = try allocator.alloc(f64, stable_samples_target);
+    defer allocator.free(stable_intervals);
     var stable_count: usize = 0;
 
     // Generate successive intervals until criteria met or max iters.
@@ -170,8 +170,8 @@ pub fn benchmarkAdaptiveReplanAutotuneVarianceEnvelope() !void {
     const cv = stddev / mean;
 
     // Sort copy for quantiles
-    const copy = try ally.alloc(f64, view.len);
-    defer ally.free(copy);
+    const copy = try allocator.alloc(f64, view.len);
+    defer allocator.free(copy);
     std.mem.copyForwards(f64, copy, view);
     std.sort.pdq(f64, copy, {}, comptime std.sort.asc(f64));
     const p95 = copy[@min(copy.len - 1, (copy.len * 95) / 100)];
@@ -205,18 +205,18 @@ pub fn benchmarkAdaptiveReplanAutotuneVarianceEnvelope() !void {
     if (!pass) return error.VarianceEnvelopeBreached;
 }
 
-fn envOr(ally: std.mem.Allocator, name: []const u8, default_: usize) usize {
-    if (std.process.getEnvVarOwned(ally, name)) |val| {
-        defer ally.free(val);
+fn envOr(allocator: std.mem.Allocator, name: []const u8, default_: usize) usize {
+    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+        defer allocator.free(val);
         return std.fmt.parseInt(usize, val, 10) catch default_;
     } else |_| {
         return default_;
     }
 }
 
-fn envOrU64(ally: std.mem.Allocator, name: []const u8, default_: u64) u64 {
-    if (std.process.getEnvVarOwned(ally, name)) |val| {
-        defer ally.free(val);
+fn envOrU64(allocator: std.mem.Allocator, name: []const u8, default_: u64) u64 {
+    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+        defer allocator.free(val);
         return std.fmt.parseInt(u64, val, 16) catch default_;
     } else |_| return default_;
 }

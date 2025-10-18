@@ -4,18 +4,18 @@ const std = @import("std");
 // This uses the StorageCatalog API directly to avoid missing DDL front-end.
 
 test "storage catalog persistence across save/load" {
-    const ally = std.testing.allocator;
-    var pm = @import("../src/storage/page_manager.zig").PageManager.initInMemory(ally, 4096);
+    const allocator = std.testing.allocator;
+    var pm = @import("../src/storage/page_manager.zig").PageManager.initInMemory(allocator, 4096);
     defer pm.deinit();
 
-    var cat = @import("../src/storage/catalog.zig").StorageCatalog.init(ally, &pm);
+    var cat = @import("../src/storage/catalog.zig").StorageCatalog.init(allocator, &pm);
     defer cat.deinit();
 
     try cat.load();
     try cat.createTable("t", &.{});
     try cat.save();
 
-    var cat2 = @import("../src/storage/catalog.zig").StorageCatalog.init(ally, &pm);
+    var cat2 = @import("../src/storage/catalog.zig").StorageCatalog.init(allocator, &pm);
     defer cat2.deinit();
     try cat2.load();
 

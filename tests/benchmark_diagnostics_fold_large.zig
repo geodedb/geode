@@ -22,9 +22,9 @@ fn foldDiagnostics(allocator: std.mem.Allocator, n: usize) !struct { total_bytes
 test "BenchmarkCANARY_REQ_GQL_010_DiagnosticsFoldLarge" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     var timer = try std.time.Timer.start();
-    const result = foldDiagnostics(ally, 50_000) catch .{ .total_bytes = 0, .allocs = 0 };
+    const result = foldDiagnostics(allocator, 50_000) catch .{ .total_bytes = 0, .allocs = 0 };
     const ns = timer.read();
     // Expect fewer than 60k allocations (should be exactly n) and total bytes > n*6 (heuristic)
     try std.testing.expect(result.allocs <= 60_000);

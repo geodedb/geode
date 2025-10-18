@@ -7,8 +7,8 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 test "TestCANARY_REQ_GQL_042_CDC_StartStop" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var engine = try cdc.CDCEngine.init(ally, .{ .enabled = false });
+    const allocator = gpa.allocator();
+    var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = false });
     defer engine.deinit();
     // Start should be a no-op when disabled
     try engine.start();

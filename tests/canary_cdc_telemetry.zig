@@ -5,8 +5,8 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 // Verifies peak buffer and batch adjustment counters increment.
 
 test "TestCANARY_REQ_GQL_042_CDC_Telemetry" {
-    const ally = std.testing.allocator;
-    var engine = try cdc.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 256, .adaptive_flush = true, .min_batch_size = 128, .max_batch_size = 2048, .adapt_window_events = 256 });
+    const allocator = std.testing.allocator;
+    var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 256, .adaptive_flush = true, .min_batch_size = 128, .max_batch_size = 2048, .adapt_window_events = 256 });
     defer engine.deinit();
 
     var i: usize = 0;

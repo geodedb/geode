@@ -7,9 +7,9 @@ const graph_exec = @import("../src/server/graph/exec.zig");
 test "TestCANARY_REQ_GQL_017_PropertyAccess" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var props = std.StringHashMap(graph_exec.PropertyValue).init(ally);
+    var props = std.StringHashMap(graph_exec.PropertyValue).init(allocator);
     defer props.deinit();
     try props.put("name", .{ .String = "alice" });
 
@@ -26,9 +26,9 @@ test "TestCANARY_REQ_GQL_017_PropertyAccess" {
 test "TestCANARY_REQ_GQL_017_PropertyAccessNull" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var props = std.StringHashMap(graph_exec.PropertyValue).init(ally);
+    var props = std.StringHashMap(graph_exec.PropertyValue).init(allocator);
     defer props.deinit();
     try props.put("age", .{ .Null = {} });
     var node = graph_exec.Node{ .id = 2, .labels = &[_][]const u8{"Person"}, .properties = props };
@@ -43,8 +43,8 @@ test "TestCANARY_REQ_GQL_017_PropertyAccessNull" {
 test "TestCANARY_REQ_GQL_017_PropertyAccessMissing" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var props = std.StringHashMap(graph_exec.PropertyValue).init(ally);
+    const allocator = gpa.allocator();
+    var props = std.StringHashMap(graph_exec.PropertyValue).init(allocator);
     defer props.deinit();
     var node = graph_exec.Node{ .id = 3, .labels = &[_][]const u8{"Person"}, .properties = props };
     if (node.properties.get("unknown")) |_| {
@@ -58,8 +58,8 @@ test "TestCANARY_REQ_GQL_017_PropertyAccessMissing" {
 test "TestCANARY_REQ_GQL_017_PropertyAccessDecimalFormat" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var props = std.StringHashMap(graph_exec.PropertyValue).init(ally);
+    const allocator = gpa.allocator();
+    var props = std.StringHashMap(graph_exec.PropertyValue).init(allocator);
     defer props.deinit();
     try props.put("score", .{ .Float = 12.5 });
     var node = graph_exec.Node{ .id = 4, .labels = &[_][]const u8{"Metric"}, .properties = props };

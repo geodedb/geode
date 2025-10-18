@@ -8,9 +8,9 @@ const protocol = @import("../src/protocol.zig");
 test "TestCANARY_REQ_GQL_032_PatternRegexNegClass" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const pc = constraints_mod.SchemaConstraints.PropertyConstraint{ .name = "p", .type = .string, .nullable = false, .default_value = null, .min_value = null, .max_value = null, .pattern = "^a[^0-9]z$" };
@@ -19,7 +19,7 @@ test "TestCANARY_REQ_GQL_032_PatternRegexNegClass" {
 
     const should_match = [_][]const u8{ "aXz", "a_z", "a z" };
     inline for (should_match) |m| {
-        var props = std.StringHashMap(protocol.Value).init(ally);
+        var props = std.StringHashMap(protocol.Value).init(allocator);
         defer props.deinit();
         try props.put("p", protocol.Value{ .string = m });
         try std.testing.expect((try sc.validateNode(1, "Neg", props)) == null);
@@ -27,7 +27,7 @@ test "TestCANARY_REQ_GQL_032_PatternRegexNegClass" {
 
     const should_fail = [_][]const u8{ "a1z", "a9z", "ab1z", "azzq" };
     inline for (should_fail) |f| {
-        var props2 = std.StringHashMap(protocol.Value).init(ally);
+        var props2 = std.StringHashMap(protocol.Value).init(allocator);
         defer props2.deinit();
         try props2.put("p", protocol.Value{ .string = f });
         const err = try sc.validateNode(2, "Neg", props2);

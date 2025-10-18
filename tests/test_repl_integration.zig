@@ -8,7 +8,7 @@ const repl_loop = geode.repl.repl_loop;
 const repl_dispatch = geode.repl.repl_dispatch;
 
 test "repl loop options - transport integration" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test that ReplLoop.Options correctly accepts transport parameter
     const options = repl_loop.ReplLoop.Options{
@@ -18,7 +18,7 @@ test "repl loop options - transport integration" {
         .history_enabled = false,
         .verbose = false,
         .show_timing = false,
-        .allocator = ally,
+        .allocator = allocator,
         .transport = &repl_dispatch.mock_transport,
     };
 
@@ -33,10 +33,10 @@ test "repl loop options - transport integration" {
 }
 
 test "client session lifecycle - mock transport" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test full ClientSession lifecycle with mock transport
-    var session = try repl_dispatch.ClientSession.init(ally, "localhost:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "localhost:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     // Initial state
@@ -87,7 +87,7 @@ test "meta command parsing - connect command" {
 }
 
 test "output formatting - response parsing" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test JSON response parsing for different formats
     const test_response =
@@ -95,7 +95,7 @@ test "output formatting - response parsing" {
     ;
 
     // Parse the JSON to verify structure
-    const parsed = std.json.parseFromSlice(std.json.Value, ally, test_response, .{}) catch |err| {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, test_response, .{}) catch |err| {
         std.debug.print("Failed to parse test response: {s}\n", .{@errorName(err)});
         return err;
     };
@@ -115,10 +115,10 @@ test "output formatting - response parsing" {
 }
 
 test "error handling - connection failures" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test error handling with invalid server address
-    const invalid_session = repl_dispatch.ClientSession.init(ally, "", &repl_dispatch.mock_transport);
+    const invalid_session = repl_dispatch.ClientSession.init(allocator, "", &repl_dispatch.mock_transport);
     try testing.expectError(error.OutOfMemory, invalid_session);
 }
 
@@ -131,7 +131,7 @@ test "transport interface compatibility" {
 }
 
 test "command history integration - disabled mode" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test that history can be disabled (useful for testing)
     const options = repl_loop.ReplLoop.Options{
@@ -141,7 +141,7 @@ test "command history integration - disabled mode" {
         .history_enabled = false, // Disabled for testing
         .verbose = true,
         .show_timing = true,
-        .allocator = ally,
+        .allocator = allocator,
         .transport = &repl_dispatch.mock_transport,
     };
 
@@ -151,7 +151,7 @@ test "command history integration - disabled mode" {
 }
 
 test "protocol messages - format validation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test protocol message formats that would be sent over QUIC
     const test_messages = [_][]const u8{
@@ -165,7 +165,7 @@ test "protocol messages - format validation" {
 
     for (test_messages) |msg| {
         // Verify each message is valid JSON
-        const parsed = std.json.parseFromSlice(std.json.Value, ally, msg, .{}) catch |err| {
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg, .{}) catch |err| {
             std.debug.print("Invalid JSON message: {s}\n", .{msg});
             return err;
         };
@@ -178,10 +178,10 @@ test "protocol messages - format validation" {
 }
 
 test "end-to-end repl workflow simulation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Simulate a complete REPL session workflow
-    var session = try repl_dispatch.ClientSession.init(ally, "localhost:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "localhost:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     // 1. Connect and handshake
@@ -212,10 +212,10 @@ test "end-to-end repl workflow simulation" {
 }
 
 test "repl error handling - network issues" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test error handling when transport has issues
-    var session = try repl_dispatch.ClientSession.init(ally, "nonexistent.host:9999", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "nonexistent.host:9999", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     // Connection should work with mock transport despite invalid address
@@ -229,10 +229,10 @@ test "repl error handling - network issues" {
 }
 
 test "repl session state management" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test session state transitions
-    var session = try repl_dispatch.ClientSession.init(ally, "test:1234", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "test:1234", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     // Initial state
@@ -290,7 +290,7 @@ test "meta command edge cases" {
 }
 
 test "output format compatibility" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test that different output formats can be requested
     const format_options = [_]repl_loop.ReplLoop.Format{ .json, .table, .csv };
@@ -303,7 +303,7 @@ test "output format compatibility" {
             .history_enabled = false,
             .verbose = false,
             .show_timing = false,
-            .allocator = ally,
+            .allocator = allocator,
             .transport = &repl_dispatch.mock_transport,
         };
 

@@ -4,14 +4,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 const RunResult = struct { code: i32, out: []u8, err: []u8 };
 
 fn run(args: []const []const u8) !RunResult {
-    const ally = std.testing.allocator;
-    var child = Child.init(args, ally);
+    const allocator = std.testing.allocator;
+    var child = Child.init(args, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(ally, 4 << 20);
-    const err = try child.stderr.?.readToEndAlloc(ally, 1 << 20);
+    const out = try child.stdout.?.readToEndAlloc(allocator, 4 << 20);
+    const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
     const term = try child.wait();
     const code: i32 = switch (term) {
         .Exited => |st| st,

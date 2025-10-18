@@ -79,8 +79,8 @@ fn makeKey(buf: *[64]u8, field: []const u8) []const u8 {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
-    const ally = gpa.allocator();
-    var args = try std.process.argsWithAllocator(ally);
+    const allocator = gpa.allocator();
+    var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.next();
     var validate_all = false;
@@ -105,13 +105,13 @@ pub fn main() !void {
         }
     };
 
-    var line_buf = try std.ArrayList(u8).initCapacity(ally, 8192);
-    defer line_buf.deinit(ally);
+    var line_buf = try std.ArrayList(u8).initCapacity(allocator, 8192);
+    defer line_buf.deinit(allocator);
 
     var total_lines: usize = 0;
     var failures: usize = 0;
-    const strict_env = std.process.getEnvVarOwned(ally, "FED_VALIDATE_STRICT") catch null;
-    defer if (strict_env) |s| ally.free(s);
+    const strict_env = std.process.getEnvVarOwned(allocator, "FED_VALIDATE_STRICT") catch null;
+    defer if (strict_env) |s| allocator.free(s);
     const strict = strict_env != null;
 
     while (true) {
@@ -123,7 +123,7 @@ pub fn main() !void {
             if (n == 0) break;
             saw_any = true;
             if (b[0] == '\n') break;
-            try line_buf.append(ally, b[0]);
+            try line_buf.append(allocator, b[0]);
         }
         if (!saw_any and line_buf.items.len == 0) break;
         total_lines += 1;
@@ -149,8 +149,8 @@ pub fn main() !void {
     }
 
     const want_txt = blkfmt: {
-        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_FORMAT")) |fmt| {
-            defer ally.free(fmt);
+        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
+            defer allocator.free(fmt);
             if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
         } else |_| {}
         break :blkfmt false;

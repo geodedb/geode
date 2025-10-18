@@ -8,7 +8,7 @@ pub fn main() !void {
     // P2-3: Use GeneralPurposeAllocator for tool main
     var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_instance.deinit();
-    const ally = gpa_instance.allocator();
+    const allocator = gpa_instance.allocator();
     var stdin_file = if (builtin.os.tag == .windows)
         std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
     else
@@ -17,21 +17,21 @@ pub fn main() !void {
         std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
     else
         std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    var buf = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    defer buf.deinit(ally);
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    defer buf.deinit(allocator);
     var tmp: [4096]u8 = undefined;
     while (true) {
         const n = try stdin_file.read(&tmp);
         if (n == 0) break;
-        try buf.appendSlice(ally, tmp[0..n]);
+        try buf.appendSlice(allocator, tmp[0..n]);
     }
     var slice = buf.items;
     while (slice.len > 0) {
         const nl = std.mem.indexOfScalar(u8, slice, '\n') orelse slice.len;
         const line = slice[0..nl];
         if (line.len > 0) {
-            if (try parseLineAlloc(ally, line)) |json_line| {
-                defer ally.free(json_line);
+            if (try parseLineAlloc(allocator, line)) |json_line| {
+                defer allocator.free(json_line);
                 try stdout_file.writeAll(json_line);
             }
         }
@@ -90,14 +90,14 @@ fn parseKV(kind: []const u8, line: []const u8, w: anytype) !void {
     try w.writeAll("}\n");
 }
 
-fn parseLineAlloc(ally: std.mem.Allocator, line: []const u8) !?[]u8 {
-    var list = std.ArrayList(u8).initCapacity(ally, 0) catch return error.OutOfMemory;
-    errdefer list.deinit(ally);
-    const w = list.writer(ally);
+fn parseLineAlloc(allocator: std.mem.Allocator, line: []const u8) !?[]u8 {
+    var list = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    errdefer list.deinit(allocator);
+    const w = list.writer(allocator);
     parseLine(line, w) catch |err| switch (err) {
         error.Skip => return null,
         else => return err,
     };
-    const owned = try list.toOwnedSlice(ally);
+    const owned = try list.toOwnedSlice(allocator);
     return owned; // Some([]u8)
 }

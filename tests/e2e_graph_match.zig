@@ -3,15 +3,15 @@ const testing = std.testing;
 
 extern fn geode_server_start() void; // placeholder if needed
 
-fn run_query(ally: std.mem.Allocator, exe: []const u8, query: []const u8) ![]const u8 {
+fn run_query(allocator: std.mem.Allocator, exe: []const u8, query: []const u8) ![]const u8 {
     var argv = [_][]const u8{ exe, query, "--no-quic" };
-    var child = std.ChildProcess.init(&argv, ally);
+    var child = std.ChildProcess.init(&argv, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Inherit;
     try child.spawn();
     defer child.deinit();
-    var out = std.ArrayList(u8).init(ally);
+    var out = std.ArrayList(u8).init(allocator);
     defer out.deinit();
     var buf: [4096]u8 = undefined;
     while (true) {
@@ -20,12 +20,12 @@ fn run_query(ally: std.mem.Allocator, exe: []const u8, query: []const u8) ![]con
         try out.appendSlice(buf[0..n]);
     }
     _ = try child.wait();
-    return try ally.dupe(u8, out.items);
+    return try allocator.dupe(u8, out.items);
 }
 
-fn run_server_and_query(ally: std.mem.Allocator, query: []const u8) ![]const u8 {
+fn run_server_and_query(allocator: std.mem.Allocator, query: []const u8) ![]const u8 {
     // Start server in background
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567" }, ally);
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;
@@ -37,13 +37,13 @@ fn run_server_and_query(ally: std.mem.Allocator, query: []const u8) ![]const u8 
 
     // Use CLI over TCP
     var argv = [_][]const u8{ "./zig-out/bin/geodec", query, "--server", "127.0.0.1:7567" };
-    var child = std.ChildProcess.init(&argv, ally);
+    var child = std.ChildProcess.init(&argv, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Inherit;
     try child.spawn();
     defer child.deinit();
-    var out = std.ArrayList(u8).init(ally);
+    var out = std.ArrayList(u8).init(allocator);
     defer out.deinit();
     var buf: [4096]u8 = undefined;
     while (true) {
@@ -52,37 +52,37 @@ fn run_server_and_query(ally: std.mem.Allocator, query: []const u8) ![]const u8 
         try out.appendSlice(buf[0..n]);
     }
     _ = try child.wait();
-    return try ally.dupe(u8, out.items);
+    return try allocator.dupe(u8, out.items);
 }
 
 test "MATCH node scan returns nodes" {
-    const ally = testing.allocator;
-    const res = try run_server_and_query(ally, "RETURN 1"); // warm up server
-    ally.free(res);
-    const out = try run_server_and_query(ally, "MATCH (n) RETURN n");
-    defer ally.free(out);
+    const allocator = testing.allocator;
+    const res = try run_server_and_query(allocator, "RETURN 1"); // warm up server
+    allocator.free(res);
+    const out = try run_server_and_query(allocator, "MATCH (n) RETURN n");
+    defer allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "\"type\":\"SCHEMA\"") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"rows\":[") != null);
 }
 
 test "MATCH edge traversal returns pairs" {
-    const ally = testing.allocator;
-    const out = try run_server_and_query(ally, "MATCH (n)-[r]->(m) RETURN n, m");
-    defer ally.free(out);
+    const allocator = testing.allocator;
+    const out = try run_server_and_query(allocator, "MATCH (n)-[r]->(m) RETURN n, m");
+    defer allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "\"type\":\"SCHEMA\"") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"rows\":[") != null);
 }
 
 test "MATCH with label and property filter" {
-    const ally = testing.allocator;
-    const out = try run_server_and_query(ally, "MATCH (n:Person) WHERE n.age > 30 RETURN n.name");
-    defer ally.free(out);
+    const allocator = testing.allocator;
+    const out = try run_server_and_query(allocator, "MATCH (n:Person) WHERE n.age > 30 RETURN n.name");
+    defer allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "\"type\":\"SCHEMA\"") != null);
 }
 
 test "MATCH traversal with edge type filter" {
-    const ally = testing.allocator;
-    const out = try run_server_and_query(ally, "MATCH (n)-[r:KNOWS]->(m) RETURN n, r, m");
-    defer ally.free(out);
+    const allocator = testing.allocator;
+    const out = try run_server_and_query(allocator, "MATCH (n)-[r:KNOWS]->(m) RETURN n, r, m");
+    defer allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "\"type\":\"SCHEMA\"") != null);
 }

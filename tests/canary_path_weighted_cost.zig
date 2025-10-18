@@ -59,20 +59,20 @@ pub const GraphStorage = FakeGraph; // alias
 // Weighted shortest path test
 
 test "TestCANARY_REQ_GQL_016_PathWeightedCost" {
-    const ally = std.testing.allocator;
-    var g = FakeGraph.init(ally);
+    const allocator = std.testing.allocator;
+    var g = FakeGraph.init(allocator);
     defer g.deinit();
     try g.addEdge(1, 2);
     try g.addEdge(2, 3);
     try g.addEdge(1, 3); // direct but we will weight differently
 
-    var weights = std.AutoHashMap(u64, f64).init(ally);
+    var weights = std.AutoHashMap(u64, f64).init(allocator);
     defer weights.deinit();
     // Assign heavier weight to direct edge (node 3) so path 1->2->3 is preferred
     try weights.put(2, 1.0); // reaching node 2 cost 1
     try weights.put(3, 5.0); // direct path cost 5
 
-    var pa = paths.PathAlgorithms.init(ally);
+    var pa = paths.PathAlgorithms.init(allocator);
     const path_opt = try pa.dijkstraShortestPath(@ptrCast(&g), 1, 3, weights);
     try std.testing.expect(path_opt != null);
     const path = path_opt.?;

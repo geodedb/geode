@@ -10,7 +10,7 @@ fn bigDecimal(coeff: i128, scale: u8) exec.BindingValue {
 }
 
 test "TestCANARY_REQ_GQL_012_DecimalOverflowSum" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     // Two rows with large decimals that when aligned to greater scale risk overflow via repeated additions.
     const rows: []const []exec.BindingValue = &.{
         &.{ .{ .Str = "G" }, bigDecimal(9_223_372_036_854_775, 2) }, // ~9.22e15 * 10^-2
@@ -18,8 +18,8 @@ test "TestCANARY_REQ_GQL_012_DecimalOverflowSum" {
     };
     const spec = exec.GroupSpec{ .key_idxs = &.{0}, .aggs = &.{.Sum} };
     const vals = &.{1};
-    const out = try exec.groupAndAggregate(ally, rows, spec, vals);
-    defer ally.free(out);
+    const out = try exec.groupAndAggregate(allocator, rows, spec, vals);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 1);
     // Expect SUM result either Decimal (if no overflow) or NULL on overflow; enforce non-crash and deterministic type.
     // Policy: On overflow we return NULL (see exec.zig ovf flag usage).
@@ -30,7 +30,7 @@ test "TestCANARY_REQ_GQL_012_DecimalOverflowSum" {
 }
 
 test "TestCANARY_REQ_GQL_012_DecimalOverflowAvg" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const rows: []const []exec.BindingValue = &.{
         &.{ .{ .Str = "G" }, bigDecimal(9_223_372_036_854_775, 2) },
         &.{ .{ .Str = "G" }, bigDecimal(9_223_372_036_854_775, 4) },
@@ -38,8 +38,8 @@ test "TestCANARY_REQ_GQL_012_DecimalOverflowAvg" {
     };
     const spec = exec.GroupSpec{ .key_idxs = &.{0}, .aggs = &.{.Avg} };
     const vals = &.{1};
-    const out = try exec.groupAndAggregate(ally, rows, spec, vals);
-    defer ally.free(out);
+    const out = try exec.groupAndAggregate(allocator, rows, spec, vals);
+    defer allocator.free(out);
     try std.testing.expect(out.len == 1);
     const res = out[0][1];
     if (res != .Decimal) {

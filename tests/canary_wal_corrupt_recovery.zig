@@ -13,18 +13,18 @@ fn writeRaw(path: []const u8, data: []const u8) !void {
 test "TestCANARY_REQ_GQL_028_CorruptPageRecovery" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var w = walmod.Wal.init(ally);
+    const allocator = gpa.allocator();
+    var w = walmod.Wal.init(allocator);
     defer w.deinit();
     try w.openFile("/tmp/geode_corrupt_test");
     // Append two inserts (valid)
     var prev: u64 = 0;
-    const payload1 = try walmod.Wal.encodeInsert(ally, 0, 0, "abc");
-    defer ally.free(payload1);
+    const payload1 = try walmod.Wal.encodeInsert(allocator, 0, 0, "abc");
+    defer allocator.free(payload1);
     _ = try w.append(1, .Insert, payload1, prev);
     prev = w.next_lsn - 1;
-    const payload2 = try walmod.Wal.encodeInsert(ally, 0, 1, "def");
-    defer ally.free(payload2);
+    const payload2 = try walmod.Wal.encodeInsert(allocator, 0, 1, "def");
+    defer allocator.free(payload2);
     _ = try w.append(1, .Insert, payload2, prev);
     prev = w.next_lsn - 1;
     try w.fsync();
@@ -49,13 +49,13 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecovery" {
     try f.sync();
 
     // Recover into fresh page manager
-    var pm = storage.PageManager.init(ally);
+    var pm = storage.PageManager.init(allocator);
     defer pm.deinit();
-    var w2 = walmod.Wal.init(ally);
+    var w2 = walmod.Wal.init(allocator);
     defer w2.deinit();
     // Directly call recover on the original wal file path
-    const path = try std.fmt.allocPrint(ally, "/tmp/geode_corrupt_test.wal.0", .{});
-    defer ally.free(path);
+    const path = try std.fmt.allocPrint(allocator, "/tmp/geode_corrupt_test.wal.0", .{});
+    defer allocator.free(path);
     const applied = try w2.recover(&pm, path);
     // Expect only the two valid inserts applied; third corrupted skipped.
     try std.testing.expectEqual(@as(usize, 2), applied);

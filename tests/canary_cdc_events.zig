@@ -7,7 +7,7 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 test "TestCANARY_REQ_GQL_042_CDC_EventCapture" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     const cfg = cdc.CDCConfig{
         .enabled = true,
@@ -16,7 +16,7 @@ test "TestCANARY_REQ_GQL_042_CDC_EventCapture" {
         .flush_interval_ms = 10_000, // large so we control flush
     };
 
-    var engine = try cdc.CDCEngine.init(ally, cfg);
+    var engine = try cdc.CDCEngine.init(allocator, cfg);
     defer engine.deinit();
 
     try engine.start();

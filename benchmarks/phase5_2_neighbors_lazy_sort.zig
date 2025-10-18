@@ -16,10 +16,10 @@ const GraphBaseline = struct {
     allocator: std.mem.Allocator,
     adj: std.AutoHashMap(u64, std.ArrayList(u64)),
 
-    pub fn init(ally: std.mem.Allocator) GraphBaseline {
+    pub fn init(allocator: std.mem.Allocator) GraphBaseline {
         return .{
-            .allocator = ally,
-            .adj = std.AutoHashMap(u64, std.ArrayList(u64)).init(ally),
+            .allocator = allocator,
+            .adj = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
         };
     }
 
@@ -64,11 +64,11 @@ const GraphOptimized = struct {
     adj: std.AutoHashMap(u64, std.ArrayList(u64)),
     adj_sorted: std.AutoHashMap(u64, bool),
 
-    pub fn init(ally: std.mem.Allocator) GraphOptimized {
+    pub fn init(allocator: std.mem.Allocator) GraphOptimized {
         return .{
-            .allocator = ally,
-            .adj = std.AutoHashMap(u64, std.ArrayList(u64)).init(ally),
-            .adj_sorted = std.AutoHashMap(u64, bool).init(ally),
+            .allocator = allocator,
+            .adj = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
+            .adj_sorted = std.AutoHashMap(u64, bool).init(allocator),
         };
     }
 

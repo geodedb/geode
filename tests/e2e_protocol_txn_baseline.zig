@@ -2,14 +2,14 @@ const std = @import("std");
 
 // Test baseline transaction functionality: BEGIN/COMMIT/ROLLBACK
 test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    const exe_dir = try std.fs.cwd().realpathAlloc(ally, ".");
-    defer ally.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(ally, "{s}/zig-out/bin/geoded", .{exe_dir});
-    defer ally.free(exe_path);
+    const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(exe_dir);
+    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
+    defer allocator.free(exe_path);
 
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, ally);
+    var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -31,7 +31,7 @@ test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
         stdin.close();
     }
 
-    var out_buf = std.ArrayList(u8).init(ally);
+    var out_buf = std.ArrayList(u8).init(allocator);
     defer out_buf.deinit();
     if (child.stdout) |so| {
         var tmpb: [8192]u8 = undefined;
@@ -61,14 +61,14 @@ test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
 
 // Test transaction rollback functionality
 test "e2e: transaction rollback" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    const exe_dir = try std.fs.cwd().realpathAlloc(ally, ".");
-    defer ally.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(ally, "{s}/zig-out/bin/geoded", .{exe_dir});
-    defer ally.free(exe_path);
+    const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(exe_dir);
+    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
+    defer allocator.free(exe_path);
 
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, ally);
+    var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -86,7 +86,7 @@ test "e2e: transaction rollback" {
         try stdin.close();
     }
 
-    var out_buf = std.ArrayList(u8).init(ally);
+    var out_buf = std.ArrayList(u8).init(allocator);
     defer out_buf.deinit();
     if (child.stdout) |so| {
         var tmpb: [8192]u8 = undefined;
@@ -111,14 +111,14 @@ test "e2e: transaction rollback" {
 
 // Test transaction state management
 test "e2e: transaction state management" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    const exe_dir = try std.fs.cwd().realpathAlloc(ally, ".");
-    defer ally.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(ally, "{s}/zig-out/bin/geoded", .{exe_dir});
-    defer ally.free(exe_path);
+    const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(exe_dir);
+    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
+    defer allocator.free(exe_path);
 
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, ally);
+    var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -139,7 +139,7 @@ test "e2e: transaction state management" {
         try stdin.close();
     }
 
-    var out_buf = std.ArrayList(u8).init(ally);
+    var out_buf = std.ArrayList(u8).init(allocator);
     defer out_buf.deinit();
     if (child.stdout) |so| {
         var tmpb: [8192]u8 = undefined;

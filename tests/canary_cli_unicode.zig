@@ -2,17 +2,17 @@ const std = @import("std");
 
 const Child = std.process.Child;
 
-fn run(argv: []const []const u8, ally: std.mem.Allocator) !struct { code: u8, out: []u8, err: []u8 } {
-    var child = Child.init(argv, ally);
+fn run(argv: []const []const u8, allocator: std.mem.Allocator) !struct { code: u8, out: []u8, err: []u8 } {
+    var child = Child.init(argv, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
     var stdout_stream = child.stdout.?.reader();
     var stderr_stream = child.stderr.?.reader();
-    var out_buf = std.ArrayList(u8).init(ally);
+    var out_buf = std.ArrayList(u8).init(allocator);
     defer out_buf.deinit();
-    var err_buf = std.ArrayList(u8).init(ally);
+    var err_buf = std.ArrayList(u8).init(allocator);
     defer err_buf.deinit();
     try stdout_stream.stream.readAllArrayList(&out_buf, 1 << 16);
     try stderr_stream.stream.readAllArrayList(&err_buf, 1 << 16);

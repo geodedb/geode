@@ -1,8 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 
-fn run_server(ally: std.mem.Allocator) !std.ChildProcess {
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567" }, ally);
+fn run_server(allocator: std.mem.Allocator) !std.ChildProcess {
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;
@@ -12,15 +12,15 @@ fn run_server(ally: std.mem.Allocator) !std.ChildProcess {
     return server;
 }
 
-fn run_cmd(ally: std.mem.Allocator, args: []const []const u8) ![]const u8 {
-    var child = std.ChildProcess.init(args, ally);
+fn run_cmd(allocator: std.mem.Allocator, args: []const []const u8) ![]const u8 {
+    var child = std.ChildProcess.init(args, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
     defer child.deinit();
-    var out = std.ArrayList(u8).init(ally);
-    var err = std.ArrayList(u8).init(ally);
+    var out = std.ArrayList(u8).init(allocator);
+    var err = std.ArrayList(u8).init(allocator);
     defer out.deinit();
     defer err.deinit();
     var buf: [2048]u8 = undefined;
@@ -36,11 +36,11 @@ fn run_cmd(ally: std.mem.Allocator, args: []const []const u8) ![]const u8 {
     }
     _ = try child.wait();
     // return combined
-    var both = std.ArrayList(u8).init(ally);
+    var both = std.ArrayList(u8).init(allocator);
     defer both.deinit();
     try both.appendSlice(out.items);
     try both.appendSlice(err.items);
-    return try ally.dupe(u8, both.items);
+    return try allocator.dupe(u8, both.items);
 }
 
 // Test that a serialization failure surfaces as status_class 40001
@@ -48,14 +48,14 @@ fn run_cmd(ally: std.mem.Allocator, args: []const []const u8) ![]const u8 {
 // For now, we check that server emits 40001 when internal error.SerializationFailure occurs.
 
 test "MVCC serialization failure yields 40001" {
-    const ally = testing.allocator;
-    var server = try run_server(ally);
+    const allocator = testing.allocator;
+    var server = try run_server(allocator);
     defer server.kill() catch {};
 
     // Trigger internal SerializationFailure via synthetic path in server (force path uses manager’s conflict matrix in commit)
     const args = &[_][]const u8{ "./zig-out/bin/geodec", "RETURN 1", "--server", "127.0.0.1:7567" };
-    const out = try run_cmd(ally, args);
-    defer ally.free(out);
+    const out = try run_cmd(allocator, args);
+    defer allocator.free(out);
 
     // This smoke check ensures server is responding; actual 40001 verification should be performed where conflicting updates are executed.
     try testing.expect(std.mem.indexOf(u8, out, "SCHEMA") != null);

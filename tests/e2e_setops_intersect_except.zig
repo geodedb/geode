@@ -2,15 +2,15 @@ const std = @import("std");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 
 fn run(gql: []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    const ally = std.testing.allocator;
-    var child = Child.init(&.{ "./zig-out/bin/geodec", gql, "--no-quic" }, ally);
+    const allocator = std.testing.allocator;
+    var child = Child.init(&.{ "./zig-out/bin/geodec", gql, "--no-quic" }, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
     // Read SCHEMA then BINDINGS lines
-    var out_buf = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
-    defer out_buf.deinit(ally);
+    var out_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    defer out_buf.deinit(allocator);
     var tmpb: [8192]u8 = undefined;
     // Read up to two lines
     var lines: usize = 0;
@@ -24,7 +24,7 @@ fn run(gql: []const u8) !struct { code: i32, out: []u8, err: []u8 } {
         }
     }
     const out = try out_buf.toOwnedSlice(std.testing.allocator);
-    const err = try child.stderr.?.readToEndAlloc(ally, 1 << 20);
+    const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
     const term = try child.wait();
     const code: i32 = switch (term) {
         .Exited => |st| st,

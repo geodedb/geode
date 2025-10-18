@@ -6,7 +6,7 @@ const cdc = @import("cdc_enhanced");
 test "TestCANARY_REQ_GQL_042_BackpressureAdaptive" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     var cfg: cdc.CDCConfig = .{};
     cfg.enabled = true;
     cfg.pending_backpressure_watermark = 10_000; // starting watermark
@@ -18,12 +18,12 @@ test "TestCANARY_REQ_GQL_042_BackpressureAdaptive" {
     cfg.backpressure_min_watermark = 2_000;
     cfg.backpressure_max_watermark = 100_000;
 
-    var engine = try cdc.CDCEngine.init(ally, cfg);
+    var engine = try cdc.CDCEngine.init(allocator, cfg);
     defer engine.deinit();
 
     // Helper to push fake events without full change capture complexity.
     const FakeEvent = cdc.ChangeEvent;
-    var meta = std.StringHashMap([]const u8).init(ally);
+    var meta = std.StringHashMap([]const u8).init(allocator);
     defer meta.deinit();
 
     // Phase 1: drive peak above high threshold repeatedly to trigger shrink.

@@ -6,10 +6,10 @@ const estimator_mod = @import("optimizer/selectivity_estimator.zig");
 test "BenchmarkCANARY_REQ_GQL_084_EstimatorVarianceEnvelope" {
     const Runs = 30; // provide stable percentile
     var samples: [Runs]u64 = undefined;
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var r: usize = 0;
     while (r < Runs) : (r += 1) {
-        var ae = estimator_mod.AdaptiveEstimator.init(ally, 128);
+        var ae = estimator_mod.AdaptiveEstimator.init(allocator, 128);
         defer ae.deinit();
         // Simulate mixed observations (80% key A, 15% key B, 5% random others)
         var i: usize = 0;

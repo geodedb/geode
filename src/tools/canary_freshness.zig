@@ -62,8 +62,8 @@ pub fn evaluate(entries: []Entry, now_days: i64) FreshnessReport {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var args = try std.process.argsWithAllocator(ally);
+    const allocator = gpa.allocator();
+    var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.next(); // program name
     const path = args.next() orelse return error.MissingPath;
@@ -71,11 +71,11 @@ pub fn main() !void {
     const now_days: i64 = @intCast(now_ts / 86400);
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
-    const data = try file.readToEndAlloc(ally, 10_000_000);
-    defer ally.free(data);
+    const data = try file.readToEndAlloc(allocator, 10_000_000);
+    defer allocator.free(data);
     // naive scan: look for "UPDATED": "YYYY-MM-DD"
     var it = std.mem.tokenizeScalar(u8, data, '\n');
-    var entries_buf = std.ArrayList(Entry).init(ally);
+    var entries_buf = std.ArrayList(Entry).init(allocator);
     defer entries_buf.deinit();
     while (it.next()) |line| {
         if (std.mem.indexOf(u8, line, "UPDATED=") != null) {

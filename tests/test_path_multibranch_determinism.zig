@@ -14,57 +14,57 @@ const planner = @import("geode").planner;
 // 2 -> 7, 3 -> 5, 4 -> 6
 // Bound: hops [1..5]
 
-fn addEdge(adj: *planner.AdjacencyList, from: u64, to: u64, eid: *u64, ally: std.mem.Allocator) !void {
-    try adj.addEdge(from, to, eid.*, ally);
+fn addEdge(adj: *planner.AdjacencyList, from: u64, to: u64, eid: *u64, allocator: std.mem.Allocator) !void {
+    try adj.addEdge(from, to, eid.*, allocator);
     eid.* += 1;
 }
 
 test "TestCANARY_REQ_GQL_016_PathMultiBranchDeterminism" {
-    const ally = std.testing.allocator;
-    var adj = planner.AdjacencyList.init(ally);
-    defer adj.deinit(ally);
+    const allocator = std.testing.allocator;
+    var adj = planner.AdjacencyList.init(allocator);
+    defer adj.deinit(allocator);
 
     var eid: u64 = 500;
     // Primary branches
-    try addEdge(&adj, 1, 2, &eid, ally);
-    try addEdge(&adj, 1, 3, &eid, ally);
-    try addEdge(&adj, 1, 4, &eid, ally);
-    try addEdge(&adj, 2, 5, &eid, ally);
-    try addEdge(&adj, 2, 6, &eid, ally);
-    try addEdge(&adj, 3, 6, &eid, ally);
-    try addEdge(&adj, 3, 7, &eid, ally);
-    try addEdge(&adj, 4, 7, &eid, ally);
-    try addEdge(&adj, 4, 8, &eid, ally);
-    try addEdge(&adj, 5, 10, &eid, ally);
-    try addEdge(&adj, 6, 10, &eid, ally);
-    try addEdge(&adj, 6, 11, &eid, ally);
-    try addEdge(&adj, 7, 11, &eid, ally);
-    try addEdge(&adj, 8, 11, &eid, ally);
-    try addEdge(&adj, 9, 3, &eid, ally);
-    try addEdge(&adj, 9, 4, &eid, ally);
+    try addEdge(&adj, 1, 2, &eid, allocator);
+    try addEdge(&adj, 1, 3, &eid, allocator);
+    try addEdge(&adj, 1, 4, &eid, allocator);
+    try addEdge(&adj, 2, 5, &eid, allocator);
+    try addEdge(&adj, 2, 6, &eid, allocator);
+    try addEdge(&adj, 3, 6, &eid, allocator);
+    try addEdge(&adj, 3, 7, &eid, allocator);
+    try addEdge(&adj, 4, 7, &eid, allocator);
+    try addEdge(&adj, 4, 8, &eid, allocator);
+    try addEdge(&adj, 5, 10, &eid, allocator);
+    try addEdge(&adj, 6, 10, &eid, allocator);
+    try addEdge(&adj, 6, 11, &eid, allocator);
+    try addEdge(&adj, 7, 11, &eid, allocator);
+    try addEdge(&adj, 8, 11, &eid, allocator);
+    try addEdge(&adj, 9, 3, &eid, allocator);
+    try addEdge(&adj, 9, 4, &eid, allocator);
     // Cross edges
-    try addEdge(&adj, 2, 7, &eid, ally);
-    try addEdge(&adj, 3, 5, &eid, ally);
-    try addEdge(&adj, 4, 6, &eid, ally);
+    try addEdge(&adj, 2, 7, &eid, allocator);
+    try addEdge(&adj, 3, 5, &eid, allocator);
+    try addEdge(&adj, 4, 6, &eid, allocator);
 
     const expander = planner.PathExpand{ .min_hops = 1, .max_hops = 5, .tie_break_policy = .LengthId };
     const starts = [_]u64{ 1, 9 };
 
     const run = struct {
         fn once(a: *const planner.AdjacencyList) ![]const planner.PathExpand.PathResult {
-            return try expander.execute(starts[0..], a, ally);
+            return try expander.execute(starts[0..], a, allocator);
         }
     };
 
     const r1 = try run.once(&adj);
     defer {
-        for (r1) |p| ally.free(p.edge_ids);
-        ally.free(r1);
+        for (r1) |p| allocator.free(p.edge_ids);
+        allocator.free(r1);
     }
     const r2 = try run.once(&adj);
     defer {
-        for (r2) |p| ally.free(p.edge_ids);
-        ally.free(r2);
+        for (r2) |p| allocator.free(p.edge_ids);
+        allocator.free(r2);
     }
 
     try std.testing.expect(r1.len > 0);

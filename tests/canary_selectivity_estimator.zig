@@ -3,8 +3,8 @@ const estimator_mod = @import("optimizer/selectivity_estimator.zig");
 
 // TestCANARY_REQ_GQL_084_FrequencySampler
 test "TestCANARY_REQ_GQL_084_FrequencySampler" {
-    const ally = std.testing.allocator;
-    var fs = estimator_mod.FrequencySampler.init(ally, 16);
+    const allocator = std.testing.allocator;
+    var fs = estimator_mod.FrequencySampler.init(allocator, 16);
     defer fs.deinit();
     try fs.record("alpha");
     try fs.record("alpha");
@@ -17,8 +17,8 @@ test "TestCANARY_REQ_GQL_084_FrequencySampler" {
 
 // TestCANARY_REQ_GQL_084_EstimatorApi
 test "TestCANARY_REQ_GQL_084_EstimatorApi" {
-    const ally = std.testing.allocator;
-    var ae = estimator_mod.AdaptiveEstimator.init(ally, 32);
+    const allocator = std.testing.allocator;
+    var ae = estimator_mod.AdaptiveEstimator.init(allocator, 32);
     defer ae.deinit();
     var api = estimator_mod.Api{ .estimator = &ae };
     // Observe distribution: 5x gamma, 1x delta
@@ -32,8 +32,8 @@ test "TestCANARY_REQ_GQL_084_EstimatorApi" {
 
 // TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook
 test "TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook" {
-    const ally = std.testing.allocator;
-    var ae = estimator_mod.AdaptiveEstimator.init(ally, 64);
+    const allocator = std.testing.allocator;
+    var ae = estimator_mod.AdaptiveEstimator.init(allocator, 64);
     defer ae.deinit();
     var api = estimator_mod.Api{ .estimator = &ae };
     // Build skewed observations for key "zeta"
@@ -50,8 +50,8 @@ test "TestCANARY_REQ_GQL_084_AdaptiveFeedbackHook" {
 
 // Additional edge test: unseen value fallback and feedback overshoot stability
 test "TestCANARY_REQ_GQL_084_UnseenAndOvershoot" {
-    const ally = std.testing.allocator;
-    var ae = estimator_mod.AdaptiveEstimator.init(ally, 8);
+    const allocator = std.testing.allocator;
+    var ae = estimator_mod.AdaptiveEstimator.init(allocator, 8);
     defer ae.deinit();
     // Observe a skewed distribution for key X
     var i: usize = 0;

@@ -6,10 +6,10 @@ const wal = @import("../src/storage/wal_compactor.zig");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Prepare synthetic log segments metadata; we assume wal.compact takes a context with segments list.
-    var segments = std.ArrayList(wal.SegmentMeta).init(ally);
+    var segments = std.ArrayList(wal.SegmentMeta).init(allocator);
     defer segments.deinit();
 
     var i: usize = 0;

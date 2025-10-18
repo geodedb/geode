@@ -4,10 +4,10 @@ const std = @import("std");
 const builders = @import("../src/graph/builders.zig");
 const topo = @import("../src/graph/topological_sort_kahn.zig");
 
-fn buildDag(ally: std.mem.Allocator, layers: u32, width: u32) !builders.Graph {
-    var g = builders.Graph.init(ally);
-    var level = std.ArrayList(u32).init(ally);
-    var next = std.ArrayList(u32).init(ally);
+fn buildDag(allocator: std.mem.Allocator, layers: u32, width: u32) !builders.Graph {
+    var g = builders.Graph.init(allocator);
+    var level = std.ArrayList(u32).init(allocator);
+    var next = std.ArrayList(u32).init(allocator);
     var node_id: u32 = 1;
     try g.addNode(node_id);
     try level.append(node_id);
@@ -27,23 +27,23 @@ fn buildDag(ally: std.mem.Allocator, layers: u32, width: u32) !builders.Graph {
         next = tmp;
         next.clearRetainingCapacity();
     }
-    try g.rebuildIndex(ally);
+    try g.rebuildIndex(allocator);
     level.deinit();
     next.deinit();
     return g;
 }
 
 test "BenchmarkCANARY_REQ_GQL_062_TopoKahn" {
-    const ally = std.testing.allocator;
-    var g = try buildDag(ally, 6, 6); // (6 layers * 6 width) moderate DAG
+    const allocator = std.testing.allocator;
+    var g = try buildDag(allocator, 6, 6); // (6 layers * 6 width) moderate DAG
     defer g.deinit();
     const iterations: usize = 40;
     var total: u128 = 0;
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         const start = std.time.nanoTimestamp();
-        const order = try topo.sort(ally, &g);
-        defer ally.free(order);
+        const order = try topo.sort(allocator, &g);
+        defer allocator.free(order);
         const end = std.time.nanoTimestamp();
         total += @as(u128, @intCast(end - start));
         try std.testing.expect(order.len == g.nodes.count());

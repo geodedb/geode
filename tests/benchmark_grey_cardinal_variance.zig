@@ -5,8 +5,8 @@ const grey = geode.graph.grey_cardinal;
 
 // CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=GreyCardinalVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_067_GreyCardinalVarianceEnvelope; OWNER=graph; UPDATED=2025-09-21
 
-fn buildSynthetic(ally: std.mem.Allocator, clusters: u32, cluster_size: u32) !builders.Graph {
-    var g = builders.Graph.init(ally);
+fn buildSynthetic(allocator: std.mem.Allocator, clusters: u32, cluster_size: u32) !builders.Graph {
+    var g = builders.Graph.init(allocator);
     var cluster: u32 = 0;
     var base: u32 = 0;
     while (cluster < clusters) : (cluster += 1) {

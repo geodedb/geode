@@ -19,9 +19,9 @@ fn worker(ctx: WorkerCtx) !void {
 test "TestCANARY_REQ_GQL_042_CDC_OrderingConcurrency" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var engine = try cdc_mod.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 1000, .flush_interval_ms = 100 });
+    var engine = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 1000, .flush_interval_ms = 100 });
     defer engine.deinit();
 
     try engine.start();
@@ -37,8 +37,8 @@ test "TestCANARY_REQ_GQL_042_CDC_OrderingConcurrency" {
     // Force flush to memory sink
     try engine.flushNow();
 
-    const seqs = try engine.memorySinkSequences(ally);
-    defer ally.free(seqs);
+    const seqs = try engine.memorySinkSequences(allocator);
+    defer allocator.free(seqs);
     var i: usize = 1;
     while (i < seqs.len) : (i += 1) {
         if (!(seqs[i] > seqs[i - 1])) return error.NonMonotonicSequence;

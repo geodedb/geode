@@ -9,7 +9,7 @@ fn dummyApply(_: []const u8) void {}
 test "BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     var prng = std.rand.DefaultPrng.init(0xC0FFEE);
     const rand = prng.random();
 
@@ -18,7 +18,7 @@ test "BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency" {
     var i: usize = 0;
     while (i < trials) : (i += 1) {
         const peers = [_][]const u8{ "n2", "n3" };
-        var n1 = try raft_mod.RaftNode.init(ally, .{ .node_id = "n1", .peers = &peers, .election_timeout_min_ms = 10, .election_timeout_max_ms = 20 });
+        var n1 = try raft_mod.RaftNode.init(allocator, .{ .node_id = "n1", .peers = &peers, .election_timeout_min_ms = 10, .election_timeout_max_ms = 20 });
         defer n1.deinit();
         n1.enableFeatures(true, false);
         n1.setApplyCallback(dummyApply);
@@ -36,8 +36,8 @@ test "BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency" {
             // Simulate vote responses probabilistically once candidate
             if (n1.state == .candidate) {
                 const resp = raft_mod.RequestVoteResponse{ .term = n1.current_term, .vote_granted = true };
-                const payload = try std.json.stringifyAlloc(ally, resp, .{});
-                defer ally.free(payload);
+                const payload = try std.json.stringifyAlloc(allocator, resp, .{});
+                defer allocator.free(payload);
                 _ = n1.handleMessage("n2", .request_vote_response, payload) catch {};
                 _ = n1.handleMessage("n3", .request_vote_response, payload) catch {};
             }

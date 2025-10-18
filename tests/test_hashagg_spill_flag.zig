@@ -6,10 +6,10 @@ const exec = @import("../src/exec.zig");
 test "TestCANARY_REQ_GQL_012_HashAggSpillFlag" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Very small memory limit to force spill quickly.
-    var agg = exec.HashAggregator.init(ally, 128);
+    var agg = exec.HashAggregator.init(allocator, 128);
     defer agg.deinit();
 
     const aggs = [_]exec.Agg{.Sum};
@@ -28,7 +28,7 @@ test "TestCANARY_REQ_GQL_012_HashAggSpillFlag" {
 
     try std.testing.expect(agg.spilled);
     const results = try agg.getResults();
-    defer ally.free(results);
+    defer allocator.free(results);
     // We expect up to 64 groups retained since phase-1 spill keeps in-memory state.
     try std.testing.expect(results.len > 0);
 }

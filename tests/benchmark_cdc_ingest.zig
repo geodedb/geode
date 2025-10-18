@@ -9,9 +9,9 @@ pub fn main() !void {}
 test "BenchmarkCANARY_REQ_GQL_042_CDC_Ingest" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var engine = try cdc.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 10_000, .flush_interval_ms = 10_000 });
+    var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 10_000, .flush_interval_ms = 10_000 });
     defer engine.deinit();
     try engine.start();
 

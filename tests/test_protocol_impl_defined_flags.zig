@@ -15,18 +15,18 @@ fn hasSubstring(hay: []const u8, needle: []const u8) bool {
 test "TestCANARY_REQ_GQL_024_ImplDefinedFlagsProtocolIntegration" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Collect impl-defined findings directly and ensure codes appear when passed to schema builder.
-    const findings = try impl_flagger.collect(ally, .{ .zero_length_paths_excluded = true });
-    defer ally.free(findings);
+    const findings = try impl_flagger.collect(allocator, .{ .zero_length_paths_excluded = true });
+    defer allocator.free(findings);
     // Build slice of codes
-    var codes = try ally.alloc([]const u8, findings.len);
-    defer ally.free(codes);
+    var codes = try allocator.alloc([]const u8, findings.len);
+    defer allocator.free(codes);
     var i: usize = 0;
     while (i < findings.len) : (i += 1) codes[i] = findings[i].code;
-    const line = try protocol.buildSchemaLine(ally, &.{}, &.{}, codes);
-    defer ally.free(line);
+    const line = try protocol.buildSchemaLine(allocator, &.{}, &.{}, codes);
+    defer allocator.free(line);
     try std.testing.expect(hasSubstring(line, "ZeroLengthPathExcluded"));
     try std.testing.expect(hasSubstring(line, "CollationBinaryDefault"));
     try std.testing.expect(hasSubstring(line, "NullOrderPolicyDefault"));

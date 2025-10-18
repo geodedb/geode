@@ -2,11 +2,11 @@ const std = @import("std");
 const wal_mod = @import("wal");
 const pipeline_mod = @import("storage/wal_compaction_pipeline.zig");
 
-fn tempBase(ally: std.mem.Allocator) ![]u8 {
+fn tempBase(allocator: std.mem.Allocator) ![]u8 {
     const cwd = std.fs.cwd();
-    const base = try cwd.realpathAlloc(ally, ".");
-    defer ally.free(base);
-    return try std.fmt.allocPrint(ally, "{s}/tmp_wal_{d}", .{ base, std.time.nanoTimestamp() });
+    const base = try cwd.realpathAlloc(allocator, ".");
+    defer allocator.free(base);
+    return try std.fmt.allocPrint(allocator, "{s}/tmp_wal_{d}", .{ base, std.time.nanoTimestamp() });
 }
 
 // Helper: append N commit records to force checkpoint cadence internal counters.
@@ -19,15 +19,15 @@ fn appendCommits(w: *wal_mod.Wal, n: usize) !void {
 
 // TestCANARY_REQ_GQL_083_CheckpointSelection
 test "TestCANARY_REQ_GQL_083_CheckpointSelection" {
-    const ally = std.testing.allocator;
-    var w = wal_mod.Wal.init(ally);
+    const allocator = std.testing.allocator;
+    var w = wal_mod.Wal.init(allocator);
     defer w.deinit();
-    const base = try tempBase(ally);
-    defer ally.free(base);
+    const base = try tempBase(allocator);
+    defer allocator.free(base);
     try w.openFile(base);
     // Tighten cadence for test determinism: checkpoint every 3 commits.
     w.setCompactionCadence(3, 10);
-    var pipe = pipeline_mod.Pipeline.init(ally, &w, .{ .checkpoint_interval_override = 3 });
+    var pipe = pipeline_mod.Pipeline.init(allocator, &w, .{ .checkpoint_interval_override = 3 });
     // Initially should not checkpoint.
     try std.testing.expect(!pipe.shouldCheckpoint());
     try appendCommits(&w, 2);
@@ -41,17 +41,17 @@ test "TestCANARY_REQ_GQL_083_CheckpointSelection" {
 
 // TestCANARY_REQ_GQL_083_CompactionJob
 test "TestCANARY_REQ_GQL_083_CompactionJob" {
-    const ally = std.testing.allocator;
-    var w = wal_mod.Wal.init(ally);
+    const allocator = std.testing.allocator;
+    var w = wal_mod.Wal.init(allocator);
     defer w.deinit();
-    const base = try tempBase(ally);
-    defer ally.free(base);
+    const base = try tempBase(allocator);
+    defer allocator.free(base);
     try w.openFile(base);
     // Force small segment rollover by shrinking segment_limit.
     w.segment_limit = 512; // small for test
     // Configure cadence: checkpoint every 2 commits, compact every 2 checkpoints.
     w.setCompactionCadence(2, 2);
-    var pipe = pipeline_mod.Pipeline.init(ally, &w, .{ .checkpoint_interval_override = 2 });
+    var pipe = pipeline_mod.Pipeline.init(allocator, &w, .{ .checkpoint_interval_override = 2 });
     // Emit commits sufficient to trigger two checkpoints -> compaction.
     try appendCommits(&w, 2); // should trigger first checkpoint on tick
     _ = try pipe.tick();
@@ -66,14 +66,14 @@ test "TestCANARY_REQ_GQL_083_CompactionJob" {
 
 // TestCANARY_REQ_GQL_083_ArchivalHook
 test "TestCANARY_REQ_GQL_083_ArchivalHook" {
-    const ally = std.testing.allocator;
-    var w = wal_mod.Wal.init(ally);
+    const allocator = std.testing.allocator;
+    var w = wal_mod.Wal.init(allocator);
     defer w.deinit();
-    const base = try tempBase(ally);
-    defer ally.free(base);
+    const base = try tempBase(allocator);
+    defer allocator.free(base);
     try w.openFile(base);
     w.setCompactionCadence(1, 100); // frequent checkpoints
-    var pipe = pipeline_mod.Pipeline.init(ally, &w, .{ .checkpoint_interval_override = 1, .archival_window = 2 });
+    var pipe = pipeline_mod.Pipeline.init(allocator, &w, .{ .checkpoint_interval_override = 1, .archival_window = 2 });
     // Two commits -> two checkpoints, archival should fire on second tick (window=2)
     try appendCommits(&w, 1);
     _ = try pipe.tick();

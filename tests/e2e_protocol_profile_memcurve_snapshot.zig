@@ -15,8 +15,8 @@ fn run(args: []const []const u8) ![]u8 {
 }
 
 // Use shared normalization
-fn normalize(line: []const u8, ally: std.mem.Allocator) ![]u8 {
-    return util.normalizeNumbers(ally, line);
+fn normalize(line: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    return util.normalizeNumbers(allocator, line);
 }
 
 const EXPECTED = "mem_curve\":[{\"op_index\":0,\"net_after_op\":0}"; // intentionally truncated prefix for stability

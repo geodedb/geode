@@ -7,10 +7,10 @@ const varcfg = @import("geode").benchmarks.variance_config;
 test "TestCANARY_REQ_GQL_021_VarianceConfigStats" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     // Known dataset: symmetric values to test mean/median/mad
     var data = [_]f128{ 10, 12, 14, 16, 18, 20, 22 };
-    const stats = varcfg.computeStatsF128(ally, data[0..]);
+    const stats = varcfg.computeStatsF128(allocator, data[0..]);
     try std.testing.expectApproxEqAbs(@as(f128, 16.0), stats.mean, 0.0001);
     try std.testing.expectApproxEqAbs(@as(f128, 16.0), stats.median, 0.0001);
     // MAD: median(|x-median|) => values deviations: 6,4,2,0,2,4,6 -> sorted -> 0,2,2,4,4,6,6 median=4

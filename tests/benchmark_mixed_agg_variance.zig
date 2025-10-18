@@ -33,19 +33,19 @@ fn computeStats(times: []u64) Stats() {
     return .{ .mean = mean64, .p95 = sorted[idx95], .cv = cv };
 }
 
-fn buildDataset(ally: std.mem.Allocator, groups: usize, rows_per_group: usize) ![]exec.BindingRow {
-    var list = std.ArrayList(exec.BindingRow).init(ally);
+fn buildDataset(allocator: std.mem.Allocator, groups: usize, rows_per_group: usize) ![]exec.BindingRow {
+    var list = std.ArrayList(exec.BindingRow).init(allocator);
     var g: usize = 0;
     while (g < groups) : (g += 1) {
         var r: usize = 0;
         while (r < rows_per_group) : (r += 1) {
             // group key as string g_#
-            const name = try std.fmt.allocPrint(ally, "g_{d}", .{g});
+            const name = try std.fmt.allocPrint(allocator, "g_{d}", .{g});
             // value pattern: distinct distribution and negative injection every 5th row
             const base: i64 = @intCast((r % 7) + @as(usize, g % 11));
             const val: i64 = if ((r % 5) == 0) -@as(i64, base) else @as(i64, base);
             const w: i64 = @as(i64, @intCast((g % 13) * 10 + r));
-            var cols = try ally.alloc(exec.BindingValue, 3);
+            var cols = try allocator.alloc(exec.BindingValue, 3);
             cols[0] = exec.BindingValue{ .Str = name };
             cols[1] = exec.BindingValue{ .Int = val };
             cols[2] = exec.BindingValue{ .Int = w };
@@ -55,35 +55,35 @@ fn buildDataset(ally: std.mem.Allocator, groups: usize, rows_per_group: usize) !
     return list.toOwnedSlice();
 }
 
-fn freeDataset(ally: std.mem.Allocator, rows: []exec.BindingRow) void {
+fn freeDataset(allocator: std.mem.Allocator, rows: []exec.BindingRow) void {
     for (rows) |r| {
         // free group key string and cols
-        if (r.cols[0] == .Str) ally.free(r.cols[0].Str);
-        ally.free(r.cols);
+        if (r.cols[0] == .Str) allocator.free(r.cols[0].Str);
+        allocator.free(r.cols);
     }
-    ally.free(rows);
+    allocator.free(rows);
 }
 
 test "BenchmarkCANARY_REQ_GQL_012_MixedAggregateVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    const dataset = try buildDataset(ally, 120, 6); // 720 rows
-    defer freeDataset(ally, dataset);
+    const dataset = try buildDataset(allocator, 120, 6); // 720 rows
+    defer freeDataset(allocator, dataset);
 
-    var build_times = try ally.alloc(u64, Iterations);
-    var emit_times = try ally.alloc(u64, Iterations);
+    var build_times = try allocator.alloc(u64, Iterations);
+    var emit_times = try allocator.alloc(u64, Iterations);
     defer {
-        ally.free(build_times);
-        ally.free(emit_times);
+        allocator.free(build_times);
+        allocator.free(emit_times);
     }
 
     const agg_specs = [_]exec.Agg{ .CountDistinct, .Sum, .Avg, .Min, .Max };
 
     var it: usize = 0;
     while (it < Iterations) : (it += 1) {
-        var agg = exec.HashAggregator.init(ally, 1 << 20);
+        var agg = exec.HashAggregator.init(allocator, 1 << 20);
         const t0 = std.time.nanoTimestamp();
         for (dataset) |row| {
             var key_vals = [_]exec.BindingValue{row.cols[0]};

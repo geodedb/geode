@@ -7,9 +7,9 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 test "TestCANARY_REQ_GQL_042_CDC_Ordering" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var engine = try cdc.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 50 });
+    var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 50 });
     defer engine.deinit();
     try engine.start();
 
@@ -19,8 +19,8 @@ test "TestCANARY_REQ_GQL_042_CDC_Ordering" {
     }
     try engine.flushNow();
 
-    const seqs = try engine.memorySinkSequences(ally);
-    defer ally.free(seqs);
+    const seqs = try engine.memorySinkSequences(allocator);
+    defer allocator.free(seqs);
     var prev: u64 = 0;
     var j: usize = 0;
     while (j < seqs.len) : (j += 1) {

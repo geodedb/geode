@@ -5,8 +5,8 @@ const builders = geode.graph.builders;
 
 // CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=ClosenessVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_067_ClosenessVarianceEnvelope; OWNER=graph; UPDATED=2025-09-21
 
-fn buildMesh(ally: std.mem.Allocator, n: u32) !builders.Graph {
-    var g = builders.Graph.init(ally);
+fn buildMesh(allocator: std.mem.Allocator, n: u32) !builders.Graph {
+    var g = builders.Graph.init(allocator);
     var i: u32 = 0;
     while (i < n) : (i += 1) g.addNode(i);
     i = 0;
@@ -23,8 +23,8 @@ fn buildMesh(ally: std.mem.Allocator, n: u32) !builders.Graph {
 test "BenchmarkCANARY_REQ_GQL_067_ClosenessVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var g = try buildMesh(ally, 42);
+    const allocator = gpa.allocator();
+    var g = try buildMesh(allocator, 42);
     defer g.deinit();
 
     const Runs = 28;
@@ -32,8 +32,8 @@ test "BenchmarkCANARY_REQ_GQL_067_ClosenessVarianceEnvelope" {
     var r: usize = 0;
     while (r < Runs) : (r += 1) {
         const start = std.time.nanoTimestamp();
-        var res = try closeness.compute(ally, &g, .{ .harmonic = true });
-        res.deinit(ally);
+        var res = try closeness.compute(allocator, &g, .{ .harmonic = true });
+        res.deinit(allocator);
         const end = std.time.nanoTimestamp();
         samples[r] = @intCast(end - start);
     }

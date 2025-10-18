@@ -26,9 +26,9 @@ fn simulateAdaptive(ctx: *wal.CompactionContext, rounds: usize, adaptive: bool) 
 test "BenchmarkCANARY_REQ_GQL_028_WalAdaptivePolicy" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var segs = std.ArrayList(wal.SegmentMeta).init(ally);
+    var segs = std.ArrayList(wal.SegmentMeta).init(allocator);
     defer segs.deinit();
     var i: usize = 0;
     while (i < 1500) : (i += 1) try segs.append(.{ .id = @intCast(i), .live_bytes = 2048, .dead_bytes = 512 });

@@ -18,9 +18,9 @@ test "TestCANARY_REQ_GQL_005_HelloRoundTrip" {
 test "TestCANARY_REQ_GQL_030_TxnCommit" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     var mgr: txn.Manager = undefined;
-    mgr.init(ally);
+    mgr.init(allocator);
     defer mgr.deinit();
     var t = mgr.begin();
     try mgr.commit(&t);
@@ -34,8 +34,8 @@ const walc = @import("../src/storage/wal_compactor.zig");
 test "TestCANARY_REQ_GQL_028_WalCompact" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var comp = walc.WalCompactor.init(ally, "/tmp", .{});
+    const allocator = gpa.allocator();
+    var comp = walc.WalCompactor.init(allocator, "/tmp", .{});
     // shouldCompact will return false without real WAL files; just call it
     _ = try comp.shouldCompact();
 }

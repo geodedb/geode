@@ -4,8 +4,8 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Resume Token Restart"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart; OWNER=streaming; UPDATED=2025-09-20
 
 test "TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart" {
-    const ally = std.testing.allocator;
-    var engine = try cdc.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 8 });
+    const allocator = std.testing.allocator;
+    var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 8 });
     defer engine.deinit();
 
     try engine.start();
@@ -23,8 +23,8 @@ test "TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart" {
     try std.testing.expect(token_after > token_before);
 
     // Acquire replay from previous token (should only include new events)
-    const replay = try engine.replayFrom(ally, token_before);
-    defer ally.free(replay);
+    const replay = try engine.replayFrom(allocator, token_before);
+    defer allocator.free(replay);
     try std.testing.expect(replay.len == 10);
     // Ensure monotonic sequence strictly increasing over replay slice
     var last_seq: u64 = 0;

@@ -4,9 +4,9 @@ const chunk_storage = @import("../src/timeseries/chunk_storage.zig");
 const gql_functions = @import("../src/timeseries/gql_functions.zig");
 
 test "e2e_timeseries: basic store operations" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    var store = timeseries.Store.init(ally);
+    var store = timeseries.Store.init(allocator);
     defer store.deinit();
 
     // Insert data for multiple series
@@ -14,9 +14,9 @@ test "e2e_timeseries: basic store operations" {
     const humidity_key = timeseries.SeriesKey{ .device_id = 1, .metric = "humidity" };
 
     // Generate realistic time-series data
-    var temp_points = std.ArrayList(timeseries.Point).init(ally);
+    var temp_points = std.ArrayList(timeseries.Point).init(allocator);
     defer temp_points.deinit();
-    var humidity_points = std.ArrayList(timeseries.Point).init(ally);
+    var humidity_points = std.ArrayList(timeseries.Point).init(allocator);
     defer humidity_points.deinit();
 
     var i: i64 = 0;
@@ -48,8 +48,8 @@ test "e2e_timeseries: basic store operations" {
 
     // Test sample_by with different aggregations
     const avg_samples = try store.sampleBy(temp_key, 10000, // 10 second buckets
-        1000000, 1100000, .avg, ally);
-    defer ally.free(avg_samples);
+        1000000, 1100000, .avg, allocator);
+    defer allocator.free(avg_samples);
 
     try std.testing.expect(avg_samples.len == 10);
     for (avg_samples) |sample| {
@@ -59,11 +59,11 @@ test "e2e_timeseries: basic store operations" {
 
     // Test min/max aggregations
     const min_samples = try store.sampleBy(humidity_key, 20000, // 20 second buckets
-        1000000, 1100000, .min, ally);
-    defer ally.free(min_samples);
+        1000000, 1100000, .min, allocator);
+    defer allocator.free(min_samples);
 
-    const max_samples = try store.sampleBy(humidity_key, 20000, 1000000, 1100000, .max, ally);
-    defer ally.free(max_samples);
+    const max_samples = try store.sampleBy(humidity_key, 20000, 1000000, 1100000, .max, allocator);
+    defer allocator.free(max_samples);
 
     try std.testing.expect(min_samples.len == 5);
     try std.testing.expect(max_samples.len == 5);
@@ -78,12 +78,12 @@ test "e2e_timeseries: basic store operations" {
 }
 
 test "e2e_timeseries: chunk storage with compression" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     const test_dir = "test_timeseries_chunks";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var storage = try chunk_storage.ChunkStorage.init(ally, test_dir, .{
+    var storage = try chunk_storage.ChunkStorage.init(allocator, test_dir, .{
         .max_points_per_chunk = 1000,
         .compression_algorithm = .gorilla,
         .retention_days = 7,
@@ -91,7 +91,7 @@ test "e2e_timeseries: chunk storage with compression" {
     defer storage.deinit();
 
     // Generate high-frequency time-series data
-    var points = std.ArrayList(timeseries.Point).init(ally);
+    var points = std.ArrayList(timeseries.Point).init(allocator);
     defer points.deinit();
 
     // Simulate 1 hour of data at 10Hz (36,000 points)
@@ -137,12 +137,12 @@ test "e2e_timeseries: chunk storage with compression" {
 }
 
 test "e2e_timeseries: retention policy" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     const test_dir = "test_retention_policy";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var storage = try chunk_storage.ChunkStorage.init(ally, test_dir, .{
+    var storage = try chunk_storage.ChunkStorage.init(allocator, test_dir, .{
         .retention_days = 1, // 1 day retention for testing
     });
     defer storage.deinit();
@@ -186,15 +186,15 @@ test "e2e_timeseries: retention policy" {
 }
 
 test "e2e_timeseries: GQL function integration" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    var store = timeseries.Store.init(ally);
+    var store = timeseries.Store.init(allocator);
     defer store.deinit();
 
     const key = timeseries.SeriesKey{ .device_id = 42, .metric = "cpu_usage" };
 
     // Insert CPU usage data (0-100%)
-    var points = std.ArrayList(timeseries.Point).init(ally);
+    var points = std.ArrayList(timeseries.Point).init(allocator);
     defer points.deinit();
 
     var i: i64 = 0;
@@ -217,7 +217,7 @@ test "e2e_timeseries: GQL function integration" {
         .params = .{ .last_value = {} },
     };
 
-    const last_result = try gql_functions.executeFunction(&store, last_value_call, ally);
+    const last_result = try gql_functions.executeFunction(&store, last_value_call, allocator);
     switch (last_result) {
         .object => |obj| {
             const ts = obj.get("ts").?.integer;
@@ -235,7 +235,7 @@ test "e2e_timeseries: GQL function integration" {
         .params = .{ .value_at = .{ .timestamp = 1000025000 } }, // During spike
     };
 
-    const at_result = try gql_functions.executeFunction(&store, value_at_call, ally);
+    const at_result = try gql_functions.executeFunction(&store, value_at_call, allocator);
     switch (at_result) {
         .object => |obj| {
             const val = obj.get("value").?.integer;
@@ -256,7 +256,7 @@ test "e2e_timeseries: GQL function integration" {
         },
     };
 
-    const interp_result = try gql_functions.executeFunction(&store, interpolate_call, ally);
+    const interp_result = try gql_functions.executeFunction(&store, interpolate_call, allocator);
     try std.testing.expect(interp_result == .object);
 
     // Test moving average
@@ -271,7 +271,7 @@ test "e2e_timeseries: GQL function integration" {
         },
     };
 
-    const avg_result = try gql_functions.executeFunction(&store, moving_avg_call, ally);
+    const avg_result = try gql_functions.executeFunction(&store, moving_avg_call, allocator);
     switch (avg_result) {
         .array => |arr| {
             try std.testing.expect(arr.len > 50); // Should have many averaged points
@@ -306,7 +306,7 @@ test "e2e_timeseries: GQL function integration" {
         },
     };
 
-    const rate_result = try gql_functions.executeFunction(&store, rate_call, ally);
+    const rate_result = try gql_functions.executeFunction(&store, rate_call, allocator);
     switch (rate_result) {
         .array => |arr| {
             try std.testing.expect(arr.len == points.items.len - 1);
@@ -333,17 +333,17 @@ test "e2e_timeseries: GQL function integration" {
 }
 
 test "e2e_timeseries: performance benchmark" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    var store = timeseries.Store.init(ally);
+    var store = timeseries.Store.init(allocator);
     defer store.deinit();
 
     const key = timeseries.SeriesKey{ .device_id = 1, .metric = "benchmark" };
 
     // Benchmark write performance
     const num_points = 1000000; // 1M points
-    var points = try ally.alloc(timeseries.Point, num_points);
-    defer ally.free(points);
+    var points = try allocator.alloc(timeseries.Point, num_points);
+    defer allocator.free(points);
 
     var i: usize = 0;
     while (i < num_points) : (i += 1) {
@@ -369,8 +369,8 @@ test "e2e_timeseries: performance benchmark" {
     // Run various queries
     _ = store.last(key);
     _ = store.valueBefore(key, 1000500000);
-    const samples = try store.sampleBy(key, 10000, 1000000000, 1001000000, .avg, ally);
-    ally.free(samples);
+    const samples = try store.sampleBy(key, 10000, 1000000000, 1001000000, .avg, allocator);
+    allocator.free(samples);
 
     const query_time = std.time.milliTimestamp() - query_start;
 

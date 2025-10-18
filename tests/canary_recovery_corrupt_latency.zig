@@ -19,15 +19,15 @@ fn stddev(a: []const f64, m: f64) f64 {
 test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var pm = storage_page_manager.PageManager.init(ally);
+    const allocator = gpa.allocator();
+    var pm = storage_page_manager.PageManager.init(allocator);
     defer pm.deinit();
-    var w = wal.Wal.init(ally);
+    var w = wal.Wal.init(allocator);
     // open a temp base path in mem FS (use random name)
     try w.openFile("/tmp/geode_corrupt_test");
     // append a few records
-    const ins_payload = try wal.Wal.encodeInsert(ally, 1, 0, &.{ 1, 2, 3 });
-    defer ally.free(ins_payload);
+    const ins_payload = try wal.Wal.encodeInsert(allocator, 1, 0, &.{ 1, 2, 3 });
+    defer allocator.free(ins_payload);
     _ = try w.append(1, .Insert, ins_payload, 0);
     _ = try w.append(1, .Commit, &.{}, 0);
     try w.fsync();
@@ -41,29 +41,29 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
         try f.seekTo(0);
     }
     // Run recovery; should stop gracefully without panic
-    const seg_path = try std.fmt.allocPrint(ally, "{s}.wal.0", .{w.base_path});
-    defer ally.free(seg_path);
+    const seg_path = try std.fmt.allocPrint(allocator, "{s}.wal.0", .{w.base_path});
+    defer allocator.free(seg_path);
     _ = try w.recover(&pm, seg_path);
 }
 
 test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const iters: usize = 180;
-    var samples = try ally.alloc(f64, iters);
-    defer ally.free(samples);
+    var samples = try allocator.alloc(f64, iters);
+    defer allocator.free(samples);
     var i: usize = 0;
     while (i < iters) : (i += 1) {
-        var pm = storage_page_manager.PageManager.init(ally);
+        var pm = storage_page_manager.PageManager.init(allocator);
         defer pm.deinit();
-        var w = wal.Wal.init(ally);
+        var w = wal.Wal.init(allocator);
         try w.openFile("/tmp/geode_corrupt_bench");
         // write several inserts to enlarge log
         var t: usize = 0;
         while (t < 20) : (t += 1) {
-            const ip = try wal.Wal.encodeInsert(ally, 1, 0, &.{ 1, 2, 3, 4 });
-            defer ally.free(ip);
+            const ip = try wal.Wal.encodeInsert(allocator, 1, 0, &.{ 1, 2, 3, 4 });
+            defer allocator.free(ip);
             _ = try w.append(1, .Insert, ip, 0);
             _ = try w.append(1, .Commit, &.{}, 0);
         }
@@ -79,8 +79,8 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
             }
         }
         const start = std.time.microTimestamp();
-        const seg_path2 = try std.fmt.allocPrint(ally, "{s}.wal.0", .{w.base_path});
-        defer ally.free(seg_path2);
+        const seg_path2 = try std.fmt.allocPrint(allocator, "{s}.wal.0", .{w.base_path});
+        defer allocator.free(seg_path2);
         _ = w.recover(&pm, seg_path2) catch {}; // tolerate early stop
         const endt = std.time.microTimestamp();
         samples[i] = @as(f64, @floatFromInt(endt - start));

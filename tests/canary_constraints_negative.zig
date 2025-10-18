@@ -7,8 +7,8 @@ const protocol = @import("../src/protocol.zig");
 test "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    const allocator = gpa.allocator();
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const nc = constraints_mod.SchemaConstraints.NodeConstraints{
@@ -19,12 +19,12 @@ test "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation" {
     };
     try sc.addNodeConstraint("Person", nc);
 
-    var props1 = std.StringHashMap(protocol.Value).init(ally);
+    var props1 = std.StringHashMap(protocol.Value).init(allocator);
     defer props1.deinit();
     try props1.put("email", .{ .String = "a@b" });
     try std.testing.expect((try sc.validateNode(1, "Person", props1)) == null);
 
-    var props2 = std.StringHashMap(protocol.Value).init(ally);
+    var props2 = std.StringHashMap(protocol.Value).init(allocator);
     defer props2.deinit();
     try props2.put("email", .{ .String = "a@b" });
     const err2 = try sc.validateNode(2, "Person", props2);
@@ -35,8 +35,8 @@ test "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation" {
 test "TestCANARY_REQ_GQL_032_ConstraintTypeMismatch" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    const allocator = gpa.allocator();
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const nc = constraints_mod.SchemaConstraints.NodeConstraints{
@@ -49,7 +49,7 @@ test "TestCANARY_REQ_GQL_032_ConstraintTypeMismatch" {
     };
     try sc.addNodeConstraint("Device", nc);
 
-    var props = std.StringHashMap(protocol.Value).init(ally);
+    var props = std.StringHashMap(protocol.Value).init(allocator);
     defer props.deinit();
     try props.put("version", .{ .Int = 17 });
     const err1 = try sc.validateNode(1, "Device", props);

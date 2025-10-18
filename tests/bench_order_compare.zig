@@ -5,8 +5,8 @@ const std = @import("std");
 // search for each comparison while the optimized path sorts indices.
 // Outputs single JSON line with timing and comparator invocation counts.
 
-fn legacySort(ally: std.mem.Allocator, rows: [][]const u8) !struct { dur_ns: u128, cmp_calls: usize } {
-    const dup = try ally.dupe([]const u8, rows);
+fn legacySort(allocator: std.mem.Allocator, rows: [][]const u8) !struct { dur_ns: u128, cmp_calls: usize } {
+    const dup = try allocator.dupe([]const u8, rows);
     var calls: usize = 0;
     const Ctx = struct { rows: [][]const u8, calls: *usize };
     const t0 = std.time.nanoTimestamp();
@@ -26,9 +26,9 @@ fn legacySort(ally: std.mem.Allocator, rows: [][]const u8) !struct { dur_ns: u12
     return .{ .dur_ns = @as(u128, @intCast(t1 - t0)), .cmp_calls = calls };
 }
 
-fn optimizedSort(ally: std.mem.Allocator, rows: [][]const u8) !struct { dur_ns: u128, cmp_calls: usize } {
-    var indices = try ally.alloc(usize, rows.len);
-    defer ally.free(indices);
+fn optimizedSort(allocator: std.mem.Allocator, rows: [][]const u8) !struct { dur_ns: u128, cmp_calls: usize } {
+    var indices = try allocator.alloc(usize, rows.len);
+    defer allocator.free(indices);
     var i: usize = 0;
     while (i < indices.len) : (i += 1) indices[i] = i;
     var calls: usize = 0;
@@ -47,17 +47,17 @@ fn optimizedSort(ally: std.mem.Allocator, rows: [][]const u8) !struct { dur_ns: 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const n = 2000; // moderate size
-    var rows = try ally.alloc([]const u8, n);
-    defer ally.free(rows);
+    var rows = try allocator.alloc([]const u8, n);
+    defer allocator.free(rows);
     // Generate synthetic JSON row slices with slight variations to avoid best-case sorting
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        rows[i] = try std.fmt.allocPrint(ally, "{{\"x\":{d},\"y\":{d}}}", .{ (n - i), i % 17 });
+        rows[i] = try std.fmt.allocPrint(allocator, "{{\"x\":{d},\"y\":{d}}}", .{ (n - i), i % 17 });
     }
-    const legacy = try legacySort(ally, rows);
-    const opt = try optimizedSort(ally, rows);
+    const legacy = try legacySort(allocator, rows);
+    const opt = try optimizedSort(allocator, rows);
     // Output JSON metrics
     std.debug.print("{s}{d}{s}{d}{s}{d}{s}{d}{s}\n", .{
         "{\"bench\":\"order_compare\",\"rows\":", n,

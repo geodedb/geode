@@ -8,8 +8,8 @@ const varcfg = @import("geode").benchmarks.variance_config;
 // VARIANCE_EXCEPTION: Temporary allowance; current CV/p95 breach due to recent WAL recovery path instrumentation. Will retune thresholds or optimize allocation churn next slice.
 // Acceptance: speedup CV<=0.18, p95/mean<=1.35 across N samples; mean speedup >=1.00 (non-regression)
 
-fn buildSyntheticWal(ally: std.mem.Allocator, base_path: []const u8, inserts: usize) !struct { wal_path: []u8 } {
-    var w = wal_mod.Wal.init(ally);
+fn buildSyntheticWal(allocator: std.mem.Allocator, base_path: []const u8, inserts: usize) !struct { wal_path: []u8 } {
+    var w = wal_mod.Wal.init(allocator);
     defer w.deinit();
     try w.openFile(base_path);
     var txn_id: u64 = 1;
@@ -18,8 +18,8 @@ fn buildSyntheticWal(ally: std.mem.Allocator, base_path: []const u8, inserts: us
         const page_id: u32 = @intCast(i / 32);
         const slot: u16 = @intCast(i % 32);
         const payload_data = [_]u8{ 'R', 'E', 'D', 'O' };
-        const enc = try wal_mod.Wal.encodeInsert(ally, page_id, slot, payload_data[0..]);
-        defer ally.free(enc);
+        const enc = try wal_mod.Wal.encodeInsert(allocator, page_id, slot, payload_data[0..]);
+        defer allocator.free(enc);
         _ = try w.append(txn_id, .Insert, enc, 0);
         if ((i % 32) == 31) { // commit every 32 inserts
             _ = try w.append(txn_id, .Commit, &.{}, 0);
@@ -28,23 +28,23 @@ fn buildSyntheticWal(ally: std.mem.Allocator, base_path: []const u8, inserts: us
     }
     _ = try w.writeCheckpoint();
     try w.fsync();
-    const wal_path = try std.fmt.allocPrint(ally, "{s}.wal.0", .{base_path});
+    const wal_path = try std.fmt.allocPrint(allocator, "{s}.wal.0", .{base_path});
     return .{ .wal_path = wal_path };
 }
 
-fn sampleDelta(ally: std.mem.Allocator, wal_path: []const u8, base_dir: []const u8) !struct { baseline: u64, optimized: u64 } {
+fn sampleDelta(allocator: std.mem.Allocator, wal_path: []const u8, base_dir: []const u8) !struct { baseline: u64, optimized: u64 } {
     // Baseline recovery
-    var w_base = wal_mod.Wal.init(ally);
+    var w_base = wal_mod.Wal.init(allocator);
     defer w_base.deinit();
-    var pm_base = page_manager.PageManager.initPersistent(ally, 512, base_dir);
+    var pm_base = page_manager.PageManager.initPersistent(allocator, 512, base_dir);
     defer pm_base.deinit();
     const t0 = std.time.nanoTimestamp();
     _ = try w_base.recover(&pm_base, wal_path);
     const t1 = std.time.nanoTimestamp();
 
-    var w_opt = wal_mod.Wal.init(ally);
+    var w_opt = wal_mod.Wal.init(allocator);
     defer w_opt.deinit();
-    var pm_opt = page_manager.PageManager.initPersistent(ally, 512, base_dir);
+    var pm_opt = page_manager.PageManager.initPersistent(allocator, 512, base_dir);
     defer pm_opt.deinit();
     const t2 = std.time.nanoTimestamp();
     _ = try w_opt.recoverOptimized(&pm_opt, wal_path, true);
@@ -81,22 +81,22 @@ fn varianceEnvelopeF(samples: []const f128) struct { mean: f128, cv: f128, p95_r
 pub fn runRedoOptimizationDeltaVarianceEnvelope() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     var td = std.testing.tmpDir(.{});
     defer td.cleanup();
-    const base = try td.dir.realpathAlloc(ally, ".");
-    defer ally.free(base);
-    const wal_base = try std.fmt.allocPrint(ally, "{s}/redo_delta_wal", .{base});
-    defer ally.free(wal_base);
-    const built = try buildSyntheticWal(ally, wal_base, 4096); // increase inserts to amplify recovery work
-    defer ally.free(built.wal_path);
+    const base = try td.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(base);
+    const wal_base = try std.fmt.allocPrint(allocator, "{s}/redo_delta_wal", .{base});
+    defer allocator.free(wal_base);
+    const built = try buildSyntheticWal(allocator, wal_base, 4096); // increase inserts to amplify recovery work
+    defer allocator.free(built.wal_path);
 
     // Symmetrical warmup phase to stabilize filesystem cache and allocator behavior
     // Perform baseline then optimized, then optimized then baseline to avoid systemic ordering bias.
     {
-        var warm_w = wal_mod.Wal.init(ally);
+        var warm_w = wal_mod.Wal.init(allocator);
         defer warm_w.deinit();
-        var warm_pm = page_manager.PageManager.initPersistent(ally, 512, base);
+        var warm_pm = page_manager.PageManager.initPersistent(allocator, 512, base);
         defer warm_pm.deinit();
         // Order A: baseline -> optimized
         _ = try warm_w.recover(&warm_pm, built.wal_path);
@@ -106,14 +106,14 @@ pub fn runRedoOptimizationDeltaVarianceEnvelope() !void {
         _ = try warm_w.recover(&warm_pm, built.wal_path);
     }
 
-    const cfg = varcfg.load(ally, "GEODE_REDO_BENCH", 64, 8, 2); // increase trim edges to 2 for stability
+    const cfg = varcfg.load(allocator, "GEODE_REDO_BENCH", 64, 8, 2); // increase trim edges to 2 for stability
     const N: usize = cfg.samples;
-    var speedups = try ally.alloc(f128, N);
-    defer ally.free(speedups);
-    var baseline_means = try ally.alloc(f128, N);
-    defer ally.free(baseline_means);
-    var optimized_means = try ally.alloc(f128, N);
-    defer ally.free(optimized_means);
+    var speedups = try allocator.alloc(f128, N);
+    defer allocator.free(speedups);
+    var baseline_means = try allocator.alloc(f128, N);
+    defer allocator.free(baseline_means);
+    var optimized_means = try allocator.alloc(f128, N);
+    defer allocator.free(optimized_means);
 
     var i: usize = 0;
     // Extra warmup per outer iteration to stabilize filesystem cache jitter.
@@ -125,11 +125,11 @@ pub fn runRedoOptimizationDeltaVarianceEnvelope() !void {
         var opt_acc: f128 = 0;
         // Per-sample pre-warm recovery to reduce first-iteration bias
         {
-            const sample_warm = try sampleDelta(ally, built.wal_path, base);
+            const sample_warm = try sampleDelta(allocator, built.wal_path, base);
             if (sample_warm.baseline == 0 or sample_warm.optimized == 0) {}
         }
         while (j < M) : (j += 1) {
-            const sample = try sampleDelta(ally, built.wal_path, base);
+            const sample = try sampleDelta(allocator, built.wal_path, base);
             if (sample.optimized == 0 or sample.baseline == 0) return error.UnexpectedZeroTiming;
             base_acc += @as(f128, @floatFromInt(sample.baseline));
             opt_acc += @as(f128, @floatFromInt(sample.optimized));
@@ -171,7 +171,7 @@ pub fn runRedoOptimizationDeltaVarianceEnvelope() !void {
             var base_acc2: f128 = 0;
             var opt_acc2: f128 = 0;
             while (j2 < adaptive_inner) : (j2 += 1) {
-                const sample2 = try sampleDelta(ally, built.wal_path, base);
+                const sample2 = try sampleDelta(allocator, built.wal_path, base);
                 if (sample2.optimized == 0 or sample2.baseline == 0) continue;
                 base_acc2 += @as(f128, @floatFromInt(sample2.baseline));
                 opt_acc2 += @as(f128, @floatFromInt(sample2.optimized));

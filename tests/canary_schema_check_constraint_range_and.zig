@@ -8,9 +8,9 @@ const protocol = @import("../src/protocol.zig");
 test "TestCANARY_REQ_GQL_032_CheckConstraintRangeAnd" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const check = constraints_mod.SchemaConstraints.CheckConstraint{
@@ -29,7 +29,7 @@ test "TestCANARY_REQ_GQL_032_CheckConstraintRangeAnd" {
     try sc.addNodeConstraint("Thing", node_constraints);
 
     // Build properties map
-    var props = std.StringHashMap(protocol.Value).init(ally);
+    var props = std.StringHashMap(protocol.Value).init(allocator);
     defer props.deinit();
     try props.put("a", protocol.Value{ .integer = 5 });
     try props.put("b", protocol.Value{ .string = "ok" });
@@ -39,7 +39,7 @@ test "TestCANARY_REQ_GQL_032_CheckConstraintRangeAnd" {
     try std.testing.expect(err == null);
 
     // Violation case (a not < 10)
-    var props2 = std.StringHashMap(protocol.Value).init(ally);
+    var props2 = std.StringHashMap(protocol.Value).init(allocator);
     defer props2.deinit();
     try props2.put("a", protocol.Value{ .integer = 15 });
     try props2.put("b", protocol.Value{ .string = "ok" });

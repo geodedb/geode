@@ -30,12 +30,12 @@ fn stats(values: []i128) struct { mean: f64, stddev: f64, cv: f64, p95: i128 } {
 test "BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const runs = 48;
-    var build = try ally.alloc(i128, runs);
-    defer ally.free(build);
-    var emit = try ally.alloc(i128, runs);
-    defer ally.free(emit);
+    var build = try allocator.alloc(i128, runs);
+    defer allocator.free(build);
+    var emit = try allocator.alloc(i128, runs);
+    defer allocator.free(emit);
 
     // Build synthetic input rows with moderate variance in group sizes.
     const g = ast.Expr{ .Ident = "g" };
@@ -46,7 +46,7 @@ test "BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope" {
     const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
 
     // Pre-generate dataset: groups A..H with differing sizes & value patterns.
-    var dataset = std.ArrayList([]const eval.Value).init(ally);
+    var dataset = std.ArrayList([]const eval.Value).init(allocator);
     defer dataset.deinit();
     const names = &.{ "a", "g" };
     const groups = [_][]const u8{ "A", "B", "C", "D", "E", "F", "G", "H" };
@@ -64,8 +64,8 @@ test "BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope" {
     var i: usize = 0;
     while (i < runs) : (i += 1) {
         var timings: exec.AggStageTimings = .{};
-        const out = try exec.runGroupedQuery(ally, q, names, dataset.items, &.{}, &.{}, &timings);
-        defer ally.free(out);
+        const out = try exec.runGroupedQuery(allocator, q, names, dataset.items, &.{}, &.{}, &timings);
+        defer allocator.free(out);
         build[i] = timings.build_ns;
         emit[i] = timings.emit_ns;
     }

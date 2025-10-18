@@ -15,7 +15,7 @@ fn next(r: *u64) u64 {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     var timer = try std.time.Timer.start();
     const iterations: usize = 50_000; // keep under time limits
@@ -25,7 +25,7 @@ pub fn main() !void {
 
     // PRNG usage (xorshift64*) to vary diagnostic patterns
 
-    var buf = std.ArrayList(diag.Diagnostic).init(ally);
+    var buf = std.ArrayList(diag.Diagnostic).init(allocator);
     defer buf.deinit();
 
     var folded: ?diag.Diagnostic = null;

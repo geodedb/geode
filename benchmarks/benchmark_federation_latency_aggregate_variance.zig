@@ -24,8 +24,8 @@ const Metrics = struct {
     outlier_ratio: f128,
 };
 
-fn simulateOnce(ally: std.mem.Allocator, cycles: usize, samples_per_cycle: usize) ![]u64 {
-    var dist = try ally.alloc(u64, cycles);
+fn simulateOnce(allocator: std.mem.Allocator, cycles: usize, samples_per_cycle: usize) ![]u64 {
+    var dist = try allocator.alloc(u64, cycles);
     var c: usize = 0;
     while (c < cycles) : (c += 1) {
         agg.resetAll();
@@ -100,11 +100,11 @@ fn computeMetrics(samples: []u64) Metrics {
 pub fn runFedLatencyAggregatorVariance() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const cycles: usize = 48;
     const samples: usize = 40;
-    const dist = try simulateOnce(ally, cycles, samples);
-    defer ally.free(dist);
+    const dist = try simulateOnce(allocator, cycles, samples);
+    defer allocator.free(dist);
     const m = computeMetrics(dist);
     var buf: [512]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);

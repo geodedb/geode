@@ -1,19 +1,19 @@
 const std = @import("std");
 
 test "e2e: transaction serialization failure mapping to status_class 25000" {
-    const ally = std.testing.allocator;
-    const exe_dir = try std.fs.cwd().realpathAlloc(ally, ".");
-    defer ally.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(ally, "{s}/zig-out/bin/geoded", .{exe_dir});
-    defer ally.free(exe_path);
+    const allocator = std.testing.allocator;
+    const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(exe_dir);
+    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
+    defer allocator.free(exe_path);
 
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, ally);
+    var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
 
-    var out_buf = std.ArrayList(u8).init(ally);
+    var out_buf = std.ArrayList(u8).init(allocator);
     defer out_buf.deinit();
 
     if (child.stdin) |stdin| {

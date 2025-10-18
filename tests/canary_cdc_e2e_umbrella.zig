@@ -8,10 +8,10 @@ const streaming = @import("../src/streaming/cdc_enhanced.zig");
 test "TestCANARY_REQ_GQL_042_CDC_E2EUmbrella" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Minimal engine configuration (uses existing enhanced engine API shape)
-    var engine = try streaming.CdcEnhanced.init(ally, .{ .enable_wal_tail = true, .adaptive_diff = true });
+    var engine = try streaming.CdcEnhanced.init(allocator, .{ .enable_wal_tail = true, .adaptive_diff = true });
     defer engine.deinit();
 
     try engine.start();
@@ -20,7 +20,7 @@ test "TestCANARY_REQ_GQL_042_CDC_E2EUmbrella" {
     // Ingest a few synthetic events
     var i: usize = 0;
     while (i < 5) : (i += 1) {
-        try engine.captureEvent(.{ .kind = .insert, .payload = try std.fmt.allocPrint(ally, "ev-{d}", .{i}) });
+        try engine.captureEvent(.{ .kind = .insert, .payload = try std.fmt.allocPrint(allocator, "ev-{d}", .{i}) });
     }
 
     // Export diagnostics snapshot

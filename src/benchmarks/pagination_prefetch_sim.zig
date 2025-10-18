@@ -36,15 +36,15 @@ fn simulateWork(units: usize) void {
 }
 
 // Runs the simulation returning per-page consumer latency metrics.
-pub fn runSimulation(ally: std.mem.Allocator, cfg: PrefetchConfig, seed: u64) ![]PageMetric {
-    var metrics = try ally.alloc(PageMetric, cfg.pages);
-    var page_done = try ally.alloc(bool, cfg.pages);
+pub fn runSimulation(allocator: std.mem.Allocator, cfg: PrefetchConfig, seed: u64) ![]PageMetric {
+    var metrics = try allocator.alloc(PageMetric, cfg.pages);
+    var page_done = try allocator.alloc(bool, cfg.pages);
     std.mem.set(bool, page_done, false);
     var rng = seed | 1;
     // Prefetch queue simulated synchronously: we simulate time elapsing for prefetch work in advance.
     // We'll maintain an array of synthetic completion times in nanoseconds (monotonic timeline increments).
-    var completion_times = try ally.alloc(u64, cfg.pages);
-    defer ally.free(completion_times);
+    var completion_times = try allocator.alloc(u64, cfg.pages);
+    defer allocator.free(completion_times);
     var current_time: u64 = 0;
     var p: usize = 0;
     while (p < cfg.pages) : (p += 1) {
@@ -75,7 +75,7 @@ pub fn runSimulation(ally: std.mem.Allocator, cfg: PrefetchConfig, seed: u64) ![
         }
         metrics[p] = .{ .consumer_latency_ns = latency, .prefetched = ready };
     }
-    ally.free(page_done);
+    allocator.free(page_done);
     return metrics;
 }
 

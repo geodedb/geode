@@ -8,9 +8,9 @@ const protocol = @import("../src/protocol.zig");
 test "BenchmarkCANARY_REQ_GQL_032_ConstraintPerf" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const check = constraints_mod.SchemaConstraints.CheckConstraint{
@@ -30,7 +30,7 @@ test "BenchmarkCANARY_REQ_GQL_032_ConstraintPerf" {
     var i: usize = 0;
     const total = 8000;
     while (i < total) : (i += 1) {
-        var props = std.StringHashMap(protocol.Value).init(ally);
+        var props = std.StringHashMap(protocol.Value).init(allocator);
         defer props.deinit();
         try props.put("a", protocol.Value{ .integer = @as(i64, @intCast(i % 999999)) });
         try props.put("b", protocol.Value{ .string = "ok" });

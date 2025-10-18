@@ -5,8 +5,8 @@ const betw = geode.graph.betweenness;
 
 // CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=BetweennessVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_067_BetweennessVarianceEnvelope; OWNER=graph; UPDATED=2025-09-21
 
-fn buildGrid(ally: std.mem.Allocator, rows: u32, cols: u32) !builders.Graph {
-    var g = builders.Graph.init(ally);
+fn buildGrid(allocator: std.mem.Allocator, rows: u32, cols: u32) !builders.Graph {
+    var g = builders.Graph.init(allocator);
     var r: u32 = 0;
     while (r < rows) : (r += 1) {
         var c: u32 = 0;
@@ -30,8 +30,8 @@ fn buildGrid(ally: std.mem.Allocator, rows: u32, cols: u32) !builders.Graph {
 test "BenchmarkCANARY_REQ_GQL_067_BetweennessVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var g = try buildGrid(ally, 12, 12); // 144 nodes, moderate for variance run
+    const allocator = gpa.allocator();
+    var g = try buildGrid(allocator, 12, 12); // 144 nodes, moderate for variance run
     defer g.deinit();
 
     const Runs = 32; // enough samples for variance estimate
@@ -40,8 +40,8 @@ test "BenchmarkCANARY_REQ_GQL_067_BetweennessVarianceEnvelope" {
     var i: usize = 0;
     while (i < Runs) : (i += 1) {
         const start = std.time.nanoTimestamp();
-        var res = try betw.compute(ally, &g, .{ .normalize = true });
-        res.deinit(ally);
+        var res = try betw.compute(allocator, &g, .{ .normalize = true });
+        res.deinit(allocator);
         const end = std.time.nanoTimestamp();
         samples[i] = @intCast(end - start);
     }

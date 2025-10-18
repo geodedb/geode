@@ -20,8 +20,8 @@ fn simulateApply(engine: anytype, batch: usize) void {
 test "BenchmarkCANARY_REQ_GQL_042_CDC_ApplyBatchLatencyVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var engine = try cdc.CdcEngine.init(ally, .{ .adaptive_backpressure = true, .pending_backpressure_watermark = 12_000 });
+    const allocator = gpa.allocator();
+    var engine = try cdc.CdcEngine.init(allocator, .{ .adaptive_backpressure = true, .pending_backpressure_watermark = 12_000 });
     defer engine.deinit();
 
     const Runs = 34;

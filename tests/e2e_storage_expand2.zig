@@ -2,12 +2,12 @@ const std = @import("std");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 const E = struct {
     fn run_with_env(args: []const []const u8, envs: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-        const ally = std.testing.allocator;
-        var child = Child.init(args, ally);
+        const allocator = std.testing.allocator;
+        var child = Child.init(args, allocator);
         child.stdin_behavior = .Ignore;
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
-        child.env_map = std.process.getEnvMap(ally) catch null;
+        child.env_map = std.process.getEnvMap(allocator) catch null;
         if (child.env_map) |*m| {
             var i: usize = 0;
             while (i + 1 < envs.len) : (i += 2) {
@@ -15,8 +15,8 @@ const E = struct {
             }
         }
         try child.spawn();
-        const out = try child.stdout.?.readToEndAlloc(ally, 1 << 20);
-        const err = try child.stderr.?.readToEndAlloc(ally, 1 << 20);
+        const out = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
+        const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
         const term = try child.wait();
         const code: i32 = switch (term) {
             .Exited => |st| st,

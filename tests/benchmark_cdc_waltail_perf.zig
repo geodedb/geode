@@ -7,8 +7,8 @@ const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 test "BenchmarkCANARY_REQ_GQL_042_CDC_WalTailPerf" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var engine = try cdc_mod.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 4096, .flush_interval_ms = 10_000 });
+    const allocator = gpa.allocator();
+    var engine = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 4096, .flush_interval_ms = 10_000 });
     defer engine.deinit();
 
     const total: usize = 25_000;

@@ -51,8 +51,8 @@ const Metrics = struct {
     passes: usize,
 };
 
-fn sampleOnce(ally: std.mem.Allocator, iterations: usize) ![]u64 {
-    var samples = try ally.alloc(u64, iterations);
+fn sampleOnce(allocator: std.mem.Allocator, iterations: usize) ![]u64 {
+    var samples = try allocator.alloc(u64, iterations);
     const keys: [2][]const u8 = .{ "k1", "k2" };
     const dirs: [2]bool = .{ true, false };
     var it: usize = 0;
@@ -150,13 +150,13 @@ fn computeMetrics(samples: []u64) Metrics {
 pub fn runFederationMismatchLatencyVariance() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const iterations: usize = 64;
     var metrics: Metrics = undefined;
     var pass: usize = 0;
     const stabilize = blk: {
-        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_STABILIZE")) |v| {
-            defer ally.free(v);
+        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_STABILIZE")) |v| {
+            defer allocator.free(v);
             if (v.len > 0 and v[0] == '1') {
                 break :blk true;
             } else {
@@ -168,8 +168,8 @@ pub fn runFederationMismatchLatencyVariance() !void {
     };
     while (true) {
         pass += 1;
-        const samples = try sampleOnce(ally, iterations);
-        defer ally.free(samples);
+        const samples = try sampleOnce(allocator, iterations);
+        defer allocator.free(samples);
         metrics = computeMetrics(samples);
         metrics.passes = pass;
         if (!stabilize) break;
@@ -204,8 +204,8 @@ pub fn runFederationMismatchLatencyVariance() !void {
     try stdout.writeAll(line);
 
     if (metrics.cv > 0.22 or metrics.p95_mean_ratio > 2.55) {
-        if (std.process.getEnvVarOwned(ally, "FED_LATENCY_ENFORCE") catch null) |v| {
-            defer ally.free(v);
+        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_ENFORCE") catch null) |v| {
+            defer allocator.free(v);
             if (v.len > 0 and v[0] == '1') {
                 std.debug.print(
                     "Federation mismatch latency variance envelope breached: cv={d:.4} p95/mean={d:.4} trim_cv={d:.4} passes={}\n",

@@ -3,8 +3,8 @@ const geode = @import("geode");
 const builders = geode.graph.builders;
 const grey = geode.graph.grey_cardinal;
 
-fn buildSynthetic(ally: std.mem.Allocator, clusters: u32, cluster_size: u32) !builders.Graph {
-    var g = builders.Graph.init(ally);
+fn buildSynthetic(allocator: std.mem.Allocator, clusters: u32, cluster_size: u32) !builders.Graph {
+    var g = builders.Graph.init(allocator);
     // Create clusters connected in a ring, each cluster a small hub-spoke plus internal path to diversify metrics.
     var cluster: u32 = 0;
     var global_base: u32 = 0;

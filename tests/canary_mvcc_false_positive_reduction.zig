@@ -6,8 +6,8 @@ const mvcc_adv = @import("../src/txn/mvcc_adv/early_detect.zig");
 test "TestCANARY_REQ_GQL_073_FalsePositiveReduction" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var det = mvcc_adv.EarlyDetector.init(ally);
+    const allocator = gpa.allocator();
+    var det = mvcc_adv.EarlyDetector.init(allocator);
     defer det.deinit();
     try det.noteAccess(10, "k1", false);
     try det.noteAccess(20, "k1", false); // both reads

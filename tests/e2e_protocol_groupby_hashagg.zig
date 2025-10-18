@@ -2,19 +2,19 @@ const std = @import("std");
 
 // Test GROUP BY execution with HashAgg physical operator
 test "e2e: GROUP BY execution with HashAgg" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     // Test data: a:[1,1,2], b:[10,1,5]
     // Expected: GROUP BY a -> (a=1,sum=11),(a=2,sum=5)
     const param_json = "{\"a\":[1,1,2],\"b\":[10,1,5]}";
 
     // Create a simple server process to test GROUP BY
-    const exe_dir = try std.fs.cwd().realpathAlloc(ally, ".");
-    defer ally.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(ally, "{s}/zig-out/bin/geoded", .{exe_dir});
-    defer ally.free(exe_path);
+    const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(exe_dir);
+    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
+    defer allocator.free(exe_path);
 
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, ally);
+    var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -23,8 +23,8 @@ test "e2e: GROUP BY execution with HashAgg" {
     if (child.stdin) |stdin| {
         // Send PROFILE query with GROUP BY and aggregation
         const query = "PROFILE RETURN a, SUM(b) GROUP BY a ORDER BY a";
-        const msg = try std.fmt.allocPrint(ally, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{s}}}\n", .{ query, param_json });
-        defer ally.free(msg);
+        const msg = try std.fmt.allocPrint(allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{s}}}\n", .{ query, param_json });
+        defer allocator.free(msg);
 
         var write_buf: [8192]u8 = undefined;
         try stdin.writer(&write_buf).writeAll(msg);
@@ -32,7 +32,7 @@ test "e2e: GROUP BY execution with HashAgg" {
         stdin.close();
     }
 
-    var out_buf = std.ArrayList(u8).init(ally);
+    var out_buf = std.ArrayList(u8).init(allocator);
     defer out_buf.deinit();
     if (child.stdout) |so| {
         var tmpb: [8192]u8 = undefined;
@@ -61,21 +61,21 @@ test "e2e: GROUP BY execution with HashAgg" {
 
 // Test HashAgg with memory spill
 test "e2e: HashAgg with memory spill" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     // Create test with very low memory limit to trigger spill
-    const exe_dir = try std.fs.cwd().realpathAlloc(ally, ".");
-    defer ally.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(ally, "{s}/zig-out/bin/geoded", .{exe_dir});
-    defer ally.free(exe_path);
+    const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(exe_dir);
+    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
+    defer allocator.free(exe_path);
 
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, ally);
+    var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
     // Set very low memory limit to trigger spill
-    var env_map = try std.process.getEnvMap(ally);
+    var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("GEODE_QUERY_MEM_LIMIT_BYTES", "1024"); // Very low limit
     child.env_map = &env_map;
@@ -86,8 +86,8 @@ test "e2e: HashAgg with memory spill" {
         // Send PROFILE query with GROUP BY that should trigger spill
         const query = "PROFILE RETURN a, SUM(b) GROUP BY a";
         const param_json = "{\"a\":[1,1,2,2,3,3,4,4,5,5],\"b\":[10,1,5,3,7,2,8,4,9,6]}";
-        const msg = try std.fmt.allocPrint(ally, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{s}}}\n", .{ query, param_json });
-        defer ally.free(msg);
+        const msg = try std.fmt.allocPrint(allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{s}}}\n", .{ query, param_json });
+        defer allocator.free(msg);
 
         var write_buf: [8192]u8 = undefined;
         try stdin.writer(&write_buf).writeAll(msg);
@@ -95,7 +95,7 @@ test "e2e: HashAgg with memory spill" {
         stdin.close();
     }
 
-    var out_buf = std.ArrayList(u8).init(ally);
+    var out_buf = std.ArrayList(u8).init(allocator);
     defer out_buf.deinit();
     if (child.stdout) |so| {
         var tmpb: [8192]u8 = undefined;

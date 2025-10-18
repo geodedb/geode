@@ -13,9 +13,9 @@ const std = @import("std");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var args = try std.process.argsWithAllocator(ally);
+    var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
     _ = args.next();
     var json = false;
@@ -26,26 +26,26 @@ pub fn main() !void {
     }
     if (json and markdown) return error.ConflictingModes;
 
-    var ids = std.StringHashMap(void).init(ally);
+    var ids = std.StringHashMap(void).init(allocator);
     defer {
         // free allocated keys
         var it = ids.iterator();
-        while (it.next()) |e| ally.free(e.key_ptr.*);
+        while (it.next()) |e| allocator.free(e.key_ptr.*);
         ids.deinit();
     }
     const DupsMax = 512;
     var dups: [DupsMax][]const u8 = undefined; // store each occurrence beyond first
     var dup_count: usize = 0;
     // Frequency map for duplicates (id -> occurrences beyond first)
-    var dup_freq = std.StringHashMap(u32).init(ally);
+    var dup_freq = std.StringHashMap(u32).init(allocator);
     defer {
         var itf = dup_freq.iterator();
-        while (itf.next()) |e| ally.free(e.key_ptr.*);
+        while (itf.next()) |e| allocator.free(e.key_ptr.*);
         dup_freq.deinit();
     }
 
-    try walkDir(&ids, &dups, &dup_count, &dup_freq, ally, "docs");
-    try walkDir(&ids, &dups, &dup_count, &dup_freq, ally, "src");
+    try walkDir(&ids, &dups, &dup_count, &dup_freq, allocator, "docs");
+    try walkDir(&ids, &dups, &dup_count, &dup_freq, allocator, "src");
 
     // Presence array for 0..999 (enough for now)
     var present: [1000]bool = .{false} ** 1000;
@@ -54,11 +54,11 @@ pub fn main() !void {
 
     // Collect ids into a list for deterministic ordering
     var id_list = std.ArrayListUnmanaged([]const u8){};
-    defer id_list.deinit(ally);
+    defer id_list.deinit(allocator);
     var it2 = ids.iterator();
     while (it2.next()) |e| {
         const key = e.key_ptr.*;
-        id_list.append(ally, key) catch {};
+        id_list.append(allocator, key) catch {};
         const tail = key[key.len - 3 ..];
         const num = std.fmt.parseInt(u32, tail, 10) catch continue;
         if (num < present.len) {
@@ -121,7 +121,7 @@ pub fn main() !void {
         std.debug.print("],\"issues\":{s}{c}", .{ if (has_issues) "true" else "false", '}' });
         // free duplicates before exit
         var j: usize = 0;
-        while (j < dup_count) : (j += 1) ally.free(dups[j]);
+        while (j < dup_count) : (j += 1) allocator.free(dups[j]);
         if (fail_on_issues and has_issues) std.process.exit(2);
         return;
     }
@@ -129,9 +129,9 @@ pub fn main() !void {
     if (markdown) {
         // Build sorted frequency list
         var freq_list = std.ArrayListUnmanaged([]const u8){};
-        defer freq_list.deinit(ally);
+        defer freq_list.deinit(allocator);
         var itf2 = dup_freq.iterator();
-        while (itf2.next()) |e| freq_list.append(ally, e.key_ptr.*) catch {};
+        while (itf2.next()) |e| freq_list.append(allocator, e.key_ptr.*) catch {};
         std.sort.block([]const u8, freq_list.items, {}, struct {
             fn lessThan(_: void, a: []const u8, b: []const u8) bool {
                 return std.mem.lessThan(u8, a, b);
@@ -172,7 +172,7 @@ pub fn main() !void {
         } else {
             // free duplicate slice copies before returning
             var dj: usize = 0;
-            while (dj < dup_count) : (dj += 1) ally.free(dups[dj]);
+            while (dj < dup_count) : (dj += 1) allocator.free(dups[dj]);
             return;
         }
     }
@@ -196,19 +196,19 @@ pub fn main() !void {
     }
     // free duplicate slices (keys freed with map)
     var j: usize = 0;
-    while (j < dup_count) : (j += 1) ally.free(dups[j]);
+    while (j < dup_count) : (j += 1) allocator.free(dups[j]);
     if (fail_on_issues and has_issues) std.process.exit(2);
     // free duplicate slice copies before normal exit (plain mode)
     var dj: usize = 0;
-    while (dj < dup_count) : (dj += 1) ally.free(dups[dj]);
+    while (dj < dup_count) : (dj += 1) allocator.free(dups[dj]);
 }
 
-fn walkDir(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *usize, dup_freq: *std.StringHashMap(u32), ally: std.mem.Allocator, root: []const u8) !void {
+fn walkDir(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *usize, dup_freq: *std.StringHashMap(u32), allocator: std.mem.Allocator, root: []const u8) !void {
     // Simple recursive traversal to avoid manual stack leaks.
-    try walkDirInner(ids, dups, dup_count, dup_freq, ally, root);
+    try walkDirInner(ids, dups, dup_count, dup_freq, allocator, root);
 }
 
-fn walkDirInner(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *usize, dup_freq: *std.StringHashMap(u32), ally: std.mem.Allocator, path: []const u8) !void {
+fn walkDirInner(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *usize, dup_freq: *std.StringHashMap(u32), allocator: std.mem.Allocator, path: []const u8) !void {
     var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch return;
     defer dir.close();
     var it = dir.iterate();
@@ -217,26 +217,26 @@ fn walkDirInner(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count
         if (next == null) break;
         const ent = next.?;
         if (ent.kind == .directory) {
-            const sub = try std.fs.path.join(ally, &.{ path, ent.name });
-            defer ally.free(sub);
-            try walkDirInner(ids, dups, dup_count, dup_freq, ally, sub);
+            const sub = try std.fs.path.join(allocator, &.{ path, ent.name });
+            defer allocator.free(sub);
+            try walkDirInner(ids, dups, dup_count, dup_freq, allocator, sub);
             continue;
         }
         if (ent.kind == .file) {
             if (!std.mem.endsWith(u8, ent.name, ".md") and !std.mem.endsWith(u8, ent.name, ".zig")) continue;
-            const full = try std.fs.path.join(ally, &.{ path, ent.name });
-            const data = std.fs.cwd().readFileAlloc(ally, full, 1 << 20) catch {
-                ally.free(full);
+            const full = try std.fs.path.join(allocator, &.{ path, ent.name });
+            const data = std.fs.cwd().readFileAlloc(allocator, full, 1 << 20) catch {
+                allocator.free(full);
                 continue;
             };
-            scanBuffer(ids, dups, dup_count, dup_freq, ally, data);
-            ally.free(data);
-            ally.free(full);
+            scanBuffer(ids, dups, dup_count, dup_freq, allocator, data);
+            allocator.free(data);
+            allocator.free(full);
         }
     }
 }
 
-fn scanBuffer(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *usize, dup_freq: *std.StringHashMap(u32), ally: std.mem.Allocator, buf: []const u8) void {
+fn scanBuffer(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *usize, dup_freq: *std.StringHashMap(u32), allocator: std.mem.Allocator, buf: []const u8) void {
     var i: usize = 0;
     while (i + 11 <= buf.len) : (i += 1) {
         if (buf[i] != 'R') continue;
@@ -245,7 +245,7 @@ fn scanBuffer(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: 
         if (!isReqId(slice)) continue;
         if (ids.contains(slice)) {
             if (dup_count.* < dups.len) {
-                const copy = ally.dupe(u8, slice) catch return;
+                const copy = allocator.dupe(u8, slice) catch return;
                 dups.*[dup_count.*] = copy;
                 dup_count.* += 1;
             }
@@ -254,11 +254,11 @@ fn scanBuffer(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: 
                 const entry = dup_freq.getPtr(slice).?;
                 entry.* += 1;
             } else {
-                const key_dup = ally.dupe(u8, slice) catch return;
+                const key_dup = allocator.dupe(u8, slice) catch return;
                 dup_freq.put(key_dup, 1) catch return;
             }
         } else {
-            const key = ally.dupe(u8, slice) catch return;
+            const key = allocator.dupe(u8, slice) catch return;
             ids.put(key, {}) catch return;
         }
         i += 10; // skip ahead

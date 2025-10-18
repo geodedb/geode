@@ -14,10 +14,10 @@ const txn_mod = @import("txn");
 test "TestCANARY_REQ_GQL_023_PhantomDetection" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     var mgr: txn_mod.Manager = undefined;
-    mgr.init(ally);
+    mgr.init(allocator);
     defer mgr.deinit();
     mgr.enablePhantomPrevention();
 
@@ -78,12 +78,12 @@ fn stats(data: []const u64) Stats {
 test "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const iters: usize = 200; // keep lightweight
-    var samples_disabled = try ally.alloc(u64, iters);
-    defer ally.free(samples_disabled);
-    var samples_enabled = try ally.alloc(u64, iters);
-    defer ally.free(samples_enabled);
+    var samples_disabled = try allocator.alloc(u64, iters);
+    defer allocator.free(samples_disabled);
+    var samples_enabled = try allocator.alloc(u64, iters);
+    defer allocator.free(samples_enabled);
 
     // Helper to run a micro workload
     inline for (.{ false, true }) |enabled| {
@@ -91,7 +91,7 @@ test "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope" {
         var i: usize = 0;
         while (i < iters) : (i += 1) {
             var mgr: txn_mod.Manager = undefined;
-            mgr.init(ally);
+            mgr.init(allocator);
             defer mgr.deinit();
             if (enabled) mgr.enablePhantomPrevention();
             var t = mgr.begin();

@@ -8,14 +8,14 @@ const std = @import("std");
 test "BenchmarkCANARY_REQ_GQL_032_CascadePerf" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     const Parents = 512;
     const ChildrenPerParent = 16;
-    var parent_alive = try ally.alloc(bool, Parents);
-    defer ally.free(parent_alive);
-    var child_alive = try ally.alloc(bool, Parents * ChildrenPerParent);
-    defer ally.free(child_alive);
+    var parent_alive = try allocator.alloc(bool, Parents);
+    defer allocator.free(parent_alive);
+    var child_alive = try allocator.alloc(bool, Parents * ChildrenPerParent);
+    defer allocator.free(child_alive);
     @memset(parent_alive, true);
     @memset(child_alive, true);
 

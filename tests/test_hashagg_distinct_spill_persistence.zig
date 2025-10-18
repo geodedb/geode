@@ -9,8 +9,8 @@ const eval = @import("../src/eval.zig");
 // Then we ensure final COUNT DISTINCT equals number of unique non-null values.
 
 test "TestCANARY_REQ_GQL_012_HashAggDistinctSpillPersistence" {
-    const ally = std.testing.allocator;
-    var agg = exec.HashAggregator.init(ally, 512); // tiny memory limit
+    const allocator = std.testing.allocator;
+    var agg = exec.HashAggregator.init(allocator, 512); // tiny memory limit
     defer agg.deinit();
 
     // One grouping key constant so all rows belong to same group, counting distinct over value column.
@@ -30,7 +30,7 @@ test "TestCANARY_REQ_GQL_012_HashAggDistinctSpillPersistence" {
     try agg.flushSegment(&agg_spec);
 
     const rows = try agg.getResults();
-    defer ally.free(rows);
+    defer allocator.free(rows);
     try std.testing.expect(rows.len == 1);
     // Single row: key + COUNT DISTINCT result
     const r = rows[0];

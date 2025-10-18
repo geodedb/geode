@@ -28,11 +28,11 @@ fn makeQuery(ret_items: usize, allocator: std.mem.Allocator) geode.planner.ast.Q
 test "TestCANARY_REQ_GQL_024_PlanCostModelFactors" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    const small = makeQuery(1, ally);
-    const large = makeQuery(4, ally);
-    const res_small = try pipeline.planQuerySelectBest(ally, small, .{ .max_plans = 64 });
-    const res_large = try pipeline.planQuerySelectBest(ally, large, .{ .max_plans = 128 });
+    const allocator = gpa.allocator();
+    const small = makeQuery(1, allocator);
+    const large = makeQuery(4, allocator);
+    const res_small = try pipeline.planQuerySelectBest(allocator, small, .{ .max_plans = 64 });
+    const res_large = try pipeline.planQuerySelectBest(allocator, large, .{ .max_plans = 128 });
     try std.testing.expect(res_small.best != null and res_large.best != null);
     // Expect refined cost for larger query (more leaves) to be greater
     try std.testing.expect(res_large.best.?.cost > res_small.best.?.cost);
@@ -42,16 +42,16 @@ test "TestCANARY_REQ_GQL_024_PlanCostModelFactors" {
 test "BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const runs: usize = 80;
-    var samples = try ally.alloc(u64, runs);
-    defer ally.free(samples);
+    var samples = try allocator.alloc(u64, runs);
+    defer allocator.free(samples);
     var i: usize = 0;
     while (i < runs) : (i += 1) {
         const ri: usize = 1 + (i % 4); // 1..4 return items
-        const q = makeQuery(ri, ally);
+        const q = makeQuery(ri, allocator);
         const t0 = std.time.nanoTimestamp();
-        _ = try pipeline.planQuerySelectBest(ally, q, .{ .max_plans = 64 });
+        _ = try pipeline.planQuerySelectBest(allocator, q, .{ .max_plans = 64 });
         const t1 = std.time.nanoTimestamp();
         samples[i] = @intCast(t1 - t0);
     }
@@ -67,8 +67,8 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope" {
     const variance = acc / @as(f128, @floatFromInt(samples.len));
     const stddev = std.math.sqrt(variance);
     const cv = stddev / mean;
-    const tmp = try ally.alloc(u64, samples.len);
-    defer ally.free(tmp);
+    const tmp = try allocator.alloc(u64, samples.len);
+    defer allocator.free(tmp);
     std.mem.copy(u64, tmp, samples);
     std.sort.pdq(u64, tmp, {}, comptime std.sort.asc(u64));
     const p95 = tmp[@min(tmp.len - 1, (tmp.len * 95) / 100)];

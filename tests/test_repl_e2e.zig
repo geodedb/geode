@@ -8,10 +8,10 @@ const repl_dispatch = geode.repl.repl_dispatch;
 const repl_loop = geode.repl.repl_loop;
 
 test "repl server handshake simulation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test HELLO handshake with expected client info
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     try session.connect();
@@ -27,10 +27,10 @@ test "repl server handshake simulation" {
 }
 
 test "repl transaction isolation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test transaction isolation in REPL context
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     try session.connect();
@@ -56,10 +56,10 @@ test "repl transaction isolation" {
 }
 
 test "repl query result pagination" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test PULL request handling for large result sets
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     try session.connect();
@@ -77,10 +77,10 @@ test "repl query result pagination" {
 }
 
 test "repl error recovery" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test that REPL can recover from query errors
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     try session.connect();
@@ -103,10 +103,10 @@ test "repl error recovery" {
 }
 
 test "repl concurrent operations simulation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test handling of multiple operations in sequence
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     try session.connect();
@@ -131,10 +131,10 @@ test "repl concurrent operations simulation" {
 }
 
 test "repl security context" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test security-related session behavior
-    var session = try repl_dispatch.ClientSession.init(ally, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
     defer session.deinit();
 
     // Connection should work with TLS transport
@@ -149,7 +149,7 @@ test "repl security context" {
 }
 
 test "repl format handling" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test that REPL can handle different output formats
     const formats = [_]repl_loop.ReplLoop.Format{ .json, .table, .csv };
@@ -162,7 +162,7 @@ test "repl format handling" {
             .history_enabled = false,
             .verbose = false,
             .show_timing = false,
-            .allocator = ally,
+            .allocator = allocator,
             .transport = &repl_dispatch.mock_transport,
         };
 
@@ -179,7 +179,7 @@ test "repl format handling" {
 }
 
 test "repl timing functionality" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test timing functionality integration
     const options = repl_loop.ReplLoop.Options{
@@ -189,7 +189,7 @@ test "repl timing functionality" {
         .history_enabled = false,
         .verbose = false,
         .show_timing = true, // Enable timing
-        .allocator = ally,
+        .allocator = allocator,
         .transport = &repl_dispatch.mock_transport,
     };
 

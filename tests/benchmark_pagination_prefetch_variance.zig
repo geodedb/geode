@@ -51,28 +51,28 @@ fn stats(values: []u64) struct { mean: f64, cv: f64, p95: u64 } {
 test "BenchmarkCANARY_REQ_GQL_004_PaginationPrefetchVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const runs = 40;
     var rng_seed: u64 = 9;
-    var latencies_list = try ally.alloc([]u64, runs); // store slices for concatenation
-    defer ally.free(latencies_list);
+    var latencies_list = try allocator.alloc([]u64, runs); // store slices for concatenation
+    defer allocator.free(latencies_list);
     var total_non_zero: usize = 0;
     var r: usize = 0;
     while (r < runs) : (r += 1) {
         rng_seed = rng_seed * 6364136223846793005 + 1;
-        const metrics = try prefetch.runSimulation(ally, .{ .window = 3, .pages = 20, .page_size = 96 }, rng_seed);
-        defer ally.free(metrics);
-        const nz = try collectNonZero(ally, metrics);
+        const metrics = try prefetch.runSimulation(allocator, .{ .window = 3, .pages = 20, .page_size = 96 }, rng_seed);
+        defer allocator.free(metrics);
+        const nz = try collectNonZero(allocator, metrics);
         latencies_list[r] = nz;
         total_non_zero += nz.len;
     }
     // Flatten
-    var all = try ally.alloc(u64, total_non_zero);
-    defer ally.free(all);
+    var all = try allocator.alloc(u64, total_non_zero);
+    defer allocator.free(all);
     var offset: usize = 0;
     for (latencies_list) |slice| {
         std.mem.copyForwards(u64, all[offset .. offset + slice.len], slice);
-        ally.free(slice);
+        allocator.free(slice);
         offset += slice.len;
     }
     const st = stats(all);

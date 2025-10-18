@@ -2,8 +2,8 @@ const std = @import("std");
 
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Performance"; ASPECT=UniquePerfVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_UniquePerfVarianceEnvelope; OWNER=schema; UPDATED=2025-09-21
 
-fn simulateUnique(batch: usize, ally: std.mem.Allocator) u64 {
-    var map = std.AutoHashMap(u64, u8).init(ally);
+fn simulateUnique(batch: usize, allocator: std.mem.Allocator) u64 {
+    var map = std.AutoHashMap(u64, u8).init(allocator);
     defer map.deinit();
     var seed: u64 = 0x9e3779b97f4a7c15;
     var inserted: u64 = 0;
@@ -27,14 +27,14 @@ fn simulateUnique(batch: usize, ally: std.mem.Allocator) u64 {
 test "BenchmarkCANARY_REQ_GQL_032_UniquePerfVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     const Runs = 28;
     var samples: [Runs]u64 = undefined;
     var r: usize = 0;
     while (r < Runs) : (r += 1) {
         const start = std.time.nanoTimestamp();
-        _ = simulateUnique(3_500, ally);
+        _ = simulateUnique(3_500, allocator);
         const end = std.time.nanoTimestamp();
         samples[r] = @intCast(end - start);
     }

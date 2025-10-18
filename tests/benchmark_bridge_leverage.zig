@@ -3,8 +3,8 @@ const geode = @import("geode");
 const builders = geode.graph.builders;
 const bridge = @import("../src/graph/centrality_bridge_leverage.zig");
 
-fn buildGraph(ally: std.mem.Allocator, clusters: u32, cluster_size: u32) !builders.Graph {
-    var g = builders.Graph.init(ally);
+fn buildGraph(allocator: std.mem.Allocator, clusters: u32, cluster_size: u32) !builders.Graph {
+    var g = builders.Graph.init(allocator);
     // Create clusters as rings, connect via single hub 0
     g.addNode(0);
     var base: u32 = 1;

@@ -4,10 +4,10 @@ const raft = @import("../src/distributed/raft_consensus.zig");
 // CANARY: REQ=REQ-GQL-070; FEATURE="Raft Replication"; ASPECT=AppendEntriesSuccess; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_070_AppendEntriesSuccess; OWNER=distributed; UPDATED=2025-09-21
 // CANARY: REQ=REQ-GQL-070; FEATURE="Raft Replication"; ASPECT=AppendEntriesTermMismatch; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_070_AppendEntriesTermMismatch; OWNER=distributed; UPDATED=2025-09-21
 
-fn makeNode(ally: std.mem.Allocator, id: u64, peer_ids: []const u64) !*raft.RaftNode {
-    var builder = raft.RaftBuilder.init(ally, .{});
+fn makeNode(allocator: std.mem.Allocator, id: u64, peer_ids: []const u64) !*raft.RaftNode {
+    var builder = raft.RaftBuilder.init(allocator, .{});
     defer builder.deinit();
-    var peers = try ally.alloc(raft.PeerConfig, peer_ids.len);
+    var peers = try allocator.alloc(raft.PeerConfig, peer_ids.len);
     for (peer_ids, 0..) |pid, i| peers[i] = .{ .id = pid, .address = "" };
     return try builder.buildNode(id, peers);
 }
@@ -15,10 +15,10 @@ fn makeNode(ally: std.mem.Allocator, id: u64, peer_ids: []const u64) !*raft.Raft
 test "TestCANARY_REQ_GQL_070_AppendEntriesSuccess" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    const n1 = try makeNode(ally, 1, &.{2});
+    const allocator = gpa.allocator();
+    const n1 = try makeNode(allocator, 1, &.{2});
     defer n1.deinit();
-    const n2 = try makeNode(ally, 2, &.{1});
+    const n2 = try makeNode(allocator, 2, &.{1});
     defer n2.deinit();
 
     // Force node1 as leader
@@ -43,10 +43,10 @@ test "TestCANARY_REQ_GQL_070_AppendEntriesSuccess" {
 test "TestCANARY_REQ_GQL_070_AppendEntriesTermMismatch" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    const n1 = try makeNode(ally, 1, &.{2});
+    const allocator = gpa.allocator();
+    const n1 = try makeNode(allocator, 1, &.{2});
     defer n1.deinit();
-    const n2 = try makeNode(ally, 2, &.{1});
+    const n2 = try makeNode(allocator, 2, &.{1});
     defer n2.deinit();
 
     n1.state = .leader;

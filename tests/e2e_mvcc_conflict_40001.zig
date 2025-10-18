@@ -1,8 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 
-fn start_server(ally: std.mem.Allocator) !std.ChildProcess {
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7570" }, ally);
+fn start_server(allocator: std.mem.Allocator) !std.ChildProcess {
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7570" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;
@@ -11,14 +11,14 @@ fn start_server(ally: std.mem.Allocator) !std.ChildProcess {
     return server;
 }
 
-fn run_cli(ally: std.mem.Allocator, args: []const []const u8) ![]const u8 {
-    var child = std.ChildProcess.init(args, ally);
+fn run_cli(allocator: std.mem.Allocator, args: []const []const u8) ![]const u8 {
+    var child = std.ChildProcess.init(args, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
     defer child.deinit();
-    var out = std.ArrayList(u8).init(ally);
+    var out = std.ArrayList(u8).init(allocator);
     var buf: [4096]u8 = undefined;
     while (true) {
         const n = try child.stdout.?.read(&buf);
@@ -26,19 +26,19 @@ fn run_cli(ally: std.mem.Allocator, args: []const []const u8) ![]const u8 {
         try out.appendSlice(buf[0..n]);
     }
     _ = try child.wait();
-    return try ally.dupe(u8, out.items);
+    return try allocator.dupe(u8, out.items);
 }
 
-fn send(ally: std.mem.Allocator, server: []const u8, text: []const u8) ![]const u8 {
-    var args = std.ArrayList([]const u8).init(ally);
+fn send(allocator: std.mem.Allocator, server: []const u8, text: []const u8) ![]const u8 {
+    var args = std.ArrayList([]const u8).init(allocator);
     defer args.deinit();
     try args.appendSlice(&.{ "./zig-out/bin/geodec", text, "--server", server });
-    return try run_cli(ally, args.items);
+    return try run_cli(allocator, args.items);
 }
 
 test "concurrent UPDATE_VALUE conflicts yield 40001 on one commit" {
-    const ally = testing.allocator;
-    var server = try start_server(ally);
+    const allocator = testing.allocator;
+    var server = try start_server(allocator);
     defer server.kill() catch {};
 
     const addr = "127.0.0.1:7570";
@@ -58,11 +58,11 @@ test "concurrent UPDATE_VALUE conflicts yield 40001 on one commit" {
 
     // Client B: delay slightly; BEGIN; UPDATE; COMMIT (should conflict with A)
     std.Thread.sleep(100 * std.time.ns_per_ms);
-    const out_b1 = try send(ally, addr, "BEGIN");
-    ally.free(out_b1);
-    const out_b2 = try send(ally, addr, "UPDATE_VALUE(\"row:1\",\"B\")");
-    ally.free(out_b2);
-    const out_b3 = try send(ally, addr, "COMMIT");
+    const out_b1 = try send(allocator, addr, "BEGIN");
+    allocator.free(out_b1);
+    const out_b2 = try send(allocator, addr, "UPDATE_VALUE(\"row:1\",\"B\")");
+    allocator.free(out_b2);
+    const out_b3 = try send(allocator, addr, "COMMIT");
 
     thr_a.join();
 
@@ -73,6 +73,6 @@ test "concurrent UPDATE_VALUE conflicts yield 40001 on one commit" {
     try testing.expect((has_40001_a and !has_40001_b) or (!has_40001_a and has_40001_b));
 
     // free outputs
-    if (a_commit.len > 0) ally.free(a_commit);
-    ally.free(out_b3);
+    if (a_commit.len > 0) allocator.free(a_commit);
+    allocator.free(out_b3);
 }

@@ -4,8 +4,8 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Resume Token"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ResumeToken; OWNER=streaming; UPDATED=2025-09-20
 
 test "TestCANARY_REQ_GQL_042_CDC_ResumeToken" {
-    const ally = std.testing.allocator;
-    var engine = try cdc.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 50 });
+    const allocator = std.testing.allocator;
+    var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 50 });
     defer engine.deinit();
     try engine.start();
     defer engine.stop();
@@ -20,8 +20,8 @@ test "TestCANARY_REQ_GQL_042_CDC_ResumeToken" {
     // Add a few more events
     while (i < 15) : (i += 1) try engine.emitChange(.update, .node, @intCast(i), null, "{\"id\":2}");
 
-    const replay = try engine.replayFrom(ally, token);
-    defer ally.free(replay);
+    const replay = try engine.replayFrom(allocator, token);
+    defer allocator.free(replay);
     try std.testing.expect(replay.len == 5);
     // sequences should start at token (11)
     var seq_expected: u64 = token;

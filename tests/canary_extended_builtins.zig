@@ -9,11 +9,11 @@ const ext_types = geode.ext_types;
 test "TestCANARY_REQ_GQL_082_AdapterBridgeUuidV4" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var reg = try eval_ext.initFunctionRegistry(ally);
+    const allocator = gpa.allocator();
+    var reg = try eval_ext.initFunctionRegistry(allocator);
     defer reg.deinit();
     const fnp = reg.get("uuid_v4") orelse return error.NotFound;
-    const v = try fnp(ally, &[_]eval_ext.ExtValue{});
+    const v = try fnp(allocator, &[_]eval_ext.ExtValue{});
     try std.testing.expect(v == .Str);
     try std.testing.expect(v.Str.len == 36);
 }

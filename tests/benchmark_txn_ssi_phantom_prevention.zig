@@ -10,14 +10,14 @@ fn Stats(comptime N: usize) type {
 test "BenchmarkCANARY_REQ_GQL_013_SSIPhantomPrevention" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     var rnd = std.rand.DefaultPrng.init(0xdeadbeef);
     const r = rnd.random();
 
-    var manager = try txn_mod.Manager.init(ally, .{});
+    var manager = try txn_mod.Manager.init(allocator, .{});
     defer manager.deinit();
 
-    var keys = std.ArrayList([]const u8).init(ally);
+    var keys = std.ArrayList([]const u8).init(allocator);
     defer keys.deinit();
     try keys.append("acct:1");
     try keys.append("acct:2");
@@ -29,8 +29,8 @@ test "BenchmarkCANARY_REQ_GQL_013_SSIPhantomPrevention" {
         const noise_n = r.intRangeAtMost(u8, 0, 4);
         var n: u8 = 0;
         while (n < noise_n) : (n += 1) {
-            const val = try std.fmt.allocPrint(ally, "noise:{d}:{d}", .{ iter, n });
-            defer ally.free(val);
+            const val = try std.fmt.allocPrint(allocator, "noise:{d}:{d}", .{ iter, n });
+            defer allocator.free(val);
             try keys.append(val);
         }
 
@@ -42,8 +42,8 @@ test "BenchmarkCANARY_REQ_GQL_013_SSIPhantomPrevention" {
         for (keys.items) |k| {
             if (std.mem.startsWith(u8, k, "acct:")) count_initial += 1;
         }
-        const new_key = try std.fmt.allocPrint(ally, "acct:new:{d}", .{iter});
-        defer ally.free(new_key);
+        const new_key = try std.fmt.allocPrint(allocator, "acct:new:{d}", .{iter});
+        defer allocator.free(new_key);
         try keys.append(new_key);
         try manager.commit(&t2);
         var count_rescan: usize = 0;
@@ -81,5 +81,5 @@ test "BenchmarkCANARY_REQ_GQL_013_SSIPhantomPrevention" {
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 5.0);
 
     const stderr = std.io.getStdErr().writer();
-    try stderr.print("{s}\n", .{try std.fmt.allocPrint(ally, "{\"benchmark\":\"txn_ssi_phantom_prevention\",\"mean_ns\":{d},\"cv\":{d:.3},\"p95_ns\":{d}}", .{ @as(u64, @intFromFloat(mean)), cv, p95 })});
+    try stderr.print("{s}\n", .{try std.fmt.allocPrint(allocator, "{\"benchmark\":\"txn_ssi_phantom_prevention\",\"mean_ns\":{d},\"cv\":{d:.3},\"p95_ns\":{d}}", .{ @as(u64, @intFromFloat(mean)), cv, p95 })});
 }

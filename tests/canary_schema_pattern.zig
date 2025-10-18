@@ -8,9 +8,9 @@ const protocol = @import("../src/protocol.zig");
 test "TestCANARY_REQ_GQL_032_PatternMatch" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const prop_constraint = constraints_mod.SchemaConstraints.PropertyConstraint{
@@ -32,13 +32,13 @@ test "TestCANARY_REQ_GQL_032_PatternMatch" {
     try sc.addNodeConstraint("Thing", node_constraints);
 
     // Match case
-    var props1 = std.StringHashMap(protocol.Value).init(ally);
+    var props1 = std.StringHashMap(protocol.Value).init(allocator);
     defer props1.deinit();
     try props1.put("p", protocol.Value{ .string = "abbbcd" });
     try std.testing.expect((try sc.validateNode(1, "Thing", props1)) == null);
 
     // Fail case
-    var props2 = std.StringHashMap(protocol.Value).init(ally);
+    var props2 = std.StringHashMap(protocol.Value).init(allocator);
     defer props2.deinit();
     try props2.put("p", protocol.Value{ .string = "xabcd" });
     const err2 = try sc.validateNode(2, "Thing", props2);

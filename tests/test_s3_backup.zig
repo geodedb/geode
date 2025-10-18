@@ -18,7 +18,7 @@ const MockS3Config = struct {
 
 // Mock S3 backup functionality test
 test "S3 backup configuration validation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Test configuration using Digital Ocean Spaces credentials
     const s3_config = MockS3Config{
@@ -43,11 +43,11 @@ test "S3 backup configuration validation" {
     try testing.expect(s3_config.access_key_id.len > 0);
     try testing.expect(s3_config.secret_access_key.len > 0);
 
-    _ = ally; // Use allocator to prevent unused variable warning
+    _ = allocator; // Use allocator to prevent unused variable warning
 }
 
 test "S3 URL building mock" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Mock URL building function
     const MockS3Manager = struct {
@@ -81,21 +81,21 @@ test "S3 URL building mock" {
     const s3_manager = MockS3Manager{ .config = s3_config };
 
     // Test URL building with endpoint
-    const url = try s3_manager.buildS3Url(ally, "test/backup.tar.gz", null);
-    defer ally.free(url);
+    const url = try s3_manager.buildS3Url(allocator, "test/backup.tar.gz", null);
+    defer allocator.free(url);
 
     try testing.expect(std.mem.indexOf(u8, url, "test-bucket.nyc3.digitaloceanspaces.com") != null);
     try testing.expect(std.mem.indexOf(u8, url, "test/backup.tar.gz") != null);
 
     // Test URL with query parameters
-    const url_with_query = try s3_manager.buildS3Url(ally, "test/backup.tar.gz", "uploads");
-    defer ally.free(url_with_query);
+    const url_with_query = try s3_manager.buildS3Url(allocator, "test/backup.tar.gz", "uploads");
+    defer allocator.free(url_with_query);
 
     try testing.expect(std.mem.indexOf(u8, url_with_query, "?uploads") != null);
 }
 
 test "S3 signature generation mock" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Mock signature generation using HMAC-SHA1
     const MockSigner = struct {
@@ -117,22 +117,22 @@ test "S3 signature generation mock" {
     const signer = MockSigner{ .secret_key = "test_secret" };
 
     // Test signature generation
-    const signature = try signer.sign(ally, "PUT\n\napplication/octet-stream\n1234567890\n/test-bucket/test-key");
-    defer ally.free(signature);
+    const signature = try signer.sign(allocator, "PUT\n\napplication/octet-stream\n1234567890\n/test-bucket/test-key");
+    defer allocator.free(signature);
 
     // Should be base64 encoded string
     try testing.expect(signature.len > 0);
     try testing.expect(signature.len == std.base64.standard.Encoder.calcSize(std.crypto.auth.hmac.HmacSha1.mac_length));
 
     // Signature should be deterministic
-    const signature2 = try signer.sign(ally, "PUT\n\napplication/octet-stream\n1234567890\n/test-bucket/test-key");
-    defer ally.free(signature2);
+    const signature2 = try signer.sign(allocator, "PUT\n\napplication/octet-stream\n1234567890\n/test-bucket/test-key");
+    defer allocator.free(signature2);
 
     try testing.expect(std.mem.eql(u8, signature, signature2));
 }
 
 test "File checksum calculation mock" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Mock checksum calculation function
     const MockChecksummer = struct {
@@ -166,8 +166,8 @@ test "File checksum calculation mock" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     // Calculate checksum
-    const checksum1 = try MockChecksummer.calculateChecksum(ally, test_file);
-    const checksum2 = try MockChecksummer.calculateChecksum(ally, test_file);
+    const checksum1 = try MockChecksummer.calculateChecksum(allocator, test_file);
+    const checksum2 = try MockChecksummer.calculateChecksum(allocator, test_file);
 
     // Should be deterministic
     try testing.expectEqual(checksum1, checksum2);
@@ -175,7 +175,7 @@ test "File checksum calculation mock" {
 }
 
 test "Backup ID generation mock" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Mock backup ID generation function
     const MockBackupIdGenerator = struct {
@@ -196,15 +196,15 @@ test "Backup ID generation mock" {
     try testing.expect(backup_id2 != 0);
 
     // Test backup ID format in hex
-    const hex_id = try std.fmt.allocPrint(ally, "{x}", .{backup_id1});
-    defer ally.free(hex_id);
+    const hex_id = try std.fmt.allocPrint(allocator, "{x}", .{backup_id1});
+    defer allocator.free(hex_id);
 
     try testing.expect(hex_id.len > 0);
     try testing.expect(hex_id.len <= 32); // 128 bits = 32 hex characters max
 }
 
 test "XML parsing mock" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
     // Mock XML parser for S3 responses
     const MockXMLParser = struct {
@@ -234,13 +234,13 @@ test "XML parsing mock" {
         \\</InitiateMultipartUploadResult>
     ;
 
-    const upload_id = try MockXMLParser.parseUploadId(ally, valid_xml);
-    defer ally.free(upload_id);
+    const upload_id = try MockXMLParser.parseUploadId(allocator, valid_xml);
+    defer allocator.free(upload_id);
 
     try testing.expect(std.mem.eql(u8, upload_id, "example-upload-id-123"));
 
     // Test invalid XML
     const invalid_xml = "<InvalidResponse>No upload ID here</InvalidResponse>";
-    const result = MockXMLParser.parseUploadId(ally, invalid_xml);
+    const result = MockXMLParser.parseUploadId(allocator, invalid_xml);
     try testing.expectError(error.InvalidXMLResponse, result);
 }

@@ -9,12 +9,12 @@ const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     const total: usize = 25_000;
 
     // Baseline
-    var base = try cdc_mod.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 1024, .adaptive_flush = false, .flush_interval_ms = 10_000 });
+    var base = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 1024, .adaptive_flush = false, .flush_interval_ms = 10_000 });
     defer base.deinit();
     var i: usize = 0;
     const base_start = std.time.nanoTimestamp();
@@ -24,7 +24,7 @@ test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf" {
     const base_elapsed = base_end - base_start;
 
     // Adaptive
-    var adapt = try cdc_mod.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 1024, .adaptive_flush = true, .adapt_window_events = 512, .flush_interval_ms = 10_000 });
+    var adapt = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 1024, .adaptive_flush = true, .adapt_window_events = 512, .flush_interval_ms = 10_000 });
     defer adapt.deinit();
     i = 0;
     const adapt_start = std.time.nanoTimestamp();

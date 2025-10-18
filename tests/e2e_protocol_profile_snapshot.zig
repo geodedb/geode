@@ -15,8 +15,8 @@ fn run(args: []const []const u8) ![]u8 {
 }
 
 // structuralSignature now delegates to util.normalizeNumbers (which also strips whitespace)
-fn structuralSignature(ally: std.mem.Allocator, line: []const u8) ![]u8 {
-    return util.normalizeNumbers(ally, line);
+fn structuralSignature(allocator: std.mem.Allocator, line: []const u8) ![]u8 {
+    return util.normalizeNumbers(allocator, line);
 }
 
 // Initial snapshot test: builds a structural signature independent of numeric jitter.

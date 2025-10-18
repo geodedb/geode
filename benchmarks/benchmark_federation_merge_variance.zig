@@ -34,10 +34,10 @@ fn fabricateResults(k1: []const i64, k2: []const i64, allocator: std.mem.Allocat
 pub fn benchmarkFederationOrderedMultiKeyDirMergeVarianceEnvelope() !void {
     const iterations = 64;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     defer _ = gpa.deinit();
-    var samples = try ally.alloc(u64, iterations);
-    defer ally.free(samples);
+    var samples = try allocator.alloc(u64, iterations);
+    defer allocator.free(samples);
     const order_keys = &[_][]const u8{ "k1", "k2" };
     const order_dirs = &[_]bool{ true, false };
     var fm: federation.FederationManager = undefined;
@@ -46,19 +46,19 @@ pub fn benchmarkFederationOrderedMultiKeyDirMergeVarianceEnvelope() !void {
     while (it < iterations) : (it += 1) {
         // Fabricate three contributors with slight permutation each iteration
         const base: i64 = @intCast(it % 4);
-        const local = fabricateResults(&[_]i64{ 1, 2, 3 }, &[_]i64{ 5 + base, 4 + base, 3 + base }, ally, order_keys, order_dirs);
-        const r1 = fabricateResults(&[_]i64{ 1, 2 }, &[_]i64{ 7 + base, 2 + base }, ally, order_keys, order_dirs);
-        const r2 = fabricateResults(&[_]i64{ 2, 3 }, &[_]i64{ 9 + base, 1 + base }, ally, order_keys, order_dirs);
+        const local = fabricateResults(&[_]i64{ 1, 2, 3 }, &[_]i64{ 5 + base, 4 + base, 3 + base }, allocator, order_keys, order_dirs);
+        const r1 = fabricateResults(&[_]i64{ 1, 2 }, &[_]i64{ 7 + base, 2 + base }, allocator, order_keys, order_dirs);
+        const r2 = fabricateResults(&[_]i64{ 2, 3 }, &[_]i64{ 9 + base, 1 + base }, allocator, order_keys, order_dirs);
         var rem = [_]federation.QueryResults{ r1, r2 };
         const start = std.time.nanoTimestamp();
-        const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
+        const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, allocator);
         const end = std.time.nanoTimestamp();
         samples[it] = @intCast(end - start);
         // Free row buffers (values freed by allocator arena teardown at end)
-        ally.free(merged.rows);
-        ally.free(local.rows);
-        ally.free(r1.rows);
-        ally.free(r2.rows);
+        allocator.free(merged.rows);
+        allocator.free(local.rows);
+        allocator.free(r1.rows);
+        allocator.free(r2.rows);
     }
     // compute stats
     var sum: u128 = 0;

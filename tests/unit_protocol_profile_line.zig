@@ -5,11 +5,11 @@ const protocol = @import("protocol");
 // Ensures no regression in length arithmetic (past segfault root cause).
 
 test "protocol.buildProfileLine basic" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const payload = "{\"profile_version\":1,\"ops\":[],\"totals\":{}}";
     const flags = [_][]const u8{ "I:IllegalOrderKeyPolicy=ident-only", "U:NullsFirstPolicy" };
-    const line = try protocol.buildProfileLine(ally, payload, &flags);
-    defer ally.free(line);
+    const line = try protocol.buildProfileLine(allocator, payload, &flags);
+    defer allocator.free(line);
     try std.testing.expect(std.mem.startsWith(u8, line, "{\"status_class\":"));
     try std.testing.expect(std.mem.indexOf(u8, line, payload) != null);
     // Ensure flags appear in order

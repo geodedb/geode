@@ -12,15 +12,15 @@ const txn_mod = @import("txn");
 test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Simulated global key store (would be index lookup under real engine)
-    var keys = std.ArrayList([]const u8).init(ally);
+    var keys = std.ArrayList([]const u8).init(allocator);
     defer keys.deinit();
     try keys.append("acct:1");
     try keys.append("acct:2");
 
-    var manager = try txn_mod.Manager.init(ally, .{});
+    var manager = try txn_mod.Manager.init(allocator, .{});
     defer manager.deinit();
 
     // Begin two transactions
@@ -28,7 +28,7 @@ test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
     var t2 = manager.begin();
 
     // Predicate read under T1 snapshot
-    var initial = std.ArrayList([]const u8).init(ally);
+    var initial = std.ArrayList([]const u8).init(allocator);
     defer initial.deinit();
     for (keys.items) |k| if (std.mem.startsWith(u8, k, "acct:")) try initial.append(k);
 
@@ -37,7 +37,7 @@ test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
     try manager.commit(&t2); // commit writer first
 
     // Re-scan under T1 snapshot: should not see acct:3 (phantom avoided)
-    var rescan = std.ArrayList([]const u8).init(ally);
+    var rescan = std.ArrayList([]const u8).init(allocator);
     defer rescan.deinit();
     for (keys.items) |k| if (std.mem.startsWith(u8, k, "acct:")) try rescan.append(k);
 

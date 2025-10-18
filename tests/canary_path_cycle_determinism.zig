@@ -7,21 +7,21 @@ const planner = @import("../src/planner.zig");
 test "TestCANARY_REQ_GQL_016_PathCycleDeterminism" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var adj = planner.AdjacencyList.init(ally);
-    defer adj.deinit(ally);
+    var adj = planner.AdjacencyList.init(allocator);
+    defer adj.deinit(allocator);
 
     // Cycle 1-2-3-1 plus extra edge 2-4
-    try adj.addEdge(1, 2, 100, ally);
-    try adj.addEdge(2, 3, 101, ally);
-    try adj.addEdge(3, 1, 102, ally);
-    try adj.addEdge(2, 4, 103, ally);
+    try adj.addEdge(1, 2, 100, allocator);
+    try adj.addEdge(2, 3, 101, allocator);
+    try adj.addEdge(3, 1, 102, allocator);
+    try adj.addEdge(2, 4, 103, allocator);
 
     const pe = planner.PathExpand{ .min_hops = 1, .max_hops = 3, .tie_break_policy = .LengthId };
     const start_nodes = [_]u64{1};
-    const results = try pe.execute(&start_nodes, &adj, ally);
-    defer ally.free(results);
+    const results = try pe.execute(&start_nodes, &adj, allocator);
+    defer allocator.free(results);
 
     // Collect (length, end_id) pairs to assert deterministic ordering and absence of duplicate cycle revisits within a single path.
     var last_len: u32 = 0;

@@ -20,21 +20,21 @@ fn assertStable(comptime N: usize, a: [N]u64, b: [N]u64) !void {
 pub fn TestCANARY_REQ_GQL_016_BoundedQuantifierDeterminism() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const query = "MATCH (n)-[*1..2]->(m) RETURN n, m ORDER BY n"; // placeholder syntax
     // Parse multiple times and ensure ordering of identifiers list in AST stable.
-    var first = try geode.parseGql(query, ally);
+    var first = try geode.parseGql(query, allocator);
     defer first.deinit();
     // Extract a deterministic surrogate ordering (here: slice of bytes of AST serialization)
-    var buf1 = std.ArrayList(u8).init(ally);
+    var buf1 = std.ArrayList(u8).init(allocator);
     defer buf1.deinit();
     try first.ast.debugPrint(.{ .writer = buf1.writer() });
     const baseline_hash: u64 = std.hash.Wyhash.hash(0, buf1.items);
     var iter: usize = 0;
     while (iter < 10) : (iter += 1) {
-        var p = try geode.parseGql(query, ally);
+        var p = try geode.parseGql(query, allocator);
         defer p.deinit();
-        var tmp = std.ArrayList(u8).init(ally);
+        var tmp = std.ArrayList(u8).init(allocator);
         defer tmp.deinit();
         try p.ast.debugPrint(.{ .writer = tmp.writer() });
         const h = std.hash.Wyhash.hash(0, tmp.items);
@@ -46,12 +46,12 @@ pub fn BenchmarkCANARY_REQ_GQL_016_BoundedQuantifierDeterminism() !void {
     // Lightweight micro-benchmark hashing the AST for deterministic multi-branch bounded quantifier pattern.
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const query = "MATCH (n)-[*1..2]->(m) RETURN n, m ORDER BY n";
     var i: usize = 0;
     while (i < 100) : (i += 1) {
-        var p = try geode.parseGql(query, ally);
-        var tmp = std.ArrayList(u8).init(ally);
+        var p = try geode.parseGql(query, allocator);
+        var tmp = std.ArrayList(u8).init(allocator);
         defer tmp.deinit();
         try p.ast.debugPrint(.{ .writer = tmp.writer() });
         std.hash.Wyhash.hash(0, tmp.items); // discard

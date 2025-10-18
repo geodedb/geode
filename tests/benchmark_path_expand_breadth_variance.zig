@@ -7,7 +7,7 @@ const planner = @import("planner"); // if planner module exposed; otherwise fall
 // Synthetic expansion benchmark approximating breadth expansion cost by traversing an adjacency list
 // with fixed branching factor and depth, measuring total traversal time.
 
-fn buildAdjacency(ally: std.mem.Allocator, branching: usize, depth: usize) ![]usize {
+fn buildAdjacency(allocator: std.mem.Allocator, branching: usize, depth: usize) ![]usize {
     // store child count for each node sequentially; tree node count = (b^{d+1}-1)/(b-1)
     var total: usize = 0;
     var d: usize = 0;
@@ -16,7 +16,7 @@ fn buildAdjacency(ally: std.mem.Allocator, branching: usize, depth: usize) ![]us
         total += pow;
         pow *= branching;
     }
-    var buf = try ally.alloc(usize, total * branching);
+    var buf = try allocator.alloc(usize, total * branching);
     // Fill children indices (mod arithmetic for determinism) - only used to simulate work
     var i: usize = 0;
     while (i < buf.len) : (i += 1) buf[i] = (i * 1315423911) ^ 0x9e3779b97f4a7c15;
@@ -49,11 +49,11 @@ fn expandWork(adj: []usize, branching: usize, depth: usize) void {
 test "BenchmarkCANARY_REQ_GQL_016_PathExpandBreadthVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     const branching = 6;
     const depth = 5;
-    const adj = try buildAdjacency(ally, branching, depth);
-    defer ally.free(adj);
+    const adj = try buildAdjacency(allocator, branching, depth);
+    defer allocator.free(adj);
 
     const Runs = 36;
     var samples: [Runs]u64 = undefined;

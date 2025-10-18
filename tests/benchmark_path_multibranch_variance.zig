@@ -28,8 +28,8 @@ fn buildGraph(allocator: std.mem.Allocator) !planner.AdjacencyList {
     var adj = planner.AdjacencyList.init(allocator);
     var eid: u64 = 9000;
     const add = struct {
-        fn e(a: *planner.AdjacencyList, from: u64, to: u64, id: *u64, ally: std.mem.Allocator) !void {
-            try a.addEdge(from, to, id.*, ally);
+        fn e(a: *planner.AdjacencyList, from: u64, to: u64, id: *u64, allocator: std.mem.Allocator) !void {
+            try a.addEdge(from, to, id.*, allocator);
             id.* += 1;
         }
     };

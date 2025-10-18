@@ -8,9 +8,9 @@ const protocol = @import("../src/protocol.zig");
 test "TestCANARY_REQ_GQL_032_PatternRegex" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const prop_constraint = constraints_mod.SchemaConstraints.PropertyConstraint{
@@ -33,7 +33,7 @@ test "TestCANARY_REQ_GQL_032_PatternRegex" {
 
     const matches = [_][]const u8{ "axbcd", "aZbdd", "a_bce", "abdd" };
     inline for (matches) |m| {
-        var props = std.StringHashMap(protocol.Value).init(ally);
+        var props = std.StringHashMap(protocol.Value).init(allocator);
         defer props.deinit();
         try props.put("p", protocol.Value{ .string = m });
         try std.testing.expect((try sc.validateNode(1, "Thing2", props)) == null);
@@ -41,7 +41,7 @@ test "TestCANARY_REQ_GQL_032_PatternRegex" {
 
     const fails = [_][]const u8{ "aXYbxd", "abf", "aab", "acbdxq" };
     inline for (fails) |f| {
-        var props2 = std.StringHashMap(protocol.Value).init(ally);
+        var props2 = std.StringHashMap(protocol.Value).init(allocator);
         defer props2.deinit();
         try props2.put("p", protocol.Value{ .string = f });
         const err = try sc.validateNode(2, "Thing2", props2);

@@ -7,9 +7,9 @@ const streaming = @import("../src/streaming/cdc_enhanced.zig");
 test "TestCANARY_REQ_GQL_042_CDC_StreamingUmbrella" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var engine = try streaming.CdcEnhanced.init(ally, .{ .enable_wal_tail = true, .adaptive_diff = true });
+    var engine = try streaming.CdcEnhanced.init(allocator, .{ .enable_wal_tail = true, .adaptive_diff = true });
     defer engine.deinit();
 
     try engine.start();
@@ -18,7 +18,7 @@ test "TestCANARY_REQ_GQL_042_CDC_StreamingUmbrella" {
     // Simulate load to trigger backpressure heuristics
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        try engine.captureEvent(.{ .kind = .insert, .payload = try std.fmt.allocPrint(ally, "bp-{d}", .{i}) });
+        try engine.captureEvent(.{ .kind = .insert, .payload = try std.fmt.allocPrint(allocator, "bp-{d}", .{i}) });
         if (i == 25) {
             // Toggle adaptive diff (assuming config mutable API exists; if not, no-op)
             engine.setAdaptiveDiffEnabled(false) catch {};
@@ -33,7 +33,7 @@ test "TestCANARY_REQ_GQL_042_CDC_StreamingUmbrella" {
     engine.setAdaptiveDiffEnabled(true) catch {};
     var j: usize = 0;
     while (j < 5) : (j += 1) {
-        try engine.captureEvent(.{ .kind = .update, .payload = try std.fmt.allocPrint(ally, "late-{d}", .{j}) });
+        try engine.captureEvent(.{ .kind = .update, .payload = try std.fmt.allocPrint(allocator, "late-{d}", .{j}) });
     }
 
     const diag2 = try engine.exportDiagnostics();

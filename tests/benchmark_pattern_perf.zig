@@ -8,9 +8,9 @@ const protocol = @import("../src/protocol.zig");
 test "BenchmarkCANARY_REQ_GQL_032_PatternPerf" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    var sc = constraints_mod.SchemaConstraints.init(ally);
+    var sc = constraints_mod.SchemaConstraints.init(allocator);
     defer sc.deinit();
 
     const patterns = [_][]const u8{ "^a.*z$", "^ab.?c[0-9]$", "foo", "^x[abc]*y$", "^h.*world$" };
@@ -27,7 +27,7 @@ test "BenchmarkCANARY_REQ_GQL_032_PatternPerf" {
         for (patterns) |pat| {
             for (inputs) |inp| {
                 // Direct call to matcher via checkPattern by forging a property constraint per pattern
-                var props = std.StringHashMap(protocol.Value).init(ally);
+                var props = std.StringHashMap(protocol.Value).init(allocator);
                 defer props.deinit();
                 try props.put("p", protocol.Value{ .string = inp });
                 // mutate pattern on constraint

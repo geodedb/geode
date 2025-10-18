@@ -7,8 +7,8 @@ const exec = @import("../src/exec.zig");
 // Expected final COUNT DISTINCT = 200 unique values (0..199).
 
 test "TestCANARY_REQ_GQL_012_HashAggDistinctSpillAccurateMerge" {
-    const ally = std.testing.allocator;
-    var agg = exec.HashAggregator.init(ally, 512); // tiny limit to force multiple segments
+    const allocator = std.testing.allocator;
+    var agg = exec.HashAggregator.init(allocator, 512); // tiny limit to force multiple segments
     defer agg.deinit();
 
     const key_val = exec.BindingValue{ .Int = 42 };
@@ -33,7 +33,7 @@ test "TestCANARY_REQ_GQL_012_HashAggDistinctSpillAccurateMerge" {
     try agg.flushSegment(&agg_spec); // spill segment 2
 
     const rows = try agg.getResults();
-    defer ally.free(rows);
+    defer allocator.free(rows);
     try std.testing.expect(rows.len == 1);
     const r = rows[0];
     try std.testing.expect(r.len == 2);

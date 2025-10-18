@@ -126,9 +126,9 @@ const CardinalityEstimator = struct {
 };
 
 test "cardinality estimator - scan estimation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
-    var stats_registry = MockStatsRegistry.init(ally);
+    var stats_registry = MockStatsRegistry.init(allocator);
     defer stats_registry.deinit();
 
     // Add table statistics
@@ -139,7 +139,7 @@ test "cardinality estimator - scan estimation" {
         .last_analyzed = 1640995200,
     });
 
-    var estimator = CardinalityEstimator.init(ally, &stats_registry);
+    var estimator = CardinalityEstimator.init(allocator, &stats_registry);
 
     // Create a mock scan node
     var scan_node = MockLogicalPlan{
@@ -153,12 +153,12 @@ test "cardinality estimator - scan estimation" {
 }
 
 test "cardinality estimator - filter estimation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
-    var stats_registry = MockStatsRegistry.init(ally);
+    var stats_registry = MockStatsRegistry.init(allocator);
     defer stats_registry.deinit();
 
-    var estimator = CardinalityEstimator.init(ally, &stats_registry);
+    var estimator = CardinalityEstimator.init(allocator, &stats_registry);
 
     // Create scan child node
     const scan_node = MockLogicalPlan{
@@ -181,12 +181,12 @@ test "cardinality estimator - filter estimation" {
 }
 
 test "cardinality estimator - join estimation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
-    var stats_registry = MockStatsRegistry.init(ally);
+    var stats_registry = MockStatsRegistry.init(allocator);
     defer stats_registry.deinit();
 
-    var estimator = CardinalityEstimator.init(ally, &stats_registry);
+    var estimator = CardinalityEstimator.init(allocator, &stats_registry);
 
     // Create left and right scan nodes
     const left_scan = MockLogicalPlan{
@@ -214,12 +214,12 @@ test "cardinality estimator - join estimation" {
 }
 
 test "cardinality estimator - aggregate estimation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
-    var stats_registry = MockStatsRegistry.init(ally);
+    var stats_registry = MockStatsRegistry.init(allocator);
     defer stats_registry.deinit();
 
-    var estimator = CardinalityEstimator.init(ally, &stats_registry);
+    var estimator = CardinalityEstimator.init(allocator, &stats_registry);
 
     // Create scan child node
     const scan_node = MockLogicalPlan{
@@ -240,12 +240,12 @@ test "cardinality estimator - aggregate estimation" {
 }
 
 test "cardinality estimator - limit estimation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
-    var stats_registry = MockStatsRegistry.init(ally);
+    var stats_registry = MockStatsRegistry.init(allocator);
     defer stats_registry.deinit();
 
-    var estimator = CardinalityEstimator.init(ally, &stats_registry);
+    var estimator = CardinalityEstimator.init(allocator, &stats_registry);
 
     // Create scan child node
     const scan_node = MockLogicalPlan{
@@ -268,12 +268,12 @@ test "cardinality estimator - limit estimation" {
 }
 
 test "cardinality estimator - project estimation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
-    var stats_registry = MockStatsRegistry.init(ally);
+    var stats_registry = MockStatsRegistry.init(allocator);
     defer stats_registry.deinit();
 
-    var estimator = CardinalityEstimator.init(ally, &stats_registry);
+    var estimator = CardinalityEstimator.init(allocator, &stats_registry);
 
     // Create scan child node
     const scan_node = MockLogicalPlan{
@@ -295,12 +295,12 @@ test "cardinality estimator - project estimation" {
 }
 
 test "cardinality estimator - sort estimation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
-    var stats_registry = MockStatsRegistry.init(ally);
+    var stats_registry = MockStatsRegistry.init(allocator);
     defer stats_registry.deinit();
 
-    var estimator = CardinalityEstimator.init(ally, &stats_registry);
+    var estimator = CardinalityEstimator.init(allocator, &stats_registry);
 
     // Create scan child node
     const scan_node = MockLogicalPlan{
@@ -322,9 +322,9 @@ test "cardinality estimator - sort estimation" {
 }
 
 test "cardinality estimator - complex plan estimation" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
-    var stats_registry = MockStatsRegistry.init(ally);
+    var stats_registry = MockStatsRegistry.init(allocator);
     defer stats_registry.deinit();
 
     // Add table statistics
@@ -335,7 +335,7 @@ test "cardinality estimator - complex plan estimation" {
         .last_analyzed = 1640995200,
     });
 
-    var estimator = CardinalityEstimator.init(ally, &stats_registry);
+    var estimator = CardinalityEstimator.init(allocator, &stats_registry);
 
     // Build complex plan: Scan -> Filter -> Join -> Aggregate
     const scan1 = MockLogicalPlan{
@@ -377,12 +377,12 @@ test "cardinality estimator - complex plan estimation" {
 }
 
 test "cardinality estimator - edge cases" {
-    const ally = testing.allocator;
+    const allocator = testing.allocator;
 
-    var stats_registry = MockStatsRegistry.init(ally);
+    var stats_registry = MockStatsRegistry.init(allocator);
     defer stats_registry.deinit();
 
-    var estimator = CardinalityEstimator.init(ally, &stats_registry);
+    var estimator = CardinalityEstimator.init(allocator, &stats_registry);
 
     // Test empty plan
     var empty_node = MockLogicalPlan{

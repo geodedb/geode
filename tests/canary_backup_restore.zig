@@ -7,8 +7,8 @@ const MockWalManager = struct {
     current_lsn: u64 = 1,
     log: std.ArrayList(u8),
 
-    pub fn init(ally: std.mem.Allocator) MockWalManager {
-        return .{ .allocator = ally, .log = std.ArrayList(u8).init(ally) };
+    pub fn init(allocator: std.mem.Allocator) MockWalManager {
+        return .{ .allocator = allocator, .log = std.ArrayList(u8).init(allocator) };
     }
 
     pub fn deinit(self: *MockWalManager) void {
@@ -29,9 +29,9 @@ const MockWalManager = struct {
         return self.current_lsn;
     }
 
-    pub fn getRecordsRange(self: *MockWalManager, start_lsn: u64, end_lsn: u64, ally: std.mem.Allocator) ![]u8 {
+    pub fn getRecordsRange(self: *MockWalManager, start_lsn: u64, end_lsn: u64, allocator: std.mem.Allocator) ![]u8 {
         // Return concatenated entries whose embedded LSN in header is within [start_lsn, end_lsn)
-        var out = std.ArrayList(u8).init(ally);
+        var out = std.ArrayList(u8).init(allocator);
         var i: usize = 0;
         while (i + 12 <= self.log.items.len) {
             const lsn = std.mem.readInt(u64, self.log.items[i .. i + 8], .little);
@@ -51,8 +51,8 @@ const MockPageManager = struct {
     allocator: std.mem.Allocator,
     pages: std.ArrayList([]u8),
 
-    pub fn init(ally: std.mem.Allocator) MockPageManager {
-        return .{ .allocator = ally, .pages = std.ArrayList([]u8).init(ally) };
+    pub fn init(allocator: std.mem.Allocator) MockPageManager {
+        return .{ .allocator = allocator, .pages = std.ArrayList([]u8).init(allocator) };
     }
     pub fn deinit(self: *MockPageManager) void {
         for (self.pages.items) |p| self.allocator.free(p);
@@ -62,9 +62,9 @@ const MockPageManager = struct {
         const dup = try self.allocator.dupe(u8, data);
         try self.pages.append(dup);
     }
-    pub fn serializeCatalog(self: *MockPageManager, ally: std.mem.Allocator) ![]u8 {
+    pub fn serializeCatalog(self: *MockPageManager, allocator: std.mem.Allocator) ![]u8 {
         // Minimal catalog: JSON array of page sizes for determinism.
-        var stream = std.ArrayList(u8).init(ally);
+        var stream = std.ArrayList(u8).init(allocator);
         try stream.append('[');
         var i: usize = 0;
         while (i < self.pages.items.len) : (i += 1) {
@@ -79,38 +79,38 @@ const MockPageManager = struct {
     pub fn getPageCount(self: *MockPageManager) u64 {
         return @intCast(self.pages.items.len);
     }
-    pub fn readPage(self: *MockPageManager, idx: u64, ally: std.mem.Allocator) ![]u8 {
+    pub fn readPage(self: *MockPageManager, idx: u64, allocator: std.mem.Allocator) ![]u8 {
         if (idx >= self.pages.items.len) return error.InvalidPage;
-        return ally.dupe(u8, self.pages.items[@intCast(idx)]);
+        return allocator.dupe(u8, self.pages.items[@intCast(idx)]);
     }
 };
 
-fn makeTempDir(ally: std.mem.Allocator) ![]u8 {
-    const base = try std.fs.cwd().realpathAlloc(ally, ".");
-    defer ally.free(base);
-    const path = try std.fmt.allocPrint(ally, "{s}/tmp_backup_{d}", .{ base, std.time.nanoTimestamp() });
+fn makeTempDir(allocator: std.mem.Allocator) ![]u8 {
+    const base = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(base);
+    const path = try std.fmt.allocPrint(allocator, "{s}/tmp_backup_{d}", .{ base, std.time.nanoTimestamp() });
     try std.fs.cwd().makePath(path);
     return path; // caller frees
 }
 
 // TestCANARY_REQ_GQL_082_FullBackup
 test "TestCANARY_REQ_GQL_082_FullBackup" {
-    const ally = std.testing.allocator;
-    var wal_mgr = MockWalManager.init(ally);
+    const allocator = std.testing.allocator;
+    var wal_mgr = MockWalManager.init(allocator);
     defer wal_mgr.deinit();
     // Add a couple of WAL logical records so LSN advances.
     try wal_mgr.appendLogicalMutation("seed1");
     try wal_mgr.appendLogicalMutation("seed2");
 
-    var pm = MockPageManager.init(ally);
+    var pm = MockPageManager.init(allocator);
     defer pm.deinit();
     try pm.addPage("page-A-data");
     try pm.addPage("page-B-data-xxxxx");
 
-    const dir = try makeTempDir(ally);
-    defer ally.free(dir);
+    const dir = try makeTempDir(allocator);
+    defer allocator.free(dir);
 
-    var mgr = try backup_mod.BackupManager.init(ally, dir, .{}, @ptrCast(&wal_mgr), @ptrCast(&pm));
+    var mgr = try backup_mod.BackupManager.init(allocator, dir, .{}, @ptrCast(&wal_mgr), @ptrCast(&pm));
     defer mgr.deinit();
 
     const meta = try mgr.createFullBackup();
@@ -125,8 +125,8 @@ test "TestCANARY_REQ_GQL_082_FullBackup" {
     while (try iter.next()) |entry| {
         if (std.mem.startsWith(u8, entry.name, "full_")) {
             full_found = true;
-            const path = try std.fmt.allocPrint(ally, "{s}/{s}", .{ dir, entry.name });
-            defer ally.free(path);
+            const path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, entry.name });
+            defer allocator.free(path);
             var f = try std.fs.cwd().openFile(path, .{});
             defer f.close();
             const read_len = try f.read(&buf);
@@ -141,15 +141,15 @@ test "TestCANARY_REQ_GQL_082_FullBackup" {
 
 // TestCANARY_REQ_GQL_082_IncrementalBackup
 test "TestCANARY_REQ_GQL_082_IncrementalBackup" {
-    const ally = std.testing.allocator;
-    var wal_mgr = MockWalManager.init(ally);
+    const allocator = std.testing.allocator;
+    var wal_mgr = MockWalManager.init(allocator);
     defer wal_mgr.deinit();
-    var pm = MockPageManager.init(ally);
+    var pm = MockPageManager.init(allocator);
     defer pm.deinit();
     try pm.addPage("only-page");
-    const dir = try makeTempDir(ally);
-    defer ally.free(dir);
-    var mgr = try backup_mod.BackupManager.init(ally, dir, .{}, @ptrCast(&wal_mgr), @ptrCast(&pm));
+    const dir = try makeTempDir(allocator);
+    defer allocator.free(dir);
+    var mgr = try backup_mod.BackupManager.init(allocator, dir, .{}, @ptrCast(&wal_mgr), @ptrCast(&pm));
     defer mgr.deinit();
     const full_meta = try mgr.createFullBackup();
     // Append new WAL records advancing LSN then create incremental specifying base LSN from previous end.
@@ -163,22 +163,22 @@ test "TestCANARY_REQ_GQL_082_IncrementalBackup" {
 
 // TestCANARY_REQ_GQL_082_RestoreDriver
 test "TestCANARY_REQ_GQL_082_RestoreDriver" {
-    const ally = std.testing.allocator;
-    var wal_mgr = MockWalManager.init(ally);
+    const allocator = std.testing.allocator;
+    var wal_mgr = MockWalManager.init(allocator);
     defer wal_mgr.deinit();
-    var pm = MockPageManager.init(ally);
+    var pm = MockPageManager.init(allocator);
     defer pm.deinit();
     try pm.addPage("r-page-1");
     try pm.addPage("r-page-2");
-    const dir = try makeTempDir(ally);
-    defer ally.free(dir);
-    var mgr = try backup_mod.BackupManager.init(ally, dir, .{}, @ptrCast(&wal_mgr), @ptrCast(&pm));
+    const dir = try makeTempDir(allocator);
+    defer allocator.free(dir);
+    var mgr = try backup_mod.BackupManager.init(allocator, dir, .{}, @ptrCast(&wal_mgr), @ptrCast(&pm));
     defer mgr.deinit();
     _ = try mgr.createFullBackup();
     try wal_mgr.appendLogicalMutation("after-full-WAL");
     const target_time = std.time.milliTimestamp() + 1; // near future
-    const restore_dir = try makeTempDir(ally);
-    defer ally.free(restore_dir);
+    const restore_dir = try makeTempDir(allocator);
+    defer allocator.free(restore_dir);
     try mgr.restoreToPointInTime(target_time, restore_dir);
     // Expect catalog and at least page_0.dat present.
     var rdir = std.fs.cwd().openDir(restore_dir, .{ .iterate = true });

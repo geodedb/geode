@@ -8,25 +8,25 @@ pub const ImplDefinedFinding = struct {
 };
 
 pub fn collect(
-    ally: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     opts: struct {
         zero_length_paths_excluded: bool,
         collation_binary_default: bool = true,
         null_order_policy_default: bool = true,
     },
 ) ![]ImplDefinedFinding {
-    var list = std.ArrayList(ImplDefinedFinding).initCapacity(ally, 3) catch return error.OutOfMemory;
-    errdefer list.deinit(ally);
+    var list = std.ArrayList(ImplDefinedFinding).initCapacity(allocator, 3) catch return error.OutOfMemory;
+    errdefer list.deinit(allocator);
     if (opts.zero_length_paths_excluded) {
-        try list.append(ally, .{ .code = "ZeroLengthPathExcluded", .detail = "Zero-length paths excluded when min_hops=0 (impl-defined policy)" });
+        try list.append(allocator, .{ .code = "ZeroLengthPathExcluded", .detail = "Zero-length paths excluded when min_hops=0 (impl-defined policy)" });
     }
     if (opts.collation_binary_default) {
-        try list.append(ally, .{ .code = "CollationBinaryDefault", .detail = "Binary collation default (Unicode collation optional feature not enabled)" });
+        try list.append(allocator, .{ .code = "CollationBinaryDefault", .detail = "Binary collation default (Unicode collation optional feature not enabled)" });
     }
     if (opts.null_order_policy_default) {
-        try list.append(ally, .{ .code = "NullOrderPolicyDefault", .detail = "NULL ordering defaults to NULLS LAST unless ORDER BY specifies otherwise (impl-defined)" });
+        try list.append(allocator, .{ .code = "NullOrderPolicyDefault", .detail = "NULL ordering defaults to NULLS LAST unless ORDER BY specifies otherwise (impl-defined)" });
     }
-    return try list.toOwnedSlice(ally);
+    return try list.toOwnedSlice(allocator);
 }
 
 test "TestCANARY_REQ_GQL_024_ImplDefinedZeroLengthPathPolicy" {

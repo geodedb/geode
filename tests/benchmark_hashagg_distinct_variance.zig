@@ -27,9 +27,9 @@ fn makeQuery() ast.Query {
     };
 }
 
-fn runOnce(ally: std.mem.Allocator, q: ast.Query, rows: []const []const exec.BindingValue) !i128 {
-    var eval_rows = try ally.alloc([]const @import("eval.zig").Value, rows.len);
-    defer ally.free(eval_rows);
+fn runOnce(allocator: std.mem.Allocator, q: ast.Query, rows: []const []const exec.BindingValue) !i128 {
+    var eval_rows = try allocator.alloc([]const @import("eval.zig").Value, rows.len);
+    defer allocator.free(eval_rows);
     var i: usize = 0;
     while (i < rows.len) : (i += 1) {
         // Each row has (g,a)
@@ -38,8 +38,8 @@ fn runOnce(ally: std.mem.Allocator, q: ast.Query, rows: []const []const exec.Bin
         eval_rows[i] = &.{ bindingToEval(gval), bindingToEval(aval) };
     }
     var timings = exec.AggStageTimings{};
-    const out = try exec.runGroupedQuery(ally, q, &.{ "g", "a" }, eval_rows, &.{}, &.{}, &timings);
-    ally.free(out);
+    const out = try exec.runGroupedQuery(allocator, q, &.{ "g", "a" }, eval_rows, &.{}, &.{}, &timings);
+    allocator.free(out);
     return timings.build_ns + timings.emit_ns;
 }
 
@@ -54,14 +54,14 @@ fn bindingToEval(b: exec.BindingValue) @import("eval.zig").Value {
 }
 
 test "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctHighCardVarianceEnvelope" {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
     const q = makeQuery();
     // Build synthetic rows: G groups, each with ~N distinct values, with duplicates sprinkled.
     const G: usize = 25;
     const N: usize = 400; // distinct cardinality per group target
     const TOTAL = G * N;
-    var rows = try ally.alloc([]const exec.BindingValue, TOTAL);
-    defer ally.free(rows);
+    var rows = try allocator.alloc([]const exec.BindingValue, TOTAL);
+    defer allocator.free(rows);
     var gi: usize = 0;
     var idx: usize = 0;
     while (gi < G) : (gi += 1) {
@@ -78,11 +78,11 @@ test "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctHighCardVarianceEnvelope" {
         }
     }
     const iters: usize = 24;
-    var samples = try ally.alloc(f64, iters);
-    defer ally.free(samples);
+    var samples = try allocator.alloc(f64, iters);
+    defer allocator.free(samples);
     var i: usize = 0;
     while (i < iters) : (i += 1) {
-        const t = try runOnce(ally, q, rows);
+        const t = try runOnce(allocator, q, rows);
         samples[i] = @as(f64, @floatFromInt(t));
     }
     // Compute mean, variance, p95

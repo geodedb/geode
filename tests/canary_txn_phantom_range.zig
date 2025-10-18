@@ -38,22 +38,22 @@ test "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection" {
 test "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     var mgr_base: txn.Manager = undefined;
-    mgr_base.init(ally);
+    mgr_base.init(allocator);
     defer mgr_base.deinit();
 
     var mgr_range: txn.Manager = undefined;
-    mgr_range.init(ally);
+    mgr_range.init(allocator);
     mgr_range.enablePhantomPrevention();
     defer mgr_range.deinit();
 
     const iters: usize = 300; // enough for variance stability but fast
-    var base_samples = try ally.alloc(f64, iters);
-    defer ally.free(base_samples);
-    var range_samples = try ally.alloc(f64, iters);
-    defer ally.free(range_samples);
+    var base_samples = try allocator.alloc(f64, iters);
+    defer allocator.free(base_samples);
+    var range_samples = try allocator.alloc(f64, iters);
+    defer allocator.free(range_samples);
 
     var i: usize = 0;
     while (i < iters) : (i += 1) {

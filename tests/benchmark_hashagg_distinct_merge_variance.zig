@@ -5,9 +5,9 @@ const exec = @import("../src/exec.zig");
 // Benchmark merges multiple spilled segments with overlapping distinct sets to measure variance.
 // Guard: CV <= 0.22; p95/mean <= 2.55.
 
-fn runOnce(ally: std.mem.Allocator) !u64 {
+fn runOnce(allocator: std.mem.Allocator) !u64 {
     var timer = try std.time.Timer.start();
-    var agg = exec.HashAggregator.init(ally, 512);
+    var agg = exec.HashAggregator.init(allocator, 512);
     defer agg.deinit();
     const key_val = exec.BindingValue{ .Int = 1 };
     const spec = [_]exec.Agg{.CountDistinct};
@@ -27,12 +27,12 @@ fn runOnce(ally: std.mem.Allocator) !u64 {
 }
 
 pub fn BenchmarkCANARY_REQ_GQL_012_HashAggDistinctMergeVarianceEnvelope() !void {
-    const ally = std.heap.page_allocator;
+    const allocator = std.heap.page_allocator;
     const iters: usize = 40; // sample size
-    var samples = try ally.alloc(u64, iters);
-    defer ally.free(samples);
+    var samples = try allocator.alloc(u64, iters);
+    defer allocator.free(samples);
     var i: usize = 0;
-    while (i < iters) : (i += 1) samples[i] = try runOnce(ally);
+    while (i < iters) : (i += 1) samples[i] = try runOnce(allocator);
     // compute stats
     var min: u64 = samples[0];
     var max: u64 = samples[0];
@@ -56,8 +56,8 @@ pub fn BenchmarkCANARY_REQ_GQL_012_HashAggDistinctMergeVarianceEnvelope() !void 
     const stddev = @sqrt(variance);
     const cv = stddev / mean;
     // approximate p95 by partial sort copy
-    const sorted = try ally.alloc(u64, iters);
-    defer ally.free(sorted);
+    const sorted = try allocator.alloc(u64, iters);
+    defer allocator.free(sorted);
     std.mem.copy(u64, sorted, samples);
     std.sort.heap(u64, sorted, {}, std.sort.asc(u64));
     const idx95 = (iters * 95) / 100;

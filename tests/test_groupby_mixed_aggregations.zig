@@ -5,14 +5,14 @@ const exec = @import("../src/exec.zig");
 // CANARY: REQ=REQ-GQL-012; FEATURE="GROUP BY/Aggregation"; ASPECT=MixedAggregationBreadth; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_012_MixedAggregationBreadth; OWNER=engine; UPDATED=2025-09-21
 // Covers combined COUNT DISTINCT + SUM + AVG + MIN + MAX with HAVING compound predicate and negative value handling.
 
-fn buildRows(ally: std.mem.Allocator) ![]exec.BindingRow {
+fn buildRows(allocator: std.mem.Allocator) ![]exec.BindingRow {
     // rows: group g in {"a","a","a","b","b"}; values v = [1,2,2,10,-5]; w = [5,5,5,100,100]
     const groups = [_][]const u8{ "a", "a", "a", "b", "b" };
     const vvals = [_]i64{ 1, 2, 2, 10, -5 };
     const wvals = [_]i64{ 5, 5, 5, 100, 100 };
-    var out = std.ArrayList(exec.BindingRow).init(ally);
+    var out = std.ArrayList(exec.BindingRow).init(allocator);
     for (groups, 0..) |g, i| {
-        var cols = try ally.alloc(exec.BindingValue, 3);
+        var cols = try allocator.alloc(exec.BindingValue, 3);
         cols[0] = exec.BindingValue{ .Str = g };
         cols[1] = exec.BindingValue{ .Int = vvals[i] };
         cols[2] = exec.BindingValue{ .Int = wvals[i] };
@@ -24,22 +24,22 @@ fn buildRows(ally: std.mem.Allocator) ![]exec.BindingRow {
 test "TestCANARY_REQ_GQL_012_MixedAggregationBreadth" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Logical: SELECT g, COUNT(DISTINCT v) AS cd, SUM(v) AS s, AVG(v) AS av, MIN(v) AS mn, MAX(w) AS mx
     // FROM R GROUP BY g HAVING COUNT(DISTINCT v) > 1 AND SUM(v) > 0 OR MAX(w) >= 100
     // We emulate through direct executor wiring (no full SQL/GQL surface yet for combined HAVING logic)
 
-    const rows = try buildRows(ally);
+    const rows = try buildRows(allocator);
     defer {
-        for (rows) |r| ally.free(r.cols);
-        ally.free(rows);
+        for (rows) |r| allocator.free(r.cols);
+        allocator.free(rows);
     }
 
     // Build synthetic group-by plan fragment
     const agg_specs = [_]exec.Agg{ .CountDistinct, .Sum, .Avg, .Min, .Max };
 
-    var agg = exec.HashAggregator.init(ally, 1 << 20);
+    var agg = exec.HashAggregator.init(allocator, 1 << 20);
     defer agg.deinit();
 
     // Feed rows
@@ -53,12 +53,12 @@ test "TestCANARY_REQ_GQL_012_MixedAggregationBreadth" {
     const result_rows = try agg.getResults();
     defer {
         // result rows reference original values; no ownership of strings allocated here beyond aggregator internals.
-        for (result_rows) |rr| ally.free(rr);
-        ally.free(result_rows);
+        for (result_rows) |rr| allocator.free(rr);
+        allocator.free(result_rows);
     }
 
     // Extract rows into a map keyed by group string for assertions
-    var map = std.StringHashMap(struct { cd: i64, sum: i64, avg: i64, mn: i64, mx: i64 }).init(ally);
+    var map = std.StringHashMap(struct { cd: i64, sum: i64, avg: i64, mn: i64, mx: i64 }).init(allocator);
     defer map.deinit();
 
     for (result_rows) |rr| {

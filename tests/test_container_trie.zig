@@ -5,8 +5,8 @@ const T = geode.graph.containers.trie.Trie(u32);
 
 // CANARY test name referenced in Trie CANARY line
 test "TestCANARY_REQ_GQL_068_Trie_basic_ops" {
-    const ally = std.testing.allocator;
-    var trie = try T.init(ally);
+    const allocator = std.testing.allocator;
+    var trie = try T.init(allocator);
     defer trie.deinit();
 
     try std.testing.expect(trie.get("cat") == null);
@@ -24,10 +24,10 @@ test "TestCANARY_REQ_GQL_068_Trie_basic_ops" {
     try std.testing.expect(trie.get("car").?.* == 22);
 
     // prefix collection
-    const pref = try trie.collectPrefix(ally, "ca");
+    const pref = try trie.collectPrefix(allocator, "ca");
     defer {
-        for (pref) |s| ally.free(s);
-        ally.free(pref);
+        for (pref) |s| allocator.free(s);
+        allocator.free(pref);
     }
     var have_cat = false;
     var have_car = false;
@@ -53,22 +53,22 @@ test "TestCANARY_REQ_GQL_068_Trie_basic_ops" {
 }
 
 test "TestCANARY_REQ_GQL_068_Trie_iterator_order" {
-    const ally = std.testing.allocator;
-    var trie = try T.init(ally);
+    const allocator = std.testing.allocator;
+    var trie = try T.init(allocator);
     defer trie.deinit();
     const words = [_][]const u8{ "a", "ab", "b", "ba", "aa" };
     const values = [_]u32{ 1, 2, 3, 4, 5 };
     for (words, 0..) |w, i| try trie.insert(w, values[i]);
     // iterator should yield keys in lexicographic order
     var it = trie.iterator();
-    var collected = std.ArrayList([]const u8).init(ally);
+    var collected = std.ArrayList([]const u8).init(allocator);
     defer {
-        for (collected.items) |s| ally.free(s);
+        for (collected.items) |s| allocator.free(s);
         collected.deinit();
     }
     while (true) {
         const nxt = it.next() orelse break;
-        const dup = try ally.dupe(u8, nxt.key);
+        const dup = try allocator.dupe(u8, nxt.key);
         try collected.append(dup);
     }
     try std.testing.expect(collected.items.len == 5);

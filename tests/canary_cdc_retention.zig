@@ -7,10 +7,10 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 test "TestCANARY_REQ_GQL_042_CDC_Retention" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // Retention 5 ms, flush interval low to trigger cleanup loop.
-    var engine = try cdc.CDCEngine.init(ally, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 100, .flush_interval_ms = 5, .retention_period_ms = 5 });
+    var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory}, .batch_size = 100, .flush_interval_ms = 5, .retention_period_ms = 5 });
     defer engine.deinit();
     try engine.start();
 

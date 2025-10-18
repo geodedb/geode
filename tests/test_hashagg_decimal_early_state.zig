@@ -6,8 +6,8 @@ const exec = @import("../src/exec.zig");
 // and the aggregated coeff matches scaled arithmetic, evidencing early decimal partial state handling.
 
 test "TestCANARY_REQ_GQL_012_HashAggDecimalEarlyState" {
-    const ally = std.testing.allocator;
-    var agg = exec.HashAggregator.init(ally, 1024);
+    const allocator = std.testing.allocator;
+    var agg = exec.HashAggregator.init(allocator, 1024);
     defer agg.deinit();
 
     const key_val = exec.BindingValue{ .Int = 9 };
@@ -23,7 +23,7 @@ test "TestCANARY_REQ_GQL_012_HashAggDecimalEarlyState" {
     try agg.addRow(&kslice, &inputs3, &aggs);
 
     const rows = try agg.getResults();
-    defer ally.free(rows);
+    defer allocator.free(rows);
     try std.testing.expect(rows.len == 1);
     const r = rows[0];
     // Sum: scale 3; values scaled to 3 => 1.200 + 1.230 + 1.234 = 3.664 coeff=3664 scale=3

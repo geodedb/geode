@@ -7,8 +7,8 @@ test "TestCANARY_REQ_GQL_028_RecoveryAfterCompaction" {
     // Simulate recovery by invoking compact then ensuring stats updated and no panic when re-checking shouldCompact.
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var compactor = wal.WalCompactor.init(ally, "/tmp", .{ .auto_compact = false });
+    const allocator = gpa.allocator();
+    var compactor = wal.WalCompactor.init(allocator, "/tmp", .{ .auto_compact = false });
     // Manually set last compaction time to force shouldCompact = true via max interval override
     compactor.stats.last_compaction_time = std.time.milliTimestamp() - 10_000_000; // far in past
     const sc = compactor.shouldCompact() catch false;

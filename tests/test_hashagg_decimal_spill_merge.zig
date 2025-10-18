@@ -6,8 +6,8 @@ const exec = @import("../src/exec.zig");
 // We simulate aggregation of 100 decimal values 1.23 (coeff=123, scale=2) expecting SUM=123*100=12300 (scale 2) and AVG=123 (scale 2, representing 1.23).
 
 test "TestCANARY_REQ_GQL_012_HashAggDecimalSpillMerge" {
-    const ally = std.testing.allocator;
-    var agg = exec.HashAggregator.init(ally, 512); // tiny memory limit triggers spilling
+    const allocator = std.testing.allocator;
+    var agg = exec.HashAggregator.init(allocator, 512); // tiny memory limit triggers spilling
     defer agg.deinit();
 
     const key_val = exec.BindingValue{ .Int = 7 };
@@ -21,7 +21,7 @@ test "TestCANARY_REQ_GQL_012_HashAggDecimalSpillMerge" {
     }
     try agg.flushSegment(&aggs);
     const rows = try agg.getResults();
-    defer ally.free(rows);
+    defer allocator.free(rows);
     try std.testing.expect(rows.len == 1);
     const r = rows[0];
     try std.testing.expect(r.len == 1 + aggs.len);

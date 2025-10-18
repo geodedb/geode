@@ -6,16 +6,16 @@ const std = @import("std");
 
 const ReqSet = struct {
     counts: std.StringHashMap(usize),
-    pub fn init(ally: std.mem.Allocator) ReqSet {
-        return .{ .counts = std.StringHashMap(usize).init(ally) };
+    pub fn init(allocator: std.mem.Allocator) ReqSet {
+        return .{ .counts = std.StringHashMap(usize).init(allocator) };
     }
     pub fn deinit(self: *ReqSet) void {
         self.counts.deinit();
     }
-    pub fn add(self: *ReqSet, key: []const u8, ally: std.mem.Allocator) void {
+    pub fn add(self: *ReqSet, key: []const u8, allocator: std.mem.Allocator) void {
         const e = self.counts.getOrPut(key) catch return;
         if (!e.found_existing) {
-            e.key_ptr.* = ally.dupe(u8, key) catch key;
+            e.key_ptr.* = allocator.dupe(u8, key) catch key;
             e.value_ptr.* = 1;
         } else {
             e.value_ptr.* += 1;
@@ -23,20 +23,20 @@ const ReqSet = struct {
     }
 };
 
-fn scanReqIds(ally: std.mem.Allocator, path: []const u8, out: *ReqSet) !void {
+fn scanReqIds(allocator: std.mem.Allocator, path: []const u8, out: *ReqSet) !void {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
     // Read entire file into memory for simplicity
-    const content = try file.readToEndAlloc(ally, 1024 * 1024); // 1MB max
-    defer ally.free(content);
+    const content = try file.readToEndAlloc(allocator, 1024 * 1024); // 1MB max
+    defer allocator.free(content);
 
     var lines = std.mem.splitSequence(u8, content, "\n");
     while (lines.next()) |line| {
         if (std.mem.indexOf(u8, line, "REQ-GQL-") != null) {
             // extract tokens like REQ-GQL-026
             var it = std.mem.tokenizeAny(u8, line, " ,:\t()[]{}");
-            while (it.next()) |tok| if (std.mem.startsWith(u8, tok, "REQ-GQL-") and tok.len == 11) out.add(tok, ally);
+            while (it.next()) |tok| if (std.mem.startsWith(u8, tok, "REQ-GQL-") and tok.len == 11) out.add(tok, allocator);
         }
     }
 }

@@ -5,8 +5,8 @@ const builders = geode.graph.builders;
 
 // CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=EigenvectorVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_067_EigenvectorVarianceEnvelope; OWNER=graph; UPDATED=2025-09-21
 
-fn buildRing(ally: std.mem.Allocator, n: u32) !builders.Graph {
-    var g = builders.Graph.init(ally);
+fn buildRing(allocator: std.mem.Allocator, n: u32) !builders.Graph {
+    var g = builders.Graph.init(allocator);
     var i: u32 = 0;
     while (i < n) : (i += 1) g.addNode(i);
     i = 0;
@@ -21,8 +21,8 @@ fn buildRing(ally: std.mem.Allocator, n: u32) !builders.Graph {
 test "BenchmarkCANARY_REQ_GQL_067_EigenvectorVarianceEnvelope" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    var g = try buildRing(ally, 96);
+    const allocator = gpa.allocator();
+    var g = try buildRing(allocator, 96);
     defer g.deinit();
 
     const Runs = 30;
@@ -30,8 +30,8 @@ test "BenchmarkCANARY_REQ_GQL_067_EigenvectorVarianceEnvelope" {
     var r: usize = 0;
     while (r < Runs) : (r += 1) {
         const start = std.time.nanoTimestamp();
-        var res = try eig.compute(ally, &g, .{ .tolerance = 1e-8, .max_iters = 120 });
-        res.deinit(ally);
+        var res = try eig.compute(allocator, &g, .{ .tolerance = 1e-8, .max_iters = 120 });
+        res.deinit(allocator);
         const end = std.time.nanoTimestamp();
         samples[r] = @intCast(end - start);
     }

@@ -38,18 +38,18 @@ fn simulatePageExecution(page_size: usize, inner_work_scale: usize) u64 {
 pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    const allocator = gpa.allocator();
     fabricatePlannedQuery(); // placeholder (future: real plan + exec state integration)
     // Determine page sizes sweep from env: GEODE_PAGINATION_BENCH_PAGE_SIZES="64,128,256" default.
     var sizes_buf: []const u8 = "64,128,256";
-    if (std.process.getEnvVarOwned(ally, "GEODE_PAGINATION_BENCH_PAGE_SIZES")) |val| {
+    if (std.process.getEnvVarOwned(allocator, "GEODE_PAGINATION_BENCH_PAGE_SIZES")) |val| {
         sizes_buf = val;
     } else |_| {}
-    defer if (!std.mem.eql(u8, sizes_buf, "64,128,256")) ally.free(sizes_buf);
+    defer if (!std.mem.eql(u8, sizes_buf, "64,128,256")) allocator.free(sizes_buf);
     // Parse CSV of sizes.
     // Collect page sizes into dynamically grown slice (manual growth).
     var cap: usize = 4;
-    var sizes_mem = try ally.alloc(usize, cap);
+    var sizes_mem = try allocator.alloc(usize, cap);
     var sizes_len: usize = 0;
     var start: usize = 0;
     var i: usize = 0;
@@ -61,9 +61,9 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
                 if (parsed != 0) {
                     if (sizes_len == cap) {
                         const new_cap = cap * 2;
-                        var new_mem = try ally.alloc(usize, new_cap);
+                        var new_mem = try allocator.alloc(usize, new_cap);
                         std.mem.copyForwards(usize, new_mem[0..sizes_len], sizes_mem[0..sizes_len]);
-                        ally.free(sizes_mem);
+                        allocator.free(sizes_mem);
                         sizes_mem = new_mem;
                         cap = new_cap;
                     }
@@ -77,20 +77,20 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
     if (sizes_len == 0) return error.InvalidPageSizeSweep;
     // Env overrides to tune benchmark without code changes.
     const inner_repeats: usize = blk: {
-        if (std.process.getEnvVarOwned(ally, "GEODE_PAGINATION_INNER_REPEATS")) |val| {
-            defer ally.free(val);
+        if (std.process.getEnvVarOwned(allocator, "GEODE_PAGINATION_INNER_REPEATS")) |val| {
+            defer allocator.free(val);
             break :blk std.fmt.parseInt(usize, val, 10) catch 32;
         } else |_| break :blk 32;
     };
     const inner_work_scale: usize = blk: {
-        if (std.process.getEnvVarOwned(ally, "GEODE_PAGINATION_INNER_WORK_SCALE")) |val| {
-            defer ally.free(val);
+        if (std.process.getEnvVarOwned(allocator, "GEODE_PAGINATION_INNER_WORK_SCALE")) |val| {
+            defer allocator.free(val);
             break :blk std.fmt.parseInt(usize, val, 10) catch 8; // lower default
         } else |_| break :blk 8;
     };
     const per_size_samples: usize = blk: {
-        if (std.process.getEnvVarOwned(ally, "GEODE_PAGINATION_SAMPLES")) |val| {
-            defer ally.free(val);
+        if (std.process.getEnvVarOwned(allocator, "GEODE_PAGINATION_SAMPLES")) |val| {
+            defer allocator.free(val);
             break :blk std.fmt.parseInt(usize, val, 10) catch 16; // lower default; we average internally
         } else |_| break :blk 16;
     };
@@ -103,10 +103,10 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
     // We collect per_size_samples aggregated observations; each observation is the
     // mean of inner_repeats timing runs to suppress high-frequency noise.
     const total_samples = per_size_samples * sizes_len;
-    var raw_samples = try ally.alloc(u64, total_samples); // raw ns per aggregated observation
-    defer ally.free(raw_samples);
-    var norm_samples = try ally.alloc(f64, total_samples); // normalized per unit page size time
-    defer ally.free(norm_samples);
+    var raw_samples = try allocator.alloc(u64, total_samples); // raw ns per aggregated observation
+    defer allocator.free(raw_samples);
+    var norm_samples = try allocator.alloc(f64, total_samples); // normalized per unit page size time
+    defer allocator.free(norm_samples);
     var sample_index: usize = 0;
     for (sizes_mem[0..sizes_len]) |sz| {
         // Per-size cache prime
@@ -133,14 +133,14 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
         }
     }
     // Free sizes_mem now that we have samples to eliminate leak path
-    ally.free(sizes_mem);
+    allocator.free(sizes_mem);
     // Optional trimming: drop the single largest and smallest sample if we have enough data
     // to mitigate outliers without biasing legitimate variation.
     std.sort.pdq(u64, raw_samples, {}, comptime std.sort.asc(u64));
     // For normalization stats, we need a parallel index ordering; create an index array and sort by norm value.
     const Pair = struct { idx: usize, val: f64 };
-    var norm_pairs = try ally.alloc(Pair, total_samples);
-    defer ally.free(norm_pairs);
+    var norm_pairs = try allocator.alloc(Pair, total_samples);
+    defer allocator.free(norm_pairs);
     var np: usize = 0;
     while (np < total_samples) : (np += 1) norm_pairs[np] = .{ .idx = np, .val = norm_samples[np] };
     std.sort.pdq(Pair, norm_pairs, {}, struct {

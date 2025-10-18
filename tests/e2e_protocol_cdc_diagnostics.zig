@@ -2,10 +2,10 @@ const std = @import("std");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 
 fn run_cdc() !struct { code: i32, out: []u8, err: []u8 } {
-    const ally = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     // Start server with CDC enabled; exit after first request so test doesn't hang.
-    var srv = Child.init(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:8567", "--test-exit-after-first-request" }, ally);
+    var srv = Child.init(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:8567", "--test-exit-after-first-request" }, allocator);
     // Inherit stdout/stderr to help debug if needed (could redirect to Pipe if assertions need it later)
     srv.stdin_behavior = .Pipe;
     srv.stdout_behavior = .Inherit;
@@ -17,7 +17,7 @@ fn run_cdc() !struct { code: i32, out: []u8, err: []u8 } {
     while (i < 10_000_000) : (i += 1) {}
 
     // Issue CDC diagnostics request via stdio mode client (simplest path) with env enabling CDC.
-    var cli = Child.init(&.{ "env", "GEODE_CDC_ENABLE=1", "./zig-out/bin/geodec", "--stdio" }, ally);
+    var cli = Child.init(&.{ "env", "GEODE_CDC_ENABLE=1", "./zig-out/bin/geodec", "--stdio" }, allocator);
     cli.stdin_behavior = .Pipe;
     cli.stdout_behavior = .Pipe;
     cli.stderr_behavior = .Pipe;
@@ -28,8 +28,8 @@ fn run_cdc() !struct { code: i32, out: []u8, err: []u8 } {
     _ = try cli.stdin.?.write(req);
     cli.stdin.?.close();
 
-    const out = try cli.stdout.?.readToEndAlloc(ally, 1 << 20);
-    const err = try cli.stderr.?.readToEndAlloc(ally, 1 << 20);
+    const out = try cli.stdout.?.readToEndAlloc(allocator, 1 << 20);
+    const err = try cli.stderr.?.readToEndAlloc(allocator, 1 << 20);
     const term = try cli.wait();
     const code: i32 = switch (term) {
         .Exited => |st| st,
