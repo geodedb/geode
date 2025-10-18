@@ -2173,9 +2173,45 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
     // Add newline to ensure Python TextIOWrapper detects end of output
     _ = try stdout_fd.writeAll("\n");
 
-    // Always exit with code 0 when we get a valid JSON response
-    // This maintains backward compatibility with existing tests
-    // The test harness will check the status_class in the JSON to determine success/failure
+    // Check if we should exit with code 1 for specific error types
+    // Exit code 1 for: syntax errors (42xxx), auth errors (28xxx), and other serious errors
+    if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |status_start| {
+        const value_start = status_start + "\"status_class\":\"".len;
+        if (value_start + 2 <= result.len) {
+            const status_category = result[value_start .. value_start + 2];
+
+            // Exit with code 1 for:
+            // - 42xxx: Syntax and Semantic Errors
+            // - 28xxx: Invalid Authorization
+            // - 22xxx: Data Exception
+            // - 23xxx: Integrity Constraint Violation
+            // But keep exit 0 for success (00xxx), warnings (01xxx), no data (02xxx), and dynamic errors (0Axxx)
+            if (std.mem.eql(u8, status_category, "42") or    // Syntax/semantic errors
+                std.mem.eql(u8, status_category, "28") or    // Auth errors
+                std.mem.eql(u8, status_category, "22") or    // Data exceptions
+                std.mem.eql(u8, status_category, "23"))      // Integrity violations
+            {
+                // Write error message to stderr
+                const stderr_fd = std.fs.File{ .handle = 2 };
+                if (std.mem.indexOf(u8, result, "\"error\":\"")) |error_start| {
+                    const error_value_start = error_start + "\"error\":\"".len;
+                    if (std.mem.indexOfPos(u8, result, error_value_start, "\"")) |error_end| {
+                        const error_msg = result[error_value_start..error_end];
+                        _ = stderr_fd.writeAll(error_msg) catch {};
+                        _ = stderr_fd.writeAll("\n") catch {};
+                    }
+                } else if (std.mem.indexOf(u8, result, "\"message\":\"")) |message_start| {
+                    const message_value_start = message_start + "\"message\":\"".len;
+                    if (std.mem.indexOfPos(u8, result, message_value_start, "\"")) |message_end| {
+                        const message_msg = result[message_value_start..message_end];
+                        _ = stderr_fd.writeAll(message_msg) catch {};
+                        _ = stderr_fd.writeAll("\n") catch {};
+                    }
+                }
+                std.process.exit(1);
+            }
+        }
+    }
 }
 
 /// Escape a string for safe embedding in JSON

@@ -542,6 +542,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "eigenvector");
         return try execution.executeEigenvectorCentrality(allocator, store, columns);
     } else if (std.mem.eql(u8, proc_name, "algo.pagerank.stream") or
+        std.mem.eql(u8, proc_name, "algo.pageRank.stream") or  // Capital R variant
         std.mem.eql(u8, proc_name, "pagerank"))
     {
         const columns = try allocator.alloc([]const u8, 2);
