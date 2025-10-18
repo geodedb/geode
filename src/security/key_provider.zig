@@ -25,11 +25,11 @@ pub const Provider = struct {
 
     /// Fetch current key material (blocking). For StaticEnv, derives from GEODE_DISK_KEY_HEX.
     /// P2-3: Now uses provided allocator for temporary allocations
-    pub fn fetch(self: Provider, ally: std.mem.Allocator) !?KeyMaterial {
+    pub fn fetch(self: Provider, allocator: std.mem.Allocator) !?KeyMaterial {
         switch (self.typ) {
-            .StaticEnv => return try loadStatic(ally),
+            .StaticEnv => return try loadStatic(allocator),
             .MockKms => return self.fetchMockKms(),
-            .ExternalKms => return try fetchExternalKms(ally),
+            .ExternalKms => return try fetchExternalKms(allocator),
         }
     }
 };
