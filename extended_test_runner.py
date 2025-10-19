@@ -225,29 +225,30 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     if is_query_command:
         has_server = any("--server" in arg for arg in args)
         has_no_quic = any("--no-quic" in arg for arg in args)
-        has_enable_auth = any("--enable-auth" in arg for arg in args)
+        has_embedded = any("--embedded" in arg for arg in args)
 
-        # Check if spec config enables auth
-        spec_requires_auth = False
+        # Extract server args from spec config to inject into embedded mode
+        spec_server_args = []
         if spec_config and isinstance(spec_config, dict):
             cli_config = spec_config.get("cli", {})
             if isinstance(cli_config, dict):
                 server_config = cli_config.get("server", {})
                 if isinstance(server_config, dict):
-                    server_args = server_config.get("args", [])
-                    spec_requires_auth = "--enable-auth" in server_args
+                    spec_server_args = server_config.get("args", [])
 
         if not has_server and not has_no_quic:
             # Insert --no-quic after "query"
             modified_args.insert(1, "--no-quic")
 
-        # If spec requires auth and test doesn't already have --enable-auth, add it
-        if spec_requires_auth and not has_enable_auth:
-            # Insert after "query" (and after --no-quic if it was just added)
-            insert_pos = 1
-            if modified_args[1] == "--no-quic":
-                insert_pos = 2
-            modified_args.insert(insert_pos, "--enable-auth")
+        # If using embedded mode and spec requires auth, inject --enable-auth
+        # (Note: other enterprise flags like --audit are global and handled separately before command execution)
+        if has_embedded and spec_server_args:
+            if "--enable-auth" in spec_server_args and "--enable-auth" not in modified_args:
+                # Determine insert position (after "query" and "--no-quic" if present)
+                insert_pos = 1
+                if len(modified_args) > 1 and modified_args[1] == "--no-quic":
+                    insert_pos = 2
+                modified_args.insert(insert_pos, "--enable-auth")
 
     # Get stdin content if present
     stdin_content = test_case.get("stdin", None)
@@ -272,9 +273,32 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
         for old, new in replacements.items():
             stdin_content = stdin_content.replace(old, new)
 
+    # Build command with global flags (must come before subcommand)
+    global_flags = []
+    if is_query_command and has_embedded and spec_server_args:
+        # Extract global flags from spec server args
+        i = 0
+        while i < len(spec_server_args):
+            arg = spec_server_args[i]
+            # Global enterprise feature flags
+            if arg == "--audit":
+                global_flags.append(arg)
+                i += 1
+            elif arg in ["--audit-file", "--audit-syslog", "--audit-eventlog"]:
+                if i + 1 < len(spec_server_args):
+                    global_flags.append(arg)
+                    global_flags.append(spec_server_args[i + 1])
+                    i += 2
+                else:
+                    i += 1
+            else:
+                i += 1
+
     try:
+        # Construct command: binary + global_flags + subcommand_args
+        command = [binary] + global_flags + modified_args
         result = subprocess.run(
-            [binary] + modified_args,
+            command,
             input=stdin_content,
             capture_output=True,
             text=True,
