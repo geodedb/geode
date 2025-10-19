@@ -58,6 +58,8 @@ tests:
       stdout_contains: ["status_class\":\"00000"]
 
   - name: drop-index
+    setup:
+      - "query \"CREATE INDEX IF NOT EXISTS person_email_idx ON :Person(email) USING HASH\" --format json"
     args: ["query", "DROP INDEX person_email_idx", "--format", "json"]
     expect:
       exit_code: 0

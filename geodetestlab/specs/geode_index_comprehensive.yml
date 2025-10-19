@@ -429,6 +429,8 @@ tests:
 
   - name: "index-cleanup-drop-indexes"
     description: "Drop all test indexes"
+    setup:
+      - "query \"CREATE INDEX IF NOT EXISTS subnet_trie ON Server USING network_cidr (subnet)\" --embedded"
     args: ["query", "--embedded", "DROP INDEX subnet_trie"]
     expect:
       exit_code: 0

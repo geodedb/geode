@@ -162,6 +162,8 @@ tests:
 
   - name: "drop-index"
     description: "Drop an index"
+    setup:
+      - "query \"CREATE INDEX IF NOT EXISTS person_name_idx FOR (p:Person) ON (p.name)\" --embedded"
     args: ["query", "--embedded", "DROP INDEX person_name_idx"]
     expect:
       exit_code: 0
