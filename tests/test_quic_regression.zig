@@ -106,7 +106,7 @@ test "handshake timeout fails gracefully" {
 
     // Wait for handshake should fail with timeout
     if (result) |_| {
-        const handshake_result = client.waitForHandshake();
+        const handshake_result = client.waitForHandshake(5); // 5 second timeout for test
         try testing.expectError(error.HandshakeFailed, handshake_result);
     } else |err| {
         // Connection itself might fail, which is also acceptable
@@ -153,7 +153,7 @@ test "end-to-end QUIC query execution" {
     defer client.deinit();
 
     try client.connectInsecure("127.0.0.1", 13141);
-    try client.waitForHandshake();
+    try client.waitForHandshake(5); // 5 second timeout for test
 
     var stream = try client.getStream();
     defer stream.deinit();

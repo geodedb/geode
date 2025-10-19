@@ -1890,6 +1890,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var timeout_secs: u32 = 10; // Default 10 second timeout
     var retry_count: u32 = 0; // Default no retries
     var use_saved_session = true; // Auto-load saved session by default
+    var enable_auth = false; // Enable authentication for embedded mode
 
     i = start_idx + 1;
     while (i < argv.len) : (i += 1) {
@@ -1924,6 +1925,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         } else if (std.mem.eql(u8, arg, "--no-quic")) {
             // Legacy compatibility
             embedded = true;
+        } else if (std.mem.eql(u8, arg, "--enable-auth")) {
+            enable_auth = true;
         } else if (std.mem.eql(u8, arg, "--user") or std.mem.eql(u8, arg, "-U")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --user requires a username\n", .{});
@@ -2083,6 +2086,19 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // Handle --embedded mode (embedded database for testing, edge deployment, offline use)
     if (embedded) {
+        // Enable authentication if requested
+        if (enable_auth) {
+            const geode_lib_auth = @import("geode");
+            const user_mgmt = geode_lib_auth.user_management;
+            user_mgmt.initUserStore(allocator) catch |err| {
+                std.debug.print("Failed to initialize user store: {}\n", .{err});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            };
+            user_mgmt.setAuthEnabled(true);
+            // Don't call ensureDefaultUser here - tests should create users explicitly
+            // Auto-creating users on every query command causes timeouts due to password hashing
+        }
+
         // Execute query directly using embedded database
         try executeEmbeddedQuery(allocator, query_text.?, format, token, user, password, embedded_data_dir);
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -2095,6 +2111,20 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     } else {
         // No --server and no --embedded: use embedded persistent mode (default)
         // This is the default for tests that need data persistence
+
+        // Enable authentication if requested
+        if (enable_auth) {
+            const geode_lib_auth = @import("geode");
+            const user_mgmt = geode_lib_auth.user_management;
+            user_mgmt.initUserStore(allocator) catch |err| {
+                std.debug.print("Failed to initialize user store: {}\n", .{err});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            };
+            user_mgmt.setAuthEnabled(true);
+            // Don't call ensureDefaultUser here - tests should create users explicitly
+            // Auto-creating users on every query command causes timeouts due to password hashing
+        }
+
         try executeEmbeddedQuery(allocator, query_text.?, format, token, user, password, null);
         std.process.exit(@intFromEnum(ExitCode.success));
     }
@@ -2268,15 +2298,18 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8) !void {
-    _ = timeout_secs; // Timeout is currently hardcoded in QuicClient.waitForHandshake
     const QuicTransport = @import("transport/quic");
     const stderr = std.fs.File{ .handle = 2 };
 
-    // Parse server address
+    // Parse server address with proper error handling
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
     const host = addr_port.next() orelse "127.0.0.1";
     const port_str = addr_port.next() orelse "3141";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch 3141;
+    const port = std.fmt.parseInt(u16, port_str, 10) catch {
+        // Invalid port number (out of range or malformed)
+        _ = try stderr.writeAll("Error: Invalid port number in server address\n");
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 
     var attempts: u32 = 0;
     const max_attempts = retry_count + 1; // retry_count=0 means 1 attempt, retry_count=3 means 4 attempts
@@ -2293,8 +2326,8 @@ fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query
             quic_client.connect(host, port);
 
         if (connect_err) |_| {
-            // Connection successful, now wait for handshake
-            const handshake_err = quic_client.waitForHandshake();
+            // Connection successful, now wait for handshake with user-specified timeout
+            const handshake_err = quic_client.waitForHandshake(timeout_secs);
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
                 return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password);
@@ -2309,8 +2342,16 @@ fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }
             }
-        } else |_| {
-            // Connection failed
+        } else |err| {
+            // Connection failed - check if it's a quick-fail error like ConnectionRefused
+            const is_refused = @errorName(err);
+            if (std.mem.indexOf(u8, is_refused, "ConnectionRefused") != null) {
+                // Connection refused - fail immediately without retrying
+                _ = try stderr.writeAll("connection refused\n");
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+
+            // Other connection errors - retry if attempts remain
             if (attempts + 1 < max_attempts) {
                 // We have more retries, continue to next attempt
                 continue;

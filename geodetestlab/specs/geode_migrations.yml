@@ -205,6 +205,8 @@ tests:
       stdout_contains: ["1"]  # Only id=2 is even from the 3 created nodes
 
   - name: check-index-usage
+    setup:
+      - "query \"CREATE (:TestNode {id: 1}), (:TestNode {id: 2}), (:TestNode {id: 3}); CREATE INDEX IF NOT EXISTS test_id_idx ON :TestNode(id)\" --format json --no-quic"
     args: ["query", "EXPLAIN MATCH (n:TestNode {id: 2}) RETURN n", "--format", "json"]
     expect:
       exit_code: 0

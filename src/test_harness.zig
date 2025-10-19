@@ -180,10 +180,22 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         if (err == error.SearchNotPermitted) {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42501\",\"error\":\"SEARCH_NOT_PERMITTED\",\"message\":\"Access denied: READ_PLAINTEXT privilege required for encrypted searchable field\",\"additional_statuses\":[]}}", .{});
         }
+        if (err == error.InvalidIpAddress) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22P02\",\"message\":\"Invalid IP address format\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.InvalidMac) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22P02\",\"message\":\"Invalid MAC address format\",\"additional_statuses\":[]}}", .{});
+        }
+        if (err == error.DecimalDivZero) {
+            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22012\",\"message\":\"Division by zero\",\"additional_statuses\":[]}}", .{});
+        }
         const error_msg = switch (err) {
             error.NotImplemented => "Feature not yet implemented",
             error.TypeMismatch => "Type mismatch in expression",
             error.DivisionByZero => "error: division by zero",
+            error.DecimalDivZero => unreachable,
+            error.InvalidIpAddress => unreachable,
+            error.InvalidMac => unreachable,
             error.OutOfMemory => return err,
             error.Unsupported => "Unsupported operation",
             error.GroupingError => unreachable,

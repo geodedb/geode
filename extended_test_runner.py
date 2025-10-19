@@ -9,7 +9,7 @@ from pathlib import Path
 import uuid
 import time
 
-def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None):
+def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None, spec_config=None):
     """Run a single test case with optional instance_id and loop_index for parallel/loop tests."""
     # Check if test should be skipped
     if test_case.get("skip", False):
@@ -74,8 +74,8 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
 
             # Add unique suffixes to index names for test isolation
             import re
-            # Match patterns like: CREATE INDEX name_idx
-            index_pattern = r'CREATE\s+INDEX\s+(\w+)'
+            # Match patterns like: CREATE INDEX name_idx or CREATE INDEX IF NOT EXISTS name_idx
+            index_pattern = r'CREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)'
             matches = re.finditer(index_pattern, processed_arg, re.IGNORECASE)
             for match in matches:
                 old_index_name = match.group(1)
@@ -121,20 +121,18 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     except FileNotFoundError:
         pass  # File doesn't exist, that's fine
 
-    # Clear catalog file to prevent duplicate graph/index/schema errors
-    # But only if not a duplicate-testing test
-    if not skip_isolation:
-        home_dir = os.path.expanduser('~')
-        catalog_paths = [
-            f'{home_dir}/.geode/catalog.json',
-            f'{home_dir}/.geode/catalog_indexes.json',
-            f'{home_dir}/.geode/catalog_schemas.json',
-        ]
-        for catalog_path in catalog_paths:
-            try:
-                os.remove(catalog_path)
-            except FileNotFoundError:
-                pass  # File doesn't exist, that's fine
+    # Clear catalog files at start of each test to ensure clean state
+    # This prevents setup failures on subsequent runs while still allowing
+    # duplicate detection between setup and main test within a single run
+    catalog_paths = [
+        '/tmp/geode_catalog.dat',
+        '/tmp/geode_fle_catalog.dat',
+    ]
+    for catalog_path in catalog_paths:
+        try:
+            os.remove(catalog_path)
+        except FileNotFoundError:
+            pass  # File doesn't exist, that's fine
 
     # Execute setup commands if present
     setup_commands = test_case.get("setup", [])
@@ -166,8 +164,8 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                     if loop_index is not None and "${loop_index}" in processed_arg:
                         processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
 
-                    # Apply same test isolation as main args
-                    if "MERGE" in processed_arg or "CREATE" in processed_arg or "DROP" in processed_arg:
+                    # Apply same test isolation as main args (skip for error/duplicate tests)
+                    if not skip_isolation and ("MERGE" in processed_arg or "CREATE" in processed_arg or "DROP" in processed_arg):
                         import re
                         # Apply name substitutions for test isolation
                         processed_arg = processed_arg.replace("'Test'", f"'Test_{test_id}'")
@@ -175,8 +173,8 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                         processed_arg = processed_arg.replace("{name: 'Test'}", f"{{name: 'Test_{test_id}'}}")
                         processed_arg = processed_arg.replace("{name: 'Unique'}", f"{{name: 'Unique_{test_id}'}}")
 
-                        # Index names
-                        index_pattern = r'CREATE\s+INDEX\s+(\w+)'
+                        # Index names (handle optional IF NOT EXISTS)
+                        index_pattern = r'CREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)'
                         for match in re.finditer(index_pattern, processed_arg, re.IGNORECASE):
                             old_name = match.group(1)
                             processed_arg = processed_arg.replace(f"INDEX {old_name}", f"INDEX {old_name}_{test_id}")
@@ -227,9 +225,29 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     if is_query_command:
         has_server = any("--server" in arg for arg in args)
         has_no_quic = any("--no-quic" in arg for arg in args)
+        has_enable_auth = any("--enable-auth" in arg for arg in args)
+
+        # Check if spec config enables auth
+        spec_requires_auth = False
+        if spec_config and isinstance(spec_config, dict):
+            cli_config = spec_config.get("cli", {})
+            if isinstance(cli_config, dict):
+                server_config = cli_config.get("server", {})
+                if isinstance(server_config, dict):
+                    server_args = server_config.get("args", [])
+                    spec_requires_auth = "--enable-auth" in server_args
+
         if not has_server and not has_no_quic:
             # Insert --no-quic after "query"
             modified_args.insert(1, "--no-quic")
+
+        # If spec requires auth and test doesn't already have --enable-auth, add it
+        if spec_requires_auth and not has_enable_auth:
+            # Insert after "query" (and after --no-quic if it was just added)
+            insert_pos = 1
+            if modified_args[1] == "--no-quic":
+                insert_pos = 2
+            modified_args.insert(insert_pos, "--enable-auth")
 
     # Get stdin content if present
     stdin_content = test_case.get("stdin", None)
@@ -242,9 +260,9 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
         stdin_content = stdin_content.replace("{name: 'Test'}", f"{{name: 'Test_{test_id}'}}")
         stdin_content = stdin_content.replace("{name: 'Unique'}", f"{{name: 'Unique_{test_id}'}}")
 
-        # Add unique suffixes to index names in stdin for test isolation
+        # Add unique suffixes to index names in stdin for test isolation (handle optional IF NOT EXISTS)
         import re
-        index_pattern = r'CREATE\s+INDEX\s+(\w+)'
+        index_pattern = r'CREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)'
         matches = re.finditer(index_pattern, stdin_content, re.IGNORECASE)
         replacements = {}
         for match in matches:
@@ -297,7 +315,38 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                     )
                 except:
                     pass  # Ignore teardown errors
-    
+
+        # Execute cleanup commands if present (for duplicate/error tests)
+        cleanup_commands = test_case.get("cleanup", [])
+        if cleanup_commands:
+            import shlex
+            for cmd_str in cleanup_commands:
+                try:
+                    cleanup_args = shlex.split(cmd_str)
+                    # Apply variable substitution
+                    cleanup_processed = []
+                    for arg in cleanup_args:
+                        if not isinstance(arg, str):
+                            cleanup_processed.append(arg)
+                            continue
+                        processed_arg = arg
+                        if "${server_address}" in processed_arg:
+                            processed_arg = processed_arg.replace("${server_address}", "127.0.0.1:8443")
+                        if instance_id is not None and "${instance_id}" in processed_arg:
+                            processed_arg = processed_arg.replace("${instance_id}", str(instance_id))
+                        if loop_index is not None and "${loop_index}" in processed_arg:
+                            processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
+                        cleanup_processed.append(processed_arg)
+
+                    subprocess.run(
+                        [binary] + cleanup_processed,
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                except:
+                    pass  # Ignore cleanup errors
+
     # Check exit code
     if "exit_code" in expect:
         # Special case for integration test invalid-command
@@ -448,7 +497,7 @@ def main():
             # Handle parallel tests with multiple instances
             if test.get("parallel") and test.get("instances"):
                 for instance in range(test["instances"]):
-                    success, message = run_test(test, spec_name=spec_file.name, instance_id=instance)
+                    success, message = run_test(test, spec_name=spec_file.name, instance_id=instance, spec_config=spec)
 
                     if success is None:
                         spec_skipped += 1
@@ -468,7 +517,7 @@ def main():
             # Handle loop tests
             elif test.get("loop"):
                 for i in range(test["loop"]):
-                    success, message = run_test(test, spec_name=spec_file.name, loop_index=i)
+                    success, message = run_test(test, spec_name=spec_file.name, loop_index=i, spec_config=spec)
 
                     if success is None:
                         spec_skipped += 1
@@ -487,7 +536,7 @@ def main():
 
             # Handle normal tests
             else:
-                success, message = run_test(test, spec_name=spec_file.name)
+                success, message = run_test(test, spec_name=spec_file.name, spec_config=spec)
 
                 if success is None:
                     # Skipped
