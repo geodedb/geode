@@ -753,7 +753,11 @@ pub const QuicClientStream = struct {
                     var i: usize = 0;
                     while (i < 5) : (i += 1) {
                         quic_lib.poll(ep, 10) catch {};
-                        std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
+                        if (@import("builtin").os.tag == .windows) {
+                            std.os.windows.kernel32.Sleep(10); // 10ms
+                        } else {
+                            std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
+                        }
                     }
                 }
             }
@@ -781,7 +785,11 @@ pub const QuicClientStream = struct {
                                     // TRACE: read() polling endpoint
                                     // std.debug.print("DEBUG: read() polling endpoint\n", .{});
                                     quic_lib.poll(ep, 50) catch {};
-                                    std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
+                                    if (@import("builtin").os.tag == .windows) {
+                                        std.os.windows.kernel32.Sleep(10); // 10ms
+                                    } else {
+                                        std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
+                                    }
                                 }
                             } else {
                                 debugLog("DEBUG: read() no endpoint to poll!", .{});

@@ -3,6 +3,19 @@
 const std = @import("std");
 const crypto = std.crypto;
 
+/// Cross-platform hostname retrieval
+fn getHostname(allocator: std.mem.Allocator) ![]u8 {
+    if (@import("builtin").os.tag == .windows) {
+        // On Windows, use a simple fallback since gethostname is not available
+        return allocator.dupe(u8, "windows-host");
+    } else {
+        // On POSIX systems, use gethostname
+        var hostname_buf: [64]u8 = undefined;
+        const hostname = std.posix.gethostname(&hostname_buf) catch return allocator.dupe(u8, "unknown");
+        return allocator.dupe(u8, hostname);
+    }
+}
+
 /// Credential storage for local session management
 pub const Credentials = struct {
     token: []const u8, // Cryptographically random token (64 hex chars)
@@ -71,12 +84,14 @@ pub const SessionToken = struct {
 /// Get system fingerprint (hostname + username)
 pub fn getSystemFingerprint(allocator: std.mem.Allocator) ![]u8 {
     // Get hostname
-    var hostname_buf: [64]u8 = undefined;
-    const hostname = std.posix.gethostname(&hostname_buf) catch "unknown";
+    const hostname = getHostname(allocator) catch "unknown";
 
     // Get system username
-    const uid = std.posix.getuid();
-    const username = std.posix.getenv("USER") orelse std.posix.getenv("USERNAME") orelse "unknown";
+    const username = std.process.getEnvVarOwned(allocator, "USER") catch 
+        std.process.getEnvVarOwned(allocator, "USERNAME") catch "unknown";
+
+    // Get user ID (Windows-compatible)
+    const uid = if (@import("builtin").os.tag == .windows) 0 else std.posix.getuid();
 
     // Combine: hostname:username:uid
     return std.fmt.allocPrint(allocator, "{s}:{s}:{d}", .{ hostname, username, uid });
@@ -88,7 +103,7 @@ pub const CredentialStore = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !CredentialStore {
-        const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
+        const home = std.process.getEnvVarOwned(allocator, "HOME") catch return error.NoHomeDirectory;
         const geode_dir = try std.fmt.allocPrint(allocator, "{s}/.geode", .{home});
         defer allocator.free(geode_dir);
 
@@ -116,7 +131,9 @@ pub const CredentialStore = struct {
         defer file.close();
 
         // Set restrictive permissions (600 - owner read/write only)
-        try file.chmod(0o600);
+        if (@import("builtin").os.tag != .windows) {
+            try file.chmod(0o600);
+        }
 
         // Write JSON
         var buf = std.ArrayList(u8).initCapacity(self.allocator, 256) catch unreachable;

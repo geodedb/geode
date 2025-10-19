@@ -568,7 +568,11 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
                 break;
             }
 
-            std.posix.nanosleep(0, 50 * std.time.ns_per_ms);
+            if (@import("builtin").os.tag == .windows) {
+                std.os.windows.kernel32.Sleep(50); // 50ms
+            } else {
+                std.posix.nanosleep(0, 50 * std.time.ns_per_ms);
+            }
         }
     }
 
@@ -586,7 +590,11 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
             if (err == error.WouldBlock) {
                 // No stream yet, continue polling
                 // Add a small delay to avoid busy-waiting
-                std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
+                if (@import("builtin").os.tag == .windows) {
+                    std.os.windows.kernel32.Sleep(10); // 10ms
+                } else {
+                    std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
+                }
                 continue;
             }
             std.debug.print("Failed to accept stream: {}\n", .{err});
@@ -1437,8 +1445,8 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Protocol: read JSON requests from stdin, write JSON responses to stdout
     // Format: {"type": "RUN_GQL", "text": "query", "params": {...}}
 
-    const stdin_file = std.fs.File{ .handle = 0 }; // stdin
-    const stdout_fd = std.fs.File{ .handle = 1 }; // stdout
+    const stdin_file = std.fs.File.stdin();
+    const stdout_fd = std.fs.File.stdout();
 
     // Use the geode module to execute queries
     const geode_lib = @import("geode");
@@ -1957,7 +1965,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             const param_value = argv[i + 2];
             // Validate JSON parameter
             if (std.mem.eql(u8, param_name, "bad_json") or std.mem.indexOf(u8, param_value, "{invalid") != null) {
-                const stderr_fd = std.fs.File{ .handle = 2 };
+                const stderr_fd = std.fs.File.stderr();
                 _ = try stderr_fd.writeAll("JSON malformed parse error\n");
                 std.process.exit(1);
             }
@@ -2002,7 +2010,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     defer if (stdin_allocated) |allocated| allocator.free(allocated);
 
     if (std.mem.eql(u8, query_text.?, "-")) {
-        const stdin = std.fs.File{ .handle = 0 }; // stdin handle
+        const stdin = std.fs.File.stdin();
         const stdin_content = try stdin.readToEndAlloc(allocator, 1024 * 1024); // Max 1MB
         defer allocator.free(stdin_content);
 
@@ -2079,7 +2087,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // Check for unauthorized user before executing
     if (user != null and std.mem.eql(u8, user.?, "unauthorized")) {
-        const stderr_fd = std.fs.File{ .handle = 2 };
+        const stderr_fd = std.fs.File.stderr();
         _ = try stderr_fd.writeAll("unauthorized access denied\n");
         std.process.exit(3);
     }
@@ -2137,7 +2145,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
 
     // Handle empty queries
     if (query_text.len == 0) {
-        const stderr_fd = std.fs.File{ .handle = 2 };
+        const stderr_fd = std.fs.File.stderr();
         _ = try stderr_fd.writeAll("Error: empty query provided\n");
         std.process.exit(1);
     }
@@ -2176,7 +2184,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
 
     // Skip empty queries
     if (trimmed_query.len == 0) {
-        const stdout_fd = std.fs.File{ .handle = 1 };
+        const stdout_fd = std.fs.File.stdout();
         _ = try stdout_fd.writeAll("{\"status_class\":\"00000\",\"columns\":[],\"rows\":[],\"flagger_findings\":[]}\n");
         return;
     }
@@ -2184,10 +2192,10 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
     const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed_query, options) catch |err| {
         // Handle specific test cases that should go to stderr
         if (std.mem.indexOf(u8, trimmed_query, "bad_json") != null) {
-            const stderr_fd = std.fs.File{ .handle = 2 };
+            const stderr_fd = std.fs.File.stderr();
             _ = try stderr_fd.writeAll("Error: malformed JSON parameter in query\n");
         } else if (std.mem.eql(u8, trimmed_query, "unauthorized")) {
-            const stderr_fd = std.fs.File{ .handle = 2 };
+            const stderr_fd = std.fs.File.stderr();
             _ = try stderr_fd.writeAll("Error: unauthorized access denied\n");
             std.process.exit(3);
         }
@@ -2198,7 +2206,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
     defer allocator.free(result);
 
     // Write result to stdout
-    const stdout_fd = std.fs.File{ .handle = 1 };
+    const stdout_fd = std.fs.File.stdout();
     _ = try stdout_fd.writeAll(result);
     // Add newline to ensure Python TextIOWrapper detects end of output
     _ = try stdout_fd.writeAll("\n");
@@ -2218,7 +2226,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
 
             if (!is_success) {
                 // Write error message to stderr
-                const stderr_fd = std.fs.File{ .handle = 2 };
+                const stderr_fd = std.fs.File.stderr();
                 if (std.mem.indexOf(u8, result, "\"error\":\"")) |error_start| {
                     const error_value_start = error_start + "\"error\":\"".len;
                     if (std.mem.indexOfPos(u8, result, error_value_start, "\"")) |error_end| {
@@ -2299,7 +2307,7 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
 fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8) !void {
     const QuicTransport = @import("transport/quic");
-    const stderr = std.fs.File{ .handle = 2 };
+    const stderr = std.fs.File.stderr();
 
     // Parse server address with proper error handling
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
@@ -2594,8 +2602,8 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // If running in test mode (non-interactive), read from stdin and execute queries
     if (non_interactive) {
-        const stdin_file = std.fs.File{ .handle = 0 }; // stdin handle
-        const stdout_file = std.fs.File{ .handle = 1 }; // stdout handle
+        const stdin_file = std.fs.File.stdin();
+        const stdout_file = std.fs.File.stdout();
         const geode_lib = @import("geode");
 
         // Read all input at once
@@ -2731,7 +2739,7 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         const sessions_json =
             \\{"sessions":[{"user":"testuser","expires":"2025-12-31"},{"user":"admin","expires":"2025-12-31"}]}
         ;
-        const stdout_fd = std.fs.File{ .handle = 1 };
+        const stdout_fd = std.fs.File.stdout();
         _ = try stdout_fd.writeAll(sessions_json);
         _ = try stdout_fd.writeAll("\n");
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -2846,14 +2854,14 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             defer if (roles) |r| allocator.free(r);
 
             // For testing - just print success
-            const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            const stdout_file = std.fs.File.stdout();
             const msg = std.fmt.allocPrint(allocator, "User '{s}' created successfully\n", .{username}) catch "Error\n";
             defer allocator.free(msg);
             _ = stdout_file.writeAll(msg) catch {};
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "list")) {
             // For testing - show default admin user
-            const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            const stdout_file = std.fs.File.stdout();
             _ = stdout_file.writeAll("admin (active) <admin@localhost> [admin]\n") catch {};
             _ = stdout_file.writeAll("Total: 1 user(s)\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.success));
@@ -2865,7 +2873,7 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             }
 
             const username = argv[subcmd_idx + 1];
-            const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            const stdout_file = std.fs.File.stdout();
             // For testing - show info for requested user
             if (std.mem.eql(u8, username, "admin")) {
                 _ = stdout_file.writeAll("Username: admin\n") catch {};
@@ -3181,7 +3189,7 @@ fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         }
 
         // For testing, simulate success for common operations
-        const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const stdout_file = std.fs.File.stdout();
         if (std.mem.eql(u8, subcmd, "create")) {
             // Parse role name from arguments
             if (subcmd_idx + 1 < argv.len) {
@@ -3318,12 +3326,12 @@ fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
-        const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const stdout_file = std.fs.File.stdout();
         const msg = std.fmt.allocPrint(allocator, "Permission '{s}' granted to '{s}' successfully\n", .{ permission, target }) catch "Error\n";
         defer allocator.free(msg);
         _ = stdout_file.writeAll(msg) catch {};
     } else {
-        const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const stdout_file = std.fs.File.stdout();
         _ = stdout_file.writeAll("Permission granted successfully\n") catch {};
     }
     std.process.exit(@intFromEnum(ExitCode.success));
@@ -3358,12 +3366,12 @@ fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !vo
             }
         }
 
-        const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const stdout_file = std.fs.File.stdout();
         const msg = std.fmt.allocPrint(allocator, "Permission '{s}' revoked from '{s}' successfully\n", .{ permission, target }) catch "Error\n";
         defer allocator.free(msg);
         _ = stdout_file.writeAll(msg) catch {};
     } else {
-        const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        const stdout_file = std.fs.File.stdout();
         _ = stdout_file.writeAll("Permission revoked successfully\n") catch {};
     }
     std.process.exit(@intFromEnum(ExitCode.success));
@@ -4161,7 +4169,7 @@ fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]cons
     const stdin_file = if (builtin.os.tag == .windows)
         std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
     else
-        std.fs.File{ .handle = std.posix.STDIN_FILENO };
+        std.fs.File.stdin();
 
     // Read line character by character until newline
     var line_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
@@ -4430,7 +4438,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         const stdin_file = if (builtin.os.tag == .windows)
             std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
         else
-            std.fs.File{ .handle = std.posix.STDIN_FILENO };
+            std.fs.File.stdin();
 
         // Read line character by character until newline
         var line_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
@@ -4667,7 +4675,7 @@ fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
 // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
 fn cmdAuthToken(allocator: std.mem.Allocator) !void {
-    const home = std.posix.getenv("HOME") orelse {
+    const home = std.process.getEnvVarOwned(allocator, "HOME") catch {
         std.debug.print("Error: HOME environment variable not set\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -4694,7 +4702,7 @@ fn cmdAuthToken(allocator: std.mem.Allocator) !void {
     defer allocator.free(content);
 
     // Output the content to stdout
-    const stdout_fd = std.fs.File{ .handle = 1 };
+    const stdout_fd = std.fs.File.stdout();
     _ = try stdout_fd.writeAll(content);
     if (content.len == 0 or content[content.len - 1] != '\n') {
         _ = try stdout_fd.writeAll("\n");
