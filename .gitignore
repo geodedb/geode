@@ -21,6 +21,8 @@ root
 auth
 *.log
 *.txt
+*.jsonl
+*.xml
 
 .direnv/
 .zig-cache/

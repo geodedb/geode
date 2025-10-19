@@ -1194,19 +1194,40 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.test_data_access_categories")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-012; FEATURE="AuditProcedures"; ASPECT=DataAccessCategories; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
-        // audit.test_data_access_categories() -> category, events_logged, success
+        // CANARY: REQ=REQ-AUDIT-PROC-012; FEATURE="AuditProcedures"; ASPECT=DataAccessCategories; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
+        // Test various data access event categories with real audit logging
+
+        // Initialize audit logger if needed
+        if (global_audit_logger == null) {
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
+                .enabled = true,
+                .file_path = "audit_data_access.jsonl",
+            });
+        }
+
+        // Test different data access categories
+        const categories = [_][]const u8{ "read", "write", "schema" };
+        const test_resources = [_][]const u8{ "users_table", "orders_table", "schema_info" };
+
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "category");
         columns[1] = try allocator.dupe(u8, "events_logged");
         columns[2] = try allocator.dupe(u8, "success");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "data_access") };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Bool = true };
-        rows[0] = row;
+        // Return multiple rows showing each category tested
+        const rows = try allocator.alloc([]eval.Value, categories.len);
+        for (categories, test_resources, 0..) |category, resource, i| {
+            // Log real events for each category
+            try global_audit_logger.?.logDataAccessEvent(category, resource, 1001);
+
+            const row = try allocator.alloc(eval.Value, 3);
+            row[0] = eval.Value{ .Str = try allocator.dupe(u8, category) };
+            row[1] = eval.Value{ .Int = 1 };
+            row[2] = eval.Value{ .Bool = true };
+            rows[i] = row;
+        }
 
         return ExecutionResult{
             .columns = columns,
@@ -1214,8 +1235,28 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.configure_rotation")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-013; FEATURE="AuditProcedures"; ASPECT=LogRotation; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
-        // audit.configure_rotation() -> configured, rotation_policy, max_size_mb
+        // CANARY: REQ=REQ-AUDIT-PROC-013; FEATURE="AuditProcedures"; ASPECT=LogRotation; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
+        // Configure log rotation policies with real settings
+
+        // Initialize audit logger if needed
+        if (global_audit_logger == null) {
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
+                .enabled = true,
+                .file_path = "audit_rotation.jsonl",
+                .rotation_size_mb = 50,  // Start with 50MB rotation threshold
+            });
+        }
+
+        // Configure rotation settings
+        const rotation_size_mb: u32 = 100;
+        const retention_days: u32 = 30;
+        global_audit_logger.?.updateConfig(rotation_size_mb, retention_days);
+
+        // Actually trigger rotation if needed
+        try global_audit_logger.?.rotateLogFile();
+
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "configured");
         columns[1] = try allocator.dupe(u8, "rotation_policy");
@@ -1225,7 +1266,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const row = try allocator.alloc(eval.Value, 3);
         row[0] = eval.Value{ .Bool = true };
         row[1] = eval.Value{ .Str = try allocator.dupe(u8, "size_based") };
-        row[2] = eval.Value{ .Int = 100 };
+        row[2] = eval.Value{ .Int = @intCast(rotation_size_mb) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1234,8 +1275,22 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.simulate_windows_eventlog")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-014; FEATURE="AuditProcedures"; ASPECT=WindowsEventLog; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
-        // audit.simulate_windows_eventlog() -> success, events_written, log_name
+        // CANARY: REQ=REQ-AUDIT-PROC-014; FEATURE="AuditProcedures"; ASPECT=WindowsEventLog; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
+        // Simulate Windows Event Log output with real XML formatting
+
+        // Initialize audit logger if needed
+        if (global_audit_logger == null) {
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
+                .enabled = true,
+                .file_path = "audit_windows.jsonl",
+            });
+        }
+
+        // Write events in Windows Event Log format
+        const events_written = try global_audit_logger.?.writeToWindowsEventLog(allocator);
+
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "events_written");
@@ -1244,8 +1299,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         const row = try allocator.alloc(eval.Value, 3);
         row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Str = "Application" };
+        row[1] = eval.Value{ .Int = @intCast(events_written) };
+        row[2] = eval.Value{ .Str = try allocator.dupe(u8, "Application") };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1254,8 +1309,22 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.simulate_syslog_output")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-015; FEATURE="AuditProcedures"; ASPECT=SyslogOutput; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
-        // audit.simulate_syslog_output() -> success, events_sent, facility
+        // CANARY: REQ=REQ-AUDIT-PROC-015; FEATURE="AuditProcedures"; ASPECT=SyslogOutput; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
+        // Simulate syslog output with RFC3164/RFC5424 formatting
+
+        // Initialize audit logger if needed
+        if (global_audit_logger == null) {
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
+                .enabled = true,
+                .file_path = "audit_syslog.jsonl",
+            });
+        }
+
+        // Write events in syslog format
+        const events_sent = try global_audit_logger.?.writeToSyslog(allocator);
+
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "events_sent");
@@ -1264,8 +1333,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         const row = try allocator.alloc(eval.Value, 3);
         row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Str = "local0" };
+        row[1] = eval.Value{ .Int = @intCast(events_sent) };
+        row[2] = eval.Value{ .Str = try allocator.dupe(u8, "local0") };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1274,8 +1343,23 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.test_combined_output")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-016; FEATURE="AuditProcedures"; ASPECT=CombinedOutput; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
-        // audit.test_combined_output() -> success, outputs_tested, all_functional
+        // CANARY: REQ=REQ-AUDIT-PROC-016; FEATURE="AuditProcedures"; ASPECT=CombinedOutput; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
+        // Test combined output to multiple formats simultaneously
+
+        // Initialize audit logger if needed
+        if (global_audit_logger == null) {
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
+                .enabled = true,
+                .file_path = "audit_combined.jsonl",
+            });
+        }
+
+        // Test outputting to multiple formats
+        const outputs_tested = try global_audit_logger.?.testCombinedOutput(allocator);
+        const all_functional = outputs_tested >= 3; // JSON + Windows + Syslog
+
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "outputs_tested");
@@ -1284,8 +1368,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         const row = try allocator.alloc(eval.Value, 3);
         row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Bool = true };
+        row[1] = eval.Value{ .Int = @intCast(outputs_tested) };
+        row[2] = eval.Value{ .Bool = all_functional };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1374,8 +1458,35 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.test_rotation_continuity")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-021; FEATURE="AuditProcedures"; ASPECT=RotationContinuity; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
-        // audit.test_rotation_continuity() -> success, rotations_tested, continuity_maintained
+        // CANARY: REQ=REQ-AUDIT-PROC-021; FEATURE="AuditProcedures"; ASPECT=RotationContinuity; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
+        // Test that log rotation maintains hash chain continuity
+
+        // Initialize audit logger if needed
+        if (global_audit_logger == null) {
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
+                .enabled = true,
+                .file_path = "audit_continuity_test.jsonl",
+                .rotation_size_mb = 1,  // Small size to trigger rotation
+            });
+        }
+
+        // Test rotation continuity
+        var rotations_tested: i64 = 0;
+        var continuity_maintained = true;
+
+        // Perform multiple rotations to test
+        var i: usize = 0;
+        while (i < 3) : (i += 1) {
+            const result = try global_audit_logger.?.testRotationContinuity();
+            if (result) {
+                rotations_tested += 1;
+            } else {
+                continuity_maintained = false;
+            }
+        }
+
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "rotations_tested");
@@ -1383,9 +1494,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const rows = try allocator.alloc([]eval.Value, 1);
         const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Bool = true };
+        row[0] = eval.Value{ .Bool = continuity_maintained };
+        row[1] = eval.Value{ .Int = rotations_tested };
+        row[2] = eval.Value{ .Bool = continuity_maintained };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1394,8 +1505,27 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.configure_retention")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-022; FEATURE="AuditProcedures"; ASPECT=RetentionPolicy; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
-        // audit.configure_retention() -> status, retention_days, policy_enabled
+        // CANARY: REQ=REQ-AUDIT-PROC-022; FEATURE="AuditProcedures"; ASPECT=RetentionPolicy; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
+        // Configure retention policies with real settings
+
+        // Initialize audit logger if needed
+        if (global_audit_logger == null) {
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
+                .enabled = true,
+                .file_path = "audit_retention.jsonl",
+                .retention_days = 90,
+            });
+        }
+
+        // Update retention configuration
+        const retention_days: u32 = 90;
+        global_audit_logger.?.updateConfig(
+            global_audit_logger.?.config.rotation_size_mb,
+            retention_days
+        );
+
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "retention_days");
@@ -1403,8 +1533,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const rows = try allocator.alloc([]eval.Value, 1);
         const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = "success" };
-        row[1] = eval.Value{ .Int = 90 };
+        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "success") };
+        row[1] = eval.Value{ .Int = @intCast(retention_days) };
         row[2] = eval.Value{ .Bool = true };
         rows[0] = row;
 
@@ -1414,8 +1544,23 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.cleanup_log_files")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-023; FEATURE="AuditProcedures"; ASPECT=LogCleanup; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
-        // audit.cleanup_log_files() -> success, files_deleted, space_freed_bytes
+        // CANARY: REQ=REQ-AUDIT-PROC-023; FEATURE="AuditProcedures"; ASPECT=LogCleanup; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
+        // Clean up old log files based on retention policy
+
+        // Initialize audit logger if needed
+        if (global_audit_logger == null) {
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
+                .enabled = true,
+                .file_path = "audit_cleanup.jsonl",
+                .retention_days = 30,  // Cleanup files older than 30 days
+            });
+        }
+
+        // Perform actual cleanup
+        const cleanup_result = try global_audit_logger.?.cleanupOldLogs();
+
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "files_deleted");
@@ -1424,8 +1569,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         const row = try allocator.alloc(eval.Value, 3);
         row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
+        row[1] = eval.Value{ .Int = @intCast(cleanup_result.files_deleted) };
+        row[2] = eval.Value{ .Int = @intCast(cleanup_result.bytes_freed) };
         rows[0] = row;
 
         return ExecutionResult{
