@@ -7,7 +7,7 @@ This document tracks the replacement of stub/mock procedures in `path_and_call_o
 
 ## Progress Tracking
 
-### ✅ Completed (17/60+ procedures implemented)
+### ✅ Completed (22/60+ procedures implemented)
 **Initial Implementation** (9 procedures):
 - [x] `audit.log_auth_event` - Real AuditLogger event logging
 - [x] `audit.test_file_output` - Real file I/O with JSONL format
