@@ -1276,6 +1276,9 @@ pub const AuditLogger = struct {
             } else {
                 valid_lines += 1;
             }
+
+            // Move to next line
+            i = line_end + 1;
         }
 
         // Recovery is successful if we recovered most of the data
@@ -1348,7 +1351,7 @@ pub const AuditLogger = struct {
 
                 if (config.can_autofix) {
                     // Attempt to auto-fix
-                    const fixed_value = if (std.mem.eql(u8, config.name, "file_path"))
+                    const fixed_value: ?[]const u8 = if (std.mem.eql(u8, config.name, "file_path"))
                         "audit.log"
                     else if (std.mem.eql(u8, config.name, "max_file_size"))
                         "104857600" // 100MB
