@@ -74,16 +74,16 @@ pub const KMSProvider = struct {
             .external_kms => {
                 const seed_str = if (self.config.seed) |s| s else 0x1234567890ABCDEF;
                 var buf: [64]u8 = undefined;
-                const len = std.fmt.bufPrint(&buf, "external-kms-{x}", .{seed_str}) catch return error.BufferTooSmall;
-                const owned = try self.allocator.dupe(u8, buf[0..len]);
+                const slice = std.fmt.bufPrint(&buf, "external-kms-{x}", .{seed_str}) catch return error.BufferTooSmall;
+                const owned = try self.allocator.dupe(u8, slice);
                 return owned;
             },
             .remote_kms => {
                 const endpoint = self.config.endpoint orelse "localhost";
                 const port = self.config.port orelse 3141;
                 var buf: [128]u8 = undefined;
-                const len = std.fmt.bufPrint(&buf, "remote-kms-{s}:{}", .{ endpoint, port }) catch return error.BufferTooSmall;
-                const owned = try self.allocator.dupe(u8, buf[0..len]);
+                const slice = std.fmt.bufPrint(&buf, "remote-kms-{s}:{}", .{ endpoint, port }) catch return error.BufferTooSmall;
+                const owned = try self.allocator.dupe(u8, slice);
                 return owned;
             },
             else => error.UnsupportedProvider,
@@ -146,7 +146,7 @@ pub const KMSProvider = struct {
         const metadata = try external_kms.envelopeToJson(envelope, self.allocator);
 
         // Store ciphertext from envelope
-        const ciphertext = try self.allocator.dupe(u8, envelope.ct);
+        const ciphertext = try self.allocator.dupe(u8, &envelope.ct);
 
         return WrappedKey{
             .key_id = key_id,
@@ -190,12 +190,12 @@ pub const KMSProvider = struct {
         const envelope = try self.remote_client.?.generate();
 
         // Serialize envelope to JSON metadata
-        var json_buf = std.ArrayList(u8).init(self.allocator);
-        defer json_buf.deinit();
+        var json_buf = try std.ArrayList(u8).initCapacity(self.allocator, 256);
+        defer json_buf.deinit(self.allocator);
 
-        const writer = json_buf.writer();
-        try writer.writeAll("{\"version\":");
-        try writer.print("{},", .{envelope.version});
+        const writer = json_buf.writer(self.allocator);
+        try writer.writeAll("{{\"version\":");
+        try writer.print("{d},", .{envelope.version});
         try writer.print("\"alg\":\"{s}\",", .{envelope.alg});
         try writer.writeAll("\"nonce\":\"");
         for (envelope.nonce) |byte| {
@@ -209,10 +209,10 @@ pub const KMSProvider = struct {
         for (envelope.ct) |byte| {
             try writer.print("{x:0>2}", .{byte});
         }
-        try writer.writeAll("\"}");
+        try writer.writeAll("\"}}");
 
-        const metadata = try json_buf.toOwnedSlice();
-        const ciphertext = try self.allocator.dupe(u8, envelope.ct);
+        const metadata = try json_buf.toOwnedSlice(self.allocator);
+        const ciphertext = try self.allocator.dupe(u8, &envelope.ct);
 
         return WrappedKey{
             .key_id = key_id,

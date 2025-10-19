@@ -19,11 +19,11 @@ pub const Envelope = struct {
 pub const Client = struct {
     allocator: std.mem.Allocator,
     kek: [32]u8, // simulated Key Encryption Key (would be remote / HSM-controlled)
-    prng: std.rand.DefaultPrng,
+    prng: std.Random.DefaultPrng,
 
     pub fn init(allocator: std.mem.Allocator, seed: u64) Client {
         // Derive KEK deterministically from seed for test reproducibility; real impl would fetch
-        var prng = std.rand.DefaultPrng.init(seed);
+        var prng = std.Random.DefaultPrng.init(seed);
         var kek: [32]u8 = undefined;
         prng.random().bytes(&kek);
         return .{ .allocator = allocator, .kek = kek, .prng = prng };
@@ -49,16 +49,16 @@ pub const Client = struct {
 
 // Serialization helpers (minimal JSON subset for diagnostics & persistence if needed)
 pub fn envelopeToJson(env: Envelope, allocator: std.mem.Allocator) ![]u8 {
-    var buf = std.ArrayList(u8).init(allocator);
-    const w = buf.writer();
-    try w.print("{\"version\":{d},\"alg\":\"{s}\",\"nonce\":\"", .{ env.version, env.alg });
+    var buf = try std.ArrayList(u8).initCapacity(allocator, 256);
+    const w = buf.writer(allocator);
+    try w.print("{{\"version\":{d},\"alg\":\"{s}\",\"nonce\":\"", .{ env.version, env.alg });
     for (env.nonce) |b| try w.print("{x:0>2}", .{b});
     try w.print("\",\"tag\":\"", .{});
     for (env.tag) |b| try w.print("{x:0>2}", .{b});
     try w.print("\",\"ct\":\"", .{});
     for (env.ct) |b| try w.print("{x:0>2}", .{b});
-    try w.print("\"}", .{});
-    return buf.toOwnedSlice();
+    try w.print("\"}}", .{});
+    return try buf.toOwnedSlice(allocator);
 }
 
 pub fn envelopeFromJson(json: []const u8) !Envelope {
