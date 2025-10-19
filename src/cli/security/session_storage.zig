@@ -9,8 +9,8 @@ fn getHostname(allocator: std.mem.Allocator) ![]u8 {
         // On Windows, use a simple fallback since gethostname is not available
         return allocator.dupe(u8, "windows-host");
     } else {
-        // On POSIX systems, use gethostname
-        var hostname_buf: [64]u8 = undefined;
+        // On POSIX systems, use gethostname with proper buffer size
+        var hostname_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
         const hostname = std.posix.gethostname(&hostname_buf) catch return allocator.dupe(u8, "unknown");
         return allocator.dupe(u8, hostname);
     }
