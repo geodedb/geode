@@ -13,6 +13,7 @@ pub const WrappedKey = struct {
     metadata: ?[]u8 = null, // Optional metadata (e.g., JSON envelope)
 
     pub fn deinit(self: *WrappedKey, allocator: std.mem.Allocator) void {
+        allocator.free(self.key_id);
         allocator.free(self.ciphertext);
         if (self.metadata) |meta| {
             allocator.free(meta);
@@ -98,12 +99,13 @@ pub const KMSProvider = struct {
             (self.config.provider_type == .external_kms or self.config.provider_type == .remote_kms);
         defer if (needs_free) self.allocator.free(key_id);
 
-        return switch (self.config.provider_type) {
-            .local_dev => self.wrapLocalDev(key_id, plaintext),
-            .external_kms => self.wrapExternalKMS(key_id, plaintext),
-            .remote_kms => self.wrapRemoteKMS(key_id, plaintext),
+        const result = switch (self.config.provider_type) {
+            .local_dev => try self.wrapLocalDev(key_id, plaintext),
+            .external_kms => try self.wrapExternalKMS(key_id, plaintext),
+            .remote_kms => try self.wrapRemoteKMS(key_id, plaintext),
             else => error.UnsupportedProvider,
         };
+        return result;
     }
 
     /// Unwrap (decrypt) a wrapped data key
@@ -122,7 +124,9 @@ pub const KMSProvider = struct {
         // Simple XOR with deterministic key - NOT SECURE, dev only
         const xor_key: u8 = 0xAA ^ @as(u8, @truncate(std.hash.crc.Crc32.hash(key_id)));
         for (plaintext, 0..) |b, i| buf[i] = b ^ xor_key;
-        return WrappedKey{ .key_id = key_id, .ciphertext = buf };
+        // Duplicate key_id since the original will be freed
+        const key_id_copy = try self.allocator.dupe(u8, key_id);
+        return WrappedKey{ .key_id = key_id_copy, .ciphertext = buf };
     }
 
     fn unwrapLocalDev(self: *KMSProvider, wrapped: WrappedKey) ![]u8 {
@@ -152,8 +156,10 @@ pub const KMSProvider = struct {
         // Store ciphertext from envelope
         const ciphertext = try self.allocator.dupe(u8, &envelope.ct);
 
+        // Duplicate key_id since the original will be freed
+        const key_id_copy = try self.allocator.dupe(u8, key_id);
         return WrappedKey{
-            .key_id = key_id,
+            .key_id = key_id_copy,
             .ciphertext = ciphertext,
             .metadata = metadata,
         };
@@ -218,8 +224,10 @@ pub const KMSProvider = struct {
         const metadata = try json_buf.toOwnedSlice(self.allocator);
         const ciphertext = try self.allocator.dupe(u8, &envelope.ct);
 
+        // Duplicate key_id since the original will be freed
+        const key_id_copy = try self.allocator.dupe(u8, key_id);
         return WrappedKey{
-            .key_id = key_id,
+            .key_id = key_id_copy,
             .ciphertext = ciphertext,
             .metadata = metadata,
         };

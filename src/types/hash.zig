@@ -161,6 +161,25 @@ pub fn parseAlg(name: []const u8) Error!HashAlg {
     return Error.InvalidAlgorithm;
 }
 
+/// Get algorithm name from Hash value (for GQL hash_alg() function)
+/// CANARY: REQ=REQ-GQL-HASH-FUNC-001; FEATURE="HashFunctions"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=types; UPDATED=2025-10-19
+pub fn hash_alg(h: Hash) []const u8 {
+    return algToString(h.alg);
+}
+
+/// Convert HashAlg enum to string representation
+pub fn algToString(alg: HashAlg) []const u8 {
+    return switch (alg) {
+        .SHA3_256 => "SHA3-256",
+        .SHA3_512 => "SHA3-512",
+        .BLAKE3 => "BLAKE3",
+        .BLAKE2B_256 => "BLAKE2b-256",
+        .BLAKE2B_512 => "BLAKE2b-512",
+        .BLAKE2S_256 => "BLAKE2s-256",
+        .ARGON2ID => "Argon2id",
+    };
+}
+
 /// Constant-time comparison of two hashes
 /// SECURITY: Uses XOR pattern to ensure execution time is independent of where bytes differ
 /// This prevents timing side-channel attacks that could leak hash information

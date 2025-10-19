@@ -372,6 +372,363 @@ pub fn isValidLongitude(lon: f64) bool {
     return lon >= -180.0 and lon <= 180.0;
 }
 
+// CANARY: REQ=REQ-GQL-GEO-FUNC-001; FEATURE="GeographicFunctions"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=types; UPDATED=2025-10-19
+// GQL-style geographic functions for query integration
+
+/// Calculate distance between two LatLon points using Haversine formula (returns meters)
+/// This is the standard function used in GQL queries
+pub fn distance_haversine(a: LatLon, b: LatLon) f64 {
+    return a.distanceKm(b) * 1000.0; // Convert km to meters
+}
+
+/// Calculate bearing from one point to another (0-360 degrees)
+pub fn geo_bearing(from: LatLon, to: LatLon) f64 {
+    return from.bearingTo(to);
+}
+
+/// Extract latitude from a LatLon coordinate
+pub fn geo_lat(coord: LatLon) f64 {
+    return coord.lat;
+}
+
+/// Extract longitude from a LatLon coordinate
+pub fn geo_lon(coord: LatLon) f64 {
+    return coord.lon;
+}
+
+/// Calculate the midpoint between two LatLon coordinates
+pub fn geo_midpoint(a: LatLon, b: LatLon) LatLon {
+    // Simple average for small distances (works well for most use cases)
+    // For more accuracy over large distances, spherical interpolation could be used
+    return LatLon{
+        .lat = (a.lat + b.lat) / 2.0,
+        .lon = (a.lon + b.lon) / 2.0,
+    };
+}
+
+/// Check if a point is within a circular radius (in meters) from a center point
+pub fn geo_within_radius(point: LatLon, center: LatLon, radius_meters: f64) bool {
+    const distance = distance_haversine(point, center);
+    return distance <= radius_meters;
+}
+
+/// Check if a point is within a bounding box defined by southwest and northeast corners
+pub fn geo_within_box(point: LatLon, southwest: LatLon, northeast: LatLon) bool {
+    return point.isWithinBounds(southwest, northeast);
+}
+
+/// Calculate the destination point given a starting point, bearing, and distance
+pub fn geo_destination(start: LatLon, bearing_degrees: f64, distance_meters: f64) LatLon {
+    return start.moveByBearing(distance_meters / 1000.0, bearing_degrees);
+}
+
+/// Calculate approximate area of a triangle formed by three points (in square meters)
+/// Uses Heron's formula with great circle distances
+pub fn geo_triangle_area(a: LatLon, b: LatLon, c: LatLon) f64 {
+    const side_a = distance_haversine(b, c);
+    const side_b = distance_haversine(a, c);
+    const side_c = distance_haversine(a, b);
+
+    // Semi-perimeter
+    const s = (side_a + side_b + side_c) / 2.0;
+
+    // Heron's formula
+    const area_squared = s * (s - side_a) * (s - side_b) * (s - side_c);
+    if (area_squared <= 0.0) return 0.0;
+
+    return @sqrt(area_squared);
+}
+
+/// Calculate the initial and final bearings (forward and reverse azimuths)
+pub fn geo_azimuth(from: LatLon, to: LatLon) struct { forward: f64, reverse: f64 } {
+    const forward = from.bearingTo(to);
+    const reverse = to.bearingTo(from);
+    return .{ .forward = forward, .reverse = reverse };
+}
+
+/// Normalize a bearing to 0-360 degrees
+pub fn normalize_bearing(bearing: f64) f64 {
+    var result = @mod(bearing, 360.0);
+    if (result < 0.0) {
+        result += 360.0;
+    }
+    return result;
+}
+
+/// Calculate compass direction from bearing (N, NE, E, SE, S, SW, W, NW)
+pub fn bearing_to_compass(bearing: f64) []const u8 {
+    const normalized = normalize_bearing(bearing);
+
+    if (normalized < 22.5 or normalized >= 337.5) return "N";
+    if (normalized < 67.5) return "NE";
+    if (normalized < 112.5) return "E";
+    if (normalized < 157.5) return "SE";
+    if (normalized < 202.5) return "S";
+    if (normalized < 247.5) return "SW";
+    if (normalized < 292.5) return "W";
+    return "NW";
+}
+
+/// Calculate the cross-track distance (perpendicular distance) from a point to a great circle path
+/// Returns signed distance in meters (positive = right of path, negative = left of path)
+pub fn geo_cross_track_distance(point: LatLon, path_start: LatLon, path_end: LatLon) f64 {
+    const earth_radius_m = 6371000.0;
+
+    const d13_rad = distance_haversine(path_start, point) / earth_radius_m;
+    const bearing_13_rad = std.math.degreesToRadians(path_start.bearingTo(point));
+    const bearing_12_rad = std.math.degreesToRadians(path_start.bearingTo(path_end));
+
+    const dxt = std.math.asin(@sin(d13_rad) * @sin(bearing_13_rad - bearing_12_rad));
+    return dxt * earth_radius_m;
+}
+
+/// Calculate along-track distance from start of path to closest point to given point
+/// Returns distance in meters along the great circle path
+pub fn geo_along_track_distance(point: LatLon, path_start: LatLon, path_end: LatLon) f64 {
+    const earth_radius_m = 6371000.0;
+
+    const d13_rad = distance_haversine(path_start, point) / earth_radius_m;
+    const dxt_rad = geo_cross_track_distance(point, path_start, path_end) / earth_radius_m;
+
+    const dat = std.math.acos(@cos(d13_rad) / @cos(dxt_rad));
+    return dat * earth_radius_m;
+}
+
+// CANARY: REQ=REQ-GQL-SPATIAL-FUNC-001; FEATURE="SpatialFunctions"; ASPECT=PostGISStyle; STATUS=IMPL; OWNER=types; UPDATED=2025-10-19
+// PostGIS-style spatial functions (st_* prefix) for GQL compatibility
+
+/// Polygon type for area calculations
+pub const Polygon = struct {
+    points: []LatLon,
+};
+
+/// LineString type for distance calculations
+pub const LineString = struct {
+    points: []LatLon,
+};
+
+/// Calculate distance between two points (alias for distance_haversine)
+pub fn st_distance(a: LatLon, b: LatLon) f64 {
+    return distance_haversine(a, b);
+}
+
+/// Calculate area of a polygon in square meters using the spherical excess formula
+/// For small polygons, uses planar approximation which is faster
+pub fn st_area(polygon: Polygon) f64 {
+    if (polygon.points.len < 3) return 0.0;
+
+    // For small polygons (< 1000 km²), use planar approximation
+    // For large polygons, would need spherical excess formula
+    const centroid = calculate_centroid(polygon.points);
+
+    // Use planar approximation in meters
+    var area: f64 = 0.0;
+    const n = polygon.points.len;
+
+    for (0..polygon.points.len) |i| {
+        const curr = polygon.points[i];
+        const next = polygon.points[(i + 1) % n];
+
+        // Convert to meters from centroid
+        const curr_x = distance_haversine(centroid, LatLon{ .lat = centroid.lat, .lon = curr.lon });
+        const curr_y = distance_haversine(centroid, LatLon{ .lat = curr.lat, .lon = centroid.lon });
+        const next_x = distance_haversine(centroid, LatLon{ .lat = centroid.lat, .lon = next.lon });
+        const next_y = distance_haversine(centroid, LatLon{ .lat = next.lat, .lon = centroid.lon });
+
+        // Apply longitude sign
+        const curr_x_signed = if (curr.lon < centroid.lon) -curr_x else curr_x;
+        const next_x_signed = if (next.lon < centroid.lon) -next_x else next_x;
+        const curr_y_signed = if (curr.lat < centroid.lat) -curr_y else curr_y;
+        const next_y_signed = if (next.lat < centroid.lat) -next_y else next_y;
+
+        // Shoelace formula
+        area += curr_x_signed * next_y_signed - next_x_signed * curr_y_signed;
+    }
+
+    return @abs(area / 2.0);
+}
+
+/// Check if two points are within a specified distance
+pub fn st_dwithin(a: LatLon, b: LatLon, distance_meters: f64) bool {
+    return distance_haversine(a, b) <= distance_meters;
+}
+
+/// Check if a point is within a polygon (2D point-in-polygon test)
+pub fn st_within(point: LatLon, polygon: Polygon) bool {
+    if (polygon.points.len < 3) return false;
+
+    // Ray casting algorithm
+    var inside = false;
+    const n = polygon.points.len;
+
+    var j: usize = n - 1;
+    for (0..polygon.points.len) |i| {
+        const pi = polygon.points[i];
+        const pj = polygon.points[j];
+
+        if ((pi.lat > point.lat) != (pj.lat > point.lat) and
+            point.lon < (pj.lon - pi.lon) * (point.lat - pi.lat) / (pj.lat - pi.lat) + pi.lon)
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+
+    return inside;
+}
+
+/// Check if a point contains another (always false for points, true if same)
+pub fn st_contains(container: LatLon, contained: LatLon) bool {
+    return container.lat == contained.lat and container.lon == contained.lon;
+}
+
+/// Check if two geometries intersect (for points, this means they're the same)
+pub fn st_intersects(a: LatLon, b: LatLon) bool {
+    const threshold = 0.000001; // About 10cm at equator
+    return @abs(a.lat - b.lat) < threshold and @abs(a.lon - b.lon) < threshold;
+}
+
+/// Check if two polygons intersect
+pub fn st_intersects_polygon(a: Polygon, b: Polygon) bool {
+    // Simple check: if any vertex of one polygon is inside the other
+    for (a.points) |point| {
+        if (st_within(point, b)) return true;
+    }
+    for (b.points) |point| {
+        if (st_within(point, a)) return true;
+    }
+    return false;
+}
+
+/// Create a buffer (circle) around a point with specified radius in meters
+/// Returns a polygon approximating a circle
+pub fn st_buffer(allocator: std.mem.Allocator, center: LatLon, radius_meters: f64, num_points: usize) !Polygon {
+    const points = try allocator.alloc(LatLon, num_points);
+    errdefer allocator.free(points);
+
+    const angle_step = 360.0 / @as(f64, @floatFromInt(num_points));
+
+    for (0..num_points) |i| {
+        const angle = @as(f64, @floatFromInt(i)) * angle_step;
+        points[i] = geo_destination(center, angle, radius_meters);
+    }
+
+    return Polygon{ .points = points };
+}
+
+/// Calculate the union of two polygons (simplified: convex hull)
+/// For a full implementation, would use Sutherland-Hodgman or similar algorithm
+pub fn st_union(allocator: std.mem.Allocator, a: Polygon, b: Polygon) !Polygon {
+    // Simplified: just merge all points and return convex hull
+    const total_points = a.points.len + b.points.len;
+    const merged = try allocator.alloc(LatLon, total_points);
+    errdefer allocator.free(merged);
+
+    @memcpy(merged[0..a.points.len], a.points);
+    @memcpy(merged[a.points.len..], b.points);
+
+    // For MVP, return the merged points (would need convex hull algorithm for production)
+    return Polygon{ .points = merged };
+}
+
+/// Calculate the centroid of a polygon or set of points
+pub fn st_centroid(points: []LatLon) LatLon {
+    return calculate_centroid(points);
+}
+
+/// Calculate length of a line string in meters
+pub fn st_length(line: LineString) f64 {
+    if (line.points.len < 2) return 0.0;
+
+    var total_length: f64 = 0.0;
+    for (1..line.points.len) |i| {
+        total_length += distance_haversine(line.points[i - 1], line.points[i]);
+    }
+    return total_length;
+}
+
+/// Calculate perimeter of a polygon in meters
+pub fn st_perimeter(polygon: Polygon) f64 {
+    if (polygon.points.len < 2) return 0.0;
+
+    var total: f64 = 0.0;
+    for (1..polygon.points.len) |i| {
+        total += distance_haversine(polygon.points[i - 1], polygon.points[i]);
+    }
+    // Close the polygon
+    if (polygon.points.len > 0) {
+        total += distance_haversine(polygon.points[polygon.points.len - 1], polygon.points[0]);
+    }
+    return total;
+}
+
+/// Check if a polygon is simple (no self-intersections)
+pub fn st_issimple(polygon: Polygon) bool {
+    // Simplified check: assume simple for now
+    // Full implementation would check all edge pairs for intersections
+    return polygon.points.len >= 3;
+}
+
+/// Check if a polygon is valid (closed, simple, non-self-intersecting)
+pub fn st_isvalid(polygon: Polygon) bool {
+    if (polygon.points.len < 3) return false;
+
+    // Check if polygon is closed
+    const first = polygon.points[0];
+    const last = polygon.points[polygon.points.len - 1];
+    const threshold = 0.000001;
+
+    const is_closed = @abs(first.lat - last.lat) < threshold and
+        @abs(first.lon - last.lon) < threshold;
+
+    return is_closed and st_issimple(polygon);
+}
+
+/// Calculate the envelope (bounding box) of a set of points
+pub fn st_envelope(points: []LatLon) struct { southwest: LatLon, northeast: LatLon } {
+    if (points.len == 0) {
+        return .{
+            .southwest = LatLon{ .lat = 0, .lon = 0 },
+            .northeast = LatLon{ .lat = 0, .lon = 0 },
+        };
+    }
+
+    var min_lat = points[0].lat;
+    var max_lat = points[0].lat;
+    var min_lon = points[0].lon;
+    var max_lon = points[0].lon;
+
+    for (points[1..]) |point| {
+        if (point.lat < min_lat) min_lat = point.lat;
+        if (point.lat > max_lat) max_lat = point.lat;
+        if (point.lon < min_lon) min_lon = point.lon;
+        if (point.lon > max_lon) max_lon = point.lon;
+    }
+
+    return .{
+        .southwest = LatLon{ .lat = min_lat, .lon = min_lon },
+        .northeast = LatLon{ .lat = max_lat, .lon = max_lon },
+    };
+}
+
+/// Helper: Calculate centroid of points
+fn calculate_centroid(points: []LatLon) LatLon {
+    if (points.len == 0) return LatLon{ .lat = 0, .lon = 0 };
+
+    var sum_lat: f64 = 0;
+    var sum_lon: f64 = 0;
+
+    for (points) |point| {
+        sum_lat += point.lat;
+        sum_lon += point.lon;
+    }
+
+    return LatLon{
+        .lat = sum_lat / @as(f64, @floatFromInt(points.len)),
+        .lon = sum_lon / @as(f64, @floatFromInt(points.len)),
+    };
+}
+
 // Test suite
 test "LatLon operations" {
     const testing = std.testing;

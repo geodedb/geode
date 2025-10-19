@@ -115,6 +115,8 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("ip_family", &ipFamily);
     try registry.put("ip_is_private", &ipIsPrivate);
     try registry.put("subnet_prefix_length", &subnetPrefixLength);
+    try registry.put("ip_network", &ipNetwork);
+    try registry.put("ip_netmask", &ipNetmask);
 
     // MAC functions
     try registry.put("mac_is_local", &macIsLocal);
@@ -138,6 +140,9 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("longitude", &getLongitude);
     try registry.put("altitude", &getAltitude);
     try registry.put("alt_ref", &getAltRef);
+    try registry.put("geo_bearing", &geoBearing);
+    try registry.put("geo_lat", &geoLat);
+    try registry.put("geo_lon", &geoLon);
 
     // Geometry functions
     try registry.put("st_astext", &stAsText);
@@ -956,6 +961,102 @@ fn subnetPrefixLength(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     return .{ .Int = @intCast(subnet.prefix_len) };
 }
 
+// CANARY: REQ=REQ-GQL-NET-FUNC-EVAL-001; FEATURE="NetworkFunctionsEvaluation"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-19
+fn ipNetwork(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    _ = allocator;
+    if (args.len != 1) return error.InvalidArgs;
+
+    const subnet = switch (args[0]) {
+        .Subnet => |s| s,
+        else => return error.TypeMismatch,
+    };
+
+    // The subnet already contains the network address in its addr field
+    return .{ .IpAddr = subnet.addr };
+}
+
+fn ipNetmask(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    _ = allocator;
+    if (args.len != 2) return error.InvalidArgs;
+
+    const addr = switch (args[0]) {
+        .IpAddr => |a| a,
+        else => return error.TypeMismatch,
+    };
+
+    const prefix_len = switch (args[1]) {
+        .Int => |i| @as(u8, @intCast(i)),
+        else => return error.TypeMismatch,
+    };
+
+    // Create subnet from IP address and prefix length
+    const subnet = switch (addr) {
+        .v4 => |octets| blk: {
+            if (prefix_len > 32) return error.InvalidArgs;
+
+            // Create network mask
+            const mask = if (prefix_len == 0) 0 else ~@as(u32, 0) << @intCast(32 - prefix_len);
+
+            // Convert IP to u32
+            const addr_int = (@as(u32, octets[0]) << 24) |
+                (@as(u32, octets[1]) << 16) |
+                (@as(u32, octets[2]) << 8) |
+                @as(u32, octets[3]);
+
+            // Apply mask to get network address
+            const network_int = addr_int & mask;
+            const network_bytes = [4]u8{
+                @intCast((network_int >> 24) & 0xFF),
+                @intCast((network_int >> 16) & 0xFF),
+                @intCast((network_int >> 8) & 0xFF),
+                @intCast(network_int & 0xFF),
+            };
+
+            break :blk heap.Subnet{
+                .addr = heap.IpAddr{ .v4 = network_bytes },
+                .prefix_len = prefix_len,
+            };
+        },
+        .v6 => |bytes| blk: {
+            if (prefix_len > 128) return error.InvalidArgs;
+
+            // Convert bytes to segments
+            var segments: [8]u16 = undefined;
+            for (0..8) |i| {
+                segments[i] = (@as(u16, bytes[i * 2]) << 8) | @as(u16, bytes[i * 2 + 1]);
+            }
+
+            // Apply mask to each segment
+            const full_segments = prefix_len / 16;
+            const remaining_bits = prefix_len % 16;
+
+            var i: usize = full_segments;
+            while (i < 8) : (i += 1) {
+                if (i == full_segments and remaining_bits > 0) {
+                    const mask = ~@as(u16, 0) << @intCast(16 - remaining_bits);
+                    segments[i] = segments[i] & mask;
+                } else if (i > full_segments) {
+                    segments[i] = 0;
+                }
+            }
+
+            // Convert segments back to bytes
+            var network_bytes: [16]u8 = undefined;
+            for (0..8) |j| {
+                network_bytes[j * 2] = @intCast((segments[j] >> 8) & 0xFF);
+                network_bytes[j * 2 + 1] = @intCast(segments[j] & 0xFF);
+            }
+
+            break :blk heap.Subnet{
+                .addr = heap.IpAddr{ .v6 = network_bytes },
+                .prefix_len = prefix_len,
+            };
+        },
+    };
+
+    return .{ .Subnet = subnet };
+}
+
 // MAC functions
 fn macIsLocal(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator; // unused
@@ -1188,6 +1289,85 @@ fn getAltRef(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
         },
         else => return .{ .Null = {} },
     }
+}
+
+// CANARY: REQ=REQ-GQL-GEO-FUNC-EVAL-001; FEATURE="GeographicFunctionsEvaluation"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-19
+fn geoBearing(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    _ = allocator;
+    if (args.len != 2) return error.InvalidArgs;
+
+    var lat1: f64 = undefined;
+    var lon1: f64 = undefined;
+    var lat2: f64 = undefined;
+    var lon2: f64 = undefined;
+
+    switch (args[0]) {
+        .LatLon => |ll| {
+            lat1 = ll.lat;
+            lon1 = ll.lon;
+        },
+        .LatLonAlt => |lla| {
+            lat1 = lla.lat;
+            lon1 = lla.lon;
+        },
+        else => return error.TypeMismatch,
+    }
+
+    switch (args[1]) {
+        .LatLon => |ll| {
+            lat2 = ll.lat;
+            lon2 = ll.lon;
+        },
+        .LatLonAlt => |lla| {
+            lat2 = lla.lat;
+            lon2 = lla.lon;
+        },
+        else => return error.TypeMismatch,
+    }
+
+    // Calculate bearing using atan2
+    const lat1_rad = lat1 * std.math.pi / 180.0;
+    const lat2_rad = lat2 * std.math.pi / 180.0;
+    const dlon = (lon2 - lon1) * std.math.pi / 180.0;
+
+    const y = std.math.sin(dlon) * std.math.cos(lat2_rad);
+    const x = std.math.cos(lat1_rad) * std.math.sin(lat2_rad) -
+        std.math.sin(lat1_rad) * std.math.cos(lat2_rad) * std.math.cos(dlon);
+
+    var bearing = std.math.atan2(y, x) * 180.0 / std.math.pi;
+
+    // Normalize to 0-360
+    if (bearing < 0) {
+        bearing += 360.0;
+    }
+
+    return .{ .Decimal = .{ .coeff = @intFromFloat(bearing * 1000000), .scale = 6 } };
+}
+
+fn geoLat(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    _ = allocator;
+    if (args.len != 1) return error.InvalidArgs;
+
+    const lat = switch (args[0]) {
+        .LatLon => |ll| ll.lat,
+        .LatLonAlt => |lla| lla.lat,
+        else => return error.TypeMismatch,
+    };
+
+    return .{ .Decimal = .{ .coeff = @intFromFloat(lat * 1000000), .scale = 6 } };
+}
+
+fn geoLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    _ = allocator;
+    if (args.len != 1) return error.InvalidArgs;
+
+    const lon = switch (args[0]) {
+        .LatLon => |ll| ll.lon,
+        .LatLonAlt => |lla| lla.lon,
+        else => return error.TypeMismatch,
+    };
+
+    return .{ .Decimal = .{ .coeff = @intFromFloat(lon * 1000000), .scale = 6 } };
 }
 
 // Geometry functions
