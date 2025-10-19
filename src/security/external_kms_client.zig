@@ -76,7 +76,7 @@ pub fn envelopeFromJson(json: []const u8) !Envelope {
     env.version = std.fmt.parseInt(u8, json[i .. i + 1], 10) catch return error.InvalidEnvelope; // single digit expected
     // alg
     const alg_key = std.mem.indexOf(u8, json, "\"alg\":\"") orelse return error.InvalidEnvelope;
-    var j = alg_key + 7;
+    const j = alg_key + 7;
     const alg_end = std.mem.indexOfScalarPos(u8, json, j, '"') orelse return error.InvalidEnvelope;
     const alg_slice = json[j..alg_end];
     if (!std.mem.eql(u8, alg_slice, "AES-256-GCM")) return error.UnsupportedAlgorithm;

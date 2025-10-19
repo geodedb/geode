@@ -2385,6 +2385,54 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .rows = rows,
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
+    } else if (std.mem.eql(u8, proc_name, "tde.test_key_escrow")) {
+        // CANARY: REQ=REQ-TDE-PROC-048; FEATURE="TDEProcedures"; ASPECT=TestKeyEscrow; STATUS=TESTED; OWNER=tde; UPDATED=2025-10-19
+        // Test key escrow and recovery mechanisms
+        const result = try tde_mod.testKeyEscrow(allocator);
+
+        const columns = try allocator.alloc([]const u8, 4);
+        columns[0] = try allocator.dupe(u8, "escrow_successful");
+        columns[1] = try allocator.dupe(u8, "recovery_tested");
+        columns[2] = try allocator.dupe(u8, "shares_created");
+        columns[3] = try allocator.dupe(u8, "threshold");
+
+        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(eval.Value, 4);
+        row[0] = eval.Value{ .Bool = result.escrow_successful };
+        row[1] = eval.Value{ .Bool = result.recovery_tested };
+        row[2] = eval.Value{ .Int = @intCast(result.shares_created) };
+        row[3] = eval.Value{ .Int = @intCast(result.threshold) };
+        rows[0] = row;
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    } else if (std.mem.eql(u8, proc_name, "tde.test_transparent_encryption")) {
+        // CANARY: REQ=REQ-TDE-PROC-049; FEATURE="TDEProcedures"; ASPECT=TestTransparentEncryption; STATUS=TESTED; OWNER=tde; UPDATED=2025-10-19
+        // Test transparent encryption with various data types
+        const result = try tde_mod.testTransparentEncryption(allocator);
+
+        const columns = try allocator.alloc([]const u8, 4);
+        columns[0] = try allocator.dupe(u8, "types_tested");
+        columns[1] = try allocator.dupe(u8, "all_transparent");
+        columns[2] = try allocator.dupe(u8, "performance_impact_pct");
+        columns[3] = try allocator.dupe(u8, "errors_encountered");
+
+        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(eval.Value, 4);
+        row[0] = eval.Value{ .Int = @intCast(result.types_tested) };
+        row[1] = eval.Value{ .Bool = result.all_transparent };
+        row[2] = eval.Value{ .Float = result.performance_impact_pct };
+        row[3] = eval.Value{ .Int = @intCast(result.errors_encountered) };
+        rows[0] = row;
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
     } else if (std.mem.eql(u8, proc_name, "tde.encrypt_page")) {
         // CANARY: REQ=REQ-TDE-PROC-015
         const columns = try allocator.alloc([]const u8, 3);

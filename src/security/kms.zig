@@ -71,14 +71,14 @@ pub const KMSProvider = struct {
 
         return switch (self.config.provider_type) {
             .local_dev => "local-dev-master-key-v1",
-            .external_kms => blk: {
+            .external_kms => {
                 const seed_str = if (self.config.seed) |s| s else 0x1234567890ABCDEF;
                 var buf: [64]u8 = undefined;
                 const len = std.fmt.bufPrint(&buf, "external-kms-{x}", .{seed_str}) catch return error.BufferTooSmall;
                 const owned = try self.allocator.dupe(u8, buf[0..len]);
                 return owned;
             },
-            .remote_kms => blk: {
+            .remote_kms => {
                 const endpoint = self.config.endpoint orelse "localhost";
                 const port = self.config.port orelse 3141;
                 var buf: [128]u8 = undefined;
