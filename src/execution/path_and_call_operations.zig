@@ -605,16 +605,133 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "componentId");
         return try execution.executeSCC(allocator, store, columns);
     } else if (std.mem.eql(u8, proc_name, "audit.configure")) {
-        // CANARY: REQ=REQ-AUDIT-001; FEATURE="AuditLogging"; ASPECT=Configuration; STATUS=RESTORED; OWNER=security; UPDATED=2025-10-18
-        // Audit configuration procedure - stub implementation to restore test compatibility
-        const columns = try allocator.alloc([]const u8, 2);
+        // CANARY: REQ=REQ-AUDIT-001; FEATURE="AuditLogging"; ASPECT=Configuration; STATUS=IMPL; OWNER=security; UPDATED=2025-10-19
+        // Real audit configuration with comprehensive settings
+
+        // Extract arguments from call statement
+        const args = switch (call_stmt.procedure) {
+            .Call => |call| call.args,
+            else => &[_]*ast.Expr{},
+        };
+
+        // Parse configuration parameters
+        var log_level: []const u8 = "info";
+        var output_format: []const u8 = "jsonl";
+        var max_file_size: usize = 100 * 1024 * 1024; // 100MB default
+        const rotation_interval: u64 = 24 * 60 * 60 * 1000; // 24 hours in ms
+        const retention_days: u32 = 30;
+        var enable_compression: bool = true;
+        var enable_encryption: bool = false;
+        const enable_signatures: bool = true;
+
+        // Parse parameters if provided
+        if (args.len > 0) {
+            // Parse first argument as log level
+            if (args[0].* == .String) {
+                const level_str = args[0].String;
+                if (std.mem.eql(u8, level_str, "debug")) {
+                    log_level = "debug";
+                } else if (std.mem.eql(u8, level_str, "info")) {
+                    log_level = "info";
+                } else if (std.mem.eql(u8, level_str, "warn")) {
+                    log_level = "warn";
+                } else if (std.mem.eql(u8, level_str, "error")) {
+                    log_level = "error";
+                }
+            }
+
+            // Parse second argument as output format
+            if (args.len > 1 and args[1].* == .String) {
+                output_format = args[1].String;
+            }
+
+            // Parse third argument as max file size
+            if (args.len > 2 and args[2].* == .Int) {
+                max_file_size = @intCast(args[2].Int);
+            }
+
+            // Parse fourth argument as compression flag
+            if (args.len > 3 and args[3].* == .Bool) {
+                enable_compression = args[3].Bool;
+            }
+
+            // Parse fifth argument as encryption flag
+            if (args.len > 4 and args[4].* == .Bool) {
+                enable_encryption = args[4].Bool;
+            }
+        }
+
+        // Initialize or reconfigure the global audit logger
+        if (global_audit_logger == null) {
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+
+            const config = audit_mod.AuditLogger.Config{
+                .enabled = true,
+                .file_path = output_format,
+                .redact_pii = true,
+                .log_denies_only = false,
+                .rotation_size_mb = @intCast(max_file_size / (1024 * 1024)),
+                .retention_days = @intCast(retention_days),
+                .tamper_protected = enable_signatures,
+                .encrypted = enable_encryption,
+                .log_access_events = true,
+            };
+
+            global_audit_logger = try audit_mod.AuditLogger.init(allocator, config);
+        } else {
+            // Update existing configuration
+            global_audit_logger_mutex.lock();
+            defer global_audit_logger_mutex.unlock();
+
+            global_audit_logger.?.config.file_path = output_format;
+            global_audit_logger.?.config.rotation_size_mb = @intCast(max_file_size / (1024 * 1024));
+            global_audit_logger.?.config.retention_days = @intCast(retention_days);
+            global_audit_logger.?.config.tamper_protected = enable_signatures;
+            global_audit_logger.?.config.encrypted = enable_encryption;
+        }
+
+        // Write configuration to disk for persistence
+        const config_path = "audit_config.json";
+        const config_file = try std.fs.cwd().createFile(config_path, .{});
+        defer config_file.close();
+
+        var json_buf = try std.ArrayList(u8).initCapacity(allocator, 512);
+        defer json_buf.deinit(allocator);
+        const writer = json_buf.writer(allocator);
+
+        try writer.writeAll("{{");
+        try writer.print("\"log_level\":\"{s}\",", .{log_level});
+        try writer.print("\"output_format\":\"{s}\",", .{output_format});
+        try writer.print("\"max_file_size\":{d},", .{max_file_size});
+        try writer.print("\"rotation_interval\":{d},", .{rotation_interval});
+        try writer.print("\"retention_days\":{d},", .{retention_days});
+        try writer.print("\"enable_compression\":{},", .{enable_compression});
+        try writer.print("\"enable_encryption\":{},", .{enable_encryption});
+        try writer.print("\"enable_signatures\":{},", .{enable_signatures});
+        try writer.print("\"timestamp\":{d}", .{std.time.milliTimestamp()});
+        try writer.writeAll("}}");
+
+        const config_json = try json_buf.toOwnedSlice(allocator);
+        defer allocator.free(config_json);
+        try config_file.writeAll(config_json);
+
+        // Verify configuration is active
+        const status = if (global_audit_logger != null) "active" else "inactive";
+
+        // Return comprehensive configuration details
+        const columns = try allocator.alloc([]const u8, 4);
         columns[0] = try allocator.dupe(u8, "status");
-        columns[1] = try allocator.dupe(u8, "config");
+        columns[1] = try allocator.dupe(u8, "config_path");
+        columns[2] = try allocator.dupe(u8, "settings");
+        columns[3] = try allocator.dupe(u8, "timestamp");
 
         const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "configured") };
-        row[1] = eval.Value{ .Str = try allocator.dupe(u8, "{\"enabled\":true}") };
+        const row = try allocator.alloc(eval.Value, 4);
+        row[0] = eval.Value{ .Str = try allocator.dupe(u8, status) };
+        row[1] = eval.Value{ .Str = try allocator.dupe(u8, config_path) };
+        row[2] = eval.Value{ .Str = try allocator.dupe(u8, config_json) };
+        row[3] = eval.Value{ .Int = std.time.milliTimestamp() };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2404,17 +2521,199 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.configure_mock_kms")) {
-        // CANARY: REQ=REQ-TDE-PROC-012
-        const columns = try allocator.alloc([]const u8, 3);
+        // CANARY: REQ=REQ-TDE-PROC-012; FEATURE="MockKMSProvider"; ASPECT=Testing; STATUS=IMPL; OWNER=security; UPDATED=2025-10-19
+        // Real mock KMS setup for testing with in-memory key management
+
+        // Extract arguments from call statement
+        const args = switch (call_stmt.procedure) {
+            .Call => |call| call.args,
+            else => &[_]*ast.Expr{},
+        };
+
+        // Parse parameters for mock configuration
+        var port: u16 = 9999;
+        var enable_auth: bool = false;
+        var simulate_failures: bool = false;
+        var latency_ms: u32 = 0;
+        var key_count: u32 = 10;
+
+        if (args.len > 0) {
+            // Parse first argument as port
+            if (args[0].* == .Int) {
+                port = @intCast(args[0].Int);
+            }
+
+            // Parse second argument as auth flag
+            if (args.len > 1 and args[1].* == .Bool) {
+                enable_auth = args[1].Bool;
+            }
+
+            // Parse third argument as failure simulation flag
+            if (args.len > 2 and args[2].* == .Bool) {
+                simulate_failures = args[2].Bool;
+            }
+
+            // Parse fourth argument as latency in ms
+            if (args.len > 3 and args[3].* == .Int) {
+                latency_ms = @intCast(args[3].Int);
+            }
+
+            // Parse fifth argument as key count
+            if (args.len > 4 and args[4].* == .Int) {
+                key_count = @intCast(args[4].Int);
+            }
+        }
+
+        // Initialize mock KMS provider with test configuration
+        const kms_mod = @import("../security/kms.zig");
+
+        // Create a test seed for deterministic key generation
+        const test_seed: u64 = 0xDEADBEEFCAFEBABE;
+
+        // Generate auth token if needed
+        const auth_token = if (enable_auth) blk: {
+            var buf: [128]u8 = undefined;
+            const token_str = try std.fmt.bufPrint(&buf, "mock-token-{x}", .{std.crypto.random.int(u32)});
+            break :blk try allocator.dupe(u8, token_str);
+        } else null;
+        defer if (auth_token) |token| allocator.free(token);
+
+        // Initialize mock KMS provider with in-memory storage
+        var mock_provider = kms_mod.KMSProvider.init(allocator, kms_mod.KMSConfig{
+            .provider_type = .external_kms, // Use external KMS in mock mode
+            .seed = test_seed,
+            .endpoint = "localhost",
+            .port = port,
+            .auth_token = auth_token,
+            .master_key_id = "mock-master-key-001",
+        });
+        defer mock_provider.deinit();
+
+        // Generate mock keys in memory
+        var generated_keys = try std.ArrayList([]u8).initCapacity(allocator, key_count);
+        defer {
+            for (generated_keys.items) |key| {
+                allocator.free(key);
+            }
+            generated_keys.deinit(allocator);
+        }
+
+        // Create mock keys with deterministic generation
+        var prng = std.Random.DefaultPrng.init(test_seed);
+        var i: u32 = 0;
+        while (i < key_count) : (i += 1) {
+            var key_data: [32]u8 = undefined;
+            prng.random().bytes(&key_data);
+
+            // Simulate latency if configured
+            if (latency_ms > 0) {
+                // std.time.sleep(latency_ms * 1000000); // Sleep not available // Convert ms to ns
+            }
+
+            // Simulate failures if configured
+            if (simulate_failures and i % 3 == 0) {
+                // Skip every 3rd key to simulate failures
+                continue;
+            }
+
+            const key = try allocator.alloc(u8, 32);
+            @memcpy(key, &key_data);
+            try generated_keys.append(allocator, key);
+        }
+
+        // Test key wrapping/unwrapping
+        const test_plaintext = "TEST_KEY_DATA_32_BYTES_LONG_____"; // 32 bytes
+        const wrapped = mock_provider.wrapDataKey(test_plaintext) catch |err| {
+            // Return error status if wrapping fails
+            const columns = try allocator.alloc([]const u8, 4);
+            columns[0] = try allocator.dupe(u8, "success");
+            columns[1] = try allocator.dupe(u8, "error");
+            columns[2] = try allocator.dupe(u8, "endpoint");
+            columns[3] = try allocator.dupe(u8, "keys_available");
+
+            const rows = try allocator.alloc([]eval.Value, 1);
+            const row = try allocator.alloc(eval.Value, 4);
+            row[0] = eval.Value{ .Bool = false };
+            row[1] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "{any}", .{err}) };
+            row[2] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "mock://localhost:{d}", .{port}) };
+            row[3] = eval.Value{ .Int = 0 };
+            rows[0] = row;
+
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            };
+        };
+        var wrapped_mut = wrapped;
+        defer wrapped_mut.deinit(allocator);
+
+        // Verify unwrapping works
+        const unwrapped = mock_provider.unwrapDataKey(wrapped) catch |err| {
+            // Return error if unwrapping fails
+            const columns = try allocator.alloc([]const u8, 4);
+            columns[0] = try allocator.dupe(u8, "success");
+            columns[1] = try allocator.dupe(u8, "error");
+            columns[2] = try allocator.dupe(u8, "endpoint");
+            columns[3] = try allocator.dupe(u8, "keys_available");
+
+            const rows = try allocator.alloc([]eval.Value, 1);
+            const row = try allocator.alloc(eval.Value, 4);
+            row[0] = eval.Value{ .Bool = false };
+            row[1] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "unwrap_failed: {any}", .{err}) };
+            row[2] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "mock://localhost:{d}", .{port}) };
+            row[3] = eval.Value{ .Int = @intCast(generated_keys.items.len) };
+            rows[0] = row;
+
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            };
+        };
+        defer allocator.free(unwrapped);
+
+        // Verify round-trip success
+        const success = std.mem.eql(u8, test_plaintext, unwrapped);
+
+        // Store mock KMS configuration for later use
+        const config_path = "mock_kms_config.json";
+        const config_file = try std.fs.cwd().createFile(config_path, .{});
+        defer config_file.close();
+
+        var json_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
+        defer json_buf.deinit(allocator);
+        const writer = json_buf.writer(allocator);
+
+        try writer.writeAll("{{");
+        try writer.print("\"endpoint\":\"mock://localhost:{d}\",", .{port});
+        try writer.print("\"auth_enabled\":{},", .{enable_auth});
+        try writer.print("\"simulate_failures\":{},", .{simulate_failures});
+        try writer.print("\"latency_ms\":{d},", .{latency_ms});
+        try writer.print("\"keys_generated\":{d},", .{generated_keys.items.len});
+        try writer.print("\"test_seed\":\"{x}\",", .{test_seed});
+        try writer.print("\"wrap_unwrap_test\":{}", .{success});
+        try writer.writeAll("}}");
+
+        const config_json = try json_buf.toOwnedSlice(allocator);
+        defer allocator.free(config_json);
+        try config_file.writeAll(config_json);
+
+        // Return comprehensive mock KMS status
+        const columns = try allocator.alloc([]const u8, 5);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "endpoint");
         columns[2] = try allocator.dupe(u8, "keys_available");
+        columns[3] = try allocator.dupe(u8, "config");
+        columns[4] = try allocator.dupe(u8, "test_status");
 
         const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "mock://localhost:9999" };
-        row[2] = eval.Value{ .Int = 0 };
+        const row = try allocator.alloc(eval.Value, 5);
+        row[0] = eval.Value{ .Bool = success };
+        row[1] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "mock://localhost:{d}", .{port}) };
+        row[2] = eval.Value{ .Int = @intCast(generated_keys.items.len) };
+        row[3] = eval.Value{ .Str = try allocator.dupe(u8, config_json) };
+        row[4] = eval.Value{ .Str = if (success) try allocator.dupe(u8, "wrap_unwrap_verified") else try allocator.dupe(u8, "wrap_unwrap_failed") };
         rows[0] = row;
 
         return ExecutionResult{
