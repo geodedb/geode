@@ -953,7 +953,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
                 var i: usize = 0;
                 var j: usize = 0;
-                while (i < current_level.len) : ({i += 2; j += 1;}) {
+                while (i < current_level.len) : ({
+                    i += 2;
+                    j += 1;
+                }) {
                     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
                     hasher.update(&current_level[i]);
                     if (i + 1 < current_level.len) {
@@ -974,7 +977,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         // Convert root hash to hex string
         var hex_buf: [64]u8 = undefined;
         for (root_hash, 0..) |byte, i| {
-            _ = std.fmt.bufPrint(hex_buf[i*2..i*2+2], "{x:0>2}", .{byte}) catch {};
+            _ = std.fmt.bufPrint(hex_buf[i * 2 .. i * 2 + 2], "{x:0>2}", .{byte}) catch {};
         }
 
         const columns = try allocator.alloc([]const u8, 3);

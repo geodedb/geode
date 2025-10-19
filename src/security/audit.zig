@@ -87,9 +87,7 @@ pub const AuditLogger = struct {
 
         // Write simple log line (simplified for compatibility)
         var buffer: [1024]u8 = undefined;
-        const log_line = try std.fmt.bufPrint(&buffer,
-            "{{\"timestamp\":{d},\"event_type\":\"{s}\",\"resource\":\"{s}\",\"action\":\"{s}\"}}\n",
-            .{event.timestamp, @tagName(event.event_type), event.resource, event.action});
+        const log_line = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"event_type\":\"{s}\",\"resource\":\"{s}\",\"action\":\"{s}\"}}\n", .{ event.timestamp, @tagName(event.event_type), event.resource, event.action });
 
         if (self.file) |f| {
             try f.writeAll(log_line);
