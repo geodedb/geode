@@ -59,8 +59,9 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation" {
             s.server.attestation_hash[0] ^= 0xFF;
             // Generate + unwrap to get new attestation signature
             const env = try c.generate();
-            var stream = try c.quic_client.getStream();
-            defer stream.deinit();
+            // NOTE: QUIC client stream access removed - quic_client is currently stubbed as ?void
+            // var stream = try c.quic_client.getStream();
+            // defer stream.deinit();
             // Send unwrap raw (reuse client API)
             const plain = c.unwrap(env) catch return error.Unexpected; // Should still work (crypto-wise)
             std.mem.doNotOptimizeAway(plain);

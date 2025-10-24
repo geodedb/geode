@@ -93,6 +93,10 @@ pub const KMSProvider = struct {
     /// Wrap a plaintext data key (encrypt under master key)
     pub fn wrapDataKey(self: *KMSProvider, plaintext: []const u8) !WrappedKey {
         const key_id = try self.fetchActiveMasterKey();
+        // Free key_id if it was dynamically allocated (external_kms, remote_kms without custom master_key_id)
+        const needs_free = self.config.master_key_id == null and
+            (self.config.provider_type == .external_kms or self.config.provider_type == .remote_kms);
+        defer if (needs_free) self.allocator.free(key_id);
 
         return switch (self.config.provider_type) {
             .local_dev => self.wrapLocalDev(key_id, plaintext),

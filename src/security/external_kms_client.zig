@@ -71,7 +71,7 @@ pub fn envelopeFromJson(json: []const u8) !Envelope {
     const ct_key = std.mem.indexOf(u8, json, "\"ct\":\"") orelse return error.InvalidEnvelope;
     // version
     const ver_key = std.mem.indexOf(u8, json, "\"version\":") orelse return error.InvalidEnvelope;
-    var i = ver_key + 11; // skip "version":
+    var i = ver_key + 10; // skip "version": (10 chars, not 11)
     while (i < json.len and (json[i] == ' ' or json[i] == '\t')) : (i += 1) {}
     env.version = std.fmt.parseInt(u8, json[i .. i + 1], 10) catch return error.InvalidEnvelope; // single digit expected
     // alg
