@@ -1654,8 +1654,7 @@ fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, conte
                             // Check if index matches this label and property
                             if (std.mem.eql(u8, index_info.table_name, label) and
                                 index_info.columns.len > 0 and
-                                std.mem.eql(u8, index_info.columns[0], prop_name))
-                            {
+                                std.mem.eql(u8, index_info.columns[0], prop_name)) {
                                 use_index_seek = true;
                                 break;
                             }
