@@ -138,7 +138,7 @@ pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !struct {
 
     // Generate derived keys
     const data_key_count: u32 = 10; // Number of data encryption keys
-    const wal_key_count: u32 = 5;   // Number of WAL encryption keys
+    const wal_key_count: u32 = 5; // Number of WAL encryption keys
     const backup_key_count: u32 = 3; // Number of backup encryption keys
 
     // Create data keys using inline derivation

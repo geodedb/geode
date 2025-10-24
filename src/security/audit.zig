@@ -284,20 +284,20 @@ pub const AuditLogger = struct {
         try writer.print("<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>\n", .{});
         try writer.print("  <System>\n", .{});
         try writer.print("    <Provider Name='Geode Audit' />\n", .{});
-        try writer.print("    <EventID>{d}</EventID>\n", .{ @intFromEnum(event.event_type) });
-        try writer.print("    <TimeCreated SystemTime='{d}' />\n", .{ event.timestamp });
+        try writer.print("    <EventID>{d}</EventID>\n", .{@intFromEnum(event.event_type)});
+        try writer.print("    <TimeCreated SystemTime='{d}' />\n", .{event.timestamp});
         try writer.print("    <Computer>localhost</Computer>\n", .{});
-        try writer.print("    <Security UserID='{d}' />\n", .{ event.user_id orelse 0 });
+        try writer.print("    <Security UserID='{d}' />\n", .{event.user_id orelse 0});
         try writer.print("  </System>\n", .{});
         try writer.print("  <EventData>\n", .{});
-        try writer.print("    <Data Name='EventType'>{s}</Data>\n", .{ @tagName(event.event_type) });
-        try writer.print("    <Data Name='Resource'>{s}</Data>\n", .{ event.resource });
-        try writer.print("    <Data Name='Action'>{s}</Data>\n", .{ event.action });
+        try writer.print("    <Data Name='EventType'>{s}</Data>\n", .{@tagName(event.event_type)});
+        try writer.print("    <Data Name='Resource'>{s}</Data>\n", .{event.resource});
+        try writer.print("    <Data Name='Action'>{s}</Data>\n", .{event.action});
         if (event.reason) |reason| {
-            try writer.print("    <Data Name='Reason'>{s}</Data>\n", .{ reason });
+            try writer.print("    <Data Name='Reason'>{s}</Data>\n", .{reason});
         }
         if (event.session_id) |session| {
-            try writer.print("    <Data Name='SessionID'>{s}</Data>\n", .{ session });
+            try writer.print("    <Data Name='SessionID'>{s}</Data>\n", .{session});
         }
         try writer.print("  </EventData>\n", .{});
         try writer.print("</Event>\n", .{});
@@ -331,15 +331,15 @@ pub const AuditLogger = struct {
         // Simple timestamp formatting (would need proper date formatting in production)
         try writer.print("Jan 01 12:00:00 ", .{});
 
-        try writer.print("localhost geode[{d}]: ", .{ std.os.linux.getpid() });
-        try writer.print("event_type={s} ", .{ @tagName(event.event_type) });
-        try writer.print("user_id={d} ", .{ event.user_id orelse 0 });
-        try writer.print("resource={s} ", .{ event.resource });
-        try writer.print("action={s} ", .{ event.action });
+        try writer.print("localhost geode[{d}]: ", .{std.os.linux.getpid()});
+        try writer.print("event_type={s} ", .{@tagName(event.event_type)});
+        try writer.print("user_id={d} ", .{event.user_id orelse 0});
+        try writer.print("resource={s} ", .{event.resource});
+        try writer.print("action={s} ", .{event.action});
         if (event.reason) |reason| {
-            try writer.print("reason={s} ", .{ reason });
+            try writer.print("reason={s} ", .{reason});
         }
-        try writer.print("timestamp={d}", .{ datetime });
+        try writer.print("timestamp={d}", .{datetime});
 
         return try buf.toOwnedSlice(allocator);
     }
@@ -508,12 +508,9 @@ pub const AuditLogger = struct {
         // Add baseline risk for any activity
         risk_score += 10.0;
 
-        const patterns = try std.fmt.allocPrint(allocator,
-            "failed_logins={d},rapid_access={d},unusual_hours={d}",
-            .{ failed_login_count, rapid_access_count, unusual_hours_count });
+        const patterns = try std.fmt.allocPrint(allocator, "failed_logins={d},rapid_access={d},unusual_hours={d}", .{ failed_login_count, rapid_access_count, unusual_hours_count });
 
-        std.debug.print("ANOMALY_DETECTION count={d} risk_score={d:.2} patterns={s}\n",
-            .{ anomaly_count, risk_score, patterns });
+        std.debug.print("ANOMALY_DETECTION count={d} risk_score={d:.2} patterns={s}\n", .{ anomaly_count, risk_score, patterns });
 
         return .{
             .anomalies_detected = anomaly_count,
@@ -560,12 +557,9 @@ pub const AuditLogger = struct {
         // Calculate confidence based on IOC count
         confidence = @min(95.0, @as(f64, @floatFromInt(ioc_count)) * 10.5);
 
-        const threat_types = try std.fmt.allocPrint(allocator,
-            "sql_injection,path_traversal,brute_force,suspicious_ip",
-            .{});
+        const threat_types = try std.fmt.allocPrint(allocator, "sql_injection,path_traversal,brute_force,suspicious_ip", .{});
 
-        std.debug.print("THREAT_INDICATORS ioc_count={d} confidence={d:.2} types={s}\n",
-            .{ ioc_count, confidence, threat_types });
+        std.debug.print("THREAT_INDICATORS ioc_count={d} confidence={d:.2} types={s}\n", .{ ioc_count, confidence, threat_types });
 
         return .{
             .ioc_count = ioc_count,
@@ -609,8 +603,7 @@ pub const AuditLogger = struct {
 
         const risk_level = if (escalation_attempts > 3) "HIGH" else if (escalation_attempts > 1) "MEDIUM" else "LOW";
 
-        std.debug.print("PRIVILEGE_ESCALATION attempts={d} blocked={d} risk={s}\n",
-            .{ escalation_attempts, blocked_count, risk_level });
+        std.debug.print("PRIVILEGE_ESCALATION attempts={d} blocked={d} risk={s}\n", .{ escalation_attempts, blocked_count, risk_level });
 
         return .{
             .escalation_attempts = escalation_attempts,
@@ -658,12 +651,9 @@ pub const AuditLogger = struct {
         }
 
         // Generate correlation ID
-        const correlation_id = try std.fmt.allocPrint(allocator,
-            "CORR-{d}-{x}",
-            .{ base_time, std.hash.Wyhash.hash(0, "correlation") });
+        const correlation_id = try std.fmt.allocPrint(allocator, "CORR-{d}-{x}", .{ base_time, std.hash.Wyhash.hash(0, "correlation") });
 
-        std.debug.print("SIEM_CORRELATION events={d} alert={} correlation_id={s}\n",
-            .{ correlated_count, alert_generated, correlation_id });
+        std.debug.print("SIEM_CORRELATION events={d} alert={} correlation_id={s}\n", .{ correlated_count, alert_generated, correlation_id });
 
         return .{
             .correlated_count = correlated_count,
@@ -700,7 +690,7 @@ pub const AuditLogger = struct {
         for (alert_rules) |rule| {
             // Simulate rule evaluation
             const triggered = std.mem.eql(u8, rule.severity, "CRITICAL") or
-                             std.mem.eql(u8, rule.severity, "HIGH");
+                std.mem.eql(u8, rule.severity, "HIGH");
 
             if (triggered) {
                 alerts_generated += 1;
@@ -710,12 +700,9 @@ pub const AuditLogger = struct {
             }
         }
 
-        const destinations = try std.fmt.allocPrint(allocator,
-            "email,slack,pagerduty,soc_dashboard",
-            .{});
+        const destinations = try std.fmt.allocPrint(allocator, "email,slack,pagerduty,soc_dashboard", .{});
 
-        std.debug.print("ALERT_GENERATION total={d} critical={d} destinations={s}\n",
-            .{ alerts_generated, critical_count, destinations });
+        std.debug.print("ALERT_GENERATION total={d} critical={d} destinations={s}\n", .{ alerts_generated, critical_count, destinations });
 
         return .{
             .alerts_generated = alerts_generated,
@@ -746,8 +733,7 @@ pub const AuditLogger = struct {
         // Output to JSON/JSONL (standard format)
         if (self.file) |f| {
             var buffer: [1024]u8 = undefined;
-            const json_line = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"event_type\":\"{s}\",\"resource\":\"{s}\",\"action\":\"{s}\",\"output\":\"combined\"}}\n",
-                .{ test_event.timestamp, @tagName(test_event.event_type), test_event.resource, test_event.action });
+            const json_line = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"event_type\":\"{s}\",\"resource\":\"{s}\",\"action\":\"{s}\",\"output\":\"combined\"}}\n", .{ test_event.timestamp, @tagName(test_event.event_type), test_event.resource, test_event.action });
             try f.writeAll(json_line);
             outputs_tested += 1;
         }
@@ -841,17 +827,18 @@ pub const AuditLogger = struct {
         // Calculate metrics
         const events_per_second = if (actual_duration_ms > 0)
             (events_written * 1000) / @as(u64, @intCast(actual_duration_ms))
-        else 0;
+        else
+            0;
 
         const avg_latency_ms = if (events_written > 0)
             @as(f64, @floatFromInt(total_latency)) / @as(f64, @floatFromInt(events_written))
-        else 0.0;
+        else
+            0.0;
 
         // Estimate CPU usage (simplified - actual would use system calls)
         const cpu_percent = @min(100.0, @as(f64, @floatFromInt(events_written)) / 100.0);
 
-        std.debug.print("PERFORMANCE_TEST events={d} duration_ms={d} events_per_sec={d} avg_latency={d:.2}ms max_latency={d}ms mem={d:.2}MB cpu={d:.1}%\n",
-            .{ events_written, actual_duration_ms, events_per_second, avg_latency_ms, max_latency, memory_used, cpu_percent });
+        std.debug.print("PERFORMANCE_TEST events={d} duration_ms={d} events_per_sec={d} avg_latency={d:.2}ms max_latency={d}ms mem={d:.2}MB cpu={d:.1}%\n", .{ events_written, actual_duration_ms, events_per_second, avg_latency_ms, max_latency, memory_used, cpu_percent });
 
         return .{
             .events_per_second = events_per_second,
@@ -947,8 +934,7 @@ pub const AuditLogger = struct {
         const leak_threshold_mb = 10.0; // 10MB threshold
         const leak_detected = (current_mb - baseline_mb) > leak_threshold_mb;
 
-        std.debug.print("MEMORY_TEST baseline={d:.2}MB peak={d:.2}MB current={d:.2}MB leak={}\n",
-            .{ baseline_mb, peak_mb, current_mb, leak_detected });
+        std.debug.print("MEMORY_TEST baseline={d:.2}MB peak={d:.2}MB current={d:.2}MB leak={}\n", .{ baseline_mb, peak_mb, current_mb, leak_detected });
 
         return .{
             .baseline_mb = baseline_mb,
@@ -983,7 +969,7 @@ pub const AuditLogger = struct {
                 for (0..ctx.iterations) |i| {
                     const event = AuditEvent{
                         .timestamp = std.time.milliTimestamp(),
-                        .event_type = .data_export,  // Using existing event type for concurrent test
+                        .event_type = .data_export, // Using existing event type for concurrent test
                         .user_id = ctx.thread_id,
                         .tenant_id = @intCast(ctx.thread_id % 10),
                         .resource = "concurrent_resource",
@@ -1036,8 +1022,7 @@ pub const AuditLogger = struct {
         const successful_ops = success_count.load(.monotonic);
         const race_conditions = race_count.load(.monotonic);
 
-        std.debug.print("CONCURRENT_TEST threads={d} successful_ops={d} race_conditions={d}\n",
-            .{ num_threads, successful_ops, race_conditions });
+        std.debug.print("CONCURRENT_TEST threads={d} successful_ops={d} race_conditions={d}\n", .{ num_threads, successful_ops, race_conditions });
 
         return .{
             .threads_tested = num_threads,
@@ -1066,8 +1051,7 @@ pub const AuditLogger = struct {
         const available_bytes: u64 = 1024 * 1024 * 1024 * 20; // 20GB
         const total_bytes: u64 = 1024 * 1024 * 1024 * 100; // 100GB
 
-        std.debug.print("DISK_SPACE available={d}MB total={d}MB used={d}%\n",
-            .{ available_bytes / (1024 * 1024), total_bytes / (1024 * 1024), used_percent });
+        std.debug.print("DISK_SPACE available={d}MB total={d}MB used={d}%\n", .{ available_bytes / (1024 * 1024), total_bytes / (1024 * 1024), used_percent });
 
         var disk_full_handled = false;
         var fallback_used = false;
@@ -1132,7 +1116,7 @@ pub const AuditLogger = struct {
         for (0..10) |i| {
             const test_event = AuditEvent{
                 .timestamp = std.time.milliTimestamp() + @as(i64, @intCast(i)),
-                .event_type = .data_export,  // Using existing event type for disk test
+                .event_type = .data_export, // Using existing event type for disk test
                 .user_id = @intCast(9000 + i),
                 .tenant_id = 999,
                 .resource = "disk_test",
@@ -1141,7 +1125,7 @@ pub const AuditLogger = struct {
                 .reason = null,
                 .ip_address = "127.0.0.1",
                 .session_id = "disk-test",
-                .query_hash = 0xD1530000 + i,  // Fixed hex literal
+                .query_hash = 0xD1530000 + i, // Fixed hex literal
                 .additional_context = null,
             };
 
@@ -1155,8 +1139,7 @@ pub const AuditLogger = struct {
             };
         }
 
-        std.debug.print("DISK_HANDLING handled={} fallback={} dropped={d} compressed={}\n",
-            .{ disk_full_handled, fallback_used, events_dropped, compression_enabled });
+        std.debug.print("DISK_HANDLING handled={} fallback={} dropped={d} compressed={}\n", .{ disk_full_handled, fallback_used, events_dropped, compression_enabled });
 
         return .{
             .disk_full_handled = disk_full_handled,
@@ -1187,8 +1170,7 @@ pub const AuditLogger = struct {
             // Write some valid audit events
             for (0..5) |i| {
                 var buffer: [512]u8 = undefined;
-                const json = try std.fmt.bufPrint(&buffer, "{{\"id\":{d},\"type\":\"valid\",\"checksum\":{d}}}\n",
-                    .{ i, i * 0x1234 });
+                const json = try std.fmt.bufPrint(&buffer, "{{\"id\":{d},\"type\":\"valid\",\"checksum\":{d}}}\n", .{ i, i * 0x1234 });
                 try file.writeAll(json);
             }
 
@@ -1198,8 +1180,7 @@ pub const AuditLogger = struct {
             // More valid data
             for (6..10) |i| {
                 var buffer: [512]u8 = undefined;
-                const json = try std.fmt.bufPrint(&buffer, "{{\"id\":{d},\"type\":\"valid\",\"checksum\":{d}}}\n",
-                    .{ i, i * 0x1234 });
+                const json = try std.fmt.bufPrint(&buffer, "{{\"id\":{d},\"type\":\"valid\",\"checksum\":{d}}}\n", .{ i, i * 0x1234 });
                 try file.writeAll(json);
             }
         }
@@ -1293,16 +1274,13 @@ pub const AuditLogger = struct {
             defer backup_file.close();
 
             var recovery_buf: [256]u8 = undefined;
-            const recovery_info = try std.fmt.bufPrint(&recovery_buf,
-                "{{\"recovery_timestamp\":{d},\"original_lines\":{d},\"recovered_lines\":{d},\"data_loss\":{d}}}\n",
-                .{ std.time.milliTimestamp(), total_expected, recovered, data_loss });
+            const recovery_info = try std.fmt.bufPrint(&recovery_buf, "{{\"recovery_timestamp\":{d},\"original_lines\":{d},\"recovered_lines\":{d},\"data_loss\":{d}}}\n", .{ std.time.milliTimestamp(), total_expected, recovered, data_loss });
             try backup_file.writeAll(recovery_info);
 
             std.fs.cwd().deleteFile(backup_path) catch {};
         }
 
-        std.debug.print("CORRUPTION_HANDLING detected={} attempted={} successful={} data_loss={d}\n",
-            .{ corruption_detected, recovery_attempted, recovery_successful, data_loss });
+        std.debug.print("CORRUPTION_HANDLING detected={} attempted={} successful={} data_loss={d}\n", .{ corruption_detected, recovery_attempted, recovery_successful, data_loss });
 
         return .{
             .corruption_detected = corruption_detected,
@@ -1396,15 +1374,12 @@ pub const AuditLogger = struct {
         defer report_file.close();
 
         var buffer: [512]u8 = undefined;
-        const report = try std.fmt.bufPrint(&buffer,
-            "{{\"timestamp\":{d},\"validated\":{},\"errors\":{d},\"warnings\":{d},\"auto_fixed\":{d}}}\n",
-            .{ std.time.milliTimestamp(), config_validated, errors_found, warnings_found, auto_fixed });
+        const report = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"validated\":{},\"errors\":{d},\"warnings\":{d},\"auto_fixed\":{d}}}\n", .{ std.time.milliTimestamp(), config_validated, errors_found, warnings_found, auto_fixed });
         try report_file.writeAll(report);
 
         std.fs.cwd().deleteFile("config_validation.json") catch {};
 
-        std.debug.print("CONFIG_VALIDATION validated={} errors={d} warnings={d} auto_fixed={d}\n",
-            .{ config_validated, errors_found, warnings_found, auto_fixed });
+        std.debug.print("CONFIG_VALIDATION validated={} errors={d} warnings={d} auto_fixed={d}\n", .{ config_validated, errors_found, warnings_found, auto_fixed });
 
         return .{
             .config_validated = config_validated,
@@ -1458,9 +1433,7 @@ pub const AuditLogger = struct {
         try writer.print("  \"total_events\": {},\n", .{event_count});
         try writer.print("  \"violations\": {},\n", .{violation_count});
         try writer.print("  \"compliant\": {},\n", .{compliant_count});
-        try writer.print("  \"compliance_rate\": {d:.2}\n", .{
-            if (event_count > 0) @as(f64, @floatFromInt(compliant_count)) * 100.0 / @as(f64, @floatFromInt(event_count)) else 100.0
-        });
+        try writer.print("  \"compliance_rate\": {d:.2}\n", .{if (event_count > 0) @as(f64, @floatFromInt(compliant_count)) * 100.0 / @as(f64, @floatFromInt(event_count)) else 100.0});
         try writer.print("}}\n", .{});
 
         return .{
@@ -1551,13 +1524,7 @@ pub const AuditLogger = struct {
 
             // Export sample records
             for (0..100) |i| {
-                try writer.print("{},{},{},{},{}\n", .{
-                    std.time.milliTimestamp() + @as(i64, @intCast(i)),
-                    "access_granted",
-                    i % 10,
-                    "resource",
-                    "SELECT"
-                });
+                try writer.print("{},{},{},{},{}\n", .{ std.time.milliTimestamp() + @as(i64, @intCast(i)), "access_granted", i % 10, "resource", "SELECT" });
                 records_exported += 1;
             }
         } else if (std.mem.eql(u8, format, "xml")) {
@@ -1691,13 +1658,7 @@ pub const AuditLogger = struct {
         const writer = output_buf.writer(allocator);
 
         // Test PowerShell cmdlet compatibility
-        const cmdlets = [_][]const u8{
-            "Get-AuditLog",
-            "Export-AuditData",
-            "Test-Compliance",
-            "New-ForensicPackage",
-            "Invoke-SecurityScan"
-        };
+        const cmdlets = [_][]const u8{ "Get-AuditLog", "Export-AuditData", "Test-Compliance", "New-ForensicPackage", "Invoke-SecurityScan" };
 
         for (cmdlets) |cmdlet| {
             cmdlets_tested += 1;

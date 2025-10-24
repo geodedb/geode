@@ -1362,7 +1362,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
                 .file_path = "audit_rotation.jsonl",
-                .rotation_size_mb = 50,  // Start with 50MB rotation threshold
+                .rotation_size_mb = 50, // Start with 50MB rotation threshold
             });
         }
 
@@ -1619,7 +1619,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
                 .file_path = "audit_continuity_test.jsonl",
-                .rotation_size_mb = 1,  // Small size to trigger rotation
+                .rotation_size_mb = 1, // Small size to trigger rotation
             });
         }
 
@@ -1672,10 +1672,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         // Update retention configuration
         const retention_days: u32 = 90;
-        global_audit_logger.?.updateConfig(
-            global_audit_logger.?.config.rotation_size_mb,
-            retention_days
-        );
+        global_audit_logger.?.updateConfig(global_audit_logger.?.config.rotation_size_mb, retention_days);
 
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "status");
@@ -1705,7 +1702,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
                 .file_path = "audit_cleanup.jsonl",
-                .retention_days = 30,  // Cleanup files older than 30 days
+                .retention_days = 30, // Cleanup files older than 30 days
             });
         }
 
@@ -1755,7 +1752,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const row = try allocator.alloc(eval.Value, 3);
         row[0] = eval.Value{ .Bool = result.anomalies_detected > 0 };
         row[1] = eval.Value{ .Int = @intCast(result.anomalies_detected) };
-        row[2] = eval.Value{ .Int = @intFromFloat(result.risk_score) };  // Convert risk score to severity level
+        row[2] = eval.Value{ .Int = @intFromFloat(result.risk_score) }; // Convert risk score to severity level
         rows[0] = row;
 
         // Free the patterns string
@@ -1794,9 +1791,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         row[1] = eval.Value{ .Int = @intCast(result.ioc_count) };
 
         // Determine threat level based on confidence
-        const threat_level = if (result.confidence >= 80.0) "HIGH"
-                            else if (result.confidence >= 50.0) "MEDIUM"
-                            else "LOW";
+        const threat_level = if (result.confidence >= 80.0) "HIGH" else if (result.confidence >= 50.0) "MEDIUM" else "LOW";
         row[2] = eval.Value{ .Str = threat_level };
         rows[0] = row;
 
@@ -1834,7 +1829,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const row = try allocator.alloc(eval.Value, 3);
         row[0] = eval.Value{ .Bool = result.escalation_attempts > 0 };
         row[1] = eval.Value{ .Int = @intCast(result.escalation_attempts) };
-        row[2] = eval.Value{ .Int = @intCast(result.blocked) };  // Users affected approximated by blocked attempts
+        row[2] = eval.Value{ .Int = @intCast(result.blocked) }; // Users affected approximated by blocked attempts
         rows[0] = row;
 
         // Note: risk_level is a string literal, no need to free
@@ -3132,7 +3127,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .rows = rows,
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
-    // Phase 6: TDE Core Procedures
+        // Phase 6: TDE Core Procedures
     } else if (std.mem.eql(u8, proc_name, "tde.initialize_key_hierarchy")) {
         // CANARY: REQ=REQ-TDE-PROC-038; FEATURE="TDEProcedures"; ASPECT=InitKeyHierarchy; STATUS=TESTED; OWNER=tde; UPDATED=2025-10-19
         // Enable TDE for testing
