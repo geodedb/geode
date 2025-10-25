@@ -556,6 +556,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             const graph_name = cg.name;
 
+            // DEBUG: Log IF NOT EXISTS flag
+            std.log.debug("CREATE GRAPH: name='{s}', if_not_exists={}, or_replace={}", .{graph_name, cg.if_not_exists, cg.or_replace});
+
             // Phase 3: Write lock for CREATE GRAPH
             cat.rwlock.lock();
             defer cat.rwlock.unlock();
@@ -569,15 +572,19 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 }
             } else {
                 // Check if graph already exists
-                if (cat.graphs.contains(graph_name)) {
+                const graph_exists = cat.graphs.contains(graph_name);
+                std.log.debug("Graph exists check: exists={}", .{graph_exists});
+                if (graph_exists) {
                     // If IF NOT EXISTS is specified, silently succeed
                     if (cg.if_not_exists) {
+                        std.log.debug("IF NOT EXISTS specified, returning success", .{});
                         return ExecutionResult{
                             .columns = try allocator.alloc([]const u8, 0),
                             .rows = try allocator.alloc([]eval.Value, 0),
                             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
                         };
                     }
+                    std.log.debug("IF NOT EXISTS not specified, returning DuplicateGraph error", .{});
                     return error.DuplicateGraph;
                 }
             }

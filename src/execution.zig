@@ -996,9 +996,23 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             catalog_mutex.lock();
             defer catalog_mutex.unlock();
 
-            // Check if graph already exists
-            if (catalog.graphs.contains(graph_name)) {
-                return error.DuplicateGraph;
+            // Handle OR REPLACE
+            if (cg.or_replace) {
+                // Remove existing graph if it exists
+                _ = catalog.graphs.remove(graph_name);
+            } else {
+                // Check if graph already exists
+                if (catalog.graphs.contains(graph_name)) {
+                    // If IF NOT EXISTS is specified, silently succeed
+                    if (cg.if_not_exists) {
+                        return ExecutionResult{
+                            .columns = try allocator.alloc([]const u8, 0),
+                            .rows = try allocator.alloc([]eval.Value, 0),
+                            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        };
+                    }
+                    return error.DuplicateGraph;
+                }
             }
 
             // Add to catalog

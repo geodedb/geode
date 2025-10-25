@@ -1,11 +1,334 @@
 # TODO - Current Development Priorities
 
-> **Status**: Updated October 17, 2025 - All Feature Phases Complete, **ALL P0 CRITICAL SECURITY FIXES COMPLETE** ✅
-> **Test Coverage**: 1629/1666 tests passing (97.8%) - All planned features implemented
+> **Status**: Updated October 25, 2025 - Test Failure Analysis Complete
+> **Test Coverage**: 1648/1725 tests passing (95.5%) - 77 failing tests analyzed
 > **Build Status**: ✅ Passes `make verify-all` with **0 memory leaks**
 > **CANARY Status**: 1016+ tracked requirements
 > **Phase Completion**: ✅ **ALL 7 FEATURE PHASES COMPLETE** (Phases 2-7 + Phase 1)
 > **Security Status**: 🟢 **PRODUCTION READY** - All 7 P0 critical vulnerabilities fixed
+
+## 🚨 CURRENT PRIORITY: Test Failure Remediation (October 25, 2025)
+
+### Test Failure Summary
+**Total Failures**: 77 tests (4.5% failure rate)
+**Pass Rate**: 95.5% (1648/1725 tests passing)
+**Failure Patterns**:
+- **exit code failures**: 66 tests (missing procedures, type mismatches, catalog issues)
+- **timeout failures**: 10 tests (server startup hangs)
+- **missing result**: 1 test (output format mismatch)
+
+### Root Cause Analysis
+
+#### 1. Missing CDC Procedures (~28 tests) - **P1 - Major Feature Gap**
+**Impact**: Change Data Capture feature completely unimplemented
+**Tests Affected**: All tests in `geode_cdc_comprehensive.yml`
+**Missing Procedures**:
+```
+cdc.enable, cdc.disable, cdc.start, cdc.stop
+cdc.status, cdc.pause, cdc.resume
+cdc.export_diagnostics, cdc.get_events
+cdc.set_guardrail, cdc.get_guardrail_status, cdc.reset_guardrails
+cdc.get_watermark, cdc.get_pending_events
+cdc.configure_adaptive_flush, cdc.get_flush_metrics
+cdc.get_malformed_records, cdc.get_ordered_events, cdc.check_duplicates
+cdc.configure_wal_tail, cdc.get_wal_status
+cdc.set_retention_policy, cdc.cleanup_expired_events
+cdc.get_telemetry_metrics, cdc.get_performance_alerts
+cdc.get_corruption_analysis, cdc.invalid_command
+```
+**Solution**: Implement complete CDC system with WAL-based change tracking
+**Effort**: 2-3 weeks (substantial feature)
+
+#### 2. Missing TDE Test Procedures (~18 tests) - **P2 - Test Infrastructure**
+**Impact**: Cannot validate TDE implementation (TDE itself is implemented, test helpers missing)
+**Tests Affected**: All tests in `geode_tde_security.yml`
+**Missing Procedures**:
+```
+tde.configure_provider, tde.configure_rotation
+tde.get_rotation_state, tde.evaluate_rotation_schedule
+tde.encrypt_page_test, tde.encrypt_wal_test
+tde.roundtrip_test, tde.create_encrypted_backup, tde.restore_with_keys
+tde.measure_overhead, tde.simulate_oltp_workload
+tde.configure_external_kms, tde.test_kms_wrap_unwrap
+tde.test_kms_attestation, tde.test_kms_failure
+tde.test_corrupted_key_handling, tde.test_key_access_control
+tde.test_key_recovery, tde.test_key_zeroization
+tde.test_privileged_unwrap, tde.cleanup_key_hierarchy
+tde.audit_plaintext_keys
+```
+**Solution**: Implement test helper stored procedures that expose TDE internals for validation
+**Effort**: 3-5 days (test infrastructure)
+
+#### 3. Catalog Cleanup Issues (~24 tests) - **P0 - Quick Win**
+**Impact**: Tests fail due to persistent catalog state between runs
+**Tests Affected**: All tests in `gql_catalog_operations_comprehensive.yml`
+**Error Pattern**: `Duplicate graph name`, `Duplicate schema name`
+**Root Cause**: Test runner not properly cleaning catalog between test runs
+**Solution**: Fix test runner cleanup logic to reset catalog completely
+**Effort**: 2-4 hours (simple fix with high impact)
+
+#### 4. Server Startup Timeouts (~10 tests) - **P0 - Critical Bug**
+**Impact**: Tests requiring server mode hang during QUIC initialization
+**Tests Affected**: All tests in `geode_auth_security.yml`
+**Error Pattern**: Server binds socket but never completes startup (10 second timeout)
+**Root Cause**: QUIC transport initialization deadlock or infinite loop in server mode
+**Solution**: Debug QUIC server initialization, likely issue in `src/transport/quic.zig`
+**Effort**: 4-8 hours (debugging + fix)
+
+#### 5. Graph Algorithm Type Mismatches (2 tests) - **P1 - Missing Functions**
+**Impact**: Similarity algorithms not implemented
+**Tests Affected**:
+- `jaccard-similarity`: Type mismatch with `algo.similarity.jaccard([(a)--()], [(b)--()])`
+- `cosine-similarity`: Type mismatch with `algo.similarity.cosine(a.vector, b.vector)`
+**Root Cause**: Missing `algo.similarity.*` function implementations
+**Solution**: Implement Jaccard and Cosine similarity functions for graph/vector data
+**Effort**: 1-2 days
+
+#### 6. Output Format Mismatch (1 test) - **P3 - Minor Issue**
+**Impact**: Test expects string "3" but gets number 3.0
+**Tests Affected**: `match-call-dijkstra-optimal` in `geode_match_call_integration.yml`
+**Root Cause**: Number formatting in JSON output
+**Solution**: Fix test expectation or adjust number serialization
+**Effort**: 15 minutes
+
+#### 7. Missing Audit Procedure (1 test) - **P2 - Test Cleanup**
+**Impact**: Cannot cleanup test artifacts
+**Tests Affected**: `audit-cleanup-log-files` in `geode_audit_logging_enterprise.yml`
+**Missing Procedure**: `audit.cleanup_test_artifacts`
+**Solution**: Implement test cleanup helper procedure
+**Effort**: 30 minutes
+
+---
+
+## 📋 IMPLEMENTATION PLAN: Test Failure Remediation
+
+### Phase 1: Quick Wins (P0) - **Target: 35 tests fixed in 1-2 days**
+**Goal**: Fix high-ROI issues that unblock large test suites
+**Expected Pass Rate**: 95.5% → 97.5% (+35 tests)
+
+#### Task 1.1: Catalog Cleanup Fix - **2-4 hours**
+**Priority**: P0 (Blocking 24 tests)
+**Files**: `extended_test_runner.py`, possibly `src/storage/catalog.zig`
+**Implementation**:
+1. Add proper catalog reset between tests in test runner
+2. Ensure all graphs, schemas, and indexes are dropped before each test in catalog suite
+3. Consider adding `--reset-catalog` flag to `geode` CLI
+**Verification**: All 24 `gql_catalog_operations_comprehensive.yml` tests should pass
+**CANARY**: Add markers for catalog cleanup logic
+
+#### Task 1.2: Server Startup Timeout Fix - **4-8 hours**
+**Priority**: P0 (Blocking 10 tests)
+**Files**: `src/transport/quic.zig`, `src/server/main.zig`
+**Investigation Steps**:
+1. Add debug logging to QUIC server initialization path
+2. Identify where server startup hangs (likely in socket binding or TLS setup)
+3. Check for deadlocks in server accept loop
+4. Verify certificate generation doesn't block
+**Implementation**:
+1. Fix identified deadlock or blocking operation
+2. Add timeout handling to prevent indefinite hangs
+3. Ensure server signals "ready" state properly
+**Verification**: All 10 `geode_auth_security.yml` tests should complete (pass or fail on auth, not timeout)
+**CANARY**: Add markers for server startup fixes
+
+#### Task 1.3: Output Format Fix - **15 minutes**
+**Priority**: P3 (Blocking 1 test, but trivial)
+**Files**: `geodetestlab/specs/geode_match_call_integration.yml` or number serialization code
+**Implementation**:
+1. Check if test expectation should be numeric or adjust JSON serialization
+2. Either change test to expect numeric value or format numbers as requested
+**Verification**: `match-call-dijkstra-optimal` test passes
+**CANARY**: Add marker for serialization fix
+
+---
+
+### Phase 2: Algorithm Implementations (P1) - **Target: 2 tests fixed in 1-2 days**
+**Goal**: Implement missing similarity algorithms
+**Expected Pass Rate**: 97.5% → 97.6% (+2 tests)
+
+#### Task 2.1: Jaccard Similarity Implementation - **4-8 hours**
+**Priority**: P1 (Blocking 1 test)
+**Files**: `src/functions/similarity.zig` (new), `src/functions/builtin.zig`
+**Implementation**:
+1. Create `algo.similarity.jaccard()` function
+2. Accept two lists of nodes/relationships
+3. Calculate Jaccard index: |A ∩ B| / |A ∪ B|
+4. Handle edge cases (empty sets, identical sets)
+5. Return float between 0.0 and 1.0
+**GQL Compliance**: Verify against ISO spec if applicable
+**Verification**: `jaccard-similarity` test passes
+**CANARY**: Add markers for Jaccard implementation
+
+#### Task 2.2: Cosine Similarity Implementation - **2-4 hours**
+**Priority**: P1 (Blocking 1 test)
+**Files**: `src/functions/similarity.zig`, `src/types/vector.zig`
+**Implementation**:
+1. Create `algo.similarity.cosine()` function
+2. Accept two vector properties (VectorF32 or VectorI32)
+3. Calculate cosine similarity: (A · B) / (||A|| × ||B||)
+4. Leverage existing SIMD vector operations
+5. Return float between -1.0 and 1.0
+**Verification**: `cosine-similarity` test passes
+**CANARY**: Add markers for cosine similarity
+
+---
+
+### Phase 3: Test Infrastructure (P2) - **Target: 19 tests fixed in 3-5 days**
+**Goal**: Add test helper procedures for TDE and audit validation
+**Expected Pass Rate**: 97.6% → 98.7% (+19 tests)
+
+#### Task 3.1: TDE Test Procedures - **3-4 days**
+**Priority**: P2 (Blocking 18 tests, but test infrastructure only)
+**Files**: `src/security/tde_test_procedures.zig` (new), `src/server/procedure_registry.zig`
+**Implementation**:
+1. Create stored procedure namespace `tde.*` for test helpers
+2. Implement 21 test procedures that expose TDE internals:
+   - `tde.configure_provider()`: Set key provider type
+   - `tde.configure_rotation()`: Configure rotation policy
+   - `tde.get_rotation_state()`: Get current rotation status
+   - `tde.encrypt_page_test()`: Test page-level encryption
+   - `tde.encrypt_wal_test()`: Test WAL encryption
+   - `tde.roundtrip_test()`: Validate encrypt/decrypt roundtrip
+   - `tde.create_encrypted_backup()`: Create test backup
+   - `tde.restore_with_keys()`: Restore from encrypted backup
+   - `tde.measure_overhead()`: Performance measurement
+   - `tde.simulate_oltp_workload()`: Load testing
+   - `tde.configure_external_kms()`: External KMS setup
+   - `tde.test_kms_wrap_unwrap()`: Test KMS operations
+   - `tde.test_kms_attestation()`: Test attestation
+   - `tde.test_kms_failure()`: Test failure handling
+   - `tde.test_corrupted_key_handling()`: Corruption scenarios
+   - `tde.test_key_access_control()`: RBAC validation
+   - `tde.test_key_recovery()`: Key recovery procedures
+   - `tde.test_key_zeroization()`: Memory sanitization
+   - `tde.test_privileged_unwrap()`: Privileged operations
+   - `tde.cleanup_key_hierarchy()`: Test cleanup
+   - `tde.audit_plaintext_keys()`: Security audit
+3. Register all procedures in procedure registry
+4. Add proper error handling and validation
+**Verification**: All 18 `geode_tde_security.yml` tests pass
+**CANARY**: Add markers for each test procedure
+**Note**: This is test infrastructure, not production features
+
+#### Task 3.2: Audit Cleanup Procedure - **30 minutes**
+**Priority**: P2 (Blocking 1 test)
+**Files**: `src/security/audit_procedures.zig`
+**Implementation**:
+1. Add `audit.cleanup_test_artifacts()` procedure
+2. Remove test log files and reset audit state
+3. Add cleanup to audit system initialization
+**Verification**: `audit-cleanup-log-files` test passes
+**CANARY**: Add marker for audit cleanup
+
+---
+
+### Phase 4: CDC Feature Implementation (P1) - **Target: 28 tests fixed in 2-3 weeks**
+**Goal**: Implement complete Change Data Capture system
+**Expected Pass Rate**: 98.7% → 100% (+28 tests)
+
+#### Task 4.1: CDC Core Architecture - **1 week**
+**Priority**: P1 (Major feature, blocking 28 tests)
+**Files**:
+- `src/cdc/engine.zig` (new)
+- `src/cdc/event_stream.zig` (new)
+- `src/cdc/wal_reader.zig` (new)
+- `src/storage/wal.zig` (modifications)
+**Implementation**:
+1. Design CDC event format (INSERT, UPDATE, DELETE, CREATE, DROP)
+2. Implement WAL reader that converts WAL entries to CDC events
+3. Create event stream buffer with backpressure handling
+4. Add CDC lifecycle management (enable/disable/start/stop)
+5. Implement event filtering by operation type
+**Architecture Decisions**:
+- WAL-based: Read from existing WAL, no dual-write penalty
+- Streaming: Push events to subscribers in real-time
+- Durable: Events survive restarts via WAL persistence
+- Ordered: Maintain strict sequential consistency
+**CANARY**: Add markers for CDC architecture
+
+#### Task 4.2: CDC Procedures (Control Plane) - **3-4 days**
+**Priority**: P1 (Required for test validation)
+**Files**: `src/cdc/procedures.zig` (new), `src/server/procedure_registry.zig`
+**Implementation**:
+1. `cdc.enable()`: Enable CDC for current database
+2. `cdc.disable()`: Disable CDC and cleanup
+3. `cdc.start()`: Start CDC event processing
+4. `cdc.stop()`: Stop CDC event processing
+5. `cdc.status()`: Get CDC engine status
+6. `cdc.pause()`: Pause event streaming
+7. `cdc.resume()`: Resume event streaming
+8. `cdc.export_diagnostics()`: Export event statistics
+9. `cdc.get_events()`: Retrieve recent events
+**CANARY**: Add markers for each procedure
+
+#### Task 4.3: CDC Guardrails & Quality - **2-3 days**
+**Priority**: P1 (Data quality and reliability)
+**Files**: `src/cdc/guardrails.zig` (new)
+**Implementation**:
+1. `cdc.set_guardrail()`: Configure thresholds (latency, queue size)
+2. `cdc.get_guardrail_status()`: Check threshold violations
+3. `cdc.reset_guardrails()`: Reset guardrail state
+4. `cdc.get_watermark()`: Get high-water mark for event processing
+5. `cdc.get_pending_events()`: Count unprocessed events
+6. `cdc.get_malformed_records()`: Detect corrupted events
+7. `cdc.check_duplicates()`: Verify event deduplication
+8. `cdc.get_ordered_events()`: Ensure sequential ordering
+**CANARY**: Add markers for guardrail logic
+
+#### Task 4.4: CDC Advanced Features - **2-3 days**
+**Priority**: P1 (Performance and observability)
+**Files**:
+- `src/cdc/adaptive_flush.zig` (new)
+- `src/cdc/retention.zig` (new)
+- `src/cdc/telemetry.zig` (new)
+**Implementation**:
+1. `cdc.configure_adaptive_flush()`: Dynamic batching based on load
+2. `cdc.get_flush_metrics()`: Flush statistics
+3. `cdc.configure_wal_tail()`: WAL tail following configuration
+4. `cdc.get_wal_status()`: WAL processing status
+5. `cdc.set_retention_policy()`: Event retention configuration
+6. `cdc.cleanup_expired_events()`: Remove old events
+7. `cdc.get_telemetry_metrics()`: Performance metrics
+8. `cdc.get_performance_alerts()`: Performance anomaly detection
+9. `cdc.get_corruption_analysis()`: Data integrity validation
+**CANARY**: Add markers for advanced features
+
+**Verification**: All 28 `geode_cdc_comprehensive.yml` tests pass
+**Documentation**: Create `docs/CDC_SYSTEM.md` with architecture and usage
+
+---
+
+## 📊 EXPECTED OUTCOMES
+
+### Test Pass Rate Progression
+- **Baseline**: 95.5% (1648/1725 passing)
+- **After Phase 1**: 97.5% (1683/1725 passing) - +35 tests
+- **After Phase 2**: 97.6% (1685/1725 passing) - +2 tests
+- **After Phase 3**: 98.7% (1704/1725 passing) - +19 tests
+- **After Phase 4**: 100% (1725/1725 passing) - +28 tests
+
+### Timeline
+- **Phase 1 (P0)**: 1-2 days (catalog, server, output format)
+- **Phase 2 (P1)**: 1-2 days (similarity algorithms)
+- **Phase 3 (P2)**: 3-5 days (TDE test procedures, audit cleanup)
+- **Phase 4 (P1)**: 2-3 weeks (full CDC implementation)
+- **Total Estimated Time**: 3-4 weeks for 100% test coverage
+
+### Priority Justification
+1. **P0 (Phases 1)**: Unblock large test suites, fix critical bugs (35 tests, 1-2 days)
+2. **P1 (Phases 2, 4)**: Implement missing features (30 tests, 2-4 weeks)
+3. **P2 (Phase 3)**: Test infrastructure improvements (19 tests, 3-5 days)
+4. **P3**: Minor cosmetic fixes (1 test, 15 minutes)
+
+### Success Criteria
+- ✅ All 77 failing tests pass
+- ✅ No regressions in currently passing tests
+- ✅ All new features have CANARY markers
+- ✅ Documentation updated for new features
+- ✅ Zero memory leaks in all test runs
+- ✅ 100% test coverage maintained
+
+---
 
 ## 🎉 MAJOR MILESTONE: All P0 Critical Security Fixes Complete (October 17, 2025)
 
