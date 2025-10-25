@@ -16,12 +16,18 @@ pub const GPUFlaggerFinding = struct {
 };
 
 pub fn detect(allocator: std.mem.Allocator) ![]GPUFlaggerFinding {
-    var list = std.ArrayList(GPUFlaggerFinding).init(allocator);
-    // For now everything is unsupported and flagged
-    inline for (@typeInfo(GPUFeature).Enum.fields) |f| {
-        try list.append(.{ .feature = @enumFromInt(f.value), .supported = false, .note = "GPU acceleration not implemented" });
+    var list = try std.ArrayList(GPUFlaggerFinding).initCapacity(allocator, 0);
+    defer list.deinit(allocator);
+    const cuda = @import("cuda_loader.zig");
+    var loader = cuda.CudaLoader.init();
+    const has_cuda = if (@import("builtin").os.tag == .linux) loader.available() else false;
+    const features = [_]GPUFeature{ .path_expand, .pagerank, .betweenness, .shortest_path };
+    for (features) |feat| {
+        const supported = has_cuda and (feat == .path_expand or feat == .shortest_path or feat == .pagerank);
+        const note = if (supported) "CUDA dynamic driver detected" else "GPU acceleration not implemented or backend unavailable";
+        try list.append(allocator, .{ .feature = feat, .supported = supported, .note = note });
     }
-    return try list.toOwnedSlice();
+    return try list.toOwnedSlice(allocator); // ownership transfer
 }
 
 pub fn anySupported(findings: []const GPUFlaggerFinding) bool {
@@ -33,7 +39,9 @@ pub fn anySupported(findings: []const GPUFlaggerFinding) bool {
 pub const GPUStatus = enum { ok, unsupported };
 
 pub fn status() GPUStatus {
-    return .unsupported;
+    const cuda = @import("cuda_loader.zig");
+    var loader = cuda.CudaLoader.init();
+    return if (@import("builtin").os.tag == .linux and loader.available()) .ok else .unsupported;
 }
 
 test "TestCANARY_REQ_GQL_051_GPUFlaggerUnsupported" {
@@ -43,6 +51,10 @@ test "TestCANARY_REQ_GQL_051_GPUFlaggerUnsupported" {
     const findings = try detect(alloc);
     defer alloc.free(findings);
     try std.testing.expect(findings.len > 0);
-    try std.testing.expect(!anySupported(findings));
-    try std.testing.expect(status() == .unsupported);
+    const has_any = anySupported(findings);
+    if (status() == .ok) {
+        try std.testing.expect(has_any);
+    } else {
+        try std.testing.expect(!has_any);
+    }
 }

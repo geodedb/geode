@@ -230,3 +230,23 @@ pub const GPUAccelerator = struct {
         _ = self;
     }
 };
+
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=DeviceMemory; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUDeviceMemoryAlloc; OWNER=engine; UPDATED=2025-10-25
+
+test "TestCANARY_REQ_GQL_051_GPUDeviceMemoryAlloc" {
+    const c = @cImport({ @cInclude("cuda.h"); });
+    // Initialize CUDA; if unavailable just return (skip)
+    if (c.cuInit(0) != c.CUresult.CUDA_SUCCESS) return; // skip when no driver
+    var count: c.int = 0;
+    if (c.cuDeviceGetCount(&count) != c.CUresult.CUDA_SUCCESS or count == 0) return; // skip
+    // Allocate small device buffer, round-trip copy
+    var dptr: c.CUdeviceptr = 0;
+    if (c.cuMemAlloc(&dptr, 16) != c.CUresult.CUDA_SUCCESS) return error.Unexpected;
+    defer _ = c.cuMemFree(dptr);
+    var host_src: [16]u8 = undefined;
+    for (&host_src, 0..) |*b, i| b.* = @as(u8, @intCast(i));
+    if (c.cuMemcpyHtoD(dptr, host_src.ptr, host_src.len) != c.CUresult.CUDA_SUCCESS) return error.Unexpected;
+    var host_dst: [16]u8 = [_]u8{0} ** 16;
+    if (c.cuMemcpyDtoH(host_dst.ptr, dptr, host_dst.len) != c.CUresult.CUDA_SUCCESS) return error.Unexpected;
+    try std.testing.expectEqualSlices(u8, &host_src, &host_dst);
+}
