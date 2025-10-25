@@ -19,13 +19,14 @@ Owner: engine
 Acceptance: `zig build test` passes existing tests; new infra tests: device enumeration (skip if none), memory alloc roundtrip, dispatch selection.
 
 ### Phase 1: Core Graph Traversal (Path Expand + BFS)
-1. Kernel: CSR adjacency traversal (one level expand) with frontier compaction.  
-2. Kernel: Multi‑level BFS (direction‑optimized optional).  
-3. Data prep: CSR copy to device with incremental refresh (dirty pages tracked).  
-4. Planner rule: Expand chains length <= 4 auto-coalesce into single GPU pipeline.  
-5. Executor: streaming of partial frontiers to host for pagination; maintain stable order via vertex id sort (tie‑break UA005/UA006).  
-6. Tests: `TestGPU_BFS_Simple`, `TestGPU_PathExpand_Bounded`, compare CPU vs GPU row sets; skip if no CUDA.  
-Acceptance: BFS speedup ≥5x on 1M edge synthetic (ReleaseFast) benchmark `bench_gpu_bfs.zig`.
+Status: IN PROGRESS (Phase0 complete; initial BFS frontier count scaffold added) — 2025-10-25T23:58:56.344Z
+1. Kernel: CSR adjacency traversal (one level expand) with frontier compaction.  (TODO)
+2. Kernel: Multi‑level BFS (direction‑optimized optional).  (Scaffold CPU fallback implemented in `phase1_kernels.zig` — GPU TBD)
+3. Data prep: CSR copy to device with incremental refresh (dirty pages tracked).  (TODO)
+4. Planner rule: Expand chains length <= 4 auto-coalesce into single GPU pipeline.  (TODO)
+5. Executor: streaming of partial frontiers to host for pagination; maintain stable order via vertex id sort (tie‑break UA005/UA006).  (TODO)
+6. Tests: `TestCANARY_REQ_GQL_051_GPUPhase1BfsFrontier` implemented; add `TestGPU_PathExpand_Bounded` (TODO).  
+Acceptance (pending): BFS speedup ≥5x on 1M edge synthetic (ReleaseFast) benchmark `bench_gpu_bfs.zig` (benchmark scaffold TODO).
 
 ### Phase 2: Analytical (PageRank)
 1. Kernel: Power iteration with dangling mass reduction + warp‑level sum.  

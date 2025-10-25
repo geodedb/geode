@@ -12,25 +12,37 @@ pub const DeviceInfo = struct {
     available: bool,
 };
 
+// Weak CUDA driver bindings; if unavailable linker will fail -> we detect before call
 extern fn cuInit(flags: cu_uint) cu_int;
 extern fn cuDeviceGetCount(count: *cu_int) cu_int;
 extern fn cuDeviceGet(device: *cu_int, ordinal: cu_int) cu_int;
 extern fn cuDeviceGetName(name: [*]u8, len: cu_int, dev: cu_int) cu_int;
 extern fn cuDeviceTotalMem(bytes: *usize, dev: cu_int) cu_int;
 
+// If symbols unresolved (static build without CUDA), treat as disabled via comptime guard
+comptime {
+    if (!@hasDecl(@This(), "cuInit")) @compileError("CUDA symbols missing");
+}
+
 const cu_uint = u32;
 const cu_int = i32;
 
 pub fn enumerate(allocator: std.mem.Allocator) ![]DeviceInfo {
     if (builtin.os.tag != .linux) {
-        return &[_]DeviceInfo{DeviceInfo{ .id = 0, .name = "non-linux", .sm_count = 0, .total_mem = 0, .warp_size = 32, .available = false }};
+        var tmp = [_]DeviceInfo{DeviceInfo{ .id = 0, .name = "non-linux", .sm_count = 0, .total_mem = 0, .warp_size = 32, .available = false }};
+        const dup = try allocator.dupe(DeviceInfo, tmp[0..]);
+        return dup;
     }
     var count: cu_int = 0;
     if (cuInit(0) != 0 or cuDeviceGetCount(&count) != 0 or count <= 0) {
-        return &[_]DeviceInfo{DeviceInfo{ .id = 0, .name = "cuda-unavailable", .sm_count = 0, .total_mem = 0, .warp_size = 32, .available = false }};
+        // Return slice literal with allocator duplication to satisfy slice return type
+        // construct slice using temporary array then duplicate into allocator-managed slice
+        var tmp = [_]DeviceInfo{DeviceInfo{ .id = 0, .name = "cuda-unavailable", .sm_count = 0, .total_mem = 0, .warp_size = 32, .available = false }};
+        const dup = try allocator.dupe(DeviceInfo, tmp[0..]);
+        return dup;
     }
     var list = try std.ArrayList(DeviceInfo).initCapacity(allocator, @intCast(count));
-    defer list.deinit(); // borrowed allocator
+    defer list.deinit(allocator); // borrowed allocator
     var i: cu_int = 0;
     while (i < count) : (i += 1) {
         var dev: cu_int = 0;
