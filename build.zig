@@ -1071,7 +1071,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&temporal_test.step);
 
     const gpu_test = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/acceleration.zig"), .target = target, .optimize = optimize }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/phase0.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&gpu_test.step);
 

@@ -57,6 +57,7 @@ pub const conformance = @import("conformance.zig");
 // Re-export selected runtime helpers so binaries can import via the geode package
 pub const exec = @import("exec.zig");
 pub const planner = @import("planner.zig");
+pub const gpu_planner_ops = @import("planner/gpu_ops.zig");
 // Expose cost model seed & variance auto-calibration modules for tests (avoid relative imports)
 pub const cost_seed = @import("planner/cost_seed.zig");
 pub const cost_model_calibration = @import("planner/calibration.zig");
