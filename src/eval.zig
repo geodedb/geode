@@ -72,6 +72,7 @@ fn toDec(v: Value) Dec {
     };
 }
 
+// CANARY: REQ=REQ-MEM-FIX-004; FEATURE="MemorySafety"; ASPECT=EnvOwnership; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-25
 pub const Env = struct {
     // Simple linear env for tests/demos
     names: []const []const u8,
@@ -81,6 +82,8 @@ pub const Env = struct {
     param_values: []const Value = &.{},
     // Allocator for memory management (C4 fix)
     allocator: std.mem.Allocator,
+    // Track whether this Env owns its arrays and should free them
+    owned: bool = false,
 
     pub fn get(self: Env, name: []const u8) ?Value {
         // First check regular environment variables
@@ -118,8 +121,9 @@ pub const Env = struct {
         new_values[self.values.len] = value;
 
         // Free old arrays to prevent memory leak (C4 fix)
-        // Only free if they were allocated (len > 0 indicates heap allocation)
-        if (self.names.len > 0) {
+        // Only free if this Env owns its arrays AND they were allocated
+        // CANARY: REQ=REQ-MEM-FIX-005; FEATURE="MemorySafety"; ASPECT=OwnershipRespect; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-25
+        if (self.owned and self.names.len > 0) {
             self.allocator.free(self.names);
             self.allocator.free(self.values);
         }
@@ -130,6 +134,7 @@ pub const Env = struct {
             .param_names = self.param_names,
             .param_values = self.param_values,
             .allocator = allocator,
+            .owned = true, // New Env owns its newly allocated arrays
         };
     }
 };

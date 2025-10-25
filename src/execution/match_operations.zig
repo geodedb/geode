@@ -694,6 +694,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .names = path_env_names,
                         .values = path_env_values,
                         .allocator = allocator,
+                        .owned = true, // Owns allocated arrays
                     };
 
                     // Evaluate RETURN expressions with path in environment
@@ -1328,6 +1329,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             .param_names = param_names,
                             .param_values = param_values,
                             .allocator = allocator,
+                            .owned = true, // Owns allocated arrays (lines 1282-1283)
                         };
 
                         // Evaluate WHERE clause if present
@@ -1428,6 +1430,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             .param_names = param_names,
                             .param_values = param_values,
                             .allocator = allocator,
+                            .owned = true, // Owns allocated arrays (lines 1399-1400)
                         };
 
                         // Evaluate WHERE clause if present
@@ -1651,6 +1654,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .param_names = param_names,
                     .param_values = param_values,
                     .allocator = allocator,
+                    .owned = true, // Owns allocated arrays (lines 1642-1643) when match_variable is set
                 };
 
                 // Evaluate WHERE clause if present
@@ -1665,11 +1669,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     if (!passes_where) {
-                        // Free allocated memory before continuing
-                        if (match_variable != null) {
-                            allocator.free(env_names);
-                            allocator.free(env_values);
-                        }
+                        // NOTE: Don't free env_names/env_values here as evalExpr for WHERE
+                        // may have called withBinding which already freed them.
+                        // CANARY: REQ=REQ-MEM-FIX-002; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=IMPL; OWNER=execution; UPDATED=2025-10-25
+                        // if (match_variable != null) {
+                        //     allocator.free(env_names);
+                        //     allocator.free(env_values);
+                        // }
                         continue;
                     }
                 }
@@ -1685,10 +1691,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     if (!passes_filter) {
-                        if (match_variable != null) {
-                            allocator.free(env_names);
-                            allocator.free(env_values);
-                        }
+                        // NOTE: Don't free env_names/env_values here as evalExpr for FILTER
+                        // may have called withBinding which already freed them.
+                        // CANARY: REQ=REQ-MEM-FIX-003; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=IMPL; OWNER=execution; UPDATED=2025-10-25
+                        // if (match_variable != null) {
+                        //     allocator.free(env_names);
+                        //     allocator.free(env_values);
+                        // }
                         continue;
                     }
                 }
@@ -1826,6 +1835,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .param_names = param_names,
                         .param_values = param_values,
                         .allocator = allocator,
+                        .owned = true, // Owns allocated arrays (lines 1809-1810)
                     };
                 }
 
@@ -1855,11 +1865,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     allocator.free(extended_env.values);
                 }
 
-                // Free original environment memory
-                if (match_variable != null) {
-                    allocator.free(env_names);
-                    allocator.free(env_values);
-                }
+                // NOTE: Don't free env_names/env_values here as they may have been
+                // freed by eval.withBinding during pattern comprehension evaluation.
+                // withBinding takes ownership of the arrays when creating new bindings.
+                // This prevents double-free errors.
+                // CANARY: REQ=REQ-MEM-FIX-001; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=IMPL; OWNER=execution; UPDATED=2025-10-25
+                // if (match_variable != null) {
+                //     allocator.free(env_names);
+                //     allocator.free(env_values);
+                // }
 
                 try rows.append(allocator, row);
             }
