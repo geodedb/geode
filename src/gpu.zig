@@ -11,3 +11,4 @@ pub const cuda_loader = @import("gpu/cuda_loader.zig");
 pub const memory_manager = @import("gpu/memory_manager.zig");
 pub const module_loader = @import("gpu/module_loader.zig");
 pub const kernel_sources = @import("gpu/kernel_sources.zig");
+pub const performance_profiler = @import("gpu/performance_profiler.zig");

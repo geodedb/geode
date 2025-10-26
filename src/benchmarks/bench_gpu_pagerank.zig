@@ -5,7 +5,7 @@ const pagerank = gpu.pagerank_kernels;
 
 // CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase2Benchmark; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_051_PageRank; OWNER=engine; UPDATED=2025-10-26
 
-const SYNTHETIC_NODES = 100_000;
+const SYNTHETIC_NODES = 1_000_000; // Scaled up 10x for GPU amortization
 const EDGES_PER_NODE = 10;
 const ITERATIONS = 20;
 

@@ -5,7 +5,7 @@ const phase1 = gpu.phase1_kernels;
 
 // CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase1Benchmark; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_051_BFS; OWNER=engine; UPDATED=2025-10-26
 
-const SYNTHETIC_NODES = 1_000_000;
+const SYNTHETIC_NODES = 10_000_000; // Scaled up 10x for GPU amortization
 const EDGES_PER_NODE = 10;
 
 fn generateSyntheticGraph(allocator: std.mem.Allocator) !struct { row_offsets: []u32, col_indices: []u32 } {

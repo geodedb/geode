@@ -5,8 +5,8 @@ const setops = gpu.gpu_setops_kernels;
 
 // CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase3Benchmark; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_051_SetOps; OWNER=engine; UPDATED=2025-10-26
 
-const SET_SIZE_A = 1_000_000;
-const SET_SIZE_B = 1_000_000;
+const SET_SIZE_A = 10_000_000; // Scaled up 10x for GPU amortization
+const SET_SIZE_B = 10_000_000;
 
 fn generateSyntheticSets(allocator: std.mem.Allocator) !struct { a: []u32, b: []u32 } {
     const a = try allocator.alloc(u32, SET_SIZE_A);

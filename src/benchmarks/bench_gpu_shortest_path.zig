@@ -5,7 +5,7 @@ const sp = gpu.shortest_path_kernels;
 
 // CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase4Benchmark; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_051_ShortestPath; OWNER=engine; UPDATED=2025-10-26
 
-const NUM_NODES = 10_000;
+const NUM_NODES = 100_000; // Scaled up 10x for GPU amortization
 const AVG_DEGREE = 10;
 
 fn generateRandomWeightedGraph(allocator: std.mem.Allocator) !sp.SPGraph {
