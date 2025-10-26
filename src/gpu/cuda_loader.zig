@@ -26,6 +26,7 @@ const cuDeviceGetName_t = *const fn ([*]u8, i32, CUdevice) callconv(.c) CUresult
 const cuDeviceTotalMem_t = *const fn (*usize, CUdevice) callconv(.c) CUresult;
 const cuCtxCreate_t = *const fn (*CUcontext, u32, CUdevice) callconv(.c) CUresult;
 const cuCtxDestroy_t = *const fn (CUcontext) callconv(.c) CUresult;
+const cuCtxSynchronize_t = *const fn () callconv(.c) CUresult;
 const cuMemAlloc_t = *const fn (*CUdeviceptr, usize) callconv(.c) CUresult;
 const cuMemFree_t = *const fn (CUdeviceptr) callconv(.c) CUresult;
 const cuMemcpyHtoD_t = *const fn (CUdeviceptr, *const anyopaque, usize) callconv(.c) CUresult;
@@ -40,6 +41,7 @@ pub const CudaLoader = struct {
     cuDeviceTotalMem_fn: ?cuDeviceTotalMem_t,
     cuCtxCreate_fn: ?cuCtxCreate_t,
     cuCtxDestroy_fn: ?cuCtxDestroy_t,
+    cuCtxSynchronize_fn: ?cuCtxSynchronize_t,
     cuMemAlloc_fn: ?cuMemAlloc_t,
     cuMemFree_fn: ?cuMemFree_t,
     cuMemcpyHtoD_fn: ?cuMemcpyHtoD_t,
@@ -47,12 +49,12 @@ pub const CudaLoader = struct {
 
     pub fn init() CudaLoader {
         if (builtin.os.tag != .linux) {
-            return CudaLoader{ .handle = null, .cuInit_fn = null, .cuDeviceGetCount_fn = null, .cuDeviceGet_fn = null, .cuDeviceGetName_fn = null, .cuDeviceTotalMem_fn = null, .cuCtxCreate_fn = null, .cuCtxDestroy_fn = null, .cuMemAlloc_fn = null, .cuMemFree_fn = null, .cuMemcpyHtoD_fn = null, .cuMemcpyDtoH_fn = null };
+            return CudaLoader{ .handle = null, .cuInit_fn = null, .cuDeviceGetCount_fn = null, .cuDeviceGet_fn = null, .cuDeviceGetName_fn = null, .cuDeviceTotalMem_fn = null, .cuCtxCreate_fn = null, .cuCtxDestroy_fn = null, .cuCtxSynchronize_fn = null, .cuMemAlloc_fn = null, .cuMemFree_fn = null, .cuMemcpyHtoD_fn = null, .cuMemcpyDtoH_fn = null };
         }
 
         // Try to load libcuda.so
         const handle = dlopen("libcuda.so.1", RTLD_LAZY) orelse dlopen("libcuda.so", RTLD_LAZY) orelse {
-            return CudaLoader{ .handle = null, .cuInit_fn = null, .cuDeviceGetCount_fn = null, .cuDeviceGet_fn = null, .cuDeviceGetName_fn = null, .cuDeviceTotalMem_fn = null, .cuCtxCreate_fn = null, .cuCtxDestroy_fn = null, .cuMemAlloc_fn = null, .cuMemFree_fn = null, .cuMemcpyHtoD_fn = null, .cuMemcpyDtoH_fn = null };
+            return CudaLoader{ .handle = null, .cuInit_fn = null, .cuDeviceGetCount_fn = null, .cuDeviceGet_fn = null, .cuDeviceGetName_fn = null, .cuDeviceTotalMem_fn = null, .cuCtxCreate_fn = null, .cuCtxDestroy_fn = null, .cuCtxSynchronize_fn = null, .cuMemAlloc_fn = null, .cuMemFree_fn = null, .cuMemcpyHtoD_fn = null, .cuMemcpyDtoH_fn = null };
         };
 
         // Load symbols
@@ -63,6 +65,7 @@ pub const CudaLoader = struct {
         const cuDeviceTotalMem_sym = dlsym(handle, "cuDeviceTotalMem_v2");
         const cuCtxCreate_sym = dlsym(handle, "cuCtxCreate_v2");
         const cuCtxDestroy_sym = dlsym(handle, "cuCtxDestroy_v2");
+        const cuCtxSynchronize_sym = dlsym(handle, "cuCtxSynchronize");
         const cuMemAlloc_sym = dlsym(handle, "cuMemAlloc_v2");
         const cuMemFree_sym = dlsym(handle, "cuMemFree_v2");
         const cuMemcpyHtoD_sym = dlsym(handle, "cuMemcpyHtoD_v2");
@@ -70,7 +73,7 @@ pub const CudaLoader = struct {
 
         if (cuInit_sym == null or cuDeviceGetCount_sym == null) {
             _ = dlclose(handle);
-            return CudaLoader{ .handle = null, .cuInit_fn = null, .cuDeviceGetCount_fn = null, .cuDeviceGet_fn = null, .cuDeviceGetName_fn = null, .cuDeviceTotalMem_fn = null, .cuCtxCreate_fn = null, .cuCtxDestroy_fn = null, .cuMemAlloc_fn = null, .cuMemFree_fn = null, .cuMemcpyHtoD_fn = null, .cuMemcpyDtoH_fn = null };
+            return CudaLoader{ .handle = null, .cuInit_fn = null, .cuDeviceGetCount_fn = null, .cuDeviceGet_fn = null, .cuDeviceGetName_fn = null, .cuDeviceTotalMem_fn = null, .cuCtxCreate_fn = null, .cuCtxDestroy_fn = null, .cuCtxSynchronize_fn = null, .cuMemAlloc_fn = null, .cuMemFree_fn = null, .cuMemcpyHtoD_fn = null, .cuMemcpyDtoH_fn = null };
         }
 
         return CudaLoader{
@@ -82,6 +85,7 @@ pub const CudaLoader = struct {
             .cuDeviceTotalMem_fn = @ptrCast(@alignCast(cuDeviceTotalMem_sym)),
             .cuCtxCreate_fn = @ptrCast(@alignCast(cuCtxCreate_sym)),
             .cuCtxDestroy_fn = @ptrCast(@alignCast(cuCtxDestroy_sym)),
+            .cuCtxSynchronize_fn = @ptrCast(@alignCast(cuCtxSynchronize_sym)),
             .cuMemAlloc_fn = @ptrCast(@alignCast(cuMemAlloc_sym)),
             .cuMemFree_fn = @ptrCast(@alignCast(cuMemFree_sym)),
             .cuMemcpyHtoD_fn = @ptrCast(@alignCast(cuMemcpyHtoD_sym)),
@@ -120,6 +124,21 @@ pub const CudaLoader = struct {
 
     pub fn cuDeviceTotalMem(self: *const CudaLoader, bytes: *usize, dev: CUdevice) CUresult {
         if (self.cuDeviceTotalMem_fn) |fn_ptr| return fn_ptr(bytes, dev);
+        return -1;
+    }
+    
+    pub fn cuCtxCreate(self: *const CudaLoader, ctx: *CUcontext, flags: u32, dev: CUdevice) CUresult {
+        if (self.cuCtxCreate_fn) |fn_ptr| return fn_ptr(ctx, flags, dev);
+        return -1;
+    }
+    
+    pub fn cuCtxDestroy(self: *const CudaLoader, ctx: CUcontext) CUresult {
+        if (self.cuCtxDestroy_fn) |fn_ptr| return fn_ptr(ctx);
+        return -1;
+    }
+    
+    pub fn cuCtxSynchronize(self: *const CudaLoader) CUresult {
+        if (self.cuCtxSynchronize_fn) |fn_ptr| return fn_ptr();
         return -1;
     }
 

@@ -34,21 +34,27 @@ fn gpuBfsFrontierCount(csr: CSR, start: u32, max_depth: u32, allocator: std.mem.
     defer mem_mgr.deinit();
     
     var mod_loader = try ModuleLoader.init(&loader);
+    defer mod_loader.deinit();
     
     // Load PTX module
     try mod_loader.loadPTX(kernel_sources.bfs_kernel_ptx);
     
     // Get kernel function
-    _ = try mod_loader.getFunction("bfs_expand_kernel");
+    const kernel_func = try mod_loader.getFunction("bfs_expand_kernel");
+    
+    const num_vertices = csr.row_offsets.len - 1;
     
     // Allocate device memory for CSR
     const row_size = csr.row_offsets.len * @sizeOf(u32);
     const col_size = csr.col_indices.len * @sizeOf(u32);
+    const visited_size = num_vertices * @sizeOf(u8);
     
     var d_row_offsets = try mem_mgr.allocDevice(row_size);
     defer mem_mgr.freeDevice(d_row_offsets);
     var d_col_indices = try mem_mgr.allocDevice(col_size);
     defer mem_mgr.freeDevice(d_col_indices);
+    var d_visited = try mem_mgr.allocDevice(visited_size);
+    defer mem_mgr.freeDevice(d_visited);
     
     // Copy CSR to device
     const row_bytes = std.mem.sliceAsBytes(csr.row_offsets);
@@ -56,43 +62,95 @@ fn gpuBfsFrontierCount(csr: CSR, start: u32, max_depth: u32, allocator: std.mem.
     try mem_mgr.copyHostToDevice(d_row_offsets, row_bytes);
     try mem_mgr.copyHostToDevice(d_col_indices, col_bytes);
     
+    // Initialize visited array to 0
+    const visited_init = try allocator.alloc(u8, num_vertices);
+    defer allocator.free(visited_init);
+    @memset(visited_init, 0);
+    try mem_mgr.copyHostToDevice(d_visited, visited_init);
+    
     // BFS execution with frontiers
-    var visited_count: usize = 0;
-    var frontier = try std.ArrayList(u32).initCapacity(allocator, 1);
-    defer frontier.deinit();
-    try frontier.append(allocator, start);
+    const max_frontier_size = num_vertices;
+    var h_frontier_in = try allocator.alloc(u32, max_frontier_size);
+    defer allocator.free(h_frontier_in);
+    var h_frontier_out = try allocator.alloc(u32, max_frontier_size);
+    defer allocator.free(h_frontier_out);
+    
+    h_frontier_in[0] = start;
+    var current_frontier_size: u32 = 1;
+    var total_visited: usize = 0;
     
     var depth: u32 = 0;
-    while (depth < max_depth and frontier.items.len > 0) : (depth += 1) {
-        visited_count += frontier.items.len;
+    while (depth < max_depth and current_frontier_size > 0) : (depth += 1) {
+        total_visited += current_frontier_size;
         
-        // Allocate frontier buffers
-        const frontier_size = frontier.items.len * @sizeOf(u32);
-        var d_frontier_in = try mem_mgr.allocDevice(frontier_size);
+        const frontier_in_size = current_frontier_size * @sizeOf(u32);
+        const frontier_out_size = max_frontier_size * @sizeOf(u32);
+        const frontier_out_count_size = @sizeOf(u32);
+        
+        var d_frontier_in = try mem_mgr.allocDevice(frontier_in_size);
         defer mem_mgr.freeDevice(d_frontier_in);
+        var d_frontier_out = try mem_mgr.allocDevice(frontier_out_size);
+        defer mem_mgr.freeDevice(d_frontier_out);
+        var d_frontier_out_count = try mem_mgr.allocDevice(frontier_out_count_size);
+        defer mem_mgr.freeDevice(d_frontier_out_count);
         
-        const frontier_bytes = std.mem.sliceAsBytes(frontier.items);
-        try mem_mgr.copyHostToDevice(d_frontier_in, frontier_bytes);
+        // Copy frontier to device
+        const frontier_in_bytes = std.mem.sliceAsBytes(h_frontier_in[0..current_frontier_size]);
+        try mem_mgr.copyHostToDevice(d_frontier_in, frontier_in_bytes);
         
-        // Launch kernel (simplified - real implementation would expand frontier)
-        // Note: This is placeholder - full implementation needs proper kernel parameter passing
-        // For now, just break after first iteration
-        break;
+        // Initialize out count to 0
+        var out_count_init: u32 = 0;
+        const out_count_bytes = std.mem.asBytes(&out_count_init);
+        try mem_mgr.copyHostToDevice(d_frontier_out_count, out_count_bytes);
+        
+        // Prepare kernel parameters (array of pointers)
+        const num_vertices_u32: u32 = @intCast(num_vertices);
+        var params = [_]*const anyopaque{
+            @ptrCast(&d_frontier_in.ptr),
+            @ptrCast(&current_frontier_size),
+            @ptrCast(&d_frontier_out.ptr),
+            @ptrCast(&d_frontier_out_count.ptr),
+            @ptrCast(&d_row_offsets.ptr),
+            @ptrCast(&d_col_indices.ptr),
+            @ptrCast(&d_visited.ptr),
+            @ptrCast(&num_vertices_u32),
+        };
+        
+        // Launch kernel
+        const threads_per_block: u32 = 256;
+        const num_blocks = (current_frontier_size + threads_per_block - 1) / threads_per_block;
+        const grid_dim = [3]u32{ num_blocks, 1, 1 };
+        const block_dim = [3]u32{ threads_per_block, 1, 1 };
+        
+        try mod_loader.launchKernel(kernel_func, grid_dim, block_dim, 0, @ptrCast(&params));
+        
+        // Copy results back
+        var next_frontier_size: u32 = 0;
+        const next_size_bytes = std.mem.asBytes(&next_frontier_size);
+        try mem_mgr.copyDeviceToHost(next_size_bytes, d_frontier_out_count);
+        
+        if (next_frontier_size == 0 or next_frontier_size > max_frontier_size) break;
+        
+        const next_frontier_bytes = std.mem.sliceAsBytes(h_frontier_out[0..next_frontier_size]);
+        try mem_mgr.copyDeviceToHost(next_frontier_bytes, d_frontier_out);
+        
+        // Swap frontiers
+        std.mem.swap([]u32, &h_frontier_in, &h_frontier_out);
+        current_frontier_size = next_frontier_size;
     }
     
-    // Fallback to CPU for correctness until kernel fully implemented
-    return cpuBfsFrontierCount(csr, start, max_depth, allocator);
+    return total_visited;
 }
 
 fn cpuBfsFrontierCount(csr: CSR, start: u32, max_depth: u32, allocator: std.mem.Allocator) !usize {
     var visited = std.AutoHashMap(u32, void).init(allocator);
     defer visited.deinit();
-    var frontier = try std.ArrayList(u32).initCapacity(allocator, 4);
+    var frontier = try std.array_list.Managed(u32).initCapacity(allocator, 4);
     defer frontier.deinit();
-    try frontier.append(allocator, start);
+    try frontier.append(start);
     var depth: u32 = 0;
     while (depth < max_depth and frontier.items.len > 0) : (depth += 1) {
-        var next = try std.ArrayList(u32).initCapacity(allocator, 4);
+        var next = try std.array_list.Managed(u32).initCapacity(allocator, 4);
         defer next.deinit();
         for (frontier.items) |v| {
             if (visited.get(v) != null) continue;
@@ -102,11 +160,11 @@ fn cpuBfsFrontierCount(csr: CSR, start: u32, max_depth: u32, allocator: std.mem.
             var i: usize = row_start;
             while (i < row_end) : (i += 1) {
                 const nbr = csr.col_indices[i];
-                if (visited.get(nbr) == null) try next.append(allocator, nbr);
+                if (visited.get(nbr) == null) try next.append(nbr);
             }
         }
         frontier.clearRetainingCapacity();
-        try frontier.appendSlice(allocator, next.items);
+        try frontier.appendSlice(next.items);
     }
     return visited.count();
 }

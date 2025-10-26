@@ -15,15 +15,15 @@ pub const DeviceBuffer = struct {
 pub const MemoryManager = struct {
     loader: *const CudaLoader,
     allocator: std.mem.Allocator,
-    pool: std.ArrayList(DeviceBuffer),
-    pinned_host_buffers: std.ArrayList([*]u8),
+    pool: std.array_list.Managed(DeviceBuffer),
+    pinned_host_buffers: std.array_list.Managed([*]u8),
     
     pub fn init(loader: *const CudaLoader, allocator: std.mem.Allocator) !MemoryManager {
         return MemoryManager{
             .loader = loader,
             .allocator = allocator,
-            .pool = std.ArrayList(DeviceBuffer).init(allocator),
-            .pinned_host_buffers = std.ArrayList([*]u8).init(allocator),
+            .pool = std.array_list.Managed(DeviceBuffer).init(allocator),
+            .pinned_host_buffers = std.array_list.Managed([*]u8).init(allocator),
         };
     }
     
@@ -62,7 +62,7 @@ pub const MemoryManager = struct {
         }
         
         const buf = DeviceBuffer{ .ptr = dptr, .size = size, .allocated = true };
-        try self.pool.append(self.allocator, buf);
+        try self.pool.append(buf);
         return buf;
     }
     
