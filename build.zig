@@ -1138,6 +1138,14 @@ pub fn build(b: *std.Build) void {
     });
     const bench_gpu_pagerank_run = b.addRunArtifact(bench_gpu_pagerank);
     bench_gpu_step.dependOn(&bench_gpu_pagerank_run.step);
+    
+    // GPU Set Operations benchmark
+    const bench_gpu_setops = b.addExecutable(.{
+        .name = "bench_gpu_setops",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_setops.zig"), .target = target, .optimize = .ReleaseFast }),
+    });
+    const bench_gpu_setops_run = b.addRunArtifact(bench_gpu_setops);
+    bench_gpu_step.dependOn(&bench_gpu_setops_run.step);
 
     // Federation mismatch flag E2E protocol-style test (lightweight)
     const fed_mismatch_flag_test = b.addTest(.{

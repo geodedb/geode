@@ -175,9 +175,210 @@ pub const pagerank_kernel_ptx_simple =
 
 pub const pagerank_kernel_ptx = pagerank_kernel_ptx_simple;
 
+// Set Operations kernels (UNION, INTERSECT, EXCEPT)
+pub const setops_kernel_cuda_c =
+    \\ extern "C" __global__ void bitonic_sort_kernel(
+    \\     unsigned int* data,
+    \\     unsigned int n
+    \\ ) {
+    \\     // Simplified bitonic sort for small datasets
+    \\     // For large datasets, use thrust or radix sort
+    \\     unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\     
+    \\     // Bitonic sort stages
+    \\     for (unsigned int k = 2; k <= n; k *= 2) {
+    \\         for (unsigned int j = k / 2; j > 0; j /= 2) {
+    \\             unsigned int ixj = tid ^ j;
+    \\             if (ixj > tid) {
+    \\                 if (tid < n && ixj < n) {
+    \\                     if ((tid & k) == 0) {
+    \\                         if (data[tid] > data[ixj]) {
+    \\                             unsigned int temp = data[tid];
+    \\                             data[tid] = data[ixj];
+    \\                             data[ixj] = temp;
+    \\                         }
+    \\                     } else {
+    \\                         if (data[tid] < data[ixj]) {
+    \\                             unsigned int temp = data[tid];
+    \\                             data[tid] = data[ixj];
+    \\                             data[ixj] = temp;
+    \\                         }
+    \\                     }
+    \\                 }
+    \\             }
+    \\             __syncthreads();
+    \\         }
+    \\     }
+    \\ }
+    \\
+    \\ extern "C" __global__ void unique_kernel(
+    \\     const unsigned int* __restrict__ input,
+    \\     unsigned int* __restrict__ output,
+    \\     unsigned int* __restrict__ count,
+    \\     unsigned int n
+    \\ ) {
+    \\     unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\     if (tid >= n) return;
+    \\     
+    \\     // First element is always unique
+    \\     if (tid == 0) {
+    \\         unsigned int pos = atomicAdd(count, 1);
+    \\         output[pos] = input[0];
+    \\         return;
+    \\     }
+    \\     
+    \\     // Check if current element differs from previous
+    \\     if (input[tid] != input[tid - 1]) {
+    \\         unsigned int pos = atomicAdd(count, 1);
+    \\         output[pos] = input[tid];
+    \\     }
+    \\ }
+    \\
+    \\ extern "C" __global__ void intersect_kernel(
+    \\     const unsigned int* __restrict__ a,
+    \\     const unsigned int* __restrict__ b,
+    \\     unsigned int* __restrict__ result,
+    \\     unsigned int* __restrict__ count,
+    \\     unsigned int a_len,
+    \\     unsigned int b_len
+    \\ ) {
+    \\     unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\     if (tid >= a_len) return;
+    \\     
+    \\     unsigned int val = a[tid];
+    \\     
+    \\     // Linear search in b (for small arrays)
+    \\     // For large arrays, use binary search on sorted data
+    \\     bool found = false;
+    \\     for (unsigned int i = 0; i < b_len; i++) {
+    \\         if (b[i] == val) {
+    \\             found = true;
+    \\             break;
+    \\         }
+    \\     }
+    \\     
+    \\     if (found) {
+    \\         unsigned int pos = atomicAdd(count, 1);
+    \\         result[pos] = val;
+    \\     }
+    \\ }
+;
+
+// Simplified PTX for set operations
+pub const setops_kernel_ptx_simple =
+    \\  .version 6.0
+    \\  .target sm_30
+    \\  .address_size 64
+    \\  
+    \\  // Simplified sort: just copy data (placeholder)
+    \\  .visible .entry bitonic_sort_kernel(
+    \\      .param .u64 .ptr .global .align 8 data,
+    \\      .param .u32 n
+    \\  )
+    \\  {
+    \\      .reg .pred %p<4>;
+    \\      .reg .b32 %r<8>;
+    \\      .reg .b64 %rd<8>;
+    \\      
+    \\      mov.u32 %r1, %tid.x;
+    \\      mov.u32 %r2, %ctaid.x;
+    \\      mov.u32 %r3, %ntid.x;
+    \\      mad.lo.s32 %r4, %r2, %r3, %r1;
+    \\      
+    \\      ld.param.u32 %r5, [n];
+    \\      setp.ge.u32 %p1, %r4, %r5;
+    \\      @%p1 bra EXIT;
+    \\      
+    \\      // Placeholder: data already "sorted"
+    \\      
+    \\  EXIT:
+    \\      ret;
+    \\  }
+    \\  
+    \\  .visible .entry unique_kernel(
+    \\      .param .u64 .ptr .global .align 8 input,
+    \\      .param .u64 .ptr .global .align 8 output,
+    \\      .param .u64 .ptr .global .align 8 count,
+    \\      .param .u32 n
+    \\  )
+    \\  {
+    \\      .reg .pred %p<4>;
+    \\      .reg .b32 %r<12>;
+    \\      .reg .b64 %rd<12>;
+    \\      
+    \\      mov.u32 %r1, %tid.x;
+    \\      mov.u32 %r2, %ctaid.x;
+    \\      mov.u32 %r3, %ntid.x;
+    \\      mad.lo.s32 %r4, %r2, %r3, %r1;
+    \\      
+    \\      ld.param.u32 %r5, [n];
+    \\      setp.ge.u32 %p1, %r4, %r5;
+    \\      @%p1 bra EXIT;
+    \\      
+    \\      // Simplified: just copy all elements
+    \\      ld.param.u64 %rd1, [input];
+    \\      ld.param.u64 %rd2, [output];
+    \\      cvt.u64.u32 %rd3, %r4;
+    \\      shl.b64 %rd4, %rd3, 2;
+    \\      add.u64 %rd5, %rd1, %rd4;
+    \\      add.u64 %rd6, %rd2, %rd4;
+    \\      ld.global.u32 %r6, [%rd5];
+    \\      st.global.u32 [%rd6], %r6;
+    \\      
+    \\      // Update count
+    \\      ld.param.u64 %rd7, [count];
+    \\      setp.eq.u32 %p2, %r4, 0;
+    \\      @%p2 st.global.u32 [%rd7], %r5;
+    \\      
+    \\  EXIT:
+    \\      ret;
+    \\  }
+    \\  
+    \\  .visible .entry intersect_kernel(
+    \\      .param .u64 .ptr .global .align 8 a,
+    \\      .param .u64 .ptr .global .align 8 b,
+    \\      .param .u64 .ptr .global .align 8 result,
+    \\      .param .u64 .ptr .global .align 8 count,
+    \\      .param .u32 a_len,
+    \\      .param .u32 b_len
+    \\  )
+    \\  {
+    \\      .reg .pred %p<4>;
+    \\      .reg .b32 %r<8>;
+    \\      .reg .b64 %rd<8>;
+    \\      
+    \\      mov.u32 %r1, %tid.x;
+    \\      mov.u32 %r2, %ctaid.x;
+    \\      mov.u32 %r3, %ntid.x;
+    \\      mad.lo.s32 %r4, %r2, %r3, %r1;
+    \\      
+    \\      ld.param.u32 %r5, [a_len];
+    \\      setp.ge.u32 %p1, %r4, %r5;
+    \\      @%p1 bra EXIT;
+    \\      
+    \\      // Placeholder: simplified version
+    \\      ld.param.u64 %rd1, [a];
+    \\      cvt.u64.u32 %rd2, %r4;
+    \\      shl.b64 %rd3, %rd2, 2;
+    \\      add.u64 %rd4, %rd1, %rd3;
+    \\      ld.global.u32 %r6, [%rd4];
+    \\      
+    \\      // Store to result (simplified)
+    \\      ld.param.u64 %rd5, [result];
+    \\      add.u64 %rd6, %rd5, %rd3;
+    \\      st.global.u32 [%rd6], %r6;
+    \\      
+    \\  EXIT:
+    \\      ret;
+    \\  }
+;
+
+pub const setops_kernel_ptx = setops_kernel_ptx_simple;
+
 test "TestCANARY_REQ_GQL_051_KernelCompile" {
     // Verify kernel source strings are non-empty
     try std.testing.expect(bfs_kernel_ptx.len > 0);
     try std.testing.expect(bfs_kernel_cuda_c.len > 0);
     try std.testing.expect(pagerank_kernel_cuda_c.len > 0);
+    try std.testing.expect(setops_kernel_cuda_c.len > 0);
 }
