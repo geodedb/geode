@@ -9,7 +9,7 @@ from pathlib import Path
 import uuid
 import time
 
-def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None, spec_config=None):
+def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None, spec_config=None, spec_data_dir=None):
     """Run a single test case with optional instance_id and loop_index for parallel/loop tests."""
     # Check if test should be skipped
     if test_case.get("skip", False):
@@ -265,6 +265,27 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                             insert_pos += 1
                         setup_processed.insert(insert_pos, "--non-interactive")
 
+                # Inject --data-dir for setup commands if spec_data_dir is provided
+                if spec_data_dir and len(setup_processed) > 0:
+                    first_cmd = setup_processed[0]
+                    if first_cmd in ["user", "role", "auth", "policy"]:
+                        # Only inject --data-dir if there's a subcommand (not just flags like --help)
+                        # Check if position 1 exists and is not a flag (meaning it's a subcommand)
+                        has_subcommand = len(setup_processed) > 1 and not str(setup_processed[1]).startswith('-')
+                        has_data_dir = any("--data-dir" in str(arg) for arg in setup_processed)
+                        has_help = any(str(arg) in ["--help", "-h"] for arg in setup_processed)
+
+                        if has_subcommand and not has_data_dir and not has_help:
+                            # Find the position to insert --data-dir
+                            # It should go before the first flag (starting with - or --) or at the end
+                            insert_pos = len(setup_processed)  # Default: append at end
+                            for i, arg in enumerate(setup_processed):
+                                if str(arg).startswith('-') and i > 0:  # Found a flag (but not at position 0)
+                                    insert_pos = i
+                                    break
+                            setup_processed.insert(insert_pos, "--data-dir")
+                            setup_processed.insert(insert_pos + 1, spec_data_dir)
+
                 setup_result = subprocess.run(
                     [binary] + setup_processed,
                     input=setup_stdin,
@@ -383,6 +404,28 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
             if len(modified_args) > insert_pos and modified_args[insert_pos] == "--no-quic":
                 insert_pos += 1
             modified_args.insert(insert_pos, "--non-interactive")
+
+    # Inject --data-dir for user/role/auth commands if spec_data_dir is provided
+    if spec_data_dir and len(modified_args) > 0:
+        first_cmd = modified_args[0]
+        # Commands that use user storage and need isolated data directories
+        if first_cmd in ["user", "role", "auth", "policy"]:
+            # Only inject --data-dir if there's a subcommand (not just flags like --help)
+            # Check if position 1 exists and is not a flag (meaning it's a subcommand)
+            has_subcommand = len(modified_args) > 1 and not str(modified_args[1]).startswith('-')
+            has_data_dir = any("--data-dir" in str(arg) for arg in modified_args)
+            has_help = any(str(arg) in ["--help", "-h"] for arg in modified_args)
+
+            if has_subcommand and not has_data_dir and not has_help:
+                # Find the position to insert --data-dir
+                # It should go before the first flag (starting with - or --) or at the end
+                insert_pos = len(modified_args)  # Default: append at end
+                for i, arg in enumerate(modified_args):
+                    if str(arg).startswith('-') and i > 0:  # Found a flag (but not at position 0)
+                        insert_pos = i
+                        break
+                modified_args.insert(insert_pos, "--data-dir")
+                modified_args.insert(insert_pos + 1, spec_data_dir)
 
     # Build command with global flags (must come before subcommand)
     global_flags = []
@@ -598,14 +641,17 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     return True, "PASSED"
 
 def main():
+    import shutil
+    import os
+
     specs_dir = Path("/home/benji/src/spyder/geode/geodetestlab/specs")
-    
+
     # Run all specs and see what we can test
     total_passed = 0
     total_failed = 0
     total_skipped = 0
     all_failures = []
-    
+
     for spec_file in sorted(specs_dir.glob("*.yml")):
         # Try to load the spec
         try:
@@ -614,7 +660,11 @@ def main():
         except Exception as e:
             print(f"Skipping {spec_file.name}: Invalid YAML")
             continue
-        
+
+        # Create unique data directory for this spec file
+        spec_data_dir = f"./data_test_{spec_file.stem}"
+        os.makedirs(spec_data_dir, exist_ok=True)
+
         has_tests = False
         spec_passed = 0
         spec_failed = 0
@@ -632,7 +682,7 @@ def main():
             # Handle parallel tests with multiple instances
             if test.get("parallel") and test.get("instances"):
                 for instance in range(test["instances"]):
-                    success, message = run_test(test, spec_name=spec_file.name, instance_id=instance, spec_config=spec)
+                    success, message = run_test(test, spec_name=spec_file.name, instance_id=instance, spec_config=spec, spec_data_dir=spec_data_dir)
 
                     if success is None:
                         spec_skipped += 1
@@ -652,7 +702,7 @@ def main():
             # Handle loop tests
             elif test.get("loop"):
                 for i in range(test["loop"]):
-                    success, message = run_test(test, spec_name=spec_file.name, loop_index=i, spec_config=spec)
+                    success, message = run_test(test, spec_name=spec_file.name, loop_index=i, spec_config=spec, spec_data_dir=spec_data_dir)
 
                     if success is None:
                         spec_skipped += 1
@@ -671,7 +721,7 @@ def main():
 
             # Handle normal tests
             else:
-                success, message = run_test(test, spec_name=spec_file.name, spec_config=spec)
+                success, message = run_test(test, spec_name=spec_file.name, spec_config=spec, spec_data_dir=spec_data_dir)
 
                 if success is None:
                     # Skipped
@@ -688,10 +738,17 @@ def main():
                     total_failed += 1
                     all_failures.append((spec_file.name, name, message))
                     has_tests = True
-        
+
         if has_tests:
             print(f"  {spec_file.name}: {spec_passed} passed, {spec_failed} failed, {spec_skipped} skipped")
             print()
+
+        # Clean up spec-specific data directory after all tests complete
+        if os.path.exists(spec_data_dir):
+            try:
+                shutil.rmtree(spec_data_dir)
+            except Exception as e:
+                pass  # Ignore cleanup errors
     
     # Summary
     print(f"\n{'='*60}")

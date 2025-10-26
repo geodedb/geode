@@ -3558,9 +3558,27 @@ fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !vo
 }
 
 fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Skip global flags to find the first subcommand argument
+    var idx = start_idx + 1;
+    while (idx < argv.len) : (idx += 1) {
+        const arg = argv[idx];
+        // Skip global flags
+        if (std.mem.eql(u8, arg, "--embedded") or
+            std.mem.eql(u8, arg, "--no-quic") or
+            std.mem.eql(u8, arg, "--server") or
+            std.mem.eql(u8, arg, "--debug")) {
+            // Skip flag and its value if present
+            if (std.mem.eql(u8, arg, "--server")) {
+                idx += 1; // Skip the server address value
+            }
+            continue;
+        }
+        break;
+    }
+
     // Check for help flag
-    if (start_idx + 1 < argv.len) {
-        const arg = argv[start_idx + 1];
+    if (idx < argv.len) {
+        const arg = argv[idx];
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             printGrantUsage();
             std.process.exit(@intFromEnum(ExitCode.success));
@@ -3569,17 +3587,17 @@ fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // For testing, simulate success with the permission type and target
     // Parse: grant <permission> [resource] <target>
-    if (start_idx + 1 < argv.len) {
-        const permission = argv[start_idx + 1];
+    if (idx < argv.len) {
+        const permission = argv[idx];
         var target: []const u8 = "unknown";
 
         // Find the target (user or role)
-        if (start_idx + 2 < argv.len) {
-            target = argv[start_idx + 2];
+        if (idx + 1 < argv.len) {
+            target = argv[idx + 1];
             // Skip "TO" or other keywords if present
             if (std.mem.eql(u8, target, "TO") or std.mem.eql(u8, target, "graph") or std.mem.eql(u8, target, "system")) {
-                if (start_idx + 3 < argv.len) {
-                    target = argv[start_idx + 3];
+                if (idx + 2 < argv.len) {
+                    target = argv[idx + 2];
                 }
             }
         }
@@ -3602,9 +3620,27 @@ fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 }
 
 fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Skip global flags to find the first subcommand argument
+    var idx = start_idx + 1;
+    while (idx < argv.len) : (idx += 1) {
+        const arg = argv[idx];
+        // Skip global flags
+        if (std.mem.eql(u8, arg, "--embedded") or
+            std.mem.eql(u8, arg, "--no-quic") or
+            std.mem.eql(u8, arg, "--server") or
+            std.mem.eql(u8, arg, "--debug")) {
+            // Skip flag and its value if present
+            if (std.mem.eql(u8, arg, "--server")) {
+                idx += 1; // Skip the server address value
+            }
+            continue;
+        }
+        break;
+    }
+
     // Check for help flag
-    if (start_idx + 1 < argv.len) {
-        const arg = argv[start_idx + 1];
+    if (idx < argv.len) {
+        const arg = argv[idx];
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             printRevokeUsage();
             std.process.exit(@intFromEnum(ExitCode.success));
@@ -3613,19 +3649,19 @@ fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !vo
 
     // For testing, simulate success with the permission type and target
     // Parse: revoke <permission> [resource] [FROM] <target>
-    if (start_idx + 1 < argv.len) {
-        const permission = argv[start_idx + 1];
+    if (idx < argv.len) {
+        const permission = argv[idx];
         var target: []const u8 = "unknown";
 
         // Find the target (user or role) - might be 2 or 3 positions after permission
-        if (start_idx + 2 < argv.len) {
-            target = argv[start_idx + 2];
+        if (idx + 1 < argv.len) {
+            target = argv[idx + 1];
             // Skip resource name or keywords like "FROM", "graph", etc.
             if (std.mem.eql(u8, target, "FROM") or std.mem.eql(u8, target, "graph") or
                 std.mem.eql(u8, target, "system") or std.mem.eql(u8, target, "database"))
             {
-                if (start_idx + 3 < argv.len) {
-                    target = argv[start_idx + 3];
+                if (idx + 2 < argv.len) {
+                    target = argv[idx + 2];
                 }
             }
         }
