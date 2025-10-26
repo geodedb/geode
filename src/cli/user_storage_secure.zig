@@ -143,13 +143,18 @@ pub const UserStorage = struct {
 
         for (users) |user| {
             if (std.mem.eql(u8, user.username, username)) {
-                // Return a copy
+                // Return a deep copy
+                var roles_copy = try self.allocator.alloc([]const u8, user.roles.len);
+                for (user.roles, 0..) |role, i| {
+                    roles_copy[i] = try self.allocator.dupe(u8, role);
+                }
+
                 return User{
                     .username = try self.allocator.dupe(u8, user.username),
                     .email = try self.allocator.dupe(u8, user.email),
                     .password_hash = try self.allocator.dupe(u8, user.password_hash),
                     .salt = try self.allocator.dupe(u8, user.salt),
-                    .roles = try self.allocator.dupe([]const u8, user.roles),
+                    .roles = roles_copy,
                     .created_at = user.created_at,
                     .is_active = user.is_active,
                 };
