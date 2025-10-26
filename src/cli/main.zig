@@ -2865,7 +2865,27 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 
 fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // start_idx points to "user", so start_idx + 1 is the subcommand
-    const subcmd_idx = start_idx + 1;
+    // Skip global flags like --embedded, --no-quic to find the actual subcommand
+    var subcmd_idx = start_idx + 1;
+    while (subcmd_idx < argv.len) : (subcmd_idx += 1) {
+        const arg = argv[subcmd_idx];
+        // Skip known global flags
+        if (std.mem.eql(u8, arg, "--embedded") or
+            std.mem.eql(u8, arg, "--no-quic") or
+            std.mem.eql(u8, arg, "--enable-auth") or
+            std.mem.eql(u8, arg, "--audit")) {
+            continue;
+        }
+        // Skip global flags with values
+        if (std.mem.eql(u8, arg, "--server") or
+            std.mem.eql(u8, arg, "--audit-file") or
+            std.mem.eql(u8, arg, "--audit-syslog")) {
+            subcmd_idx += 1; // Skip the value too
+            continue;
+        }
+        // Found non-flag argument - this is the subcommand
+        break;
+    }
 
     // Check for missing subcommand
     if (subcmd_idx >= argv.len) {
@@ -2928,6 +2948,7 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             var roles_buffer: [16][]const u8 = undefined;
             var roles_count: usize = 0;
             var data_dir: []const u8 = "./data";
+            var if_not_exists: bool = false;
 
             var i: usize = subcmd_idx + 2;
             if (i < argv.len and !std.mem.startsWith(u8, argv[i], "--")) {
@@ -2970,6 +2991,8 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
                         std.process.exit(@intFromEnum(ExitCode.general_error));
                     }
                     i += 1;
+                } else if (std.mem.eql(u8, argv[i], "--if-not-exists")) {
+                    if_not_exists = true;
                 }
             }
 
@@ -2991,6 +3014,11 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             // Create user
             storage.createUser(username, effective_email, password.?, roles_buffer[0..roles_count]) catch |err| {
                 if (err == error.UserAlreadyExists) {
+                    if (if_not_exists) {
+                        // User already exists, but --if-not-exists was specified, so succeed silently
+                        std.debug.print("User '{s}' already exists (skipped due to --if-not-exists)\n", .{username});
+                        std.process.exit(@intFromEnum(ExitCode.success));
+                    }
                     std.debug.print("Error: User '{s}' already exists\n", .{username});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }
@@ -3367,7 +3395,27 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 
 fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // start_idx points to "role", so start_idx + 1 is the subcommand
-    const subcmd_idx = start_idx + 1;
+    // Skip global flags like --embedded, --no-quic to find the actual subcommand
+    var subcmd_idx = start_idx + 1;
+    while (subcmd_idx < argv.len) : (subcmd_idx += 1) {
+        const arg = argv[subcmd_idx];
+        // Skip known global flags
+        if (std.mem.eql(u8, arg, "--embedded") or
+            std.mem.eql(u8, arg, "--no-quic") or
+            std.mem.eql(u8, arg, "--enable-auth") or
+            std.mem.eql(u8, arg, "--audit")) {
+            continue;
+        }
+        // Skip global flags with values
+        if (std.mem.eql(u8, arg, "--server") or
+            std.mem.eql(u8, arg, "--audit-file") or
+            std.mem.eql(u8, arg, "--audit-syslog")) {
+            subcmd_idx += 1; // Skip the value too
+            continue;
+        }
+        // Found non-flag argument - this is the subcommand
+        break;
+    }
 
     // Check for missing subcommand
     if (subcmd_idx >= argv.len) {

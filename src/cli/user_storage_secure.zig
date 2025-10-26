@@ -185,7 +185,22 @@ pub const UserStorage = struct {
 
             const old_len = new_users.len;
             new_users = try self.allocator.realloc(new_users, old_len + 1);
-            new_users[old_len] = user;
+
+            // Deep copy to avoid double-free when cleaning up both arrays
+            var roles_copy = try self.allocator.alloc([]const u8, user.roles.len);
+            for (user.roles, 0..) |role, i| {
+                roles_copy[i] = try self.allocator.dupe(u8, role);
+            }
+
+            new_users[old_len] = User{
+                .username = try self.allocator.dupe(u8, user.username),
+                .email = try self.allocator.dupe(u8, user.email),
+                .password_hash = try self.allocator.dupe(u8, user.password_hash),
+                .salt = try self.allocator.dupe(u8, user.salt),
+                .roles = roles_copy,
+                .created_at = user.created_at,
+                .is_active = user.is_active,
+            };
         }
 
         if (found) {
