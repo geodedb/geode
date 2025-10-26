@@ -2873,13 +2873,15 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         if (std.mem.eql(u8, arg, "--embedded") or
             std.mem.eql(u8, arg, "--no-quic") or
             std.mem.eql(u8, arg, "--enable-auth") or
-            std.mem.eql(u8, arg, "--audit")) {
+            std.mem.eql(u8, arg, "--audit"))
+        {
             continue;
         }
         // Skip global flags with values
         if (std.mem.eql(u8, arg, "--server") or
             std.mem.eql(u8, arg, "--audit-file") or
-            std.mem.eql(u8, arg, "--audit-syslog")) {
+            std.mem.eql(u8, arg, "--audit-syslog"))
+        {
             subcmd_idx += 1; // Skip the value too
             continue;
         }
@@ -3403,13 +3405,15 @@ fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         if (std.mem.eql(u8, arg, "--embedded") or
             std.mem.eql(u8, arg, "--no-quic") or
             std.mem.eql(u8, arg, "--enable-auth") or
-            std.mem.eql(u8, arg, "--audit")) {
+            std.mem.eql(u8, arg, "--audit"))
+        {
             continue;
         }
         // Skip global flags with values
         if (std.mem.eql(u8, arg, "--server") or
             std.mem.eql(u8, arg, "--audit-file") or
-            std.mem.eql(u8, arg, "--audit-syslog")) {
+            std.mem.eql(u8, arg, "--audit-syslog"))
+        {
             subcmd_idx += 1; // Skip the value too
             continue;
         }
