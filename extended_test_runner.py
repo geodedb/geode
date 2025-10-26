@@ -15,7 +15,14 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     if test_case.get("skip", False):
         return None, "skipped"
 
+    # Extract command and args from test case
+    test_command = test_case.get("command", None)
     args = test_case.get("args", [])
+
+    # If command is specified but args is empty, use command as first arg
+    if test_command and len(args) == 0:
+        args = [test_command]
+
     expect = test_case.get("expect", {})
 
     # Generate unique test ID for isolation
@@ -142,9 +149,14 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
             try:
                 # Handle both string and dict formats
                 if isinstance(cmd_item, dict):
-                    # Dict format: {"args": ["query", "...", "--no-quic"]}
+                    # Dict format: {"args": ["query", "...", "--no-quic"]} or {"command": "shell", "args": [], "stdin": "..."}
+                    setup_command = cmd_item.get("command", None)
                     setup_args = cmd_item.get("args", [])
                     setup_stdin = cmd_item.get("stdin", None)
+
+                    # If command is specified but args is empty, use command as first arg
+                    if setup_command and len(setup_args) == 0:
+                        setup_args = [setup_command]
                 else:
                     # String format: "geode query '...' --no-quic"
                     setup_args = shlex.split(cmd_item)
@@ -207,9 +219,39 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                 if len(setup_processed) > 0 and setup_processed[0] == "query":
                     has_embedded = any("--embedded" in arg for arg in setup_processed)
                     has_server = any("--server" in arg for arg in setup_processed)
-                    if not has_embedded and not has_server:
+                    # Check if spec explicitly enables server mode
+                    spec_server_enabled = False
+                    if spec_config and isinstance(spec_config, dict):
+                        cli_config = spec_config.get("cli", {})
+                        if isinstance(cli_config, dict):
+                            server_config = cli_config.get("server", {})
+                            if isinstance(server_config, dict):
+                                spec_server_enabled = server_config.get("enabled", False)
+                    if not has_embedded and not has_server and not spec_server_enabled:
                         setup_processed.insert(1, "--embedded")
-                        setup_processed.insert(2, "--no-quic")
+
+                # Add --embedded and --no-quic for shell commands (for compatibility)
+                if len(setup_processed) > 0 and setup_processed[0] == "shell":
+                    has_embedded = any("--embedded" in arg for arg in setup_processed)
+                    has_no_quic = any("--no-quic" in arg for arg in setup_processed)
+                    if not has_embedded:
+                        setup_processed.insert(1, "--embedded")
+                    if not has_no_quic:
+                        # Insert after --embedded if it was added
+                        insert_pos = 2 if setup_processed[1] == "--embedded" else 1
+                        setup_processed.insert(insert_pos, "--no-quic")
+
+                # Add --non-interactive for shell commands when stdin is used
+                if len(setup_processed) > 0 and setup_processed[0] == "shell" and setup_stdin:
+                    has_non_interactive = any("--non-interactive" in arg for arg in setup_processed)
+                    if not has_non_interactive:
+                        # Find position after --embedded and --no-quic
+                        insert_pos = 1
+                        if len(setup_processed) > 1 and setup_processed[1] == "--embedded":
+                            insert_pos = 2
+                        if len(setup_processed) > insert_pos and setup_processed[insert_pos] == "--no-quic":
+                            insert_pos += 1
+                        setup_processed.insert(insert_pos, "--non-interactive")
 
                 setup_result = subprocess.run(
                     [binary] + setup_processed,
@@ -235,18 +277,20 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
         has_no_quic = any("--no-quic" in arg for arg in args)
         has_embedded = any("--embedded" in arg for arg in args)
 
-        # Extract server args from spec config to inject into embedded mode
+        # Check if spec explicitly enables server mode
+        spec_server_enabled = False
         spec_server_args = []
         if spec_config and isinstance(spec_config, dict):
             cli_config = spec_config.get("cli", {})
             if isinstance(cli_config, dict):
                 server_config = cli_config.get("server", {})
                 if isinstance(server_config, dict):
+                    spec_server_enabled = server_config.get("enabled", False)
                     spec_server_args = server_config.get("args", [])
 
-        # If no server specified and not already embedded, force embedded mode
-        # (since default is now server mode which would try to connect to a non-existent server)
-        if not has_server and not has_embedded:
+        # If no server specified, not already embedded, AND spec doesn't explicitly enable server mode,
+        # force embedded mode (since default is now server mode which would try to connect to a non-existent server)
+        if not has_server and not has_embedded and not spec_server_enabled:
             # Insert --embedded after "query"
             modified_args.insert(1, "--embedded")
             has_embedded = True
@@ -289,6 +333,30 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
             replacements[f"INDEX {old_index_name}"] = f"INDEX {new_index_name}"
         for old, new in replacements.items():
             stdin_content = stdin_content.replace(old, new)
+
+    # Add --embedded and --no-quic for shell commands (for compatibility)
+    is_shell_command = len(modified_args) > 0 and modified_args[0] == "shell"
+    if is_shell_command:
+        has_embedded = any("--embedded" in arg for arg in modified_args)
+        has_no_quic = any("--no-quic" in arg for arg in modified_args)
+        if not has_embedded:
+            modified_args.insert(1, "--embedded")
+        if not has_no_quic:
+            # Insert after --embedded if it was added
+            insert_pos = 2 if modified_args[1] == "--embedded" else 1
+            modified_args.insert(insert_pos, "--no-quic")
+
+    # Add --non-interactive for shell commands when stdin is used
+    if is_shell_command and stdin_content:
+        has_non_interactive = any("--non-interactive" in arg for arg in modified_args)
+        if not has_non_interactive:
+            # Find position after --embedded and --no-quic
+            insert_pos = 1
+            if len(modified_args) > 1 and modified_args[1] == "--embedded":
+                insert_pos = 2
+            if len(modified_args) > insert_pos and modified_args[insert_pos] == "--no-quic":
+                insert_pos += 1
+            modified_args.insert(insert_pos, "--non-interactive")
 
     # Build command with global flags (must come before subcommand)
     global_flags = []

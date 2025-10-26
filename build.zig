@@ -1309,4 +1309,3 @@ pub fn build(b: *std.Build) void {
     const run_zig_client_tests = b.addRunArtifact(zig_client_tests);
     test_clients_step.dependOn(&run_zig_client_tests.step);
 }
-

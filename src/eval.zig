@@ -1252,6 +1252,109 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
+            // CANARY: REQ=REQ-MATH-TRIG-001; FEATURE="TrigonometricFunctions"; ASPECT=ATAN; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            if (std.mem.eql(u8, function_name, "atan")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(allocator, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                const result = std.math.atan(val);
+                // Check for NaN before converting
+                if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+
+            // CANARY: REQ=REQ-MATH-TRIG-002; FEATURE="TrigonometricFunctions"; ASPECT=ATAN2; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            if (std.mem.eql(u8, function_name, "atan2")) {
+                if (call.args.len != 2) break :blk_call .{ .Null = {} };
+                const arg_y = try evalExpr(allocator, call.args[0].*, env);
+                const arg_x = try evalExpr(allocator, call.args[1].*, env);
+
+                const val_y = switch (arg_y) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                const val_x = switch (arg_x) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                const result = std.math.atan2(val_y, val_x);
+                // Check for NaN before converting
+                if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+
+            // CANARY: REQ=REQ-MATH-TRIG-003; FEATURE="TrigonometricFunctions"; ASPECT=ASIN; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            if (std.mem.eql(u8, function_name, "asin")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(allocator, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                // asin domain is [-1, 1]
+                if (val < -1.0 or val > 1.0) break :blk_call .{ .Null = {} };
+                const result = std.math.asin(val);
+                // Check for NaN before converting
+                if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+
+            // CANARY: REQ=REQ-MATH-TRIG-004; FEATURE="TrigonometricFunctions"; ASPECT=ACOS; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            if (std.mem.eql(u8, function_name, "acos")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(allocator, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                // acos domain is [-1, 1]
+                if (val < -1.0 or val > 1.0) break :blk_call .{ .Null = {} };
+                const result = std.math.acos(val);
+                // Check for NaN before converting
+                if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+
+            // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            if (std.mem.eql(u8, function_name, "degrees")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(allocator, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                const result = val * (180.0 / std.math.pi);
+                // Check for NaN or infinity before converting
+                if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+
+            // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            if (std.mem.eql(u8, function_name, "radians")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(allocator, call.args[0].*, env);
+                const val = switch (arg) {
+                    .Int => |i| @as(f64, @floatFromInt(i)),
+                    .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+                    else => break :blk_call .{ .Null = {} },
+                };
+                const result = val * (std.math.pi / 180.0);
+                // Check for NaN or infinity before converting
+                if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            }
+
             if (std.mem.eql(u8, function_name, "log")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1341,6 +1444,42 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     },
                     else => break :blk_call .{ .Null = {} },
                 }
+            }
+
+            // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=MOD; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            if (std.mem.eql(u8, function_name, "mod")) {
+                if (call.args.len != 2) break :blk_call .{ .Null = {} };
+                const dividend_arg = try evalExpr(allocator, call.args[0].*, env);
+                const divisor_arg = try evalExpr(allocator, call.args[1].*, env);
+
+                const dividend = switch (dividend_arg) {
+                    .Int => |i| i,
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                const divisor = switch (divisor_arg) {
+                    .Int => |i| i,
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                // Division by zero check
+                if (divisor == 0) break :blk_call .{ .Null = {} };
+                const result = @rem(dividend, divisor);
+                break :blk_call .{ .Int = result };
+            }
+
+            // CANARY: REQ=REQ-MATH-ARITH-002; FEATURE="ArithmeticFunctions"; ASPECT=SIGN; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            if (std.mem.eql(u8, function_name, "sign")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const arg = try evalExpr(allocator, call.args[0].*, env);
+
+                const sign_value = switch (arg) {
+                    .Int => |i| if (i < 0) @as(i64, -1) else if (i > 0) @as(i64, 1) else @as(i64, 0),
+                    .Decimal => |d| if (d.coeff < 0) @as(i64, -1) else if (d.coeff > 0) @as(i64, 1) else @as(i64, 0),
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                break :blk_call .{ .Int = sign_value };
             }
 
             // Special handling for random() with no args

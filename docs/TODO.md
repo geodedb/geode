@@ -1,20 +1,264 @@
 # TODO - Current Development Priorities
 
-> **Status**: Updated October 25, 2025 - Test Failure Analysis Complete
-> **Test Coverage**: 1648/1725 tests passing (95.5%) - 77 failing tests analyzed
+> **Status**: Updated October 26, 2025 - **NEW: Missing Math Functions Discovered**
+> **Test Coverage**: 1473/1703 tests passing (86.5%) - 184 failing tests (177 timeouts + 6 exit codes + 1 stderr)
 > **Build Status**: ✅ Passes `make verify-all` with **0 memory leaks**
 > **CANARY Status**: 1016+ tracked requirements
 > **Phase Completion**: ✅ **ALL 7 FEATURE PHASES COMPLETE** (Phases 2-7 + Phase 1)
 > **Security Status**: 🟢 **PRODUCTION READY** - All 7 P0 critical vulnerabilities fixed
 
-## 🚨 CURRENT PRIORITY: Test Failure Remediation (October 25, 2025)
+## 🚨 URGENT: Auth Mode Change Impact (October 26, 2025)
 
-### Test Failure Summary
-**Total Failures**: 77 tests (4.5% failure rate)
-**Pass Rate**: 95.5% (1648/1725 tests passing)
+**Status**: ✅ **FIXED** - Test harness updated for new server mode default
+**Impact**: Changed default from `--embedded` to server mode broke 400+ tests
+**Resolution**: Updated `extended_test_runner.py` to auto-detect server mode from spec configuration
+**Current Pass Rate**: 86.5% (1473/1703 tests passing)
+**Remaining Issues**: 177 timeout failures due to missing function implementations
+
+---
+
+## 🚨 CURRENT PRIORITY: Missing Math Functions (October 26, 2025)
+
+### New Test Failure Summary
+**Total Failures**: 184 tests (10.8% failure rate)
+**Pass Rate**: 86.5% (1473/1703 tests passing)
 **Failure Patterns**:
+- **timeout failures**: 177 tests (functions return `null` instead of values)
+- **exit code failures**: 6 tests (auth tests in server mode)
+- **stderr missing**: 1 test (QUIC transport test)
+
+### Root Cause Confirmation
+**Status**: ✅ **CONFIRMED** - Functions are NOT implemented
+**Evidence**: Direct test shows `RETURN atan2(1, 1)` returns `{"rows":[[null]]}`
+**Impact**: Tests timeout waiting for output that never matches expected values
+
+### Missing Function Categories
+
+#### 1. Missing Trigonometric Functions - **P0 CRITICAL**
+**Files**: `src/eval.zig:1148-1300` (function dispatch)
+**Stub Location**: Add after existing `tan` function (line 1253)
+**Missing Functions**:
+```
+atan(x) → f64              - Arctangent (inverse tangent)
+atan2(y, x) → f64          - Two-argument arctangent
+asin(x) → f64              - Arcsine (domain: [-1, 1])
+acos(x) → f64              - Arccosine (domain: [-1, 1])
+degrees(radians) → f64     - Convert radians to degrees
+radians(degrees) → f64     - Convert degrees to radians
+```
+**Tests Affected**: `geode_advanced_math_algorithms.yml` lines 22-63
+**Implementation Complexity**: LOW (Zig stdlib has `std.math.atan`, `.atan2`, `.asin`, `.acos`)
+
+#### 2. Missing Arithmetic Functions - **P0 CRITICAL**
+**Files**: `src/eval.zig:1148-1300` (function dispatch)
+**Stub Location**: Add after existing `ceil` function (line 1310)
+**Missing Functions**:
+```
+mod(x, y) → Int/Decimal    - Modulo operation (remainder after division)
+sign(x) → Int              - Sign of number (-1, 0, or 1)
+```
+**Tests Affected**: `geode_advanced_math_algorithms.yml` lines 73-78, 64-71
+**Implementation Complexity**: LOW (simple arithmetic operations)
+
+#### 3. Missing Statistical Functions - **P1 MAJOR**
+**Files**: `src/execution/aggregation_evaluation.zig` (aggregation functions)
+**Stub Location**: Add alongside existing aggregation functions
+**Missing Functions**:
+```
+stddev(values) → f64       - Standard deviation (population)
+variance(values) → f64     - Variance (population)
+```
+**Tests Affected**: `geode_advanced_math_algorithms.yml` lines 81-98
+**Implementation Complexity**: MEDIUM (requires two-pass aggregation)
+
+#### 4. Other Timeout Failures (Non-Math) - **P2 INVESTIGATE**
+**Categories**:
+- String functions: TRIM edge cases, REPLACE, SUBSTRING
+- Graph algorithms: PageRank, degree centrality, shortest paths
+- Pipeline operations: Multi-stage transformations
+**Note**: These may be test specification issues rather than missing implementations
+
+---
+
+## 📋 IMPLEMENTATION PLAN: Missing Math Functions (October 26, 2025)
+
+### Phase 8: Mathematical Functions Implementation - **Target: 20+ tests fixed in 1 day**
+**Goal**: Implement all missing trigonometric and arithmetic functions
+**Expected Pass Rate**: 86.5% → 90%+ (20-30 tests)
+**Priority**: **P0 CRITICAL** - Basic database functionality
+
+#### Task 8.1: Trigonometric Functions - **2-4 hours**
+**Priority**: P0 (Blocking ~10 tests)
+**Files**: `src/eval.zig` (lines 1253-1285)
+**Stub Location**: Insert new function blocks after existing `tan` function at line 1253
+
+**Implementation Pattern** (follow existing sin/cos/tan):
+```zig
+if (std.mem.eql(u8, function_name, "atan")) {
+    if (call.args.len != 1) break :blk_call .{ .Null = {} };
+    const arg = try evalExpr(allocator, call.args[0].*, env);
+    const val = switch (arg) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => break :blk_call .{ .Null = {} },
+    };
+    const result = std.math.atan(val);
+    if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
+    break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+}
+```
+
+**Functions to implement** (in order):
+1. **atan(x)** - Use `std.math.atan(val)` (1 arg, domain: all reals)
+2. **atan2(y, x)** - Use `std.math.atan2(val_y, val_x)` (2 args, domain: all reals)
+3. **asin(x)** - Use `std.math.asin(val)` (1 arg, domain: [-1, 1], add validation)
+4. **acos(x)** - Use `std.math.acos(val)` (1 arg, domain: [-1, 1], add validation)
+5. **degrees(rad)** - Multiply by `180.0 / std.math.pi` (1 arg)
+6. **radians(deg)** - Multiply by `std.math.pi / 180.0` (1 arg)
+
+**Edge Cases**:
+- asin/acos: Validate input in [-1, 1], return null for out-of-range
+- atan2: Handle (0, 0) case (returns 0)
+- All: Check for NaN/Inf before returning
+
+**Verification**:
+```bash
+./zig-out/bin/geode query --embedded --no-quic "RETURN atan2(1, 1) AS result"
+# Expected: {"rows":[[0.785398]]} (approximately PI/4)
+```
+
+**CANARY Markers**:
+```zig
+// CANARY: REQ=REQ-MATH-TRIG-001; FEATURE="TrigonometricFunctions"; ASPECT=ATAN; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+// CANARY: REQ=REQ-MATH-TRIG-002; FEATURE="TrigonometricFunctions"; ASPECT=ATAN2; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+// CANARY: REQ=REQ-MATH-TRIG-003; FEATURE="TrigonometricFunctions"; ASPECT=ASIN; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+// CANARY: REQ=REQ-MATH-TRIG-004; FEATURE="TrigonometricFunctions"; ASPECT=ACOS; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+// CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+// CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+```
+
+#### Task 8.2: Arithmetic Functions - **1-2 hours**
+**Priority**: P0 (Blocking ~2 tests)
+**Files**: `src/eval.zig` (lines 1310+)
+**Stub Location**: Insert after existing `ceil` function at line 1310
+
+**Implementation**:
+
+**MOD function**:
+```zig
+if (std.mem.eql(u8, function_name, "mod")) {
+    if (call.args.len != 2) break :blk_call .{ .Null = {} };
+    const dividend_arg = try evalExpr(allocator, call.args[0].*, env);
+    const divisor_arg = try evalExpr(allocator, call.args[1].*, env);
+
+    const dividend = switch (dividend_arg) {
+        .Int => |i| i,
+        else => break :blk_call .{ .Null = {} },
+    };
+
+    const divisor = switch (divisor_arg) {
+        .Int => |i| i,
+        else => break :blk_call .{ .Null = {} },
+    };
+
+    if (divisor == 0) break :blk_call .{ .Null = {} }; // Division by zero
+    const result = @rem(dividend, divisor);
+    break :blk_call .{ .Int = result };
+}
+```
+
+**SIGN function**:
+```zig
+if (std.mem.eql(u8, function_name, "sign")) {
+    if (call.args.len != 1) break :blk_call .{ .Null = {} };
+    const arg = try evalExpr(allocator, call.args[0].*, env);
+
+    const sign_value = switch (arg) {
+        .Int => |i| if (i < 0) @as(i64, -1) else if (i > 0) @as(i64, 1) else @as(i64, 0),
+        .Decimal => |d| if (d.coeff < 0) @as(i64, -1) else if (d.coeff > 0) @as(i64, 1) else @as(i64, 0),
+        else => break :blk_call .{ .Null = {} },
+    };
+
+    break :blk_call .{ .Int = sign_value };
+}
+```
+
+**Edge Cases**:
+- MOD: Return null for division by zero
+- SIGN: Return 0 for zero input, handle Decimal type
+
+**Verification**:
+```bash
+./zig-out/bin/geode query --embedded --no-quic "RETURN mod(10, 3) AS result"
+# Expected: {"rows":[[1]]}
+./zig-out/bin/geode query --embedded --no-quic "RETURN sign(-42) AS neg, sign(0) AS zero, sign(42) AS pos"
+# Expected: {"rows":[[-1, 0, 1]]}
+```
+
+**CANARY Markers**:
+```zig
+// CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=MOD; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+// CANARY: REQ=REQ-MATH-ARITH-002; FEATURE="ArithmeticFunctions"; ASPECT=SIGN; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+```
+
+#### Task 8.3: Statistical Aggregation Functions - **2-3 hours**
+**Priority**: P1 (Blocking ~2 tests)
+**Files**: `src/execution/aggregation_evaluation.zig`
+**Stub Location**: Add alongside existing aggregation functions
+
+**Investigation Required**:
+1. Find where SUM, AVG, COUNT aggregations are implemented
+2. Understand aggregation state management pattern
+3. Implement STDDEV and VARIANCE following same pattern
+
+**Implementation Approach**:
+- **Two-pass algorithm**:
+  - Pass 1: Calculate mean
+  - Pass 2: Calculate sum of squared deviations
+  - VARIANCE = sum(deviations²) / n
+  - STDDEV = sqrt(VARIANCE)
+
+**Note**: This task requires deeper investigation into the aggregation framework. May be deferred to Phase 9 if time-constrained.
+
+**CANARY Markers**:
+```zig
+// CANARY: REQ=REQ-MATH-STATS-001; FEATURE="StatisticalFunctions"; ASPECT=VARIANCE; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+// CANARY: REQ=REQ-MATH-STATS-002; FEATURE="StatisticalFunctions"; ASPECT=STDDEV; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+```
+
+#### Task 8.4: Build and Test - **30 minutes**
+**Priority**: P0 (Verification)
+**Commands**:
+```bash
+# Build with new functions
+make build
+
+# Test individual functions
+./zig-out/bin/geode query --embedded --no-quic "RETURN atan2(1, 1), atan(1), asin(0.5), acos(0.5), degrees(3.14159), radians(180) AS results"
+./zig-out/bin/geode query --embedded --no-quic "RETURN mod(10, 3), sign(-42), sign(0), sign(42) AS results"
+
+# Run full test suite
+python3 extended_test_runner.py --spec geodetestlab/specs/geode_advanced_math_algorithms.yml
+
+# Run comprehensive tests
+python3 extended_test_runner.py
+```
+
+**Success Criteria**:
+- All 6 trigonometric functions return correct values
+- MOD and SIGN return correct values
+- Pass rate improves from 86.5% to at least 90%
+- Zero compilation errors
+- Zero memory leaks in `make verify-all`
+
+---
+
+### Previous Test Failure Summary (October 25, 2025)
+**Total Failures**: 77 tests (4.5% failure rate - SUPERSEDED)
+**Pass Rate**: 95.5% (1648/1725 tests passing - SUPERSEDED)
+**Failure Patterns** (now addressed or re-categorized):
 - **exit code failures**: 66 tests (missing procedures, type mismatches, catalog issues)
-- **timeout failures**: 10 tests (server startup hangs)
+- **timeout failures**: 10 tests (server startup hangs - NOW FIXED)
 - **missing result**: 1 test (output format mismatch)
 
 ### Root Cause Analysis
