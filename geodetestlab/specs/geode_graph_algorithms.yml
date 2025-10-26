@@ -54,13 +54,13 @@ tests:
 
   # Similarity Algorithms
   - name: jaccard-similarity
-    args: ["query", "--embedded", "MATCH (a:Node), (b:Node) WHERE a <> b WITH a, b, algo.similarity.jaccard([(a)--()], [(b)--()])  AS similarity WHERE similarity > 0.5 RETURN a.name, b.name, similarity ORDER BY similarity DESC LIMIT 5", "--format", "json"]
+    args: ["query", "--embedded", "MATCH (a:Node), (b:Node) WHERE id(a) <> id(b) WITH a, b, algo.similarity.jaccard([(a)--()], [(b)--()])  AS similarity WHERE similarity > 0.5 RETURN a.name, b.name, similarity ORDER BY similarity DESC LIMIT 5", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["similarity"]
 
   - name: cosine-similarity
-    args: ["query", "--embedded", "MATCH (a:Node), (b:Node) WHERE a <> b AND a.vector IS NOT NULL AND b.vector IS NOT NULL RETURN a.name, b.name, algo.similarity.cosine(a.vector, b.vector) AS similarity ORDER BY similarity DESC LIMIT 5", "--format", "json"]
+    args: ["query", "--embedded", "MATCH (a:Node), (b:Node) WHERE id(a) <> id(b) AND a.vector IS NOT NULL AND b.vector IS NOT NULL RETURN a.name, b.name, algo.similarity.cosine(a.vector, b.vector) AS similarity ORDER BY similarity DESC LIMIT 5", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["similarity"]
