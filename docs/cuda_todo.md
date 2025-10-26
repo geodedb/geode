@@ -40,7 +40,7 @@ Progress: pagerank_kernels.zig added with CPU reference + placeholder GPU path (
 Next Steps: integrate planner recognition for PageRank calls and add benchmark scaffold.
 
 ### Phase 3: Set Operations & Projection
-Status: NOT STARTED -> SCAFFOLD QUEUED — 2025-10-26T00:08:52.339Z
+Status: SCAFFOLD STARTED — 2025-10-26T00:10:49.367Z
 1. Kernel: Parallel UNION DISTINCT via hash set (cuckoo or robin hood) with stable emission ordering. (Plan: start with GPU parallel sort + unique, then optimize to hash)
 2. Kernel: INTERSECT / EXCEPT using bitset or sorted merge GPU path. (Initial implementation: sorted merge using thrust-like pattern in Zig; later bitset)
 3. Planner: cost model extension for GPU set ops; threshold on cardinality (>200k rows) and distinct ratio >0.3. (TODO)
