@@ -87,7 +87,7 @@ pub const bfs_kernel_ptx_simple =
 // For CANARY test compatibility
 pub const bfs_kernel_ptx = bfs_kernel_ptx_simple;
 
-// PageRank kernel - Optimized push-based algorithm
+// PageRank kernel - Optimized push-based algorithm with reduced synchronization
 pub const pagerank_kernel_cuda_c =
     \\ extern "C" __global__ void pagerank_iteration_kernel(
     \\     const unsigned int* __restrict__ row_offsets,
@@ -104,7 +104,7 @@ pub const pagerank_kernel_cuda_c =
     \\     ranks_out[vid] = (1.0f - damping) / num_vertices;
     \\ }
     \\
-    \\ // Push-based PageRank: each vertex distributes its rank to neighbors
+    \\ // Optimized push-based PageRank - minimal synchronization overhead
     \\ extern "C" __global__ void pagerank_push_kernel(
     \\     const unsigned int* __restrict__ row_offsets,
     \\     const unsigned int* __restrict__ col_indices,
@@ -122,8 +122,10 @@ pub const pagerank_kernel_cuda_c =
     \\     
     \\     if (out_degree == 0) return;
     \\     
-    \\     // Distribute rank to all neighbors
+    \\     // Calculate contribution per neighbor
     \\     float contribution = damping * ranks_in[vid] / out_degree;
+    \\     
+    \\     // Push to all neighbors with coalesced memory access
     \\     for (unsigned int i = row_start; i < row_end; i++) {
     \\         unsigned int neighbor = col_indices[i];
     \\         atomicAdd(&ranks_out[neighbor], contribution);

@@ -235,6 +235,34 @@ make status-generate
 
 # Cross-platform verification
 make verify-fast
+
+# GPU benchmarks (requires CUDA)
+./run_gpu_benchmarks.sh
+```
+
+### **GPU Acceleration Testing**
+
+Geode includes GPU-accelerated graph algorithms (BFS, PageRank, Set Operations). Test with Docker:
+
+```bash
+# Build GPU-enabled Docker image
+docker build -t geode:gpu -f Dockerfile.gpu .
+
+# Run GPU benchmarks (requires NVIDIA GPU + nvidia-docker2)
+docker run --gpus all --rm geode:gpu
+
+# Or use the convenience script
+./test_gpu_docker.sh
+```
+
+**Requirements for GPU testing:**
+- NVIDIA GPU with CUDA 12.3.2+ support
+- NVIDIA Docker runtime installed
+- Docker configured with `--gpus` flag support
+
+**Verify GPU access:**
+```bash
+docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 ```
 
 ### **Test Coverage**
@@ -242,11 +270,13 @@ make verify-fast
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
 - **CANARY Governance** - 1016 governance markers tracking implementation
 - **Cross-Platform** - Linux, macOS, Windows compatibility
+- **GPU Acceleration** - Optional CUDA-based graph algorithm acceleration
 
 ### **Quality Assurance**
 - **Memory Safety** - Zero memory leaks in test runs
 - **Performance Regression** - Automated benchmark validation
 - **Standards Compliance** - Continuous ISO/IEC 39075:2024 verification
+- **GPU Performance** - Target speedups: BFS ≥5x, PageRank ≥3x, Set Ops ≥3-4x
 
 ## 📚 Documentation
 

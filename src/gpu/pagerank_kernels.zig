@@ -141,6 +141,9 @@ fn gpuPageRankImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
         // Swap buffers for next iteration
         std.mem.swap(@TypeOf(d_ranks_in), &d_ranks_in, &d_ranks_out);
     }
+    
+    // Synchronize once at the end before copying results back
+    try mem_mgr.synchronize();
 
     // Copy final ranks back to host
     const final_ranks_bytes = std.mem.sliceAsBytes(h_ranks);

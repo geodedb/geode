@@ -102,6 +102,16 @@ pub const MemoryManager = struct {
         const buf = try self.allocator.alloc(u8, size);
         return buf;
     }
+
+    pub fn synchronize(self: *MemoryManager) !void {
+        if (!self.loader.available()) {
+            return error.GPUUnavailable;
+        }
+        const result = self.loader.cuCtxSynchronize();
+        if (result != 0) {
+            return error.GPUSyncFailed;
+        }
+    }
 };
 
 test "TestCANARY_REQ_GQL_051_GPUMemoryManager" {
