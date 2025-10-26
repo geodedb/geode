@@ -19,11 +19,15 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
     test_command = test_case.get("command", None)
     args = test_case.get("args", [])
 
-    # If command is specified, prepend it to args (so "query" becomes ["query", "RETURN ..."])
+    # Handle both list and string command formats
     if test_command:
-        # Only prepend if the first arg is not already the command
-        if len(args) == 0 or args[0] != test_command:
-            args = [test_command] + args
+        if isinstance(test_command, list):
+            # command is already a list (e.g., ["sh", "-c"]), use it as the base args
+            args = test_command + args
+        elif isinstance(test_command, str):
+            # command is a string (e.g., "query"), prepend it to args
+            if len(args) == 0 or args[0] != test_command:
+                args = [test_command] + args
 
     expect = test_case.get("expect", {})
 
@@ -156,11 +160,15 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                     setup_args = cmd_item.get("args", [])
                     setup_stdin = cmd_item.get("stdin", None)
 
-                    # If command is specified, prepend it to args (so "query" becomes ["query", "RETURN ..."])
+                    # Handle both list and string command formats
                     if setup_command:
-                        # Only prepend if the first arg is not already the command
-                        if len(setup_args) == 0 or setup_args[0] != setup_command:
-                            setup_args = [setup_command] + setup_args
+                        if isinstance(setup_command, list):
+                            # command is already a list (e.g., ["sh", "-c"]), use it as the base args
+                            setup_args = setup_command + setup_args
+                        elif isinstance(setup_command, str):
+                            # command is a string (e.g., "query"), prepend it to args
+                            if len(setup_args) == 0 or setup_args[0] != setup_command:
+                                setup_args = [setup_command] + setup_args
                 else:
                     # String format: "geode query '...' --no-quic"
                     setup_args = shlex.split(cmd_item)
