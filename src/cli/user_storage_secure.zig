@@ -282,25 +282,25 @@ pub const UserStorage = struct {
         var json_array = std.ArrayList(u8).initCapacity(self.allocator, 1024) catch return error.OutOfMemory;
         defer json_array.deinit(self.allocator);
 
-        try json_array.appendSlice(self.allocator,"[");
+        try json_array.appendSlice(self.allocator, "[");
         for (users, 0..) |user, i| {
-            if (i > 0) try json_array.appendSlice(self.allocator,",");
+            if (i > 0) try json_array.appendSlice(self.allocator, ",");
 
-            try json_array.appendSlice(self.allocator,"{");
+            try json_array.appendSlice(self.allocator, "{");
             try std.fmt.format(json_array.writer(self.allocator), "\"username\":\"{s}\",", .{user.username});
             try std.fmt.format(json_array.writer(self.allocator), "\"email\":\"{s}\",", .{user.email});
             try std.fmt.format(json_array.writer(self.allocator), "\"password_hash\":\"{s}\",", .{user.password_hash});
             try std.fmt.format(json_array.writer(self.allocator), "\"salt\":\"{s}\",", .{user.salt});
             try std.fmt.format(json_array.writer(self.allocator), "\"created_at\":{d},", .{user.created_at});
             try std.fmt.format(json_array.writer(self.allocator), "\"is_active\":{},", .{user.is_active});
-            try json_array.appendSlice(self.allocator,"\"roles\":[");
+            try json_array.appendSlice(self.allocator, "\"roles\":[");
             for (user.roles, 0..) |role, ri| {
-                if (ri > 0) try json_array.appendSlice(self.allocator,",");
+                if (ri > 0) try json_array.appendSlice(self.allocator, ",");
                 try std.fmt.format(json_array.writer(self.allocator), "\"{s}\"", .{role});
             }
-            try json_array.appendSlice(self.allocator,"]}");
+            try json_array.appendSlice(self.allocator, "]}");
         }
-        try json_array.appendSlice(self.allocator,"]");
+        try json_array.appendSlice(self.allocator, "]");
 
         // Encrypt the data
         const encrypted_data = try self.encryptData(json_array.items);

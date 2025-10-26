@@ -10,6 +10,7 @@ results
 .geode_embedded/
 __pycache__/
 **/__pycache__/
+data/
 
 test_io
 test_compile
