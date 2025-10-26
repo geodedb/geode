@@ -212,7 +212,11 @@ class ParallelTestRunner:
                 if server_address and "--no-quic" not in processed_args and "--server" not in processed_args and "--embedded" not in processed_args:
                     # Use server mode (only if not using embedded or no-quic mode)
                     processed_args.extend(["--server", server_address])
-                # Otherwise use default embedded mode with persistence (no --no-quic flag needed)
+                elif not server_address and "--embedded" not in processed_args and "--server" not in processed_args:
+                    # No server address provided - use embedded mode with --embedded and --no-quic flags
+                    # Insert after the command (at position 1)
+                    processed_args.insert(1, "--embedded")
+                    processed_args.insert(2, "--no-quic")
             elif is_shell_command:
                 # Shell doesn't support --no-quic, remove it if present
                 if "--no-quic" in processed_args:
@@ -220,6 +224,10 @@ class ParallelTestRunner:
                 # Add --server if server_address is provided and not already present
                 if server_address and "--server" not in processed_args:
                     processed_args.extend(["--server", server_address])
+                elif not server_address and "--embedded" not in processed_args and "--server" not in processed_args:
+                    # No server address - use embedded mode for shell
+                    processed_args.insert(1, "--embedded")
+                    processed_args.insert(2, "--no-quic")
 
         return processed_args
 
