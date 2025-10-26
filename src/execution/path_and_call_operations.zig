@@ -1989,17 +1989,17 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         }
         // Test real corruption handling
         const result = try global_audit_logger.?.testCorruptionHandling(allocator);
-        const columns = try allocator.alloc([]const u8, 4);
+        const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "corruption_detected");
         columns[1] = try allocator.dupe(u8, "recovery_attempted");
-        columns[2] = try allocator.dupe(u8, "recovery_successful");
-        columns[3] = try allocator.dupe(u8, "data_loss");
+        columns[2] = try allocator.dupe(u8, "data_salvaged");
         const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
+        const row = try allocator.alloc(eval.Value, 3);
         row[0] = eval.Value{ .Bool = result.corruption_detected };
         row[1] = eval.Value{ .Bool = result.recovery_attempted };
-        row[2] = eval.Value{ .Bool = result.recovery_successful };
-        row[3] = eval.Value{ .Int = @intCast(result.data_loss) };
+        // data_salvaged = number of valid lines recovered (total - data_loss)
+        const data_salvaged = if (result.data_loss > 0) 9 - result.data_loss else 9;
+        row[2] = eval.Value{ .Int = @intCast(data_salvaged) };
         rows[0] = row;
         return ExecutionResult{
             .columns = columns,

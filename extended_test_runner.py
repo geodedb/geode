@@ -281,28 +281,42 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
             except Exception as e:
                 return False, f"setup error: {str(e)}"
 
+    # Check if spec explicitly enables server mode
+    spec_server_enabled = False
+    spec_server_args = []
+    if spec_config and isinstance(spec_config, dict):
+        cli_config = spec_config.get("cli", {})
+        if isinstance(cli_config, dict):
+            server_config = cli_config.get("server", {})
+            if isinstance(server_config, dict):
+                spec_server_enabled = server_config.get("enabled", False)
+                spec_server_args = server_config.get("args", [])
+
     # Add --embedded if query command and no server specified (default is now server mode)
     modified_args = args[:]
+
+    # For now, only inject --server for query commands
+    # (other commands like user/role/etc may handle server mode differently)
     is_query_command = len(args) > 0 and args[0] == "query"
+
     if is_query_command:
         has_server = any("--server" in arg for arg in args)
         has_no_quic = any("--no-quic" in arg for arg in args)
         has_embedded = any("--embedded" in arg for arg in args)
 
-        # Check if spec explicitly enables server mode
-        spec_server_enabled = False
-        spec_server_args = []
-        if spec_config and isinstance(spec_config, dict):
-            cli_config = spec_config.get("cli", {})
-            if isinstance(cli_config, dict):
-                server_config = cli_config.get("server", {})
-                if isinstance(server_config, dict):
-                    spec_server_enabled = server_config.get("enabled", False)
-                    spec_server_args = server_config.get("args", [])
+        # If spec enables server mode and test doesn't already have --server or --embedded,
+        # inject --server and --insecure flags to connect to the running server
+        if spec_server_enabled and not has_server and not has_embedded:
+            # Insert --server ${server} after the command
+            modified_args.insert(1, "--server")
+            modified_args.insert(2, "${server}")
+            # Add --insecure flag (test servers use self-signed certs)
+            modified_args.insert(3, "--insecure")
+            has_server = True
 
         # If no server specified, not already embedded, AND spec doesn't explicitly enable server mode,
-        # force embedded mode (since default is now server mode which would try to connect to a non-existent server)
-        if not has_server and not has_embedded and not spec_server_enabled:
+        # force embedded mode for query commands only (since default is now server mode which would try to connect to a non-existent server)
+        if is_query_command and not has_server and not has_embedded and not spec_server_enabled:
             # Insert --embedded after "query"
             modified_args.insert(1, "--embedded")
             has_embedded = True

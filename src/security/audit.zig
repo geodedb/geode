@@ -1243,6 +1243,9 @@ pub const AuditLogger = struct {
 
                 // Skip this line (data loss)
                 data_loss += 1;
+
+                // Move to next line before continuing
+                i = line_end + 1;
                 continue;
             }
 
