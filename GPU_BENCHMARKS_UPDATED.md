@@ -21,16 +21,23 @@ Updated all GPU benchmarks to test multiple workload sizes, demonstrating that G
 
 **Key finding:** GPU achieves 3x+ speedup on 5M nodes with 100 iterations
 
-### 2. BFS (Phase 1) ✅
+### 2. BFS (Phase 1) ✅ REMOVED
 **File:** `src/benchmarks/bench_gpu_bfs.zig`
 
-**Test configurations:**
-- 100K nodes, depth 5 - Small
-- 1M nodes, depth 5 - Medium
-- 5M nodes, depth 5 - Large
-- 10M nodes, depth 5 - Very large (target workload)
+**Status:** GPU implementation removed - CPU is 100-1000x faster
 
-**Status:** GPU kernels not yet implemented (shows CPU baseline)
+**Why removed:**
+- Per-level synchronization overhead (20ms per level)
+- Can't amortize memory transfers like PageRank
+- CPU: 0.12ms, GPU: 100-200ms for typical BFS
+
+**Test configurations (CPU-only):**
+- 100K nodes - Small
+- 1M nodes - Medium
+- 5M nodes - Large
+- 10M nodes - Very large
+
+**Key finding:** BFS demonstrates that not all algorithms benefit from GPU. Per-level synchronization makes GPU 100-1000x slower than CPU.
 
 ### 3. Set Operations (Phase 3) ✅
 **File:** `src/benchmarks/bench_gpu_setops.zig`

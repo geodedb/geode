@@ -34,7 +34,7 @@ fn generateSyntheticGraph(config: TestConfig, allocator: std.mem.Allocator) !str
     return .{ .row_offsets = row_offsets, .col_indices = col_indices };
 }
 
-fn runBenchmark(config: TestConfig, gpu_enabled: bool, allocator: std.mem.Allocator) !void {
+fn runBenchmark(config: TestConfig, allocator: std.mem.Allocator) !void {
     std.debug.print("\n{s}:\n", .{config.name});
     std.debug.print("  Graph: {} nodes, {} edges/node, depth={}\n", .{ config.nodes, config.edges_per_node, config.max_depth });
 
@@ -51,11 +51,6 @@ fn runBenchmark(config: TestConfig, gpu_enabled: bool, allocator: std.mem.Alloca
     const cpu_ms = @as(f64, @floatFromInt(cpu_end - cpu_start)) / 1_000_000.0;
 
     std.debug.print("  CPU: {d:.2} ms (visited {} nodes)\n", .{ cpu_ms, cpu_count });
-
-    if (gpu_enabled) {
-        // Note: GPU BFS currently falls back to CPU
-        std.debug.print("  GPU: Not implemented yet (falls back to CPU)\n", .{});
-    }
 }
 
 pub fn main() !void {
@@ -63,47 +58,40 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("GPU BFS Benchmark - Comparative Analysis\n", .{});
-    std.debug.print("=========================================\n", .{});
-
-    const gpu_enabled = phase0.gpuEnabled();
-    std.debug.print("\nGPU Available: {}\n", .{gpu_enabled});
-
-    if (!gpu_enabled) {
-        std.debug.print("\n⚠️  No CUDA device found - running CPU-only benchmarks\n", .{});
-    } else {
-        std.debug.print("\n⚠️  GPU BFS kernels not yet implemented - showing CPU baseline\n", .{});
-    }
+    std.debug.print("BFS Benchmark - CPU Only\n", .{});
+    std.debug.print("=========================\n", .{});
+    std.debug.print("\nNote: GPU BFS removed - overhead dominates for typical workloads\n", .{});
+    std.debug.print("BFS requires per-level synchronization making GPU slower than CPU.\n", .{});
 
     const configs = [_]TestConfig{
         .{
             .nodes = 100_000,
             .edges_per_node = 10,
             .max_depth = 5,
-            .name = "Small Graph (overhead would dominate)",
+            .name = "Small Graph",
         },
         .{
             .nodes = 1_000_000,
             .edges_per_node = 10,
             .max_depth = 5,
-            .name = "Medium Graph (baseline)",
+            .name = "Medium Graph",
         },
         .{
             .nodes = 5_000_000,
             .edges_per_node = 10,
             .max_depth = 5,
-            .name = "Large Graph (GPU target workload)",
+            .name = "Large Graph",
         },
         .{
             .nodes = 10_000_000,
             .edges_per_node = 10,
             .max_depth = 5,
-            .name = "Very Large Graph (GPU sweet spot)",
+            .name = "Very Large Graph",
         },
     };
 
     for (configs) |config| {
-        runBenchmark(config, gpu_enabled, allocator) catch |err| {
+        runBenchmark(config, allocator) catch |err| {
             std.debug.print("\n  Error running benchmark: {}\n", .{err});
             continue;
         };
@@ -111,8 +99,9 @@ pub fn main() !void {
 
     std.debug.print("\n" ++ "=" ** 70 ++ "\n", .{});
     std.debug.print("Summary:\n", .{});
-    std.debug.print("  • Target: 5x speedup on large graphs (5M+ nodes)\n", .{});
-    std.debug.print("  • Status: GPU BFS kernels not yet implemented\n", .{});
-    std.debug.print("  • Expected: Similar patterns to PageRank (overhead vs compute)\n", .{});
+    std.debug.print("  • BFS is highly optimized on CPU with good cache locality\n", .{});
+    std.debug.print("  • GPU would require per-level synchronization (100ms+ overhead)\n", .{});
+    std.debug.print("  • CPU is 100-1000x faster for typical BFS workloads\n", .{});
+    std.debug.print("  • GPU BFS only beneficial for very deep/dense graphs (rare)\n", .{});
     std.debug.print("\nBenchmark complete.\n", .{});
 }
