@@ -29,12 +29,14 @@ Status: IN PROGRESS (Phase0 complete; initial BFS frontier count scaffold added)
 Acceptance (pending): BFS speedup ≥5x on 1M edge synthetic (ReleaseFast) benchmark `bench_gpu_bfs.zig` (benchmark scaffold TODO).
 
 ### Phase 2: Analytical (PageRank)
-1. Kernel: Power iteration with dangling mass reduction + warp‑level sum.  
-2. Convergence criteria & deterministic ordering of output bindings.  
-3. Planner insertion: recognize PageRank function calls; replace with `GpuPageRank` when graph size > threshold.  
-4. Tests: convergence on small graph; compare against CPU implementation diff <1e-6.  
-5. Bench: 50 iterations on 1M edges faster than CPU ≥3x.  
-Acceptance: PageRank E2E returns identical ordering & values tolerance.
+Status: SCAFFOLD STARTED — 2025-10-26T00:07:12.617Z
+1. Kernel: Power iteration with dangling mass reduction + warp‑level sum. (Scaffold planned: implement CPU reference + placeholder GPU invoking same loop; add CANARY)
+2. Convergence criteria & deterministic ordering of output bindings. (Tolerance target <1e-6; ordering by vertex id ascending)
+3. Planner insertion: recognize PageRank function calls; replace with `GpuPageRank` when graph size > threshold (>50k edges) and gpuEnabled(). (TODO)
+4. Tests: `TestCANARY_REQ_GQL_051_GPUPageRankSmallGraph` (TODO) — verify sum of ranks ≈1.0 and diff CPU vs GPU <1e-6.  
+5. Bench: `bench_gpu_pagerank.zig` (TODO) — 50 iterations on 1M edges; capture ms & speedup vs CPU baseline; CANARY line with STATUS=BENCHED when threshold met.  
+Acceptance: PageRank E2E returns identical ordering & values tolerance; benchmark speedup ≥3x.
+Next Steps: add pagerank_kernels.zig (CPU ref + placeholder GPU), integrate into build.zig tests & update planner dispatch.
 
 ### Phase 3: Set Operations & Projection
 1. Kernel: Parallel UNION DISTINCT via hash set (cuckoo or robin hood) with stable emission ordering.  
