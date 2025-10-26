@@ -201,6 +201,39 @@ pub fn build(b: *std.Build) void {
     integration_tests.root_module.addImport("geode", root_mod);
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
+    // Compile Vulkan shaders to SPIR-V (Phase 2)
+    const shader_compile_step = b.step("shaders", "Compile Vulkan shaders to SPIR-V");
+    
+    const shader_sources = [_][]const u8{
+        "src/gpu/kernels/pagerank.comp",
+        "src/gpu/kernels/setops.comp",
+        "src/gpu/kernels/shortest_path.comp",
+        "src/gpu/kernels/vector_add.comp",
+    };
+    
+    for (shader_sources) |shader_src| {
+        const shader_compile = b.addSystemCommand(&[_][]const u8{
+            "glslangValidator",
+            "-V",
+            shader_src,
+            "-o",
+        });
+        shader_compile.addArg(b.fmt("{s}.spv", .{shader_src[0 .. shader_src.len - 5]})); // Remove .comp, add .spv
+        shader_compile_step.dependOn(&shader_compile.step);
+    }
+
+    // Vulkan compute tests (Phase 1)
+    const vulkan_compute_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/vulkan_compute.zig"), .target = target, .optimize = optimize });
+    const vulkan_loader_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/vulkan_loader.zig"), .target = target, .optimize = optimize });
+    
+    const vulkan_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gpu/test_vulkan_basic.zig"), .target = target, .optimize = optimize }) });
+    vulkan_tests.root_module.addImport("vulkan_compute", vulkan_compute_mod);
+    vulkan_tests.root_module.addImport("vulkan_loader", vulkan_loader_mod);
+    vulkan_tests.linkLibC();
+    vulkan_tests.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+    vulkan_tests.linkSystemLibrary("vulkan");
+    const run_vulkan_tests = b.addRunArtifact(vulkan_tests);
+
     // GQL Conformance tests
     const gql_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_conformance.zig"), .target = target, .optimize = optimize }) });
 
@@ -285,6 +318,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_match_call_tests.step);
     test_step.dependOn(&run_decimal_tests.step);
     test_step.dependOn(&run_integration_tests.step);
+    test_step.dependOn(&run_vulkan_tests.step);
 
     // Extended built-ins CANARY adapter + decimal formatter tests
     const canary_extended_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_extended_builtins.zig"), .target = target, .optimize = optimize }) });

@@ -1,0 +1,58 @@
+#version 450
+
+// PageRank iteration kernel for Vulkan
+// Optimized for large graphs (1M+ nodes)
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InputRanks {
+    float ranks_in[];
+};
+
+layout(std430, binding = 1) writeonly buffer OutputRanks {
+    float ranks_out[];
+};
+
+layout(std430, binding = 2) readonly buffer RowOffsets {
+    uint row_offsets[];
+};
+
+layout(std430, binding = 3) readonly buffer ColIndices {
+    uint col_indices[];
+};
+
+layout(std430, binding = 4) readonly buffer OutDegrees {
+    uint out_degrees[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_nodes;
+    float damping_factor;
+    float base_rank;
+} pc;
+
+void main() {
+    uint node_id = gl_GlobalInvocationID.x;
+    
+    if (node_id >= pc.num_nodes) {
+        return;
+    }
+    
+    // Calculate incoming rank contribution
+    float incoming_rank = 0.0;
+    
+    uint start = row_offsets[node_id];
+    uint end = row_offsets[node_id + 1];
+    
+    for (uint i = start; i < end; i++) {
+        uint neighbor = col_indices[i];
+        uint neighbor_degree = out_degrees[neighbor];
+        
+        if (neighbor_degree > 0) {
+            incoming_rank += ranks_in[neighbor] / float(neighbor_degree);
+        }
+    }
+    
+    // Apply PageRank formula: (1-d)/N + d * incoming_rank
+    ranks_out[node_id] = pc.base_rank + pc.damping_factor * incoming_rank;
+}
