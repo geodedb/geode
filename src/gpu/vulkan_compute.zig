@@ -213,7 +213,7 @@ pub const VulkanBuffer = struct {
             .flags = 0,
             .size = size,
             .usage = usage,
-            .sharingMode = vk.c.VK_SHARING_MODE_EXCLUSIVE,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount = 0,
             .pQueueFamilyIndices = null,
         };
@@ -349,11 +349,11 @@ pub const ComputePipeline = struct {
         errdefer vk.Vulkan.destroyShaderModule(compute.device, shader_module, null);
         
         // Create descriptor set layout
-        const bindings = try compute.allocator.alloc(vk.c.VkDescriptorSetLayoutBinding, descriptor_count);
+        const bindings = try compute.allocator.alloc(vk.VkDescriptorSetLayoutBinding, descriptor_count);
         defer compute.allocator.free(bindings);
         
         for (bindings, 0..) |*binding, i| {
-            binding.* = vk.c.VkDescriptorSetLayoutBinding{
+            binding.* = vk.VkDescriptorSetLayoutBinding{
                 .binding = @intCast(i),
                 .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .descriptorCount = 1,
@@ -378,7 +378,7 @@ pub const ComputePipeline = struct {
         errdefer vk.Vulkan.destroyDescriptorSetLayout(compute.device, descriptor_set_layout, null);
         
         // Create pipeline layout with push constants support
-        const push_constant_range = vk.c.VkPushConstantRange{
+        const push_constant_range = vk.VkPushConstantRange{
             .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
             .offset = 0,
             .size = 128, // Max 128 bytes for push constants
@@ -437,7 +437,7 @@ pub const ComputePipeline = struct {
         errdefer vk.Vulkan.destroyPipeline(compute.device, pipeline, null);
         
         // Create descriptor pool
-        const pool_size = vk.c.VkDescriptorPoolSize{
+        const pool_size = vk.VkDescriptorPoolSize{
             .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .descriptorCount = descriptor_count * 10, // Allocate space for multiple sets
         };
