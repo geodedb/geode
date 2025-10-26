@@ -268,8 +268,9 @@ pub fn build(b: *std.Build) void {
     transport_quic_mod_tests.addImport("vendor_quic", vendor_quic_mod_tests);
     custom_tests.root_module.addImport("transport/quic", transport_quic_mod_tests);
     custom_tests.root_module.addImport("vendor_quic", vendor_quic_mod_tests);
-    if (target.result.os.tag == .windows) {
-        custom_tests.linkLibC();
+    custom_tests.linkLibC();
+    if (target.result.os.tag == .linux) {
+        custom_tests.linkSystemLibrary("dl");
     }
     const run_custom_tests = b.addRunArtifact(custom_tests);
 
@@ -1132,6 +1133,7 @@ pub fn build(b: *std.Build) void {
     });
     bench_gpu_bfs.root_module.addImport("gpu", gpu_mod);
     bench_gpu_bfs.linkLibC();
+    bench_gpu_bfs.linkSystemLibrary("dl");
     b.installArtifact(bench_gpu_bfs);
     const bench_gpu_step = b.step("bench-gpu", "Run GPU benchmarks");
     const bench_gpu_bfs_run = b.addRunArtifact(bench_gpu_bfs);
@@ -1144,6 +1146,7 @@ pub fn build(b: *std.Build) void {
     });
     bench_gpu_pagerank.root_module.addImport("gpu", gpu_mod);
     bench_gpu_pagerank.linkLibC();
+    bench_gpu_pagerank.linkSystemLibrary("dl");
     b.installArtifact(bench_gpu_pagerank);
     const bench_gpu_pagerank_run = b.addRunArtifact(bench_gpu_pagerank);
     bench_gpu_step.dependOn(&bench_gpu_pagerank_run.step);
@@ -1155,6 +1158,7 @@ pub fn build(b: *std.Build) void {
     });
     bench_gpu_setops.root_module.addImport("gpu", gpu_mod);
     bench_gpu_setops.linkLibC();
+    bench_gpu_setops.linkSystemLibrary("dl");
     b.installArtifact(bench_gpu_setops);
     const bench_gpu_setops_run = b.addRunArtifact(bench_gpu_setops);
     bench_gpu_step.dependOn(&bench_gpu_setops_run.step);
@@ -1166,6 +1170,7 @@ pub fn build(b: *std.Build) void {
     });
     bench_gpu_shortest_path.root_module.addImport("gpu", gpu_mod);
     bench_gpu_shortest_path.linkLibC();
+    bench_gpu_shortest_path.linkSystemLibrary("dl");
     b.installArtifact(bench_gpu_shortest_path);
     const bench_gpu_shortest_path_run = b.addRunArtifact(bench_gpu_shortest_path);
     bench_gpu_step.dependOn(&bench_gpu_shortest_path_run.step);
