@@ -39,11 +39,14 @@ Acceptance: PageRank E2E returns identical ordering & values tolerance; benchmar
 Next Steps: add pagerank_kernels.zig (CPU ref + placeholder GPU), integrate into build.zig tests & update planner dispatch.
 
 ### Phase 3: Set Operations & Projection
-1. Kernel: Parallel UNION DISTINCT via hash set (cuckoo or robin hood) with stable emission ordering.  
-2. Kernel: INTERSECT / EXCEPT using bitset or sorted merge GPU path.  
-3. Planner: cost model extension for GPU set ops; threshold on cardinality.  
-4. Tests: GPU vs CPU set op equivalence (unordered semantics).  
-Acceptance: UNION DISTINCT speedup ≥4x for 5M rows synthetic.
+Status: NOT STARTED -> SCAFFOLD QUEUED — 2025-10-26T00:08:52.339Z
+1. Kernel: Parallel UNION DISTINCT via hash set (cuckoo or robin hood) with stable emission ordering. (Plan: start with GPU parallel sort + unique, then optimize to hash)
+2. Kernel: INTERSECT / EXCEPT using bitset or sorted merge GPU path. (Initial implementation: sorted merge using thrust-like pattern in Zig; later bitset)
+3. Planner: cost model extension for GPU set ops; threshold on cardinality (>200k rows) and distinct ratio >0.3. (TODO)
+4. Tests: `TestCANARY_REQ_GQL_051_GPUUnionDistinctSmall`, `TestCANARY_REQ_GQL_051_GPUIntersectSmall` (TODO) comparing CPU vs GPU sets.
+5. Benchmark: `bench_gpu_setops.zig` (TODO) with UNION DISTINCT 5M rows speedup target ≥4x.
+Acceptance: UNION DISTINCT speedup ≥4x; correctness preserved (unordered semantics) and deterministic tie-break when ordered context required.
+Next Steps: add `gpu_setops_kernels.zig` with CPU fallbacks + placeholder GPU routines; wire planner heuristic; create tests & benchmark scaffold.
 
 ### Phase 4: Shortest Path (Single‑Source Dijkstra / Delta-Stepping)
 1. Kernel: Delta-stepping with bucket parallelization; support weighted edges (float64).  
