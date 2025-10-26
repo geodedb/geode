@@ -1,23 +1,34 @@
 # TODO - Current Development Priorities
 
-> **Status**: Updated October 26, 2025 - **NEW: Missing Math Functions Discovered**
-> **Test Coverage**: 1473/1703 tests passing (86.5%) - 184 failing tests (177 timeouts + 6 exit codes + 1 stderr)
+> **Status**: Updated October 26, 2025 - **CRITICAL: 400 Test Timeouts After Test Runner Fix**
+> **Test Coverage**: UNKNOWN - Full test run showing 400 timeout failures
 > **Build Status**: ✅ Passes `make verify-all` with **0 memory leaks**
 > **CANARY Status**: 1016+ tracked requirements
 > **Phase Completion**: ✅ **ALL 7 FEATURE PHASES COMPLETE** (Phases 2-7 + Phase 1)
 > **Security Status**: 🟢 **PRODUCTION READY** - All 7 P0 critical vulnerabilities fixed
 
-## 🚨 URGENT: Auth Mode Change Impact (October 26, 2025)
+## 🚨 CRITICAL: 400 Test Timeouts (October 26, 2025)
 
-**Status**: ✅ **FIXED** - Test harness updated for new server mode default
-**Impact**: Changed default from `--embedded` to server mode broke 400+ tests
-**Resolution**: Updated `extended_test_runner.py` to auto-detect server mode from spec configuration
-**Current Pass Rate**: 86.5% (1473/1703 tests passing)
-**Remaining Issues**: 177 timeout failures due to missing function implementations
+**Status**: 🔴 **INVESTIGATION REQUIRED** - Test runner fix may have introduced regressions
+**Current Failures**:
+- **timeout failures**: 400 tests (massive regression from previous 40 failures)
+- **exit code failures**: 2 tests (jaccard-similarity, cosine-similarity)
+- **missing output**: 1 test (match-call-dijkstra-optimal)
+
+**Root Cause Hypothesis**:
+1. Test runner command extraction fix may have broken some test formats
+2. Possible interaction between list/string command handling and certain test specs
+3. May need to investigate which tests are timing out (math tests were passing earlier)
+
+**Immediate Actions Required**:
+1. Compare current test run with previous 97.6% pass rate run
+2. Identify which test categories are timing out
+3. Check if test runner changes broke previously passing tests
+4. Review command extraction logic for edge cases
 
 ---
 
-## 🚨 CURRENT PRIORITY: Missing Math Functions (October 26, 2025)
+## 🚨 PREVIOUS STATUS: Test Runner Command Extraction Fix (October 26, 2025)
 
 ### New Test Failure Summary
 **Total Failures**: 184 tests (10.8% failure rate)

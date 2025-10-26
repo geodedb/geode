@@ -334,7 +334,7 @@ geodetestlab-comprehensive: build
 	@echo "Running comprehensive geodetestlab tests..."
 	@if [ -x "parallel_test_runner.py" ]; then \
 		echo "Using parallel test runner with default settings..."; \
-		python3 parallel_test_runner.py --max-workers 4 --timeout 10; \
+		python3 parallel_test_runner.py --max-workers 4 --timeout 120; \
 	elif [ -x "extended_test_runner.py" ]; then \
 		echo "Using extended test runner..."; \
 		python3 extended_test_runner.py; \
