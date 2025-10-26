@@ -864,8 +864,7 @@ pub fn getRotationState(allocator: std.mem.Allocator) !struct {
     rotation_in_progress: bool,
     scheduled_rotation: ?i64,
 } {
-    const timestamp_str = try std.fmt.allocPrint(allocator, "{d}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
-        .{2025, 10, 25, 0, 0, 0});
+    const timestamp_str = try std.fmt.allocPrint(allocator, "{d}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{ 2025, 10, 25, 0, 0, 0 });
 
     return .{
         .current_generation = rotation_state.current_generation,

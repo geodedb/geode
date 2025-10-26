@@ -557,7 +557,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const graph_name = cg.name;
 
             // DEBUG: Log IF NOT EXISTS flag
-            std.log.debug("CREATE GRAPH: name='{s}', if_not_exists={}, or_replace={}", .{graph_name, cg.if_not_exists, cg.or_replace});
+            std.log.debug("CREATE GRAPH: name='{s}', if_not_exists={}, or_replace={}", .{ graph_name, cg.if_not_exists, cg.or_replace });
 
             // Phase 3: Write lock for CREATE GRAPH
             cat.rwlock.lock();

@@ -231,9 +231,7 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("wal", wal_mod_for_tests);
     // Provide storage page manager to test redo optimization
     custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
-    // Provide cdc_enhanced module to test aggregator for CDC variance benchmarks
-    const cdc_enhanced_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
-    custom_tests.root_module.addImport("cdc_enhanced", cdc_enhanced_mod_for_tests);
+    // CDC enhanced is available through the geode module, no need for standalone module import
 
     const storage_catalog_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
     storage_catalog_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);

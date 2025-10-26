@@ -1493,7 +1493,6 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     const stdout_fd = std.fs.File{ .handle = 1 }; // stdout
 
     // Use the geode module to execute queries
-    
 
     // Store the last query result and query text for PULL requests
     var last_result: ?[]const u8 = null;
@@ -2184,7 +2183,6 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
     }
 
     // Use the geode module to execute the query via test harness
-    
 
     // CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI Authentication"; ASPECT=EmbeddedAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
     // Validate authentication if auth is enabled
@@ -2648,7 +2646,6 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     if (non_interactive) {
         const stdin_file = std.fs.File{ .handle = 0 }; // stdin handle
         const stdout_file = std.fs.File{ .handle = 1 }; // stdout handle
-        
 
         // Read all input at once
         const stdin_content = stdin_file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {

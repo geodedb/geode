@@ -956,7 +956,28 @@ const MemorySink = struct {
 
     pub fn send(self: *MemorySink, events: []const ChangeEvent) !void {
         for (events) |event| {
-            try self.events.append(self.allocator, event);
+            // Deep copy event to avoid double-free - duplicate the allocated strings
+            const copied_event = ChangeEvent{
+                .timestamp = event.timestamp,
+                .transaction_id = event.transaction_id,
+                .sequence = event.sequence,
+                .change_type = event.change_type,
+                .entity_type = event.entity_type,
+                .entity_id = event.entity_id,
+                .before = if (event.before) |b| try self.allocator.dupe(u8, b) else null,
+                .after = if (event.after) |a| try self.allocator.dupe(u8, a) else null,
+                .metadata = blk: {
+                    var new_meta = std.StringHashMap([]const u8).init(self.allocator);
+                    var it = event.metadata.iterator();
+                    while (it.next()) |entry| {
+                        const key_copy = try self.allocator.dupe(u8, entry.key_ptr.*);
+                        const val_copy = try self.allocator.dupe(u8, entry.value_ptr.*);
+                        try new_meta.put(key_copy, val_copy);
+                    }
+                    break :blk new_meta;
+                },
+            };
+            try self.events.append(self.allocator, copied_event);
         }
     }
 };
@@ -1092,6 +1113,14 @@ pub const StreamingEngine = struct {
 
     pub fn deinit(self: *Self) void {
         self.stop();
+        // Free allocated strings in queries
+        var it = self.queries.valueIterator();
+        while (it.next()) |query| {
+            self.allocator.free(query.id);
+            self.allocator.free(query.name);
+            self.allocator.free(query.query);
+            self.allocator.free(query.aggregations);
+        }
         self.queries.deinit();
         self.windows.deinit();
     }
@@ -1273,11 +1302,15 @@ fn freeEventInternal(engine: *CDCEngine, ev: *ChangeEvent) void {
 }
 
 // Shallow free for contexts where we only have allocator, not engine pointer.
+// Now also frees keys since MemorySink duplicates them
 fn freeEventShallow(allocator: Allocator, ev: *ChangeEvent) void {
     if (ev.before) |b| allocator.free(b);
     if (ev.after) |a| allocator.free(a);
     var it = ev.metadata.iterator();
-    while (it.next()) |entry| allocator.free(entry.value_ptr.*);
+    while (it.next()) |entry| {
+        allocator.free(entry.key_ptr.*); // Free the key (now owned after duplication)
+        allocator.free(entry.value_ptr.*); // Free the value
+    }
     ev.metadata.deinit();
     ev.before = null;
     ev.after = null;
@@ -1302,9 +1335,10 @@ pub fn getCDCStatus(engine: *CDCEngine) CDCStatus {
 test "CDC basic operations" {
     const allocator = std.testing.allocator;
 
+    var sinks: [1]CDCSink = .{.memory};
     const config = CDCConfig{
         .enabled = true,
-        .sinks = &[_]CDCSink{.memory},
+        .sinks = &sinks,
         .batch_size = 10,
         .flush_interval_ms = 100,
     };
@@ -1328,9 +1362,10 @@ test "CDC basic operations" {
 test "Streaming query creation" {
     const allocator = std.testing.allocator;
 
+    var sinks2: [1]CDCSink = .{.memory};
     const cdc_config = CDCConfig{
         .enabled = true,
-        .sinks = &[_]CDCSink{.memory},
+        .sinks = &sinks2,
     };
 
     var cdc_engine = try CDCEngine.init(allocator, cdc_config);

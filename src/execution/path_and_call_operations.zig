@@ -34,7 +34,6 @@ var global_tde_mutex: std.Thread.Mutex = .{};
 var global_cdc_engine: ?*cdc_mod.CDCEngine = null;
 var global_cdc_mutex: std.Thread.Mutex = .{};
 
-
 pub fn buildMemberPath(allocator: std.mem.Allocator, expr: *ast.Expr, result: *std.ArrayList(u8)) !void {
     switch (expr.*) {
         .Member => |member| {
@@ -2128,8 +2127,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         const row = try allocator.alloc(eval.Value, 3);
         row[0] = eval.Value{ .Int = files_cleaned };
-        row[1] = eval.Value{ .Bool = true };  // logs_archived
-        row[2] = eval.Value{ .Bool = true };  // test_data_removed
+        row[1] = eval.Value{ .Bool = true }; // logs_archived
+        row[2] = eval.Value{ .Bool = true }; // test_data_removed
         rows[0] = row;
 
         return ExecutionResult{
@@ -3313,8 +3312,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
 
-    // ========== TDE TEST PROCEDURES (Phase 3 - REAL IMPLEMENTATIONS) ==========
-    // CANARY: REQ=REQ-TDE-TEST-PROCEDURES; FEATURE="TDETestProcedures"; ASPECT=RealImplementation; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // ========== TDE TEST PROCEDURES (Phase 3 - REAL IMPLEMENTATIONS) ==========
+        // CANARY: REQ=REQ-TDE-TEST-PROCEDURES; FEATURE="TDETestProcedures"; ASPECT=RealImplementation; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
 
     } else if (std.mem.eql(u8, proc_name, "tde.configure_provider")) {
         // CANARY: REQ=REQ-TDE-PROC-037; FEATURE="TDETestProcedures"; ASPECT=ConfigureProvider; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
@@ -3328,10 +3327,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const provider_type = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Str => |s| s,
                 else => "StaticEnv",
@@ -3398,10 +3397,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const max_age_hours: u32 = if (args.len > 1) blk: {
             const arg_val = switch (args[1].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Int => |i| @intCast(i),
                 else => 168,
@@ -3490,10 +3489,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const test_data = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Str => |s| s,
                 else => "confidential data for roundtrip test",
@@ -3532,10 +3531,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const backup_path = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Str => |s| s,
                 else => "/tmp/tde_test_backup.enc",
@@ -3576,10 +3575,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const backup_path = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Str => |s| s,
                 else => "/tmp/tde_test_backup.enc",
@@ -3588,10 +3587,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const manifest_path = if (args.len > 1) blk: {
             const arg_val = switch (args[1].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Str => |s| s,
                 else => "/tmp/tde_test_manifest.json",
@@ -3656,10 +3655,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const duration_seconds = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Int => |i| @as(u32, @intCast(i)),
                 else => 10,
@@ -3668,10 +3667,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const concurrent_transactions = if (args.len > 1) blk: {
             const arg_val = switch (args[1].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Int => |i| @as(u32, @intCast(i)),
                 else => 10,
@@ -3784,10 +3783,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const endpoint = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Str => |s| s,
                 else => "https://kms.example.com",
@@ -3796,10 +3795,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const region = if (args.len > 1) blk: {
             const arg_val = switch (args[1].*) {
-            .String => |s| eval.Value{ .Str = s },
-            .Int => |i| eval.Value{ .Int = i },
-            else => eval.Value{ .Null = {} },
-        };
+                .String => |s| eval.Value{ .Str = s },
+                .Int => |i| eval.Value{ .Int = i },
+                else => eval.Value{ .Null = {} },
+            };
             break :blk switch (arg_val) {
                 .Str => |s| s,
                 else => "us-east-1",
@@ -4012,7 +4011,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
 
-    // ========== END TDE TEST PROCEDURES ==========
+        // ========== END TDE TEST PROCEDURES ==========
 
     } else if (std.mem.eql(u8, proc_name, "algo.bfs.stream") or
         std.mem.eql(u8, proc_name, "bfs"))
@@ -4136,7 +4135,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.disable")) {
         // CANARY: REQ=REQ-CDC-PROC-002; FEATURE="CDCProcedures"; ASPECT=Disable; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4161,7 +4159,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.status")) {
         // CANARY: REQ=REQ-CDC-PROC-003; FEATURE="CDCProcedures"; ASPECT=Status; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4193,7 +4190,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.export_diagnostics")) {
         // CANARY: REQ=REQ-CDC-PROC-004; FEATURE="CDCProcedures"; ASPECT=ExportDiagnostics; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4220,7 +4216,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_events")) {
         // CANARY: REQ=REQ-CDC-PROC-005; FEATURE="CDCProcedures"; ASPECT=GetEvents; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4235,7 +4230,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             columns[3] = try allocator.dupe(u8, "timestamp");
             columns[4] = try allocator.dupe(u8, "payload");
             const rows = try allocator.alloc([]eval.Value, 0);
-        return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
+            return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
         }
 
         // For now, return a single sample event
@@ -4254,7 +4249,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.pause")) {
         // CANARY: REQ=REQ-CDC-PROC-006; FEATURE="CDCProcedures"; ASPECT=Pause; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 1);
@@ -4264,7 +4258,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.resume")) {
         // CANARY: REQ=REQ-CDC-PROC-007; FEATURE="CDCProcedures"; ASPECT=Resume; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 1);
@@ -4274,7 +4267,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.set_guardrail")) {
         // CANARY: REQ=REQ-CDC-PROC-008; FEATURE="CDCProcedures"; ASPECT=SetGuardrail; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
 
@@ -4325,7 +4317,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_guardrail_status")) {
         // CANARY: REQ=REQ-CDC-PROC-009; FEATURE="CDCProcedures"; ASPECT=GetGuardrailStatus; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4352,7 +4343,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.reset_guardrails")) {
         // CANARY: REQ=REQ-CDC-PROC-010; FEATURE="CDCProcedures"; ASPECT=ResetGuardrails; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4374,7 +4364,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_watermark")) {
         // CANARY: REQ=REQ-CDC-PROC-011; FEATURE="CDCProcedures"; ASPECT=GetWatermark; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4399,7 +4388,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_pending_events")) {
         // CANARY: REQ=REQ-CDC-PROC-012; FEATURE="CDCProcedures"; ASPECT=GetPendingEvents; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4424,7 +4412,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.configure_adaptive_flush")) {
         // CANARY: REQ=REQ-CDC-PROC-013; FEATURE="CDCProcedures"; ASPECT=ConfigureAdaptiveFlush; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 1);
@@ -4434,7 +4421,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_flush_metrics")) {
         // CANARY: REQ=REQ-CDC-PROC-014; FEATURE="CDCProcedures"; ASPECT=GetFlushMetrics; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4461,7 +4447,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_malformed_records")) {
         // CANARY: REQ=REQ-CDC-PROC-015; FEATURE="CDCProcedures"; ASPECT=GetMalformedRecords; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4484,7 +4469,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_corruption_analysis")) {
         // CANARY: REQ=REQ-CDC-PROC-016; FEATURE="CDCProcedures"; ASPECT=GetCorruptionAnalysis; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 3);
@@ -4498,7 +4482,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_ordered_events")) {
         // CANARY: REQ=REQ-CDC-PROC-017; FEATURE="CDCProcedures"; ASPECT=GetOrderedEvents; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 3);
@@ -4512,7 +4495,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.check_duplicates")) {
         // CANARY: REQ=REQ-CDC-PROC-018; FEATURE="CDCProcedures"; ASPECT=CheckDuplicates; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4535,7 +4517,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_wal_status")) {
         // CANARY: REQ=REQ-CDC-PROC-019; FEATURE="CDCProcedures"; ASPECT=GetWalStatus; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4560,7 +4541,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.configure_wal_tail")) {
         // CANARY: REQ=REQ-CDC-PROC-020; FEATURE="CDCProcedures"; ASPECT=ConfigureWalTail; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 2);
@@ -4572,7 +4552,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.set_retention_policy")) {
         // CANARY: REQ=REQ-CDC-PROC-021; FEATURE="CDCProcedures"; ASPECT=SetRetentionPolicy; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 1);
@@ -4582,7 +4561,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.cleanup_expired_events")) {
         // CANARY: REQ=REQ-CDC-PROC-022; FEATURE="CDCProcedures"; ASPECT=CleanupExpiredEvents; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 3);
@@ -4596,7 +4574,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_telemetry_metrics")) {
         // CANARY: REQ=REQ-CDC-PROC-023; FEATURE="CDCProcedures"; ASPECT=GetTelemetryMetrics; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4622,7 +4599,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.get_performance_alerts")) {
         // CANARY: REQ=REQ-CDC-PROC-024; FEATURE="CDCProcedures"; ASPECT=GetPerformanceAlerts; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 4);
@@ -4638,7 +4614,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.stop")) {
         // CANARY: REQ=REQ-CDC-PROC-025; FEATURE="CDCProcedures"; ASPECT=Stop; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4660,7 +4635,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else if (std.mem.eql(u8, proc_name, "cdc.start")) {
         // CANARY: REQ=REQ-CDC-PROC-026; FEATURE="CDCProcedures"; ASPECT=Start; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         global_cdc_mutex.lock();
@@ -4684,7 +4658,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]eval.Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
-
     } else {
         // Unknown procedure - return error
         std.log.warn("Unknown procedure: {s}", .{proc_name});
