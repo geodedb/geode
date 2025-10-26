@@ -333,7 +333,7 @@ pub const VkDescriptorSetLayoutBinding = extern struct {
     descriptorType: u32,
     descriptorCount: u32,
     stageFlags: VkShaderStageFlags,
-    pImmutableSamplers: ?[*]const anyopaque,
+    pImmutableSamplers: ?*const anyopaque,
 };
 
 pub const VkDescriptorSetLayoutCreateInfo = extern struct {
@@ -447,12 +447,12 @@ pub const VkSubmitInfo = extern struct {
     sType: u32,
     pNext: ?*const anyopaque,
     waitSemaphoreCount: u32,
-    pWaitSemaphores: ?[*]const anyopaque,
+    pWaitSemaphores: ?*const anyopaque,
     pWaitDstStageMask: ?[*]const u32,
     commandBufferCount: u32,
     pCommandBuffers: [*]const VkCommandBuffer,
     signalSemaphoreCount: u32,
-    pSignalSemaphores: ?[*]const anyopaque,
+    pSignalSemaphores: ?*const anyopaque,
 };
 
 pub const VkFenceCreateInfo = extern struct {

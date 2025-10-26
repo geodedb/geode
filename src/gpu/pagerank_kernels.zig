@@ -4,11 +4,10 @@ const CudaLoader = @import("cuda_loader.zig").CudaLoader;
 const SmartKernelLoader = @import("smart_kernel_loader.zig").SmartKernelLoader;
 const MemoryManager = @import("memory_manager.zig").MemoryManager;
 const kernel_sources = @import("kernel_sources.zig");
-// Vulkan support temporarily disabled - needs build system refactoring for @cImport in modules
-// const VulkanCompute = @import("vulkan_compute.zig").VulkanCompute;
-// const VulkanBuffer = @import("vulkan_compute.zig").VulkanBuffer;
-// const ComputePipeline = @import("vulkan_compute.zig").ComputePipeline;
-// const vulkan_shaders = @import("vulkan_shaders.zig");
+const VulkanCompute = @import("vulkan_compute.zig").VulkanCompute;
+const VulkanBuffer = @import("vulkan_compute.zig").VulkanBuffer;
+const ComputePipeline = @import("vulkan_compute.zig").ComputePipeline;
+const vulkan_shaders = @import("vulkan_shaders.zig");
 
 // CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase3VulkanPageRank; STATUS=WIP; TEST=TestCANARY_REQ_GQL_051_GPUPageRankVulkan; OWNER=engine; UPDATED=2025-10-26
 
@@ -58,12 +57,19 @@ pub fn pagerankGPU(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
         return pagerankCPU(g, iterations, d, allocator);
     }
 
-    // Try CUDA, fallback to CPU (Vulkan temporarily disabled)
+    // Try CUDA first (if available)
     if (gpuPageRankCudaImpl(g, iterations, d, allocator)) |result| {
         return result;
     } else |cuda_err| {
-        std.debug.print("CUDA PageRank failed: {}, falling back to CPU\n", .{cuda_err});
-        return pagerankCPU(g, iterations, d, allocator);
+        std.debug.print("CUDA PageRank failed: {}, trying Vulkan\n", .{cuda_err});
+        
+        // Try Vulkan fallback
+        if (gpuPageRankVulkanImpl(g, iterations, d, allocator)) |result| {
+            return result;
+        } else |vulkan_err| {
+            std.debug.print("Vulkan PageRank failed: {}, falling back to CPU\n", .{vulkan_err});
+            return pagerankCPU(g, iterations, d, allocator);
+        }
     }
 }
 
@@ -166,10 +172,120 @@ fn gpuPageRankCudaImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.A
     return result;
 }
 
-// Vulkan implementation temporarily disabled - needs build system refactoring
-// fn gpuPageRankVulkanImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Allocator) ![]f64 {
-//     ... (implementation preserved in git history)
-// }
+fn gpuPageRankVulkanImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Allocator) ![]f64 {
+    // Initialize Vulkan compute
+    var compute = VulkanCompute.init(allocator) catch |err| {
+        std.debug.print("Failed to initialize Vulkan: {}\n", .{err});
+        return error.GPUUnavailable;
+    };
+    defer compute.deinit();
+    
+    std.debug.print("Using Vulkan device: {s}\n", .{compute.getDeviceName()});
+    
+    // Get SPIR-V shader
+    const spirv_words = vulkan_shaders.getShaderWords("pagerank") orelse return error.ShaderNotFound;
+    
+    // Create compute pipeline (5 buffers: ranks_in, ranks_out, row_offsets, col_indices, out_degrees)
+    var pipeline = try ComputePipeline.createFromSPIRV(&compute, spirv_words, 5);
+    defer pipeline.destroy();
+    
+    // Calculate buffer sizes
+    const num_nodes = g.num_nodes;
+    const num_edges = g.col_indices.len;
+    const ranks_size = num_nodes * @sizeOf(f32);
+    const row_size = (num_nodes + 1) * @sizeOf(u32);
+    const col_size = num_edges * @sizeOf(u32);
+    const degrees_size = num_nodes * @sizeOf(u32);
+    
+    // Create device buffers
+    var buf_ranks_in = try VulkanBuffer.create(&compute, ranks_size, 
+        @import("vulkan_loader.zig").VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    defer buf_ranks_in.destroy();
+    
+    var buf_ranks_out = try VulkanBuffer.create(&compute, ranks_size,
+        @import("vulkan_loader.zig").VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    defer buf_ranks_out.destroy();
+    
+    var buf_row_offsets = try VulkanBuffer.create(&compute, row_size,
+        @import("vulkan_loader.zig").VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    defer buf_row_offsets.destroy();
+    
+    var buf_col_indices = try VulkanBuffer.create(&compute, col_size,
+        @import("vulkan_loader.zig").VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    defer buf_col_indices.destroy();
+    
+    var buf_out_degrees = try VulkanBuffer.create(&compute, degrees_size,
+        @import("vulkan_loader.zig").VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    defer buf_out_degrees.destroy();
+    
+    // Initialize ranks on host (f32)
+    const h_ranks = try allocator.alloc(f32, num_nodes);
+    defer allocator.free(h_ranks);
+    const init_rank: f32 = 1.0 / @as(f32, @floatFromInt(num_nodes));
+    for (h_ranks) |*r| r.* = init_rank;
+    
+    // Calculate out-degrees
+    var h_out_degrees = try allocator.alloc(u32, num_nodes);
+    defer allocator.free(h_out_degrees);
+    for (h_out_degrees) |*d_out| d_out.* = 0;
+    for (0..num_nodes) |v| {
+        const start = g.row_offsets[v];
+        const end = g.row_offsets[v + 1];
+        h_out_degrees[v] = end - start;
+    }
+    
+    // Copy data to device
+    try buf_ranks_in.copyFromHost(std.mem.sliceAsBytes(h_ranks));
+    try buf_row_offsets.copyFromHost(std.mem.sliceAsBytes(g.row_offsets));
+    try buf_col_indices.copyFromHost(std.mem.sliceAsBytes(g.col_indices));
+    try buf_out_degrees.copyFromHost(std.mem.sliceAsBytes(h_out_degrees));
+    
+    // Setup push constants
+    const damping_f32: f32 = @floatCast(d);
+    const base_rank: f32 = (1.0 - damping_f32) / @as(f32, @floatFromInt(num_nodes));
+    const push_constants = [_]u32{
+        num_nodes,
+        @bitCast(damping_f32),
+        @bitCast(base_rank),
+    };
+    
+    // Calculate workgroup dimensions
+    const local_size: u32 = 256;
+    const num_workgroups = (num_nodes + local_size - 1) / local_size;
+    
+    // PageRank iterations
+    var it: u32 = 0;
+    while (it < iterations) : (it += 1) {
+        // Execute compute shader
+        const buffers = [_]VulkanBuffer{
+            buf_ranks_in,
+            buf_ranks_out,
+            buf_row_offsets,
+            buf_col_indices,
+            buf_out_degrees,
+        };
+        
+        try pipeline.executeWithPushConstants(
+            @constCast(&buffers),
+            .{ num_workgroups, 1, 1 },
+            &push_constants,
+        );
+        
+        // Swap buffers for next iteration
+        std.mem.swap(VulkanBuffer, &buf_ranks_in, &buf_ranks_out);
+    }
+    
+    // Copy results back
+    try buf_ranks_in.copyToHost(std.mem.sliceAsBytes(h_ranks));
+    
+    // Convert f32 to f64 for output
+    var result = try allocator.alloc(f64, num_nodes);
+    for (h_ranks, 0..) |r, i| {
+        result[i] = @floatCast(r);
+    }
+    
+    return result;
+}
 
 test "TestCANARY_REQ_GQL_051_GPUPageRankSmallGraph" {
     // Graph: 0->1,2 ; 1->2 ; 2->0 ; 2->3 ; 3->2

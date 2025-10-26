@@ -116,14 +116,16 @@ pub const VulkanCompute = struct {
         const queue_family_index = compute_queue_family.?;
         
         // Create logical device
-        const queue_priority: f32 = 1.0;
-        const queue_create_info = vk.VkDeviceQueueCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .queueFamilyIndex = queue_family_index,
-            .queueCount = 1,
-            .pQueuePriorities = &queue_priority,
+        const queue_priorities = [_]f32{1.0};
+        const queue_create_infos = [_]vk.VkDeviceQueueCreateInfo{
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .queueFamilyIndex = queue_family_index,
+                .queueCount = 1,
+                .pQueuePriorities = &queue_priorities,
+            },
         };
         
         const device_create_info = vk.VkDeviceCreateInfo{
@@ -131,7 +133,7 @@ pub const VulkanCompute = struct {
             .pNext = null,
             .flags = 0,
             .queueCreateInfoCount = 1,
-            .pQueueCreateInfos = &queue_create_info,
+            .pQueueCreateInfos = &queue_create_infos,
             .enabledLayerCount = 0,
             .ppEnabledLayerNames = null,
             .enabledExtensionCount = 0,
@@ -378,20 +380,24 @@ pub const ComputePipeline = struct {
         errdefer vk.Vulkan.destroyDescriptorSetLayout(compute.device, descriptor_set_layout, null);
         
         // Create pipeline layout with push constants support
-        const push_constant_range = vk.VkPushConstantRange{
-            .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
-            .offset = 0,
-            .size = 128, // Max 128 bytes for push constants
+        const push_constant_ranges = [_]vk.VkPushConstantRange{
+            .{
+                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                .offset = 0,
+                .size = 128, // Max 128 bytes for push constants
+            },
         };
+        
+        const descriptor_set_layouts = [_]vk.VkDescriptorSetLayout{descriptor_set_layout};
         
         const pipeline_layout_create_info = vk.VkPipelineLayoutCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .setLayoutCount = 1,
-            .pSetLayouts = &descriptor_set_layout,
+            .pSetLayouts = &descriptor_set_layouts,
             .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &push_constant_range,
+            .pPushConstantRanges = &push_constant_ranges,
         };
         
         var pipeline_layout: vk.VkPipelineLayout = undefined;
@@ -437,9 +443,11 @@ pub const ComputePipeline = struct {
         errdefer vk.Vulkan.destroyPipeline(compute.device, pipeline, null);
         
         // Create descriptor pool
-        const pool_size = vk.VkDescriptorPoolSize{
-            .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .descriptorCount = descriptor_count * 10, // Allocate space for multiple sets
+        const pool_sizes = [_]vk.VkDescriptorPoolSize{
+            .{
+                .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = descriptor_count * 10, // Allocate space for multiple sets
+            },
         };
         
         const pool_create_info = vk.VkDescriptorPoolCreateInfo{
@@ -448,7 +456,7 @@ pub const ComputePipeline = struct {
             .flags = 0,
             .maxSets = 10,
             .poolSizeCount = 1,
-            .pPoolSizes = &pool_size,
+            .pPoolSizes = &pool_sizes,
         };
         
         var descriptor_pool: vk.VkDescriptorPool = undefined;
@@ -481,12 +489,13 @@ pub const ComputePipeline = struct {
         workgroup_count: [3]u32,
     ) !void {
         // Allocate descriptor set
+        const set_layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout};
         const alloc_info = vk.VkDescriptorSetAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = null,
             .descriptorPool = self.descriptor_pool,
             .descriptorSetCount = 1,
-            .pSetLayouts = &self.descriptor_set_layout,
+            .pSetLayouts = &set_layouts,
         };
         
         var descriptor_set: vk.VkDescriptorSet = undefined;
@@ -518,7 +527,7 @@ pub const ComputePipeline = struct {
                 .descriptorCount = 1,
                 .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .pImageInfo = null,
-                .pBufferInfo = &buffer_infos[i],
+                .pBufferInfo = buffer_infos[i..i+1].ptr,
                 .pTexelBufferView = null,
             };
         }
@@ -579,7 +588,7 @@ pub const ComputePipeline = struct {
             .pWaitSemaphores = null,
             .pWaitDstStageMask = null,
             .commandBufferCount = 1,
-            .pCommandBuffers = &cmd_buffer,
+            .pCommandBuffers = @ptrCast(&cmd_buffer),
             .signalSemaphoreCount = 0,
             .pSignalSemaphores = null,
         };
@@ -602,12 +611,13 @@ pub const ComputePipeline = struct {
         push_constants: []const u32,
     ) !void {
         // Allocate descriptor set
+        const set_layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout};
         const alloc_info = vk.VkDescriptorSetAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = null,
             .descriptorPool = self.descriptor_pool,
             .descriptorSetCount = 1,
-            .pSetLayouts = &self.descriptor_set_layout,
+            .pSetLayouts = &set_layouts,
         };
         
         var descriptor_set: vk.VkDescriptorSet = undefined;
@@ -639,7 +649,7 @@ pub const ComputePipeline = struct {
                 .descriptorCount = 1,
                 .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .pImageInfo = null,
-                .pBufferInfo = &buffer_infos[i],
+                .pBufferInfo = buffer_infos[i..i+1].ptr,
                 .pTexelBufferView = null,
             };
         }
@@ -714,7 +724,7 @@ pub const ComputePipeline = struct {
             .pWaitSemaphores = null,
             .pWaitDstStageMask = null,
             .commandBufferCount = 1,
-            .pCommandBuffers = &cmd_buffer,
+            .pCommandBuffers = @ptrCast(&cmd_buffer),
             .signalSemaphoreCount = 0,
             .pSignalSemaphores = null,
         };

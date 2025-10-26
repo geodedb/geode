@@ -54,10 +54,6 @@ pub const VkDescriptorSetLayoutBinding = vk.VkDescriptorSetLayoutBinding;
 pub const VkPushConstantRange = vk.VkPushConstantRange;
 pub const VkDescriptorPoolSize = vk.VkDescriptorPoolSize;
 
-pub const VkDescriptorSetLayoutBinding = vk.VkDescriptorSetLayoutBinding;
-pub const VkPushConstantRange = vk.VkPushConstantRange;
-pub const VkDescriptorPoolSize = vk.VkDescriptorPoolSize;
-
 pub const VkBufferUsageFlags = vk.VkBufferUsageFlags;
 pub const VkMemoryPropertyFlags = vk.VkMemoryPropertyFlags;
 pub const VkQueueFlags = vk.VkQueueFlags;
