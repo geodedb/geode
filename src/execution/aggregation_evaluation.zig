@@ -205,6 +205,121 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                         }
                     }
                     return eval.Value{ .Null = {} };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "stddev")) {
+                    // CANARY: REQ=REQ-MATH-STATS-001; FEATURE="StatisticalFunctions"; ASPECT=STDDEV; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+                    // STDDEV aggregation - population standard deviation
+                    if (call.args.len == 1) {
+                        const field_name = if (call.args[0].* == .PropertyAccess)
+                            call.args[0].PropertyAccess.property
+                        else if (call.args[0].* == .Member)
+                            call.args[0].Member.field
+                        else
+                            null;
+
+                        if (field_name) |field| {
+                            // First pass: calculate mean
+                            var sum: f64 = 0;
+                            var count: f64 = 0;
+                            for (nodes) |node| {
+                                if (node.properties.get(field)) |val| {
+                                    if (val == .Int) {
+                                        sum += @floatFromInt(val.Int);
+                                        count += 1;
+                                    } else if (val == .Float) {
+                                        sum += val.Float;
+                                        count += 1;
+                                    }
+                                }
+                            }
+
+                            if (count > 0) {
+                                const mean = sum / count;
+
+                                // Second pass: calculate sum of squared deviations
+                                var sum_squared_dev: f64 = 0;
+                                for (nodes) |node| {
+                                    if (node.properties.get(field)) |val| {
+                                        var value: f64 = undefined;
+                                        if (val == .Int) {
+                                            value = @floatFromInt(val.Int);
+                                        } else if (val == .Float) {
+                                            value = val.Float;
+                                        } else {
+                                            continue;
+                                        }
+                                        const deviation = value - mean;
+                                        sum_squared_dev += deviation * deviation;
+                                    }
+                                }
+
+                                // Population standard deviation: sqrt(variance)
+                                const variance = sum_squared_dev / count;
+                                const stddev = @sqrt(variance);
+
+                                // Return as Decimal with 6 decimal places
+                                return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(stddev * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                            }
+                            return eval.Value{ .Null = {} };
+                        }
+                    }
+                    return eval.Value{ .Null = {} };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "variance")) {
+                    // CANARY: REQ=REQ-MATH-STATS-002; FEATURE="StatisticalFunctions"; ASPECT=VARIANCE; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+                    // VARIANCE aggregation - population variance
+                    if (call.args.len == 1) {
+                        const field_name = if (call.args[0].* == .PropertyAccess)
+                            call.args[0].PropertyAccess.property
+                        else if (call.args[0].* == .Member)
+                            call.args[0].Member.field
+                        else
+                            null;
+
+                        if (field_name) |field| {
+                            // First pass: calculate mean
+                            var sum: f64 = 0;
+                            var count: f64 = 0;
+                            for (nodes) |node| {
+                                if (node.properties.get(field)) |val| {
+                                    if (val == .Int) {
+                                        sum += @floatFromInt(val.Int);
+                                        count += 1;
+                                    } else if (val == .Float) {
+                                        sum += val.Float;
+                                        count += 1;
+                                    }
+                                }
+                            }
+
+                            if (count > 0) {
+                                const mean = sum / count;
+
+                                // Second pass: calculate sum of squared deviations
+                                var sum_squared_dev: f64 = 0;
+                                for (nodes) |node| {
+                                    if (node.properties.get(field)) |val| {
+                                        var value: f64 = undefined;
+                                        if (val == .Int) {
+                                            value = @floatFromInt(val.Int);
+                                        } else if (val == .Float) {
+                                            value = val.Float;
+                                        } else {
+                                            continue;
+                                        }
+                                        const deviation = value - mean;
+                                        sum_squared_dev += deviation * deviation;
+                                    }
+                                }
+
+                                // Population variance: sum((x - mean)^2) / n
+                                const variance = sum_squared_dev / count;
+
+                                // Return as Decimal with 6 decimal places
+                                return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(variance * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                            }
+                            return eval.Value{ .Null = {} };
+                        }
+                    }
+                    return eval.Value{ .Null = {} };
                 }
             }
         },
