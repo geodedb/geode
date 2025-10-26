@@ -50,10 +50,11 @@ Acceptance: UNION DISTINCT speedup ≥4x; correctness preserved (unordered seman
 Next Steps: add `gpu_setops_kernels.zig` with CPU fallbacks + placeholder GPU routines; wire planner heuristic; create tests & benchmark scaffold.
 
 ### Phase 4: Shortest Path (Single‑Source Dijkstra / Delta-Stepping)
-1. Kernel: Delta-stepping with bucket parallelization; support weighted edges (float64).  
-2. Planner pattern match for `SHORTEST_PATH` bounded; GPU variant only if all weights non-negative.  
-3. Tests: correctness on weighted graph, compare distances; tie‑break UA005/UA006 preserved.  
-Acceptance: performance benchmark speedup ≥3x vs CPU baseline (>100k edges).
+Status: SCAFFOLD STARTED — 2025-10-26T00:12:30.198Z
+1. Kernel: Delta-stepping with bucket parallelization; support weighted edges (float64). (TODO; CPU Dijkstra scaffold added in shortest_path_kernels.zig)
+2. Planner pattern match for `SHORTEST_PATH` bounded; GPU variant only if all weights non-negative. (TODO)
+3. Tests: `TestCANARY_REQ_GQL_051_GPUDijkstraSmall` implemented (small weighted graph equivalence). Additional large graph tests TBD.
+Acceptance (pending): performance benchmark speedup ≥3x vs CPU baseline (>100k edges).
 
 ### Phase 5: Integration & Telemetry
 1. GPU operator profiling metrics (kernel ms, occupancy, achieved bandwidth).  
