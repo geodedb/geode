@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const CudaLoader = @import("cuda_loader.zig").CudaLoader;
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase0Infra; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUPhase0DeviceEnum; OWNER=engine; UPDATED=2025-10-25
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase0Infra; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUPhase0DeviceEnum; OWNER=engine; UPDATED=2025-10-26
 
 pub const DeviceInfo = struct {
     id: u32,
@@ -12,20 +13,18 @@ pub const DeviceInfo = struct {
     available: bool,
 };
 
-// Weak CUDA driver bindings; if unavailable linker will fail -> we detect before call
-extern fn cuInit(flags: cu_uint) cu_int;
-extern fn cuDeviceGetCount(count: *cu_int) cu_int;
-extern fn cuDeviceGet(device: *cu_int, ordinal: cu_int) cu_int;
-extern fn cuDeviceGetName(name: [*]u8, len: cu_int, dev: cu_int) cu_int;
-extern fn cuDeviceTotalMem(bytes: *usize, dev: cu_int) cu_int;
+var global_loader: ?CudaLoader = null;
+var loader_init_once = std.once(initGlobalLoader);
 
-// If symbols unresolved (static build without CUDA), treat as disabled via comptime guard
-comptime {
-    if (!@hasDecl(@This(), "cuInit")) @compileError("CUDA symbols missing");
+fn initGlobalLoader() void {
+    global_loader = CudaLoader.init();
 }
 
-const cu_uint = u32;
-const cu_int = i32;
+fn getLoader() *const CudaLoader {
+    loader_init_once.call();
+    if (global_loader) |*loader| return loader;
+    unreachable;
+}
 
 pub fn enumerate(allocator: std.mem.Allocator) ![]DeviceInfo {
     if (builtin.os.tag != .linux) {
@@ -33,26 +32,34 @@ pub fn enumerate(allocator: std.mem.Allocator) ![]DeviceInfo {
         const dup = try allocator.dupe(DeviceInfo, tmp[0..]);
         return dup;
     }
-    var count: cu_int = 0;
-    if (cuInit(0) != 0 or cuDeviceGetCount(&count) != 0 or count <= 0) {
-        // Return slice literal with allocator duplication to satisfy slice return type
-        // construct slice using temporary array then duplicate into allocator-managed slice
+    
+    const loader = getLoader();
+    if (!loader.available()) {
         var tmp = [_]DeviceInfo{DeviceInfo{ .id = 0, .name = "cuda-unavailable", .sm_count = 0, .total_mem = 0, .warp_size = 32, .available = false }};
         const dup = try allocator.dupe(DeviceInfo, tmp[0..]);
         return dup;
     }
+    
+    var count: i32 = 0;
+    if (loader.cuInit(0) != 0 or loader.cuDeviceGetCount(&count) != 0 or count <= 0) {
+        var tmp = [_]DeviceInfo{DeviceInfo{ .id = 0, .name = "cuda-unavailable", .sm_count = 0, .total_mem = 0, .warp_size = 32, .available = false }};
+        const dup = try allocator.dupe(DeviceInfo, tmp[0..]);
+        return dup;
+    }
+    
     var list = try std.ArrayList(DeviceInfo).initCapacity(allocator, @intCast(count));
-    defer list.deinit(allocator); // borrowed allocator
-    var i: cu_int = 0;
+    defer list.deinit(allocator);
+    
+    var i: i32 = 0;
     while (i < count) : (i += 1) {
-        var dev: cu_int = 0;
-        if (cuDeviceGet(&dev, i) != 0) continue;
+        var dev: i32 = 0;
+        if (loader.cuDeviceGet(&dev, i) != 0) continue;
         var buf: [128]u8 = undefined;
-        _ = cuDeviceGetName(&buf, 128, dev);
+        _ = loader.cuDeviceGetName(&buf, 128, dev);
         var name_len: usize = 0;
         while (name_len < buf.len and buf[name_len] != 0) : (name_len += 1) {}
         var total_mem: usize = 0;
-        _ = cuDeviceTotalMem(&total_mem, dev);
+        _ = loader.cuDeviceTotalMem(&total_mem, dev);
         try list.append(allocator, .{ .id = @intCast(i), .name = buf[0..name_len], .sm_count = 0, .total_mem = total_mem, .warp_size = 32, .available = true });
     }
     return try list.toOwnedSlice(allocator);
@@ -60,8 +67,10 @@ pub fn enumerate(allocator: std.mem.Allocator) ![]DeviceInfo {
 
 pub fn gpuEnabled() bool {
     if (builtin.os.tag != .linux) return false;
-    var count: cu_int = 0;
-    if (cuInit(0) != 0 or cuDeviceGetCount(&count) != 0) return false;
+    const loader = getLoader();
+    if (!loader.available()) return false;
+    var count: i32 = 0;
+    if (loader.cuInit(0) != 0 or loader.cuDeviceGetCount(&count) != 0) return false;
     return count > 0;
 }
 
