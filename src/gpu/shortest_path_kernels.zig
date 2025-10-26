@@ -15,13 +15,15 @@ pub fn dijkstraCPU(g: SPGraph, start: u32, allocator: std.mem.Allocator) ![]f64 
     for (dist) |*d| d.* = std.math.inf(f64);
     dist[start] = 0;
     var visited = std.AutoHashMap(u32, void).init(allocator); defer visited.deinit();
-    var pq = std.ArrayList(struct { v: u32, d: f64 }).init(allocator); defer pq.deinit();
-    try pq.append(allocator, .{ .v = start, .d = 0 });
+    var pq = std.array_list.Managed(struct { v: u32, d: f64 }).init(allocator); defer pq.deinit();
+    try pq.append(.{ .v = start, .d = 0 });
     while (pq.items.len > 0) {
         // simple linear extract-min (small graphs in test)
         var min_idx: usize = 0;
         var i: usize = 1;
-        while (i < pq.items.len) : (i += 1) if (pq.items[i].d < pq.items[min_idx].d) min_idx = i;
+        while (i < pq.items.len) : (i += 1) {
+            if (pq.items[i].d < pq.items[min_idx].d) min_idx = i;
+        }
         const node = pq.items[min_idx].v;
         const node_dist = pq.items[min_idx].d;
         _ = pq.swapRemove(min_idx);
@@ -36,7 +38,7 @@ pub fn dijkstraCPU(g: SPGraph, start: u32, allocator: std.mem.Allocator) ![]f64 
             const alt = node_dist + w;
             if (alt < dist[nbr]) {
                 dist[nbr] = alt;
-                try pq.append(allocator, .{ .v = nbr, .d = alt });
+                try pq.append(.{ .v = nbr, .d = alt });
             }
         }
     }

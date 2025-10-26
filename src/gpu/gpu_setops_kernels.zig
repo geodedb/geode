@@ -8,12 +8,12 @@ pub fn unionDistinctCPU(a: []const u32, b: []const u32, allocator: std.mem.Alloc
     defer map.deinit();
     for (a) |v| { _ = map.put(v, {}) catch {}; }
     for (b) |v| { _ = map.put(v, {}) catch {}; }
-    var list = std.ArrayList(u32).init(allocator);
+    var list = std.array_list.Managed(u32).init(allocator);
     defer list.deinit();
     var it = map.iterator();
-    while (it.next()) |e| try list.append(allocator, e.key_ptr.*);
+    while (it.next()) |e| try list.append(e.key_ptr.*);
     const slice = try allocator.alloc(u32, list.items.len);
-    std.mem.copy(u32, slice, list.items);
+    @memcpy(slice, list.items);
     return slice;
 }
 
@@ -25,10 +25,10 @@ pub fn unionDistinctGPU(a: []const u32, b: []const u32, allocator: std.mem.Alloc
 pub fn intersectCPU(a: []const u32, b: []const u32, allocator: std.mem.Allocator) ![]u32 {
     var setA = std.AutoHashMap(u32, void).init(allocator); defer setA.deinit();
     for (a) |v| { _ = setA.put(v, {}) catch {}; }
-    var list = std.ArrayList(u32).init(allocator); defer list.deinit();
-    for (b) |v| if (setA.get(v) != null) try list.append(allocator, v);
+    var list = std.array_list.Managed(u32).init(allocator); defer list.deinit();
+    for (b) |v| if (setA.get(v) != null) try list.append(v);
     const slice = try allocator.alloc(u32, list.items.len);
-    std.mem.copy(u32, slice, list.items);
+    @memcpy(slice, list.items);
     return slice;
 }
 

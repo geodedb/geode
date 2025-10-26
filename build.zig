@@ -1130,6 +1130,14 @@ pub fn build(b: *std.Build) void {
     const bench_gpu_step = b.step("bench-gpu", "Run GPU benchmarks");
     const bench_gpu_bfs_run = b.addRunArtifact(bench_gpu_bfs);
     bench_gpu_step.dependOn(&bench_gpu_bfs_run.step);
+    
+    // GPU PageRank benchmark
+    const bench_gpu_pagerank = b.addExecutable(.{
+        .name = "bench_gpu_pagerank",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_pagerank.zig"), .target = target, .optimize = .ReleaseFast }),
+    });
+    const bench_gpu_pagerank_run = b.addRunArtifact(bench_gpu_pagerank);
+    bench_gpu_step.dependOn(&bench_gpu_pagerank_run.step);
 
     // Federation mismatch flag E2E protocol-style test (lightweight)
     const fed_mismatch_flag_test = b.addTest(.{
