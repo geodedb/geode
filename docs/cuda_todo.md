@@ -57,10 +57,14 @@ Status: SCAFFOLD STARTED — 2025-10-26T00:12:30.198Z
 Acceptance (pending): performance benchmark speedup ≥3x vs CPU baseline (>100k edges).
 
 ### Phase 5: Integration & Telemetry
-1. GPU operator profiling metrics (kernel ms, occupancy, achieved bandwidth).  
-2. Diagnostics frame extension: `gpu_perf` object.  
-3. Flagger marks implementation-dependent behaviors (ordering stable strategy).  
-4. Tests: telemetry presence when GPU path taken; JSON schema validation.
+Status: SCAFFOLD STARTED — 2025-10-26T00:13:46.552Z
+1. GPU operator profiling metrics (kernel ms, occupancy, achieved bandwidth). (Scaffold added in telemetry.zig; placeholder values for now; real CUDA event profiling TBD)
+2. Diagnostics frame extension: `gpu_perf` object. (GPUDiagnostics struct + JSON serialization implemented with tests)
+3. Flagger marks implementation-dependent behaviors (ordering stable strategy). (TODO: integrate with existing flagger.zig)
+4. Tests: `TestCANARY_REQ_GQL_051_GPUTelemetryStruct` and `TestCANARY_REQ_GQL_051_GPUTelemetryFallback` implemented.
+Acceptance (pending): telemetry presence validated when GPU path taken; JSON schema validation against diagnostics spec.
+Progress: telemetry.zig scaffold added (2025-10-26T00:13:46.552Z); planner/executor integration TBD.
+Next Steps: wire telemetry capture into executor dispatch points; update flagger to mark GPU-specific behaviors.
 
 ## Planner / Executor Changes
 - New enum PhysicalOp additions; modify cost model to include device transfer cost (bytes / PCIe bandwidth) & kernel cost model (edges/second estimate).
