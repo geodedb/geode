@@ -13,14 +13,14 @@ Implementing Vulkan Compute as a cross-platform GPU backend alongside CUDA. This
 |-------|--------|------------|-------|-------|-------|
 | **Phase 1: Foundation** | ✅ COMPLETE | 100% | 4 | 3/3 | Vulkan device init, buffers, pipelines |
 | **Phase 2: Shaders** | ✅ COMPLETE | 100% | 5 | 1/1 | GLSL→SPIR-V compilation, embedding |
-| **Phase 3: PageRank** | 🔄 IN PROGRESS | 0% | 0 | 0/0 | Integrating with pagerank_kernels.zig |
-| **Phase 4: SetOps** | ⏳ PLANNED | 0% | 0 | 0/0 | UNION, INTERSECT, EXCEPT |
-| **Phase 5: ShortestPath** | ⏳ PLANNED | 0% | 0 | 0/0 | Delta-stepping |
-| **Phase 6: Backend Selection** | ⏳ PLANNED | 0% | 0 | 0/0 | Smart dispatch logic |
-| **Phase 7: Integration** | ⏳ PLANNED | 0% | 0 | 0/0 | Full system integration |
-| **Phase 8: Documentation** | ⏳ PLANNED | 0% | 0 | 0/0 | User docs, benchmarks |
+| **Phase 3: PageRank** | 🚫 BLOCKED | 90% | 1 | 0/1 | @cImport+module system issue - see VULKAN_PHASE3_BLOCKED.md |
+| **Phase 4: SetOps** | ⏳ PLANNED | 0% | 0 | 0/0 | Blocked by Phase 3 |
+| **Phase 5: ShortestPath** | ⏳ PLANNED | 0% | 0 | 0/0 | Blocked by Phase 3 |
+| **Phase 6: Backend Selection** | ⏳ PLANNED | 0% | 0 | 0/0 | Blocked by Phase 3 |
+| **Phase 7: Integration** | ⏳ PLANNED | 0% | 0 | 0/0 | Blocked by Phase 3 |
+| **Phase 8: Documentation** | ⏳ PLANNED | 0% | 0 | 0/0 | Blocked by Phase 3 |
 
-**Overall Progress:** 25% (2/8 phases complete)
+**Overall Progress:** 25% (2/8 phases complete, 1 blocked)
 
 ## Quick Start
 
@@ -98,12 +98,15 @@ GEODE_SHORTESTPATH_GPU_THRESHOLD=1000000  # Min nodes for GPU
 
 ## Next Actions
 
-### Immediate (Phase 3)
-1. Update `src/gpu/pagerank_kernels.zig` with Vulkan path
-2. Create `VulkanPageRankExecutor` struct
-3. Port graph data to Vulkan buffers
-4. Test correctness vs CPU/CUDA
-5. Benchmark on different graph sizes
+### Immediate (Unblock Phase 3)
+1. **Create manual FFI bindings** - `src/gpu/vulkan_ffi.zig`
+   - Remove @cImport dependency
+   - Define extern functions manually (500+ LOC)
+   - Update vulkan_loader.zig to use FFI module
+2. Update build.zig with proper Vulkan configuration
+3. Un-comment Vulkan PageRank implementation
+4. Test CUDA→Vulkan→CPU fallback chain
+5. Benchmark correctness and performance
 
 ### Short-Term (Phases 4-5)
 1. Similar Vulkan integration for set operations
@@ -121,6 +124,8 @@ GEODE_SHORTESTPATH_GPU_THRESHOLD=1000000  # Min nodes for GPU
 - **Plan:** `docs/VULKAN_COMPUTE_IMPLEMENTATION_PLAN.md`
 - **Phase 1:** `docs/VULKAN_PHASE1_COMPLETE.md`
 - **Phase 2:** `docs/VULKAN_PHASE2_COMPLETE.md`
+- **Phase 3 Blocker:** `docs/VULKAN_PHASE3_BLOCKED.md` ⚠️
+- **Status:** `docs/VULKAN_IMPLEMENTATION_STATUS.md` (this file)
 
 ## Performance Expectations
 
@@ -143,12 +148,16 @@ GEODE_SHORTESTPATH_GPU_THRESHOLD=1000000  # Min nodes for GPU
 
 ## Known Limitations
 
-### Current
-1. No async execution - all operations synchronous
-2. No staging buffers - using host-visible memory
-3. No device selection - uses first available
-4. No validation layers in production
-5. Hardcoded workgroup sizes
+### Current - Phase 3 BLOCKER
+1. **@cImport in modules incompatible with Zig 0.15.1 build system**
+   - Vulkan headers cannot be found during module compilation
+   - See `docs/VULKAN_PHASE3_BLOCKED.md` for details
+   - Requires architectural refactoring (manual FFI bindings)
+2. No async execution - all operations synchronous
+3. No staging buffers - using host-visible memory
+4. No device selection - uses first available
+5. No validation layers in production
+6. Hardcoded workgroup sizes
 
 ### By Design
 1. GPU BFS removed (CPU faster)
@@ -175,6 +184,7 @@ feat(gpu): Add GLSL shader compilation pipeline (Phase 2)
 
 ---
 
-**Status:** Foundation complete, ready for algorithm integration  
-**Next Milestone:** Phase 3 - PageRank Vulkan Implementation  
-**ETA:** End of week
+**Status:** Foundation complete, Phase 3 blocked by build system limitation  
+**Next Milestone:** Unblock Phase 3 with manual FFI bindings  
+**Blocker Details:** `docs/VULKAN_PHASE3_BLOCKED.md`  
+**ETA:** 1-2 days (after FFI refactoring)

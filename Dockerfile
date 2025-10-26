@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y \
     git \
     build-essential \
     file \
+    libvulkan-dev \
+    glslang-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and run Zig installation script

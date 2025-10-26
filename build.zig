@@ -230,6 +230,7 @@ pub fn build(b: *std.Build) void {
     vulkan_tests.root_module.addImport("vulkan_compute", vulkan_compute_mod);
     vulkan_tests.root_module.addImport("vulkan_loader", vulkan_loader_mod);
     vulkan_tests.linkLibC();
+    vulkan_tests.addIncludePath(.{ .cwd_relative = "/usr/include" });
     vulkan_tests.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
     vulkan_tests.linkSystemLibrary("vulkan");
     const run_vulkan_tests = b.addRunArtifact(vulkan_tests);
@@ -1166,6 +1167,9 @@ pub fn build(b: *std.Build) void {
     bench_gpu_bfs.root_module.addImport("gpu", gpu_mod);
     bench_gpu_bfs.linkLibC();
     bench_gpu_bfs.linkSystemLibrary("dl");
+    bench_gpu_bfs.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    bench_gpu_bfs.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+    bench_gpu_bfs.linkSystemLibrary("vulkan");
     b.installArtifact(bench_gpu_bfs);
     const bench_gpu_step = b.step("bench-gpu", "Run GPU benchmarks");
     const bench_gpu_bfs_run = b.addRunArtifact(bench_gpu_bfs);
@@ -1179,6 +1183,9 @@ pub fn build(b: *std.Build) void {
     bench_gpu_pagerank.root_module.addImport("gpu", gpu_mod);
     bench_gpu_pagerank.linkLibC();
     bench_gpu_pagerank.linkSystemLibrary("dl");
+    bench_gpu_pagerank.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    bench_gpu_pagerank.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+    bench_gpu_pagerank.linkSystemLibrary("vulkan");
     b.installArtifact(bench_gpu_pagerank);
     const bench_gpu_pagerank_run = b.addRunArtifact(bench_gpu_pagerank);
     bench_gpu_step.dependOn(&bench_gpu_pagerank_run.step);
@@ -1191,6 +1198,9 @@ pub fn build(b: *std.Build) void {
     bench_gpu_setops.root_module.addImport("gpu", gpu_mod);
     bench_gpu_setops.linkLibC();
     bench_gpu_setops.linkSystemLibrary("dl");
+    bench_gpu_setops.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    bench_gpu_setops.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+    bench_gpu_setops.linkSystemLibrary("vulkan");
     b.installArtifact(bench_gpu_setops);
     const bench_gpu_setops_run = b.addRunArtifact(bench_gpu_setops);
     bench_gpu_step.dependOn(&bench_gpu_setops_run.step);
@@ -1203,6 +1213,9 @@ pub fn build(b: *std.Build) void {
     bench_gpu_shortest_path.root_module.addImport("gpu", gpu_mod);
     bench_gpu_shortest_path.linkLibC();
     bench_gpu_shortest_path.linkSystemLibrary("dl");
+    bench_gpu_shortest_path.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    bench_gpu_shortest_path.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+    bench_gpu_shortest_path.linkSystemLibrary("vulkan");
     b.installArtifact(bench_gpu_shortest_path);
     const bench_gpu_shortest_path_run = b.addRunArtifact(bench_gpu_shortest_path);
     bench_gpu_step.dependOn(&bench_gpu_shortest_path_run.step);

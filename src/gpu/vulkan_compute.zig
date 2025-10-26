@@ -73,7 +73,7 @@ pub const VulkanCompute = struct {
             return VulkanError.NoPhysicalDevices;
         }
         
-        var physical_devices = try allocator.alloc(vk.VkPhysicalDevice, device_count);
+        const physical_devices = try allocator.alloc(vk.VkPhysicalDevice, device_count);
         defer allocator.free(physical_devices);
         
         result = vk.Vulkan.enumeratePhysicalDevices(instance, &device_count, physical_devices.ptr);
@@ -95,7 +95,7 @@ pub const VulkanCompute = struct {
         var queue_family_count: u32 = 0;
         vk.Vulkan.getPhysicalDeviceQueueFamilyProperties(physical_device, &queue_family_count, null);
         
-        var queue_families = try allocator.alloc(vk.VkQueueFamilyProperties, queue_family_count);
+        const queue_families = try allocator.alloc(vk.VkQueueFamilyProperties, queue_family_count);
         defer allocator.free(queue_families);
         
         vk.Vulkan.getPhysicalDeviceQueueFamilyProperties(physical_device, &queue_family_count, queue_families.ptr);
@@ -349,7 +349,7 @@ pub const ComputePipeline = struct {
         errdefer vk.Vulkan.destroyShaderModule(compute.device, shader_module, null);
         
         // Create descriptor set layout
-        var bindings = try compute.allocator.alloc(vk.c.VkDescriptorSetLayoutBinding, descriptor_count);
+        const bindings = try compute.allocator.alloc(vk.c.VkDescriptorSetLayoutBinding, descriptor_count);
         defer compute.allocator.free(bindings);
         
         for (bindings, 0..) |*binding, i| {
@@ -377,15 +377,21 @@ pub const ComputePipeline = struct {
         }
         errdefer vk.Vulkan.destroyDescriptorSetLayout(compute.device, descriptor_set_layout, null);
         
-        // Create pipeline layout
+        // Create pipeline layout with push constants support
+        const push_constant_range = vk.c.VkPushConstantRange{
+            .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = 128, // Max 128 bytes for push constants
+        };
+        
         const pipeline_layout_create_info = vk.VkPipelineLayoutCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .setLayoutCount = 1,
             .pSetLayouts = &descriptor_set_layout,
-            .pushConstantRangeCount = 0,
-            .pPushConstantRanges = null,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_constant_range,
         };
         
         var pipeline_layout: vk.VkPipelineLayout = undefined;
@@ -548,6 +554,141 @@ pub const ComputePipeline = struct {
         }
         
         vk.Vulkan.cmdBindPipeline(cmd_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.pipeline);
+        vk.Vulkan.cmdBindDescriptorSets(
+            cmd_buffer,
+            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+            self.pipeline_layout,
+            0,
+            1,
+            @ptrCast(&descriptor_set),
+            0,
+            null,
+        );
+        vk.Vulkan.cmdDispatch(cmd_buffer, workgroup_count[0], workgroup_count[1], workgroup_count[2]);
+        
+        result = vk.Vulkan.endCommandBuffer(cmd_buffer);
+        if (result != vk.VK_SUCCESS) {
+            return VulkanError.CommandBufferEndFailed;
+        }
+        
+        // Submit and wait
+        const submit_info = vk.VkSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd_buffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        };
+        
+        result = vk.Vulkan.queueSubmit(self.compute.queue, 1, @ptrCast(&submit_info), @ptrCast(vk.VK_NULL_HANDLE));
+        if (result != vk.VK_SUCCESS) {
+            return VulkanError.QueueSubmitFailed;
+        }
+        
+        result = vk.Vulkan.queueWaitIdle(self.compute.queue);
+        if (result != vk.VK_SUCCESS) {
+            return error.QueueWaitFailed;
+        }
+    }
+    
+    pub fn executeWithPushConstants(
+        self: *Self,
+        buffers: []VulkanBuffer,
+        workgroup_count: [3]u32,
+        push_constants: []const u32,
+    ) !void {
+        // Allocate descriptor set
+        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorPool = self.descriptor_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &self.descriptor_set_layout,
+        };
+        
+        var descriptor_set: vk.VkDescriptorSet = undefined;
+        var result = vk.Vulkan.allocateDescriptorSets(self.compute.device, &alloc_info, @ptrCast(&descriptor_set));
+        if (result != vk.VK_SUCCESS) {
+            return VulkanError.DescriptorSetAllocationFailed;
+        }
+        
+        // Update descriptor sets
+        var buffer_infos = try self.compute.allocator.alloc(vk.VkDescriptorBufferInfo, buffers.len);
+        defer self.compute.allocator.free(buffer_infos);
+        
+        var writes = try self.compute.allocator.alloc(vk.VkWriteDescriptorSet, buffers.len);
+        defer self.compute.allocator.free(writes);
+        
+        for (buffers, 0..) |buf, i| {
+            buffer_infos[i] = vk.VkDescriptorBufferInfo{
+                .buffer = buf.buffer,
+                .offset = 0,
+                .range = buf.size,
+            };
+            
+            writes[i] = vk.VkWriteDescriptorSet{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = descriptor_set,
+                .dstBinding = @intCast(i),
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &buffer_infos[i],
+                .pTexelBufferView = null,
+            };
+        }
+        
+        vk.Vulkan.updateDescriptorSets(self.compute.device, @intCast(writes.len), writes.ptr, 0, null);
+        
+        // Allocate command buffer
+        const cmd_alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = self.compute.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        
+        var cmd_buffer: vk.VkCommandBuffer = undefined;
+        result = vk.Vulkan.allocateCommandBuffers(self.compute.device, &cmd_alloc_info, @ptrCast(&cmd_buffer));
+        if (result != vk.VK_SUCCESS) {
+            return VulkanError.CommandBufferAllocationFailed;
+        }
+        
+        // Record command buffer
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        };
+        
+        result = vk.Vulkan.beginCommandBuffer(cmd_buffer, &begin_info);
+        if (result != vk.VK_SUCCESS) {
+            return VulkanError.CommandBufferBeginFailed;
+        }
+        
+        vk.Vulkan.cmdBindPipeline(cmd_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.pipeline);
+        
+        // Push constants
+        if (push_constants.len > 0) {
+            const push_size = push_constants.len * @sizeOf(u32);
+            vk.Vulkan.cmdPushConstants(
+                cmd_buffer,
+                self.pipeline_layout,
+                vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                0,
+                @intCast(push_size),
+                push_constants.ptr,
+            );
+        }
+        
         vk.Vulkan.cmdBindDescriptorSets(
             cmd_buffer,
             vk.VK_PIPELINE_BIND_POINT_COMPUTE,

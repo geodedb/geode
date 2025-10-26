@@ -4,8 +4,13 @@ const CudaLoader = @import("cuda_loader.zig").CudaLoader;
 const SmartKernelLoader = @import("smart_kernel_loader.zig").SmartKernelLoader;
 const MemoryManager = @import("memory_manager.zig").MemoryManager;
 const kernel_sources = @import("kernel_sources.zig");
+// Vulkan support temporarily disabled - needs build system refactoring for @cImport in modules
+// const VulkanCompute = @import("vulkan_compute.zig").VulkanCompute;
+// const VulkanBuffer = @import("vulkan_compute.zig").VulkanBuffer;
+// const ComputePipeline = @import("vulkan_compute.zig").ComputePipeline;
+// const vulkan_shaders = @import("vulkan_shaders.zig");
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase2PageRank; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUPageRankSmallGraph; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase3VulkanPageRank; STATUS=WIP; TEST=TestCANARY_REQ_GQL_051_GPUPageRankVulkan; OWNER=engine; UPDATED=2025-10-26
 
 pub const PRGraph = struct {
     row_offsets: []const u32,
@@ -53,13 +58,16 @@ pub fn pagerankGPU(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
         return pagerankCPU(g, iterations, d, allocator);
     }
 
-    return gpuPageRankImpl(g, iterations, d, allocator) catch |err| {
-        std.debug.print("GPU PageRank failed: {}, falling back to CPU\n", .{err});
+    // Try CUDA, fallback to CPU (Vulkan temporarily disabled)
+    if (gpuPageRankCudaImpl(g, iterations, d, allocator)) |result| {
+        return result;
+    } else |cuda_err| {
+        std.debug.print("CUDA PageRank failed: {}, falling back to CPU\n", .{cuda_err});
         return pagerankCPU(g, iterations, d, allocator);
-    };
+    }
 }
 
-fn gpuPageRankImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Allocator) ![]f64 {
+fn gpuPageRankCudaImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Allocator) ![]f64 {
     const loader = CudaLoader.init();
     if (!loader.available()) return error.GPUUnavailable;
 
@@ -157,6 +165,11 @@ fn gpuPageRankImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
 
     return result;
 }
+
+// Vulkan implementation temporarily disabled - needs build system refactoring
+// fn gpuPageRankVulkanImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Allocator) ![]f64 {
+//     ... (implementation preserved in git history)
+// }
 
 test "TestCANARY_REQ_GQL_051_GPUPageRankSmallGraph" {
     // Graph: 0->1,2 ; 1->2 ; 2->0 ; 2->3 ; 3->2
