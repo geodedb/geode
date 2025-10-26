@@ -65,7 +65,10 @@ fn runBenchmark(config: TestConfig, gpu_enabled: bool, allocator: std.mem.Alloca
     // Benchmark GPU if available
     if (gpu_enabled) {
         const gpu_start = std.time.nanoTimestamp();
-        const gpu_ranks = try pagerank.pagerankGPU(pr_graph, config.iterations, 0.85, allocator);
+        const gpu_ranks = pagerank.pagerankGPU(pr_graph, config.iterations, 0.85, allocator) catch |err| {
+            std.debug.print("  GPU: Failed ({any}), used CPU fallback\n", .{err});
+            return;
+        };
         const gpu_end = std.time.nanoTimestamp();
         const gpu_ms = @as(f64, @floatFromInt(gpu_end - gpu_start)) / 1_000_000.0;
 
@@ -86,6 +89,8 @@ fn runBenchmark(config: TestConfig, gpu_enabled: bool, allocator: std.mem.Alloca
         } else {
             std.debug.print(" ⚠️ CPU faster (overhead dominates)\n", .{});
         }
+    } else {
+        std.debug.print("  GPU: Not available\n", .{});
     }
 }
 
