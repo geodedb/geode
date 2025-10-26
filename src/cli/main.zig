@@ -2172,7 +2172,6 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
 
     // Use specified data directory or default
     const effective_data_dir = data_dir orelse "./data_embedded";
-    _ = effective_data_dir; // TODO: Wire up persistent storage path
 
     // Log embedded mode initialization for visibility
     if (data_dir != null) {
@@ -2181,7 +2180,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
 
     // Use the geode module to execute the query via test harness
 
-    // CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI Authentication"; ASPECT=EmbeddedAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
+    // CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI Authentication"; ASPECT=EmbeddedAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-26
     // Validate authentication if auth is enabled
     const user_mgmt = geode.user_management;
     if (user_mgmt.isAuthEnabled()) {
@@ -2195,25 +2194,94 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
             std.process.exit(1);
         }
 
-        // Validate credentials
-        _ = user_mgmt.authenticate(user.?, password.?) catch {
-            // Invalid credentials
+        // Validate credentials using secure encrypted storage
+        const user_storage_secure = @import("user_storage_secure.zig");
+        var storage = try user_storage_secure.UserStorage.init(allocator, effective_data_dir);
+        defer storage.deinit();
+
+        if (try storage.findUser(user.?)) |found_user| {
+            var stored_user = found_user;
+            defer stored_user.deinit(allocator);
+
+            // Verify password by re-hashing and comparing
+            // Extract salt from stored user
+            var salt: [32]u8 = undefined;
+            if (stored_user.salt.len != 64) {
+                // Invalid salt format
+                const stderr_fd = std.fs.File{ .handle = 2 };
+                const stdout_fd = std.fs.File{ .handle = 1 };
+                _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
+                _ = try stderr_fd.writeAll("Authentication failed\n");
+                std.process.exit(1);
+            }
+
+            // Decode hex salt to bytes
+            var i: usize = 0;
+            while (i < 32) : (i += 1) {
+                const high = std.fmt.charToDigit(stored_user.salt[i * 2], 16) catch 0;
+                const low = std.fmt.charToDigit(stored_user.salt[i * 2 + 1], 16) catch 0;
+                salt[i] = (high << 4) | low;
+            }
+
+            // Hash provided password with same salt
+            var hash: [64]u8 = undefined;
+            const params = std.crypto.pwhash.argon2.Params{
+                .t = 3,
+                .m = 65536,
+                .p = 4,
+            };
+            try std.crypto.pwhash.argon2.kdf(
+                allocator,
+                &hash,
+                password.?,
+                &salt,
+                params,
+                .argon2id,
+            );
+
+            // Compare with stored hash
+            const hash_hex = std.fmt.bytesToHex(hash, .lower);
+
+            // Verify hash lengths match
+            if (stored_user.password_hash.len != hash_hex.len) {
+                // Invalid password - length mismatch
+                const stderr_fd = std.fs.File{ .handle = 2 };
+                const stdout_fd = std.fs.File{ .handle = 1 };
+                _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
+                _ = try stderr_fd.writeAll("Authentication failed\n");
+                std.process.exit(1);
+            }
+
+            // Compare hashes
+            if (!std.mem.eql(u8, hash_hex[0..], stored_user.password_hash)) {
+                // Invalid password
+                const stderr_fd = std.fs.File{ .handle = 2 };
+                const stdout_fd = std.fs.File{ .handle = 1 };
+                _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
+                _ = try stderr_fd.writeAll("Authentication failed\n");
+                std.process.exit(1);
+            }
+            // Password verified successfully
+        } else {
+            // User not found
             const stderr_fd = std.fs.File{ .handle = 2 };
             const stdout_fd = std.fs.File{ .handle = 1 };
             _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
             _ = try stderr_fd.writeAll("Authentication failed\n");
             std.process.exit(1);
-        };
+        }
     }
 
     // Execute query using the test harness with authentication
     var mut_ally = allocator;
 
     // Prepare authentication options
+    // NOTE: If auth was already validated above, don't pass credentials to test harness
+    // to avoid double authentication
     const options = geode.test_harness.QueryOptions{
         .token = token,
-        .user = user,
-        .password = password,
+        .user = if (user_mgmt.isAuthEnabled()) null else user,
+        .password = if (user_mgmt.isAuthEnabled()) null else password,
         .strict_offset_validation = false, // Allow SKIP without ORDER BY (results in undefined order)
     };
 
@@ -2846,6 +2914,7 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         // Simple user management implementation for tests
 
         if (std.mem.eql(u8, subcmd, "create")) {
+            // CANARY: REQ=REQ-AUTH-CLI-002; FEATURE="CLIUserManagement"; ASPECT=UserCreate; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-26
             // Parse arguments: user create <username> [email] [password] [--role role1,role2]
             if (subcmd_idx + 1 >= argv.len) {
                 std.debug.print("Error: username required\n", .{});
@@ -2856,7 +2925,9 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             const username = argv[subcmd_idx + 1];
             var email: ?[]const u8 = null;
             var password: ?[]const u8 = null;
-            var roles: ?[][]const u8 = null;
+            var roles_buffer: [16][]const u8 = undefined;
+            var roles_count: usize = 0;
+            var data_dir: []const u8 = "./data";
 
             var i: usize = subcmd_idx + 2;
             if (i < argv.len and !std.mem.startsWith(u8, argv[i], "--")) {
@@ -2867,7 +2938,7 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             // Check if next arg is a password (not a flag)
             if (i < argv.len and !std.mem.startsWith(u8, argv[i], "--")) {
                 password = argv[i];
-                // Check password strength for testing
+                // Check password strength
                 if (password.?.len < 8) {
                     std.debug.print("Error: Password does not meet policy requirements - must be at least 8 characters\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -2875,35 +2946,102 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
                 i += 1;
             }
 
+            // Parse remaining flags
             while (i < argv.len) : (i += 1) {
                 if (std.mem.eql(u8, argv[i], "--role") and i + 1 < argv.len) {
                     // Parse comma-separated roles
-                    var role_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
-                    defer role_list.deinit(allocator);
-
                     var it = std.mem.tokenizeAny(u8, argv[i + 1], ",");
                     while (it.next()) |role| {
-                        role_list.append(allocator, role) catch unreachable;
+                        if (roles_count >= roles_buffer.len) {
+                            std.debug.print("Error: too many roles (max 16)\n", .{});
+                            std.process.exit(@intFromEnum(ExitCode.usage_error));
+                        }
+                        roles_buffer[roles_count] = role;
+                        roles_count += 1;
                     }
-                    roles = try role_list.toOwnedSlice(allocator);
+                    i += 1;
+                } else if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
+                    data_dir = argv[i + 1];
+                    i += 1;
+                } else if (std.mem.eql(u8, argv[i], "--password") and i + 1 < argv.len) {
+                    password = argv[i + 1];
+                    if (password.?.len < 8) {
+                        std.debug.print("Error: Password does not meet policy requirements - must be at least 8 characters\n", .{});
+                        std.process.exit(@intFromEnum(ExitCode.general_error));
+                    }
                     i += 1;
                 }
             }
-            defer if (roles) |r| allocator.free(r);
 
-            // For testing - just print success
-            const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-            const msg = std.fmt.allocPrint(allocator, "User '{s}' created successfully\n", .{username}) catch "Error\n";
-            defer allocator.free(msg);
-            _ = stdout_file.writeAll(msg) catch {};
+            // Require password
+            if (password == null) {
+                std.debug.print("Error: password required (use --password or provide as positional arg)\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+
+            // Default email if not provided
+            const effective_email = email orelse try std.fmt.allocPrint(allocator, "{s}@example.com", .{username});
+            defer if (email == null) allocator.free(effective_email);
+
+            // Initialize secure user storage (encrypted page-based)
+            const user_storage_secure = @import("user_storage_secure.zig");
+            var storage = try user_storage_secure.UserStorage.init(allocator, data_dir);
+            defer storage.deinit();
+
+            // Create user
+            storage.createUser(username, effective_email, password.?, roles_buffer[0..roles_count]) catch |err| {
+                if (err == error.UserAlreadyExists) {
+                    std.debug.print("Error: User '{s}' already exists\n", .{username});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                }
+                std.debug.print("Error creating user: {}\n", .{err});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            };
+
+            std.debug.print("User '{s}' created successfully\n", .{username});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "list")) {
-            // For testing - show default admin user
+            // CANARY: REQ=REQ-AUTH-CLI-003; FEATURE="CLIUserManagement"; ASPECT=UserList; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-26
+            var data_dir: []const u8 = "./data";
+
+            // Parse flags
+            var i: usize = subcmd_idx + 1;
+            while (i < argv.len) : (i += 1) {
+                if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
+                    data_dir = argv[i + 1];
+                    i += 1;
+                }
+            }
+
+            // Initialize secure user storage (encrypted page-based)
+            const user_storage_secure = @import("user_storage_secure.zig");
+            var storage = try user_storage_secure.UserStorage.init(allocator, data_dir);
+            defer storage.deinit();
+
+            const users = try storage.loadUsers();
+            defer {
+                for (users) |*user| {
+                    user.deinit(allocator);
+                }
+                allocator.free(users);
+            }
+
             const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-            _ = stdout_file.writeAll("admin (active) <admin@localhost> [admin]\n") catch {};
-            _ = stdout_file.writeAll("Total: 1 user(s)\n") catch {};
+            for (users) |user| {
+                const status = if (user.is_active) "active" else "inactive";
+                const roles_str = if (user.roles.len > 0) user.roles[0] else "user";
+                const line = try std.fmt.allocPrint(allocator, "{s} ({s}) <{s}> [{s}]\n", .{ user.username, status, user.email, roles_str });
+                defer allocator.free(line);
+                _ = stdout_file.writeAll(line) catch {};
+            }
+
+            const total = try std.fmt.allocPrint(allocator, "Total: {d} user(s)\n", .{users.len});
+            defer allocator.free(total);
+            _ = stdout_file.writeAll(total) catch {};
+
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "show") or std.mem.eql(u8, subcmd, "info")) {
+            // CANARY: REQ=REQ-AUTH-CLI-004; FEATURE="CLIUserManagement"; ASPECT=UserInfo; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-26
             if (subcmd_idx + 1 >= argv.len) {
                 std.debug.print("Error: username required\n", .{});
                 std.debug.print("Usage: geode user show <username>\n", .{});
@@ -2911,35 +3049,51 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             }
 
             const username = argv[subcmd_idx + 1];
-            const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-            // For testing - show info for requested user
-            if (std.mem.eql(u8, username, "admin")) {
-                _ = stdout_file.writeAll("Username: admin\n") catch {};
-                _ = stdout_file.writeAll("Email: admin@localhost\n") catch {};
-                _ = stdout_file.writeAll("Status: active\n") catch {};
-                _ = stdout_file.writeAll("Roles: admin\n") catch {};
-            } else if (std.mem.eql(u8, username, "alice")) {
-                _ = stdout_file.writeAll("Username: alice\n") catch {};
-                _ = stdout_file.writeAll("Email: alice@example.com\n") catch {};
-                _ = stdout_file.writeAll("Status: active\n") catch {};
-                _ = stdout_file.writeAll("Roles: user\n") catch {};
-            } else if (std.mem.eql(u8, username, "testuser")) {
-                _ = stdout_file.writeAll("Username: testuser\n") catch {};
-                _ = stdout_file.writeAll("Email: test@geode.dev\n") catch {};
-                _ = stdout_file.writeAll("Status: active\n") catch {};
-                _ = stdout_file.writeAll("Roles: user\n") catch {};
-            } else {
-                const msg1 = std.fmt.allocPrint(allocator, "Username: {s}\n", .{username}) catch "Error\n";
-                defer allocator.free(msg1);
-                _ = stdout_file.writeAll(msg1) catch {};
-                const msg2 = std.fmt.allocPrint(allocator, "Email: {s}@example.com\n", .{username}) catch "Error\n";
-                defer allocator.free(msg2);
-                _ = stdout_file.writeAll(msg2) catch {};
-                _ = stdout_file.writeAll("Status: active\n") catch {};
-                _ = stdout_file.writeAll("Roles: user\n") catch {};
+            var data_dir: []const u8 = "./data";
+
+            // Parse flags
+            var i: usize = subcmd_idx + 2;
+            while (i < argv.len) : (i += 1) {
+                if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
+                    data_dir = argv[i + 1];
+                    i += 1;
+                }
             }
+
+            // Initialize secure user storage (encrypted page-based)
+            const user_storage_secure = @import("user_storage_secure.zig");
+            var storage = try user_storage_secure.UserStorage.init(allocator, data_dir);
+            defer storage.deinit();
+
+            if (try storage.findUser(username)) |found_user| {
+                var user = found_user;
+                defer user.deinit(allocator);
+
+                const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                const username_line = try std.fmt.allocPrint(allocator, "Username: {s}\n", .{user.username});
+                defer allocator.free(username_line);
+                _ = stdout_file.writeAll(username_line) catch {};
+
+                const email_line = try std.fmt.allocPrint(allocator, "Email: {s}\n", .{user.email});
+                defer allocator.free(email_line);
+                _ = stdout_file.writeAll(email_line) catch {};
+
+                const status_line = try std.fmt.allocPrint(allocator, "Status: {s}\n", .{if (user.is_active) "active" else "inactive"});
+                defer allocator.free(status_line);
+                _ = stdout_file.writeAll(status_line) catch {};
+
+                const roles_str = if (user.roles.len > 0) user.roles[0] else "user";
+                const roles_line = try std.fmt.allocPrint(allocator, "Roles: {s}\n", .{roles_str});
+                defer allocator.free(roles_line);
+                _ = stdout_file.writeAll(roles_line) catch {};
+            } else {
+                std.debug.print("Error: User '{s}' not found\n", .{username});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, subcmd, "delete")) {
+            // CANARY: REQ=REQ-AUTH-CLI-005; FEATURE="CLIUserManagement"; ASPECT=UserDelete; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-26
             if (subcmd_idx + 1 >= argv.len) {
                 std.debug.print("Error: username required\n", .{});
                 std.debug.print("Usage: geode user delete <username>\n", .{});
@@ -2947,10 +3101,30 @@ fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
             }
 
             const username = argv[subcmd_idx + 1];
-            // For testing - just print success
+            var data_dir: []const u8 = "./data";
 
-            std.debug.print("User '{s}' deleted successfully\n", .{username});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            // Parse flags
+            var i: usize = subcmd_idx + 2;
+            while (i < argv.len) : (i += 1) {
+                if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
+                    data_dir = argv[i + 1];
+                    i += 1;
+                }
+            }
+
+            // Initialize secure user storage (encrypted page-based)
+            const user_storage_secure = @import("user_storage_secure.zig");
+            var storage = try user_storage_secure.UserStorage.init(allocator, data_dir);
+            defer storage.deinit();
+
+            const deleted = try storage.deleteUser(username);
+            if (deleted) {
+                std.debug.print("User '{s}' deleted successfully\n", .{username});
+                std.process.exit(@intFromEnum(ExitCode.success));
+            } else {
+                std.debug.print("Error: User '{s}' not found\n", .{username});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
         } else if (std.mem.eql(u8, subcmd, "enable")) {
             if (subcmd_idx + 1 >= argv.len) {
                 std.debug.print("Error: username required\n", .{});
