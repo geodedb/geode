@@ -1,7 +1,7 @@
 const std = @import("std");
 const phase0 = @import("phase0.zig");
 const CudaLoader = @import("cuda_loader.zig").CudaLoader;
-const ModuleLoader = @import("module_loader.zig").ModuleLoader;
+const SmartKernelLoader = @import("smart_kernel_loader.zig").SmartKernelLoader;
 const MemoryManager = @import("memory_manager.zig").MemoryManager;
 const kernel_sources = @import("kernel_sources.zig");
 
@@ -66,14 +66,15 @@ fn gpuPageRankImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
     var mem_mgr = try MemoryManager.init(&loader, allocator);
     defer mem_mgr.deinit();
 
-    var mod_loader = try ModuleLoader.init(&loader);
-    defer mod_loader.deinit();
+    var smart_loader = try SmartKernelLoader.init(&loader, allocator);
+    defer smart_loader.deinit();
 
-    // Load PTX module for PageRank kernel
-    try mod_loader.loadPTX(kernel_sources.pagerank_kernel_ptx);
+    // Load PageRank kernels (uses NVRTC if available)
+    try smart_loader.loadPageRankKernels();
 
-    // Get kernel function
-    const kernel_func = try mod_loader.getFunction("pagerank_iteration_kernel");
+    // Get kernel functions
+    const init_func = try smart_loader.getFunction("pagerank_iteration_kernel");
+    const push_func = try smart_loader.getFunction("pagerank_push_kernel");
 
     // Allocate device memory for graph
     const row_size = (g.num_nodes + 1) * @sizeOf(u32);
@@ -112,10 +113,11 @@ fn gpuPageRankImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
     const grid_dim = [3]u32{ num_blocks, 1, 1 };
     const block_dim = [3]u32{ threads_per_block, 1, 1 };
 
-    // Power iteration
+    // Power iteration with optimized push-based algorithm
     var it: u32 = 0;
     while (it < iterations) : (it += 1) {
-        var params = [_]*const anyopaque{
+        // Initialize ranks_out with base value (1-damping)/N
+        var init_params = [_]*const anyopaque{
             @ptrCast(&d_row_offsets.ptr),
             @ptrCast(&d_col_indices.ptr),
             @ptrCast(&d_ranks_in.ptr),
@@ -123,8 +125,18 @@ fn gpuPageRankImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
             @ptrCast(&g.num_nodes),
             @ptrCast(&damping_f32),
         };
+        try smart_loader.launchKernel(init_func, grid_dim, block_dim, 0, @ptrCast(&init_params));
 
-        try mod_loader.launchKernel(kernel_func, grid_dim, block_dim, 0, @ptrCast(&params));
+        // Push contributions from each vertex to its neighbors
+        var push_params = [_]*const anyopaque{
+            @ptrCast(&d_row_offsets.ptr),
+            @ptrCast(&d_col_indices.ptr),
+            @ptrCast(&d_ranks_in.ptr),
+            @ptrCast(&d_ranks_out.ptr),
+            @ptrCast(&g.num_nodes),
+            @ptrCast(&damping_f32),
+        };
+        try smart_loader.launchKernel(push_func, grid_dim, block_dim, 0, @ptrCast(&push_params));
 
         // Swap buffers for next iteration
         std.mem.swap(@TypeOf(d_ranks_in), &d_ranks_in, &d_ranks_out);

@@ -58,6 +58,13 @@ fn gpuUnionDistinctImpl(a: []const u32, b: []const u32, allocator: std.mem.Alloc
     @memcpy(combined[0..a.len], a);
     @memcpy(combined[a.len..], b);
 
+    // OPTIMIZATION: Sort on CPU (more efficient than GPU bitonic sort for large arrays)
+    std.sort.block(u32, combined, {}, struct {
+        fn lessThan(_: void, lhs: u32, rhs: u32) bool {
+            return lhs < rhs;
+        }
+    }.lessThan);
+
     // Allocate device memory
     const data_size = total_len * @sizeOf(u32);
     var d_input = try mem_mgr.allocDevice(data_size);
@@ -69,7 +76,7 @@ fn gpuUnionDistinctImpl(a: []const u32, b: []const u32, allocator: std.mem.Alloc
     var d_count = try mem_mgr.allocDevice(@sizeOf(u32));
     defer mem_mgr.freeDevice(d_count);
 
-    // Copy data to device
+    // Copy sorted data to device
     const input_bytes = std.mem.sliceAsBytes(combined);
     try mem_mgr.copyHostToDevice(d_input, input_bytes);
 
@@ -78,20 +85,10 @@ fn gpuUnionDistinctImpl(a: []const u32, b: []const u32, allocator: std.mem.Alloc
     const zero_bytes = std.mem.asBytes(&zero);
     try mem_mgr.copyHostToDevice(d_count, zero_bytes);
 
-    // Sort kernel first (simple bitonic sort for small arrays)
-    const sort_func = try smart_loader.getFunction("bitonic_sort_kernel");
+    // Unique kernel (remove duplicates) - data is already sorted
+    const unique_func = try smart_loader.getFunction("unique_kernel");
     const threads_per_block: u32 = 256;
     const num_blocks: u32 = @intCast((total_len + threads_per_block - 1) / threads_per_block);
-
-    var sort_params = [_]*const anyopaque{
-        @ptrCast(&d_input.ptr),
-        @ptrCast(&@as(u32, @intCast(total_len))),
-    };
-
-    try smart_loader.launchKernel(sort_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&sort_params));
-
-    // Unique kernel (remove duplicates)
-    const unique_func = try smart_loader.getFunction("unique_kernel");
 
     var unique_params = [_]*const anyopaque{
         @ptrCast(&d_input.ptr),

@@ -87,7 +87,7 @@ pub const bfs_kernel_ptx_simple =
 // For CANARY test compatibility
 pub const bfs_kernel_ptx = bfs_kernel_ptx_simple;
 
-// PageRank kernel
+// PageRank kernel - Optimized push-based algorithm
 pub const pagerank_kernel_cuda_c =
     \\ extern "C" __global__ void pagerank_iteration_kernel(
     \\     const unsigned int* __restrict__ row_offsets,
@@ -100,32 +100,34 @@ pub const pagerank_kernel_cuda_c =
     \\     unsigned int vid = blockIdx.x * blockDim.x + threadIdx.x;
     \\     if (vid >= num_vertices) return;
     \\     
-    \\     // Initialize with (1-damping)/N
-    \\     float rank = (1.0f - damping) / num_vertices;
+    \\     // Initialize ranks_out with (1-damping)/N base value
+    \\     ranks_out[vid] = (1.0f - damping) / num_vertices;
+    \\ }
+    \\
+    \\ // Push-based PageRank: each vertex distributes its rank to neighbors
+    \\ extern "C" __global__ void pagerank_push_kernel(
+    \\     const unsigned int* __restrict__ row_offsets,
+    \\     const unsigned int* __restrict__ col_indices,
+    \\     const float* __restrict__ ranks_in,
+    \\     float* __restrict__ ranks_out,
+    \\     unsigned int num_vertices,
+    \\     float damping
+    \\ ) {
+    \\     unsigned int vid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\     if (vid >= num_vertices) return;
     \\     
-    \\     // Sum contributions from incoming edges
-    \\     // Note: This is a simplified version. For correct PageRank,
-    \\     // we need the transpose graph (incoming edges).
-    \\     // For now, we iterate all vertices and check for outgoing edges to vid.
-    \\     // This is inefficient but correct for small graphs.
+    \\     unsigned int row_start = row_offsets[vid];
+    \\     unsigned int row_end = row_offsets[vid + 1];
+    \\     unsigned int out_degree = row_end - row_start;
     \\     
-    \\     for (unsigned int src = 0; src < num_vertices; src++) {
-    \\         unsigned int row_start = row_offsets[src];
-    \\         unsigned int row_end = row_offsets[src + 1];
-    \\         unsigned int out_degree = row_end - row_start;
-    \\         
-    \\         if (out_degree == 0) continue;
-    \\         
-    \\         // Check if src has an edge to vid
-    \\         for (unsigned int i = row_start; i < row_end; i++) {
-    \\             if (col_indices[i] == vid) {
-    \\                 rank += damping * ranks_in[src] / out_degree;
-    \\                 break;
-    \\             }
-    \\         }
+    \\     if (out_degree == 0) return;
+    \\     
+    \\     // Distribute rank to all neighbors
+    \\     float contribution = damping * ranks_in[vid] / out_degree;
+    \\     for (unsigned int i = row_start; i < row_end; i++) {
+    \\         unsigned int neighbor = col_indices[i];
+    \\         atomicAdd(&ranks_out[neighbor], contribution);
     \\     }
-    \\     
-    \\     ranks_out[vid] = rank;
     \\ }
 ;
 
