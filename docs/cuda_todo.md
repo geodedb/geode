@@ -105,4 +105,22 @@ Next Steps: wire telemetry capture into executor dispatch points; update flagger
 - Benchmark demonstrates required speedups.  
 
 ## Next Action
-Implement Phase 0 tasks; add kernels scaffold & planner op stubs; wire detection & first tests.
+**COMPLETED PHASE 0-5 SCAFFOLDS** — 2025-10-26T00:16:36.869Z
+
+All five phases now have scaffold implementations with CANARY tests:
+- Phase 0: Device enumeration, planner heuristics (phase0.zig, gpu_ops.zig)
+- Phase 1: BFS frontier count CPU baseline (phase1_kernels.zig)
+- Phase 2: PageRank CPU reference (pagerank_kernels.zig)
+- Phase 3: Set ops (union/intersect) CPU baseline (gpu_setops_kernels.zig)
+- Phase 4: Dijkstra shortest path CPU baseline (shortest_path_kernels.zig)
+- Phase 5: Telemetry & diagnostics JSON (telemetry.zig)
+
+**CRITICAL NEXT STEPS FOR ACTUAL GPU ACCELERATION:**
+1. Fix CUDA symbol linking (cuInit, cuDeviceGetCount, etc.) — requires libcuda.so dynamic loading or static link in build.zig
+2. Implement actual CUDA kernels for Phase 1 (BFS), Phase 2 (PageRank), etc. using CUDA C API or inline PTX
+3. Add memory manager for device buffers (pooled allocation, HtoD/DtoH async copies)
+4. Wire planner/executor dispatch to choose GPU vs CPU path based on heuristics
+5. Add benchmarks for each phase to validate speedup targets (≥3-5x)
+6. Update README with GPU feature matrix and usage instructions
+
+**Current State:** All tests pass on CPU path; GPU path falls back to CPU implementations. CUDA symbols unresolved in test builds — this is expected until proper dynamic loading or linking configured.
