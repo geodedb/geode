@@ -416,9 +416,7 @@ pub const QuicStream = struct {
 
     pub fn read(self: *QuicStream, buf: []u8) !usize {
         if (self.quic_stream_id) |sid| {
-            return quic_lib.readStream(self.parent_connection.quic_connection.?, sid, buf) catch {
-                return 0;
-            };
+            return try quic_lib.readStream(self.parent_connection.quic_connection.?, sid, buf);
         } else {
             return QuicError.StreamFailed;
         }

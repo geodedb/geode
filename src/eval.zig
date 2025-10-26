@@ -336,11 +336,11 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
                 break :blk .{ .Str = result };
             }
             if (l == .Int and r == .Int) {
-                var result: i64 = undefined;
-                if (@addWithOverflow(&result, l.Int, r.Int)) {
+                const result_tuple = @addWithOverflow(l.Int, r.Int);
+                if (result_tuple[1] != 0) {
                     return EvalError.IntegerOverflow;
                 }
-                break :blk .{ .Int = result };
+                break :blk .{ .Int = result_tuple[0] };
             }
             // Decimal + Int / Int + Decimal / Decimal + Decimal
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
@@ -358,11 +358,11 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
             // NULL - anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk2 .{ .Null = {} };
             if (l == .Int and r == .Int) {
-                var result: i64 = undefined;
-                if (@subWithOverflow(&result, l.Int, r.Int)) {
+                const result_tuple = @subWithOverflow(l.Int, r.Int);
+                if (result_tuple[1] != 0) {
                     return EvalError.IntegerOverflow;
                 }
-                break :blk2 .{ .Int = result };
+                break :blk2 .{ .Int = result_tuple[0] };
             }
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
@@ -379,11 +379,11 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
             // NULL * anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk3 .{ .Null = {} };
             if (l == .Int and r == .Int) {
-                var result: i64 = undefined;
-                if (@mulWithOverflow(&result, l.Int, r.Int)) {
+                const result_tuple = @mulWithOverflow(l.Int, r.Int);
+                if (result_tuple[1] != 0) {
                     return EvalError.IntegerOverflow;
                 }
-                break :blk3 .{ .Int = result };
+                break :blk3 .{ .Int = result_tuple[0] };
             }
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);

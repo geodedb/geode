@@ -605,11 +605,24 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
 
     // Main message processing loop
     while (true) {
-        // Read message
-        const msg = stream.readLine(65536) catch |err| {
-            if (err == error.EndOfStream) break;
-            std.debug.print("Failed to read message: {}\n", .{err});
-            return err;
+        // Poll and retry readLine until we get a message or real error
+        const msg = blk: while (true) {
+            // Poll the endpoint to process incoming packets before reading
+            transport.poll(50) catch {};
+
+            // Try to read message
+            if (stream.readLine(65536)) |m| {
+                break :blk m;
+            } else |err| {
+                if (err == error.EndOfStream) return;
+                if (err == error.WouldBlock) {
+                    // Data not ready yet, poll and retry
+                    std.posix.nanosleep(0, 10 * std.time.ns_per_ms);
+                    continue;
+                }
+                std.debug.print("Failed to read message: {}\n", .{err});
+                return err;
+            }
         };
         defer allocator.free(msg);
 
