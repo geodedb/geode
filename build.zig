@@ -1094,27 +1094,27 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/telemetry.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&gpu_phase5_test.step);
-    
+
     // GPU memory manager test
     const gpu_memory_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/memory_manager.zig"), .target = target, .optimize = optimize }),
     });
     gpu_memory_test.linkLibC();
     test_step.dependOn(&gpu_memory_test.step);
-    
+
     // GPU kernel sources test
     const gpu_kernels_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/kernel_sources.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&gpu_kernels_test.step);
-    
+
     // GPU cuda_loader test
     const gpu_loader_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/cuda_loader.zig"), .target = target, .optimize = optimize }),
     });
     gpu_loader_test.linkLibC();
     test_step.dependOn(&gpu_loader_test.step);
-    
+
     // GPU module_loader test
     const gpu_module_loader_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/module_loader.zig"), .target = target, .optimize = optimize }),
@@ -1122,36 +1122,51 @@ pub fn build(b: *std.Build) void {
     gpu_module_loader_test.linkLibC();
     test_step.dependOn(&gpu_module_loader_test.step);
 
+    // GPU unified module for benchmarks
+    const gpu_mod = b.createModule(.{ .root_source_file = b.path("src/gpu.zig"), .target = target, .optimize = .ReleaseFast });
+
     // GPU BFS benchmark (optional, not part of regular test suite)
     const bench_gpu_bfs = b.addExecutable(.{
         .name = "bench_gpu_bfs",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_bfs.zig"), .target = target, .optimize = .ReleaseFast }),
     });
+    bench_gpu_bfs.root_module.addImport("gpu", gpu_mod);
+    bench_gpu_bfs.linkLibC();
+    b.installArtifact(bench_gpu_bfs);
     const bench_gpu_step = b.step("bench-gpu", "Run GPU benchmarks");
     const bench_gpu_bfs_run = b.addRunArtifact(bench_gpu_bfs);
     bench_gpu_step.dependOn(&bench_gpu_bfs_run.step);
-    
+
     // GPU PageRank benchmark
     const bench_gpu_pagerank = b.addExecutable(.{
         .name = "bench_gpu_pagerank",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_pagerank.zig"), .target = target, .optimize = .ReleaseFast }),
     });
+    bench_gpu_pagerank.root_module.addImport("gpu", gpu_mod);
+    bench_gpu_pagerank.linkLibC();
+    b.installArtifact(bench_gpu_pagerank);
     const bench_gpu_pagerank_run = b.addRunArtifact(bench_gpu_pagerank);
     bench_gpu_step.dependOn(&bench_gpu_pagerank_run.step);
-    
+
     // GPU Set Operations benchmark
     const bench_gpu_setops = b.addExecutable(.{
         .name = "bench_gpu_setops",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_setops.zig"), .target = target, .optimize = .ReleaseFast }),
     });
+    bench_gpu_setops.root_module.addImport("gpu", gpu_mod);
+    bench_gpu_setops.linkLibC();
+    b.installArtifact(bench_gpu_setops);
     const bench_gpu_setops_run = b.addRunArtifact(bench_gpu_setops);
     bench_gpu_step.dependOn(&bench_gpu_setops_run.step);
-    
+
     // GPU Shortest Path benchmark
     const bench_gpu_shortest_path = b.addExecutable(.{
         .name = "bench_gpu_shortest_path",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_shortest_path.zig"), .target = target, .optimize = .ReleaseFast }),
     });
+    bench_gpu_shortest_path.root_module.addImport("gpu", gpu_mod);
+    bench_gpu_shortest_path.linkLibC();
+    b.installArtifact(bench_gpu_shortest_path);
     const bench_gpu_shortest_path_run = b.addRunArtifact(bench_gpu_shortest_path);
     bench_gpu_step.dependOn(&bench_gpu_shortest_path_run.step);
 

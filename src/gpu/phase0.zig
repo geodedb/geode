@@ -32,24 +32,24 @@ pub fn enumerate(allocator: std.mem.Allocator) ![]DeviceInfo {
         const dup = try allocator.dupe(DeviceInfo, tmp[0..]);
         return dup;
     }
-    
+
     const loader = getLoader();
     if (!loader.available()) {
         var tmp = [_]DeviceInfo{DeviceInfo{ .id = 0, .name = "cuda-unavailable", .sm_count = 0, .total_mem = 0, .warp_size = 32, .available = false }};
         const dup = try allocator.dupe(DeviceInfo, tmp[0..]);
         return dup;
     }
-    
+
     var count: i32 = 0;
     if (loader.cuInit(0) != 0 or loader.cuDeviceGetCount(&count) != 0 or count <= 0) {
         var tmp = [_]DeviceInfo{DeviceInfo{ .id = 0, .name = "cuda-unavailable", .sm_count = 0, .total_mem = 0, .warp_size = 32, .available = false }};
         const dup = try allocator.dupe(DeviceInfo, tmp[0..]);
         return dup;
     }
-    
+
     var list = try std.ArrayList(DeviceInfo).initCapacity(allocator, @intCast(count));
     defer list.deinit(allocator);
-    
+
     var i: i32 = 0;
     while (i < count) : (i += 1) {
         var dev: i32 = 0;
@@ -81,7 +81,8 @@ pub fn shouldUseGpu(edge_count: usize, selectivity: f64) bool {
 }
 
 test "TestCANARY_REQ_GQL_051_GPUPhase0DeviceEnum" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const infos = try enumerate(alloc);
     defer alloc.free(infos);

@@ -93,13 +93,13 @@ pub const EventTimer = struct {
 
     pub fn getElapsedMs(self: *EventTimer) f32 {
         if (self.start_event == null or self.end_event == null) return 0.0;
-        
+
         _ = self.loader.eventSynchronize(self.end_event.?);
-        
+
         var ms: f32 = 0.0;
         const res = self.loader.eventElapsedTime(&ms, self.start_event.?, self.end_event.?);
         if (res != 0) return 0.0;
-        
+
         return ms;
     }
 };
@@ -160,7 +160,8 @@ pub fn serializeToJson(diag: GPUDiagnostics, allocator: std.mem.Allocator) ![]u8
 }
 
 test "TestCANARY_REQ_GQL_051_GPUTelemetryStruct" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const metrics = recordKernelMetrics("test_bfs", 0, 5.5);
     try std.testing.expectEqual(@as(f64, 5.5), metrics.kernel_ms);
@@ -174,7 +175,8 @@ test "TestCANARY_REQ_GQL_051_GPUTelemetryStruct" {
 }
 
 test "TestCANARY_REQ_GQL_051_GPUTelemetryFallback" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const diag = createDiagnostics(false, null, "no device");
     const json = try serializeToJson(diag, alloc);

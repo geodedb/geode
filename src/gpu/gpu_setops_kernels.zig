@@ -10,8 +10,12 @@ const kernel_sources = @import("kernel_sources.zig");
 pub fn unionDistinctCPU(a: []const u32, b: []const u32, allocator: std.mem.Allocator) ![]u32 {
     var map = std.AutoHashMap(u32, void).init(allocator);
     defer map.deinit();
-    for (a) |v| { _ = map.put(v, {}) catch {}; }
-    for (b) |v| { _ = map.put(v, {}) catch {}; }
+    for (a) |v| {
+        _ = map.put(v, {}) catch {};
+    }
+    for (b) |v| {
+        _ = map.put(v, {}) catch {};
+    }
     var list = std.array_list.Managed(u32).init(allocator);
     defer list.deinit();
     var it = map.iterator();
@@ -25,7 +29,7 @@ pub fn unionDistinctGPU(a: []const u32, b: []const u32, allocator: std.mem.Alloc
     if (!phase0.gpuEnabled()) {
         return unionDistinctCPU(a, b, allocator);
     }
-    
+
     return gpuUnionDistinctImpl(a, b, allocator) catch |err| {
         std.debug.print("GPU UNION DISTINCT failed: {}, falling back to CPU\n", .{err});
         return unionDistinctCPU(a, b, allocator);
@@ -35,96 +39,92 @@ pub fn unionDistinctGPU(a: []const u32, b: []const u32, allocator: std.mem.Alloc
 fn gpuUnionDistinctImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator) ![]u32 {
     const loader = CudaLoader.init();
     if (!loader.available()) return error.GPUUnavailable;
-    
+
     var mem_mgr = try MemoryManager.init(&loader, allocator);
     defer mem_mgr.deinit();
-    
+
     var mod_loader = try ModuleLoader.init(&loader);
     defer mod_loader.deinit();
-    
+
     // Load set operations kernels
     try mod_loader.loadPTX(kernel_sources.setops_kernel_ptx);
-    
+
     // Concatenate a and b
     const total_len = a.len + b.len;
     if (total_len == 0) return try allocator.alloc(u32, 0);
-    
+
     var combined = try allocator.alloc(u32, total_len);
     defer allocator.free(combined);
     @memcpy(combined[0..a.len], a);
     @memcpy(combined[a.len..], b);
-    
+
     // Allocate device memory
     const data_size = total_len * @sizeOf(u32);
     var d_input = try mem_mgr.allocDevice(data_size);
     defer mem_mgr.freeDevice(d_input);
     var d_output = try mem_mgr.allocDevice(data_size);
     defer mem_mgr.freeDevice(d_output);
-    
+
     // Output count (how many unique elements)
     var d_count = try mem_mgr.allocDevice(@sizeOf(u32));
     defer mem_mgr.freeDevice(d_count);
-    
+
     // Copy data to device
     const input_bytes = std.mem.sliceAsBytes(combined);
     try mem_mgr.copyHostToDevice(d_input, input_bytes);
-    
+
     // Initialize count to 0
     var zero: u32 = 0;
     const zero_bytes = std.mem.asBytes(&zero);
     try mem_mgr.copyHostToDevice(d_count, zero_bytes);
-    
+
     // Sort kernel first (simple bitonic sort for small arrays)
     const sort_func = try mod_loader.getFunction("bitonic_sort_kernel");
     const threads_per_block: u32 = 256;
     const num_blocks: u32 = @intCast((total_len + threads_per_block - 1) / threads_per_block);
-    
+
     var sort_params = [_]*const anyopaque{
         @ptrCast(&d_input.ptr),
         @ptrCast(&@as(u32, @intCast(total_len))),
     };
-    
-    try mod_loader.launchKernel(sort_func, 
-        [3]u32{ num_blocks, 1, 1 }, 
-        [3]u32{ threads_per_block, 1, 1 }, 
-        0, 
-        @ptrCast(&sort_params));
-    
+
+    try mod_loader.launchKernel(sort_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&sort_params));
+
     // Unique kernel (remove duplicates)
     const unique_func = try mod_loader.getFunction("unique_kernel");
-    
+
     var unique_params = [_]*const anyopaque{
         @ptrCast(&d_input.ptr),
         @ptrCast(&d_output.ptr),
         @ptrCast(&d_count.ptr),
         @ptrCast(&@as(u32, @intCast(total_len))),
     };
-    
-    try mod_loader.launchKernel(unique_func,
-        [3]u32{ num_blocks, 1, 1 },
-        [3]u32{ threads_per_block, 1, 1 },
-        0,
-        @ptrCast(&unique_params));
-    
+
+    try mod_loader.launchKernel(unique_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&unique_params));
+
     // Read back count
     var result_count: u32 = 0;
     const count_bytes = std.mem.asBytes(&result_count);
     try mem_mgr.copyDeviceToHost(count_bytes, d_count);
-    
+
     // Allocate result and copy back
     if (result_count == 0) return try allocator.alloc(u32, 0);
-    
+
     const result = try allocator.alloc(u32, result_count);
     const result_bytes = std.mem.sliceAsBytes(result);
     try mem_mgr.copyDeviceToHost(result_bytes, d_output);
-    
+
     return result;
 }
 
 pub fn intersectCPU(a: []const u32, b: []const u32, allocator: std.mem.Allocator) ![]u32 {
-    var setA = std.AutoHashMap(u32, void).init(allocator); defer setA.deinit();
-    for (a) |v| { _ = setA.put(v, {}) catch {}; }
-    var list = std.array_list.Managed(u32).init(allocator); defer list.deinit();
+    var setA = std.AutoHashMap(u32, void).init(allocator);
+    defer setA.deinit();
+    for (a) |v| {
+        _ = setA.put(v, {}) catch {};
+    }
+    var list = std.array_list.Managed(u32).init(allocator);
+    defer list.deinit();
     for (b) |v| if (setA.get(v) != null) try list.append(v);
     const slice = try allocator.alloc(u32, list.items.len);
     @memcpy(slice, list.items);
@@ -135,7 +135,7 @@ pub fn intersectGPU(a: []const u32, b: []const u32, allocator: std.mem.Allocator
     if (!phase0.gpuEnabled()) {
         return intersectCPU(a, b, allocator);
     }
-    
+
     return gpuIntersectImpl(a, b, allocator) catch |err| {
         std.debug.print("GPU INTERSECT failed: {}, falling back to CPU\n", .{err});
         return intersectCPU(a, b, allocator);
@@ -145,23 +145,23 @@ pub fn intersectGPU(a: []const u32, b: []const u32, allocator: std.mem.Allocator
 fn gpuIntersectImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator) ![]u32 {
     const loader = CudaLoader.init();
     if (!loader.available()) return error.GPUUnavailable;
-    
+
     var mem_mgr = try MemoryManager.init(&loader, allocator);
     defer mem_mgr.deinit();
-    
+
     var mod_loader = try ModuleLoader.init(&loader);
     defer mod_loader.deinit();
-    
+
     try mod_loader.loadPTX(kernel_sources.setops_kernel_ptx);
-    
+
     if (a.len == 0 or b.len == 0) return try allocator.alloc(u32, 0);
-    
+
     // Allocate device memory
     const a_size = a.len * @sizeOf(u32);
     const b_size = b.len * @sizeOf(u32);
     const max_result = @min(a.len, b.len);
     const result_size = max_result * @sizeOf(u32);
-    
+
     var d_a = try mem_mgr.allocDevice(a_size);
     defer mem_mgr.freeDevice(d_a);
     var d_b = try mem_mgr.allocDevice(b_size);
@@ -170,19 +170,19 @@ fn gpuIntersectImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator
     defer mem_mgr.freeDevice(d_result);
     var d_count = try mem_mgr.allocDevice(@sizeOf(u32));
     defer mem_mgr.freeDevice(d_count);
-    
+
     // Copy data to device
     try mem_mgr.copyHostToDevice(d_a, std.mem.sliceAsBytes(a));
     try mem_mgr.copyHostToDevice(d_b, std.mem.sliceAsBytes(b));
-    
+
     var zero: u32 = 0;
     try mem_mgr.copyHostToDevice(d_count, std.mem.asBytes(&zero));
-    
+
     // Launch intersect kernel
     const intersect_func = try mod_loader.getFunction("intersect_kernel");
     const threads_per_block: u32 = 256;
     const num_blocks: u32 = @intCast((a.len + threads_per_block - 1) / threads_per_block);
-    
+
     var params = [_]*const anyopaque{
         @ptrCast(&d_a.ptr),
         @ptrCast(&d_b.ptr),
@@ -191,64 +191,74 @@ fn gpuIntersectImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator
         @ptrCast(&@as(u32, @intCast(a.len))),
         @ptrCast(&@as(u32, @intCast(b.len))),
     };
-    
-    try mod_loader.launchKernel(intersect_func,
-        [3]u32{ num_blocks, 1, 1 },
-        [3]u32{ threads_per_block, 1, 1 },
-        0,
-        @ptrCast(&params));
-    
+
+    try mod_loader.launchKernel(intersect_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&params));
+
     // Read back count
     var result_count: u32 = 0;
     try mem_mgr.copyDeviceToHost(std.mem.asBytes(&result_count), d_count);
-    
+
     if (result_count == 0) return try allocator.alloc(u32, 0);
-    
+
     // Allocate and copy result
     const result = try allocator.alloc(u32, result_count);
     try mem_mgr.copyDeviceToHost(std.mem.sliceAsBytes(result), d_result);
-    
+
     return result;
 }
 
 test "TestCANARY_REQ_GQL_051_GPUUnionDistinctSmall" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const alloc = gpa.allocator();
-    const a = &[_]u32{1,2,3,3};
-    const b = &[_]u32{3,4,5};
+    const a = &[_]u32{ 1, 2, 3, 3 };
+    const b = &[_]u32{ 3, 4, 5 };
     const cpu = try unionDistinctCPU(a, b, alloc);
     defer alloc.free(cpu);
     const gpu = try unionDistinctGPU(a, b, alloc);
     defer alloc.free(gpu);
     try std.testing.expectEqual(cpu.len, gpu.len);
     // Unordered equivalence: convert to hash sets
-    var set_cpu = std.AutoHashMap(u32, void).init(alloc); defer set_cpu.deinit();
-    var set_gpu = std.AutoHashMap(u32, void).init(alloc); defer set_gpu.deinit();
-    for (cpu) |v| { _ = set_cpu.put(v, {}) catch {}; }
-    for (gpu) |v| { _ = set_gpu.put(v, {}) catch {}; }
+    var set_cpu = std.AutoHashMap(u32, void).init(alloc);
+    defer set_cpu.deinit();
+    var set_gpu = std.AutoHashMap(u32, void).init(alloc);
+    defer set_gpu.deinit();
+    for (cpu) |v| {
+        _ = set_cpu.put(v, {}) catch {};
+    }
+    for (gpu) |v| {
+        _ = set_gpu.put(v, {}) catch {};
+    }
     try std.testing.expectEqual(set_cpu.count(), set_gpu.count());
 }
 
 test "TestCANARY_REQ_GQL_051_GPUIntersectSmall" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const alloc = gpa.allocator();
-    const a = &[_]u32{1,2,3,4};
-    const b = &[_]u32{3,4,5,6};
+    const a = &[_]u32{ 1, 2, 3, 4 };
+    const b = &[_]u32{ 3, 4, 5, 6 };
     const cpu = try intersectCPU(a, b, alloc);
     defer alloc.free(cpu);
     const gpu = try intersectGPU(a, b, alloc);
     defer alloc.free(gpu);
-    
+
     // Verify same length
     try std.testing.expectEqual(cpu.len, gpu.len);
-    
+
     // Verify same elements (unordered)
-    var set_cpu = std.AutoHashMap(u32, void).init(alloc); defer set_cpu.deinit();
-    var set_gpu = std.AutoHashMap(u32, void).init(alloc); defer set_gpu.deinit();
-    for (cpu) |v| { _ = set_cpu.put(v, {}) catch {}; }
-    for (gpu) |v| { _ = set_gpu.put(v, {}) catch {}; }
+    var set_cpu = std.AutoHashMap(u32, void).init(alloc);
+    defer set_cpu.deinit();
+    var set_gpu = std.AutoHashMap(u32, void).init(alloc);
+    defer set_gpu.deinit();
+    for (cpu) |v| {
+        _ = set_cpu.put(v, {}) catch {};
+    }
+    for (gpu) |v| {
+        _ = set_gpu.put(v, {}) catch {};
+    }
     try std.testing.expectEqual(set_cpu.count(), set_gpu.count());
-    
+
     // Verify expected result: {3, 4}
     try std.testing.expect(cpu.len == 2 or cpu.len == 0); // 0 if GPU unavailable fallback
 }

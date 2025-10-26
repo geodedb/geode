@@ -234,7 +234,9 @@ pub const GPUAccelerator = struct {
 // CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=DeviceMemory; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUDeviceMemoryAlloc; OWNER=engine; UPDATED=2025-10-25
 
 test "TestCANARY_REQ_GQL_051_GPUDeviceMemoryAlloc" {
-    const c = @cImport({ @cInclude("cuda.h"); });
+    const c = @cImport({
+        @cInclude("cuda.h");
+    });
     // Initialize CUDA; if unavailable just return (skip)
     if (c.cuInit(0) != c.CUresult.CUDA_SUCCESS) return; // skip when no driver
     var count: c.int = 0;

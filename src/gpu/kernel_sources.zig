@@ -88,7 +88,7 @@ pub const bfs_kernel_ptx_simple =
 pub const bfs_kernel_ptx = bfs_kernel_ptx_simple;
 
 // PageRank kernel
-pub const pagerank_kernel_cuda_c = 
+pub const pagerank_kernel_cuda_c =
     \\ extern "C" __global__ void pagerank_iteration_kernel(
     \\     const unsigned int* __restrict__ row_offsets,
     \\     const unsigned int* __restrict__ col_indices,

@@ -52,7 +52,7 @@ pub fn pagerankGPU(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
     if (!phase0.gpuEnabled()) {
         return pagerankCPU(g, iterations, d, allocator);
     }
-    
+
     return gpuPageRankImpl(g, iterations, d, allocator) catch |err| {
         std.debug.print("GPU PageRank failed: {}, falling back to CPU\n", .{err});
         return pagerankCPU(g, iterations, d, allocator);
@@ -62,24 +62,24 @@ pub fn pagerankGPU(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
 fn gpuPageRankImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Allocator) ![]f64 {
     const loader = CudaLoader.init();
     if (!loader.available()) return error.GPUUnavailable;
-    
+
     var mem_mgr = try MemoryManager.init(&loader, allocator);
     defer mem_mgr.deinit();
-    
+
     var mod_loader = try ModuleLoader.init(&loader);
     defer mod_loader.deinit();
-    
+
     // Load PTX module for PageRank kernel
     try mod_loader.loadPTX(kernel_sources.pagerank_kernel_ptx);
-    
+
     // Get kernel function
     const kernel_func = try mod_loader.getFunction("pagerank_iteration_kernel");
-    
+
     // Allocate device memory for graph
     const row_size = (g.num_nodes + 1) * @sizeOf(u32);
     const col_size = g.col_indices.len * @sizeOf(u32);
     const ranks_size = g.num_nodes * @sizeOf(f32); // Use f32 on GPU for performance
-    
+
     var d_row_offsets = try mem_mgr.allocDevice(row_size);
     defer mem_mgr.freeDevice(d_row_offsets);
     var d_col_indices = try mem_mgr.allocDevice(col_size);
@@ -88,30 +88,30 @@ fn gpuPageRankImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
     defer mem_mgr.freeDevice(d_ranks_in);
     var d_ranks_out = try mem_mgr.allocDevice(ranks_size);
     defer mem_mgr.freeDevice(d_ranks_out);
-    
+
     // Copy graph structure to device
     const row_bytes = std.mem.sliceAsBytes(g.row_offsets);
     const col_bytes = std.mem.sliceAsBytes(g.col_indices);
     try mem_mgr.copyHostToDevice(d_row_offsets, row_bytes);
     try mem_mgr.copyHostToDevice(d_col_indices, col_bytes);
-    
+
     // Initialize ranks on host
     const h_ranks = try allocator.alloc(f32, g.num_nodes);
     defer allocator.free(h_ranks);
     const init_rank: f32 = 1.0 / @as(f32, @floatFromInt(g.num_nodes));
     for (h_ranks) |*r| r.* = init_rank;
-    
+
     // Copy initial ranks to device
     const init_ranks_bytes = std.mem.sliceAsBytes(h_ranks);
     try mem_mgr.copyHostToDevice(d_ranks_in, init_ranks_bytes);
-    
+
     // Prepare kernel parameters
     const damping_f32 = @as(f32, @floatCast(d));
     const threads_per_block: u32 = 256;
     const num_blocks = (g.num_nodes + threads_per_block - 1) / threads_per_block;
     const grid_dim = [3]u32{ num_blocks, 1, 1 };
     const block_dim = [3]u32{ threads_per_block, 1, 1 };
-    
+
     // Power iteration
     var it: u32 = 0;
     while (it < iterations) : (it += 1) {
@@ -123,32 +123,33 @@ fn gpuPageRankImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.Alloc
             @ptrCast(&g.num_nodes),
             @ptrCast(&damping_f32),
         };
-        
+
         try mod_loader.launchKernel(kernel_func, grid_dim, block_dim, 0, @ptrCast(&params));
-        
+
         // Swap buffers for next iteration
         std.mem.swap(@TypeOf(d_ranks_in), &d_ranks_in, &d_ranks_out);
     }
-    
+
     // Copy final ranks back to host
     const final_ranks_bytes = std.mem.sliceAsBytes(h_ranks);
     try mem_mgr.copyDeviceToHost(final_ranks_bytes, d_ranks_in);
-    
+
     // Convert f32 to f64 for output
     var result = try allocator.alloc(f64, g.num_nodes);
     for (h_ranks, 0..) |r, i| {
         result[i] = @floatCast(r);
     }
-    
+
     return result;
 }
 
 test "TestCANARY_REQ_GQL_051_GPUPageRankSmallGraph" {
     // Graph: 0->1,2 ; 1->2 ; 2->0 ; 2->3 ; 3->2
-    const row_offsets = &[_]u32{0,2,3,5,6};
-    const col_indices = &[_]u32{1,2,2,0,3,2};
+    const row_offsets = &[_]u32{ 0, 2, 3, 5, 6 };
+    const col_indices = &[_]u32{ 1, 2, 2, 0, 3, 2 };
     const g = PRGraph{ .row_offsets = row_offsets, .col_indices = col_indices, .num_nodes = 4 };
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const cpu = try pagerankCPU(g, 20, 0.85, alloc);
     defer alloc.free(cpu);

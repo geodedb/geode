@@ -147,17 +147,17 @@ pub const CudaLoader = struct {
         if (self.cuDeviceTotalMem_fn) |fn_ptr| return fn_ptr(bytes, dev);
         return -1;
     }
-    
+
     pub fn cuCtxCreate(self: *const CudaLoader, ctx: *CUcontext, flags: u32, dev: CUdevice) CUresult {
         if (self.cuCtxCreate_fn) |fn_ptr| return fn_ptr(ctx, flags, dev);
         return -1;
     }
-    
+
     pub fn cuCtxDestroy(self: *const CudaLoader, ctx: CUcontext) CUresult {
         if (self.cuCtxDestroy_fn) |fn_ptr| return fn_ptr(ctx);
         return -1;
     }
-    
+
     pub fn cuCtxSynchronize(self: *const CudaLoader) CUresult {
         if (self.cuCtxSynchronize_fn) |fn_ptr| return fn_ptr();
         return -1;
@@ -209,11 +209,11 @@ pub const CudaLoader = struct {
     }
 
     pub fn supportsEvents(self: *const CudaLoader) bool {
-        return self.cuEventCreate_fn != null and 
-               self.cuEventDestroy_fn != null and 
-               self.cuEventRecord_fn != null and
-               self.cuEventSynchronize_fn != null and
-               self.cuEventElapsedTime_fn != null;
+        return self.cuEventCreate_fn != null and
+            self.cuEventDestroy_fn != null and
+            self.cuEventRecord_fn != null and
+            self.cuEventSynchronize_fn != null and
+            self.cuEventElapsedTime_fn != null;
     }
 };
 
