@@ -203,6 +203,14 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                         # It's a GQL statement, so we need to add "query" command
                         setup_processed = ["query"] + setup_processed
 
+                # Add --embedded for query commands in setup (same as main test command)
+                if len(setup_processed) > 0 and setup_processed[0] == "query":
+                    has_embedded = any("--embedded" in arg for arg in setup_processed)
+                    has_server = any("--server" in arg for arg in setup_processed)
+                    if not has_embedded and not has_server:
+                        setup_processed.insert(1, "--embedded")
+                        setup_processed.insert(2, "--no-quic")
+
                 setup_result = subprocess.run(
                     [binary] + setup_processed,
                     input=setup_stdin,
@@ -219,7 +227,7 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
             except Exception as e:
                 return False, f"setup error: {str(e)}"
 
-    # Add --no-quic if query command and no server specified
+    # Add --embedded if query command and no server specified (default is now server mode)
     modified_args = args[:]
     is_query_command = len(args) > 0 and args[0] == "query"
     if is_query_command:
@@ -236,9 +244,18 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                 if isinstance(server_config, dict):
                     spec_server_args = server_config.get("args", [])
 
-        if not has_server and not has_no_quic:
-            # Insert --no-quic after "query"
-            modified_args.insert(1, "--no-quic")
+        # If no server specified and not already embedded, force embedded mode
+        # (since default is now server mode which would try to connect to a non-existent server)
+        if not has_server and not has_embedded:
+            # Insert --embedded after "query"
+            modified_args.insert(1, "--embedded")
+            has_embedded = True
+
+        # Also add --no-quic for embedded mode for compatibility
+        if has_embedded and not has_no_quic:
+            # Find position after --embedded
+            insert_pos = 2 if len(modified_args) > 1 and modified_args[1] == "--embedded" else 1
+            modified_args.insert(insert_pos, "--no-quic")
 
         # If using embedded mode and spec requires auth, inject --enable-auth
         # (Note: other enterprise flags like --audit are global and handled separately before command execution)
