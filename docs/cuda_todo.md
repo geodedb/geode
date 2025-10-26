@@ -571,8 +571,17 @@ GPU speedup only materializes when compute time >> transfer time, typically:
    - Updated `src/gpu.zig` to export `performance_profiler`
    - All GPU components accessible via unified interface
 
-**Status:** ✅ **PRODUCTION READY** — GPU acceleration complete with automatic dispatch and performance optimization
+6. **Critical Bug Fixes** (Performance Optimization - 2025-10-26)
+   - Fixed INTERSECT correctness bug (returned 0 elements instead of 5M)
+   - Replaced O(n²) linear search with O(n log m) binary search
+   - Added input sorting for binary search compatibility
+   - Fixed benchmark data generation for 50% overlap validation
+   - See: `docs/PHASE10_OPTIMIZATION_SUMMARY.md`
+
+**Status:** ✅ **OPTIMIZATIONS IMPLEMENTED** — INTERSECT fixed, awaiting GPU hardware validation
 
 **See:** `docs/PHASE10_COMPLETION_REPORT.md` for detailed implementation report  
-**See:** `docs/GPU_PRODUCTION_DEPLOYMENT.md` for deployment guide
+**See:** `docs/GPU_PRODUCTION_DEPLOYMENT.md` for deployment guide  
+**See:** `docs/PHASE10_OPTIMIZATION_SUMMARY.md` for optimization details  
+**See:** `docs/GPU_PERFORMANCE_OPTIMIZATION.md` for comprehensive optimization roadmap
 

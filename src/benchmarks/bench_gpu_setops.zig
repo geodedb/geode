@@ -12,18 +12,15 @@ fn generateSyntheticSets(allocator: std.mem.Allocator) !struct { a: []u32, b: []
     const a = try allocator.alloc(u32, SET_SIZE_A);
     const b = try allocator.alloc(u32, SET_SIZE_B);
 
-    // Set A: 0, 2, 4, 6, ... (even numbers)
+    // Set A: 0 to SET_SIZE_A-1
     for (a, 0..) |*val, i| {
-        val.* = @intCast(i * 2);
+        val.* = @intCast(i);
     }
 
-    // Set B: 1, 3, 5, 7, ... and some overlap with A
+    // Set B: SET_SIZE_B/2 to SET_SIZE_B/2 + SET_SIZE_B - 1
+    // This gives 50% overlap: elements [SET_SIZE_B/2 .. SET_SIZE_A-1] are in both
     for (b, 0..) |*val, i| {
-        if (i < SET_SIZE_B / 2) {
-            val.* = @intCast(i * 2 + 1); // odds
-        } else {
-            val.* = @intCast((i - SET_SIZE_B / 2) * 2); // evens (overlap)
-        }
+        val.* = @intCast(i + SET_SIZE_B / 2);
     }
 
     return .{ .a = a, .b = b };

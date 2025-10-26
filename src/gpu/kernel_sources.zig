@@ -247,13 +247,22 @@ pub const setops_kernel_cuda_c =
     \\     
     \\     unsigned int val = a[tid];
     \\     
-    \\     // Linear search in b (for small arrays)
-    \\     // For large arrays, use binary search on sorted data
+    \\     // Binary search in sorted array b (assumes both arrays are sorted)
+    \\     unsigned int left = 0;
+    \\     unsigned int right = b_len;
     \\     bool found = false;
-    \\     for (unsigned int i = 0; i < b_len; i++) {
-    \\         if (b[i] == val) {
+    \\     
+    \\     while (left < right) {
+    \\         unsigned int mid = left + (right - left) / 2;
+    \\         unsigned int mid_val = b[mid];
+    \\         
+    \\         if (mid_val == val) {
     \\             found = true;
     \\             break;
+    \\         } else if (mid_val < val) {
+    \\             left = mid + 1;
+    \\         } else {
+    \\             right = mid;
     \\         }
     \\     }
     \\     

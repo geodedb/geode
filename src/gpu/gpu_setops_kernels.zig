@@ -156,6 +156,18 @@ fn gpuIntersectImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator
 
     if (a.len == 0 or b.len == 0) return try allocator.alloc(u32, 0);
 
+    // Sort inputs on CPU first (for binary search in kernel)
+    // For production, would sort on GPU, but this is simpler for now
+    const a_sorted = try allocator.alloc(u32, a.len);
+    defer allocator.free(a_sorted);
+    @memcpy(a_sorted, a);
+    std.mem.sort(u32, a_sorted, {}, std.sort.asc(u32));
+
+    const b_sorted = try allocator.alloc(u32, b.len);
+    defer allocator.free(b_sorted);
+    @memcpy(b_sorted, b);
+    std.mem.sort(u32, b_sorted, {}, std.sort.asc(u32));
+
     // Allocate device memory
     const a_size = a.len * @sizeOf(u32);
     const b_size = b.len * @sizeOf(u32);
@@ -171,9 +183,9 @@ fn gpuIntersectImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator
     var d_count = try mem_mgr.allocDevice(@sizeOf(u32));
     defer mem_mgr.freeDevice(d_count);
 
-    // Copy data to device
-    try mem_mgr.copyHostToDevice(d_a, std.mem.sliceAsBytes(a));
-    try mem_mgr.copyHostToDevice(d_b, std.mem.sliceAsBytes(b));
+    // Copy sorted data to device
+    try mem_mgr.copyHostToDevice(d_a, std.mem.sliceAsBytes(a_sorted));
+    try mem_mgr.copyHostToDevice(d_b, std.mem.sliceAsBytes(b_sorted));
 
     var zero: u32 = 0;
     try mem_mgr.copyHostToDevice(d_count, std.mem.asBytes(&zero));
