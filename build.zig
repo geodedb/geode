@@ -1078,6 +1078,10 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/phase1_kernels.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&gpu_phase1_test.step);
+    const gpu_phase2_test = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/pagerank_kernels.zig"), .target = target, .optimize = optimize }),
+    });
+    test_step.dependOn(&gpu_phase2_test.step);
 
     // Federation mismatch flag E2E protocol-style test (lightweight)
     const fed_mismatch_flag_test = b.addTest(.{

@@ -36,7 +36,8 @@ Status: SCAFFOLD STARTED — 2025-10-26T00:07:12.617Z
 4. Tests: `TestCANARY_REQ_GQL_051_GPUPageRankSmallGraph` (TODO) — verify sum of ranks ≈1.0 and diff CPU vs GPU <1e-6.  
 5. Bench: `bench_gpu_pagerank.zig` (TODO) — 50 iterations on 1M edges; capture ms & speedup vs CPU baseline; CANARY line with STATUS=BENCHED when threshold met.  
 Acceptance: PageRank E2E returns identical ordering & values tolerance; benchmark speedup ≥3x.
-Next Steps: add pagerank_kernels.zig (CPU ref + placeholder GPU), integrate into build.zig tests & update planner dispatch.
+Progress: pagerank_kernels.zig added with CPU reference + placeholder GPU path (2025-10-26T00:09:22.408Z); test implemented; planner dispatch still TODO.
+Next Steps: integrate planner recognition for PageRank calls and add benchmark scaffold.
 
 ### Phase 3: Set Operations & Projection
 Status: NOT STARTED -> SCAFFOLD QUEUED — 2025-10-26T00:08:52.339Z
