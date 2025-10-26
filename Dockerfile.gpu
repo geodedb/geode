@@ -1,0 +1,80 @@
+# GPU-enabled build for geode database with CUDA support
+FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04 AS builder
+
+ARG TARGETARCH
+ARG ZIG_VERSION=0.15.1
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    xz-utils \
+    ca-certificates \
+    git \
+    build-essential \
+    file \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zig using the existing script
+COPY scripts/docker/install-zig.sh /tmp/install-zig.sh
+RUN chmod +x /tmp/install-zig.sh && \
+    if [ "$(uname -m)" = "aarch64" ]; then \
+        ARCH="aarch64"; \
+    else \
+        ARCH="x86_64"; \
+    fi && \
+    /tmp/install-zig.sh ${ZIG_VERSION} $ARCH linux /opt && \
+    rm /tmp/install-zig.sh
+
+# Set working directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Build geode binaries and GPU benchmarks
+RUN zig build -Doptimize=ReleaseFast && \
+    zig build bench-gpu -Doptimize=ReleaseFast
+
+# Runtime stage with GPU support
+FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04 AS runtime
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    openssl \
+    && rm -rf /var/lib/apt/lists/* && \
+    useradd -m -u 1000 geode && \
+    mkdir -p /data /certs /var/log/geode /benchmarks && \
+    chown -R geode:geode /data /certs /var/log/geode /benchmarks
+
+# Copy all built binaries from builder
+COPY --from=builder /build/zig-out/bin/ /usr/local/bin/
+COPY --from=builder /build/run_gpu_benchmarks.sh /benchmarks/
+
+# Make benchmark script executable
+RUN chmod +x /benchmarks/run_gpu_benchmarks.sh
+
+# Switch to non-root user
+USER geode
+WORKDIR /benchmarks
+
+# Expose ports (QUIC-only + metrics)
+EXPOSE 8443/udp 9090/tcp
+
+# Default command runs GPU benchmarks directly
+CMD ["sh", "-c", "echo '=== GPU Acceleration Benchmarks ===' && \
+     echo 'Date:' $(date) && \
+     echo '' && \
+     echo '--- Phase 1: BFS Traversal ---' && \
+     /usr/local/bin/bench_gpu_bfs && \
+     echo '' && \
+     echo '--- Phase 2: PageRank ---' && \
+     /usr/local/bin/bench_gpu_pagerank && \
+     echo '' && \
+     echo '--- Phase 3: Set Operations ---' && \
+     /usr/local/bin/bench_gpu_setops && \
+     echo '' && \
+     echo '--- Phase 4: Shortest Path ---' && \
+     /usr/local/bin/bench_gpu_shortest_path && \
+     echo '' && \
+     echo '=== Benchmarks Complete ==='"]
