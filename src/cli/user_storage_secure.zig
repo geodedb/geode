@@ -45,8 +45,15 @@ pub const UserStorage = struct {
         defer allocator.free(key_path);
 
         // Try to load existing key or generate new one
-        const key_file = std.fs.cwd().openFile(key_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => blk: {
+        if (std.fs.cwd().openFile(key_path, .{})) |key_file| {
+            // File exists, read the key
+            defer key_file.close();
+            const bytes_read = try key_file.readAll(&encryption_key);
+            if (bytes_read != 32) {
+                return error.InvalidKeyFile;
+            }
+        } else |err| switch (err) {
+            error.FileNotFound => {
                 // Generate new key
                 std.crypto.random.bytes(&encryption_key);
 
@@ -54,17 +61,8 @@ pub const UserStorage = struct {
                 const file = try std.fs.cwd().createFile(key_path, .{ .mode = 0o600 });
                 defer file.close();
                 try file.writeAll(&encryption_key);
-
-                break :blk file;
             },
             else => return err,
-        };
-        if (key_file.stat() catch null) |_| {
-            defer key_file.close();
-            const bytes_read = try key_file.readAll(&encryption_key);
-            if (bytes_read != 32) {
-                return error.InvalidKeyFile;
-            }
         }
 
         return Self{
@@ -259,11 +257,22 @@ pub const UserStorage = struct {
             }
             roles = roles[0..role_count];
 
+            // Hex-decode salt from JSON
+            const salt_hex = salt.string;
+            if (salt_hex.len != 64) continue; // Salt must be 32 bytes = 64 hex chars
+            var salt_bytes: [32]u8 = undefined;
+            var i: usize = 0;
+            while (i < 32) : (i += 1) {
+                const high = std.fmt.charToDigit(salt_hex[i * 2], 16) catch continue;
+                const low = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch continue;
+                salt_bytes[i] = (high << 4) | low;
+            }
+
             users[user_count] = User{
                 .username = try self.allocator.dupe(u8, username.string),
                 .email = try self.allocator.dupe(u8, email.string),
                 .password_hash = try self.allocator.dupe(u8, password_hash.string),
-                .salt = try self.allocator.dupe(u8, salt.string),
+                .salt = try self.allocator.dupe(u8, &salt_bytes),
                 .roles = roles,
                 .created_at = created_at.integer,
                 .is_active = if (is_active_val) |v| if (v == .bool) v.bool else true else true,
@@ -286,11 +295,14 @@ pub const UserStorage = struct {
         for (users, 0..) |user, i| {
             if (i > 0) try json_array.appendSlice(self.allocator, ",");
 
+            // Hex-encode salt for JSON storage
+            const salt_hex = std.fmt.bytesToHex(user.salt[0..32].*, .lower);
+
             try json_array.appendSlice(self.allocator, "{");
             try std.fmt.format(json_array.writer(self.allocator), "\"username\":\"{s}\",", .{user.username});
             try std.fmt.format(json_array.writer(self.allocator), "\"email\":\"{s}\",", .{user.email});
             try std.fmt.format(json_array.writer(self.allocator), "\"password_hash\":\"{s}\",", .{user.password_hash});
-            try std.fmt.format(json_array.writer(self.allocator), "\"salt\":\"{s}\",", .{user.salt});
+            try std.fmt.format(json_array.writer(self.allocator), "\"salt\":\"{s}\",", .{salt_hex});
             try std.fmt.format(json_array.writer(self.allocator), "\"created_at\":{d},", .{user.created_at});
             try std.fmt.format(json_array.writer(self.allocator), "\"is_active\":{},", .{user.is_active});
             try json_array.appendSlice(self.allocator, "\"roles\":[");
