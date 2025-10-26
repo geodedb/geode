@@ -12,3 +12,5 @@ pub const memory_manager = @import("gpu/memory_manager.zig");
 pub const module_loader = @import("gpu/module_loader.zig");
 pub const kernel_sources = @import("gpu/kernel_sources.zig");
 pub const performance_profiler = @import("gpu/performance_profiler.zig");
+pub const nvrtc_compiler = @import("gpu/nvrtc_compiler.zig");
+pub const smart_kernel_loader = @import("gpu/smart_kernel_loader.zig");

@@ -10,41 +10,46 @@ echo "Note: GPU benchmarks require CUDA-capable hardware."
 echo "If CUDA is unavailable, benchmarks will skip GPU tests and run CPU baseline only."
 echo ""
 
-# Check if zig-out/bin exists
-if [ ! -d "zig-out/bin" ]; then
+# Check if running in Docker container (binaries in /usr/local/bin)
+if [ -f "/usr/local/bin/bench_gpu_bfs" ]; then
+    BIN_DIR="/usr/local/bin"
+elif [ -d "zig-out/bin" ]; then
+    BIN_DIR="zig-out/bin"
+else
     echo "Building benchmarks..."
     zig build -Doptimize=ReleaseFast
+    BIN_DIR="zig-out/bin"
 fi
 
 echo "--- Phase 1: BFS Traversal ---"
-if [ -f "zig-out/bin/bench_gpu_bfs" ]; then
-    ./zig-out/bin/bench_gpu_bfs
+if [ -f "$BIN_DIR/bench_gpu_bfs" ]; then
+    $BIN_DIR/bench_gpu_bfs
 else
-    echo "BFS benchmark not built. Run: zig build"
+    echo "BFS benchmark not found in $BIN_DIR"
 fi
 echo ""
 
 echo "--- Phase 2: PageRank ---"
-if [ -f "zig-out/bin/bench_gpu_pagerank" ]; then
-    ./zig-out/bin/bench_gpu_pagerank
+if [ -f "$BIN_DIR/bench_gpu_pagerank" ]; then
+    $BIN_DIR/bench_gpu_pagerank
 else
-    echo "PageRank benchmark not built. Run: zig build"
+    echo "PageRank benchmark not found in $BIN_DIR"
 fi
 echo ""
 
 echo "--- Phase 3: Set Operations ---"
-if [ -f "zig-out/bin/bench_gpu_setops" ]; then
-    ./zig-out/bin/bench_gpu_setops
+if [ -f "$BIN_DIR/bench_gpu_setops" ]; then
+    $BIN_DIR/bench_gpu_setops
 else
-    echo "Set Operations benchmark not built. Run: zig build"
+    echo "Set Operations benchmark not found in $BIN_DIR"
 fi
 echo ""
 
 echo "--- Phase 4: Shortest Path ---"
-if [ -f "zig-out/bin/bench_gpu_shortest_path" ]; then
-    ./zig-out/bin/bench_gpu_shortest_path
+if [ -f "$BIN_DIR/bench_gpu_shortest_path" ]; then
+    $BIN_DIR/bench_gpu_shortest_path
 else
-    echo "Shortest Path benchmark not built. Run: zig build"
+    echo "Shortest Path benchmark not found in $BIN_DIR"
 fi
 echo ""
 

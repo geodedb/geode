@@ -1,5 +1,5 @@
 # GPU-enabled build for geode database with CUDA support
-FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.3.2-devel-ubuntu22.04 AS builder
 
 ARG TARGETARCH
 ARG ZIG_VERSION=0.15.1
@@ -35,8 +35,8 @@ COPY . .
 RUN zig build -Doptimize=ReleaseFast && \
     zig build bench-gpu -Doptimize=ReleaseFast
 
-# Runtime stage with GPU support
-FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04 AS runtime
+# Runtime stage with GPU support and NVRTC
+FROM nvidia/cuda:12.3.2-devel-ubuntu22.04 AS runtime
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \

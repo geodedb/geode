@@ -1,7 +1,7 @@
 const std = @import("std");
 const phase0 = @import("phase0.zig");
 const CudaLoader = @import("cuda_loader.zig").CudaLoader;
-const ModuleLoader = @import("module_loader.zig").ModuleLoader;
+const SmartKernelLoader = @import("smart_kernel_loader.zig").SmartKernelLoader;
 const MemoryManager = @import("memory_manager.zig").MemoryManager;
 const kernel_sources = @import("kernel_sources.zig");
 
@@ -43,11 +43,11 @@ fn gpuUnionDistinctImpl(a: []const u32, b: []const u32, allocator: std.mem.Alloc
     var mem_mgr = try MemoryManager.init(&loader, allocator);
     defer mem_mgr.deinit();
 
-    var mod_loader = try ModuleLoader.init(&loader);
-    defer mod_loader.deinit();
+    var smart_loader = try SmartKernelLoader.init(&loader, allocator);
+    defer smart_loader.deinit();
 
-    // Load set operations kernels
-    try mod_loader.loadPTX(kernel_sources.setops_kernel_ptx);
+    // Load set operations kernels (uses NVRTC if available)
+    try smart_loader.loadSetOpsKernels();
 
     // Concatenate a and b
     const total_len = a.len + b.len;
@@ -79,7 +79,7 @@ fn gpuUnionDistinctImpl(a: []const u32, b: []const u32, allocator: std.mem.Alloc
     try mem_mgr.copyHostToDevice(d_count, zero_bytes);
 
     // Sort kernel first (simple bitonic sort for small arrays)
-    const sort_func = try mod_loader.getFunction("bitonic_sort_kernel");
+    const sort_func = try smart_loader.getFunction("bitonic_sort_kernel");
     const threads_per_block: u32 = 256;
     const num_blocks: u32 = @intCast((total_len + threads_per_block - 1) / threads_per_block);
 
@@ -88,10 +88,10 @@ fn gpuUnionDistinctImpl(a: []const u32, b: []const u32, allocator: std.mem.Alloc
         @ptrCast(&@as(u32, @intCast(total_len))),
     };
 
-    try mod_loader.launchKernel(sort_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&sort_params));
+    try smart_loader.launchKernel(sort_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&sort_params));
 
     // Unique kernel (remove duplicates)
-    const unique_func = try mod_loader.getFunction("unique_kernel");
+    const unique_func = try smart_loader.getFunction("unique_kernel");
 
     var unique_params = [_]*const anyopaque{
         @ptrCast(&d_input.ptr),
@@ -100,7 +100,7 @@ fn gpuUnionDistinctImpl(a: []const u32, b: []const u32, allocator: std.mem.Alloc
         @ptrCast(&@as(u32, @intCast(total_len))),
     };
 
-    try mod_loader.launchKernel(unique_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&unique_params));
+    try smart_loader.launchKernel(unique_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&unique_params));
 
     // Read back count
     var result_count: u32 = 0;
@@ -149,10 +149,10 @@ fn gpuIntersectImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator
     var mem_mgr = try MemoryManager.init(&loader, allocator);
     defer mem_mgr.deinit();
 
-    var mod_loader = try ModuleLoader.init(&loader);
-    defer mod_loader.deinit();
+    var smart_loader = try SmartKernelLoader.init(&loader, allocator);
+    defer smart_loader.deinit();
 
-    try mod_loader.loadPTX(kernel_sources.setops_kernel_ptx);
+    try smart_loader.loadSetOpsKernels();
 
     if (a.len == 0 or b.len == 0) return try allocator.alloc(u32, 0);
 
@@ -191,7 +191,7 @@ fn gpuIntersectImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator
     try mem_mgr.copyHostToDevice(d_count, std.mem.asBytes(&zero));
 
     // Launch intersect kernel
-    const intersect_func = try mod_loader.getFunction("intersect_kernel");
+    const intersect_func = try smart_loader.getFunction("intersect_kernel");
     const threads_per_block: u32 = 256;
     const num_blocks: u32 = @intCast((a.len + threads_per_block - 1) / threads_per_block);
 
@@ -204,7 +204,7 @@ fn gpuIntersectImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator
         @ptrCast(&@as(u32, @intCast(b.len))),
     };
 
-    try mod_loader.launchKernel(intersect_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&params));
+    try smart_loader.launchKernel(intersect_func, [3]u32{ num_blocks, 1, 1 }, [3]u32{ threads_per_block, 1, 1 }, 0, @ptrCast(&params));
 
     // Read back count
     var result_count: u32 = 0;
