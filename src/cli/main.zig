@@ -661,13 +661,14 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
 
             std.debug.print("Client: {s} version {s}\n", .{ client_name, client_ver });
 
-            // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
-            // Extract and validate authentication credentials
-            const geode_lib = @import("geode");
-            const user_mgmt = geode_lib.user_management;
+            // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=IMPL; OWNER=2025-10-25
+            // Extract and validate authentication credentials (using global geode import to share state)
+            const user_mgmt = geode.user_management;
 
             // Check if authentication is enabled
-            if (user_mgmt.isAuthEnabled()) {
+            const auth_enabled_status = user_mgmt.isAuthEnabled();
+            std.debug.print("DEBUG: isAuthEnabled() returned: {}\n", .{auth_enabled_status});
+            if (auth_enabled_status) {
                 std.debug.print("Authentication is enabled, validating credentials\n", .{});
 
                 // Extract username and password from HELLO message
@@ -705,6 +706,8 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
                 // Authentication successful - store username
                 authenticated_username = try allocator.dupe(u8, username);
                 std.debug.print("Authentication successful for user: {s}\n", .{username});
+            } else {
+                std.debug.print("DEBUG: Authentication is NOT enabled, skipping credential validation\n", .{});
             }
 
             // Send HELLO response
@@ -728,19 +731,16 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
             const query_text = query_text_value.string;
             std.debug.print("Query text: {s}\n", .{query_text});
 
-            // Use the geode module to execute queries
-            const geode_lib = @import("geode");
-
             // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
-            // Execute query with authenticated user context
-            const options = geode_lib.test_harness.QueryOptions{
+            // Execute query with authenticated user context (using global geode import)
+            const options = geode.test_harness.QueryOptions{
                 .token = null,
                 .user = authenticated_username,
                 .strict_offset_validation = true, // QUIC mode enforces US001 (OFFSET requires ORDER BY)
             };
 
             var mut_ally = allocator;
-            const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
+            const result = geode.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
                 // Send error response
                 const error_msg = try std.fmt.allocPrint(allocator, "STATUS: {{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)});
                 defer allocator.free(error_msg);
@@ -1493,7 +1493,7 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     const stdout_fd = std.fs.File{ .handle = 1 }; // stdout
 
     // Use the geode module to execute queries
-    const geode_lib = @import("geode");
+    
 
     // Store the last query result and query text for PULL requests
     var last_result: ?[]const u8 = null;
@@ -1543,14 +1543,14 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             const query_text = text.string;
 
             // Execute query using embedded server
-            const options = geode_lib.test_harness.QueryOptions{
+            const options = geode.test_harness.QueryOptions{
                 .token = null,
                 .user = null,
                 .strict_offset_validation = true, // Stdio mode enforces US001 (OFFSET requires ORDER BY)
             };
 
             var mut_ally = allocator;
-            const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
+            const result = geode.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
                 // Send error response
                 const error_resp = try std.fmt.allocPrint(allocator, "{{\"result\":{{\"type\":\"ERROR\",\"code\":\"00000\",\"message\":\"{s}\"}}}}\n", .{@errorName(err)});
                 defer allocator.free(error_resp);
@@ -1880,10 +1880,9 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         .force_no_tls = force_no_tls,
     };
 
-    // Initialize user management if auth is enabled
+    // Initialize user management if auth is enabled (using global geode import)
     if (enable_auth) {
-        const geode_lib = @import("geode");
-        const user_mgmt = geode_lib.user_management;
+        const user_mgmt = geode.user_management;
         user_mgmt.initUserStore(allocator) catch |err| {
             std.debug.print("Failed to initialize user store: {}\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -2140,8 +2139,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     if (embedded) {
         // Enable authentication if requested
         if (enable_auth) {
-            const geode_lib_auth = @import("geode");
-            const user_mgmt = geode_lib_auth.user_management;
+            const user_mgmt = geode.user_management;
             user_mgmt.initUserStore(allocator) catch |err| {
                 std.debug.print("Failed to initialize user store: {}\n", .{err});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -2186,11 +2184,11 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
     }
 
     // Use the geode module to execute the query via test harness
-    const geode_lib = @import("geode");
+    
 
     // CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI Authentication"; ASPECT=EmbeddedAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
     // Validate authentication if auth is enabled
-    const user_mgmt = geode_lib.user_management;
+    const user_mgmt = geode.user_management;
     if (user_mgmt.isAuthEnabled()) {
         // Auth is enabled - credentials are required
         if (user == null or password == null) {
@@ -2217,7 +2215,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
     var mut_ally = allocator;
 
     // Prepare authentication options
-    const options = geode_lib.test_harness.QueryOptions{
+    const options = geode.test_harness.QueryOptions{
         .token = token,
         .user = user,
         .password = password,
@@ -2235,7 +2233,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
         return;
     }
 
-    const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed_query, options) catch |err| {
+    const result = geode.test_harness.runQueryWithAuth(&mut_ally, trimmed_query, options) catch |err| {
         // Handle specific test cases that should go to stderr
         if (std.mem.indexOf(u8, trimmed_query, "bad_json") != null) {
             const stderr_fd = std.fs.File{ .handle = 2 };
@@ -2650,7 +2648,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     if (non_interactive) {
         const stdin_file = std.fs.File{ .handle = 0 }; // stdin handle
         const stdout_file = std.fs.File{ .handle = 1 }; // stdout handle
-        const geode_lib = @import("geode");
+        
 
         // Read all input at once
         const stdin_content = stdin_file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
@@ -2679,14 +2677,14 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
 
             // Execute query using geode test harness (local execution)
-            const options = geode_lib.test_harness.QueryOptions{
+            const options = geode.test_harness.QueryOptions{
                 .token = null,
                 .user = null,
                 .strict_offset_validation = true,
             };
 
             var mut_ally = allocator;
-            const result = geode_lib.test_harness.runQueryWithAuth(&mut_ally, trimmed, options) catch |err| {
+            const result = geode.test_harness.runQueryWithAuth(&mut_ally, trimmed, options) catch |err| {
                 std.debug.print("Error: {s}\n", .{@errorName(err)});
                 continue;
             };
