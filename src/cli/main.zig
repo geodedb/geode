@@ -757,53 +757,37 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
             const columns = result_obj.get("columns");
             const rows = result_obj.get("rows");
 
-            // Build and send SCHEMA response
-            var schema_buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch {
-                const error_response = "STATUS: {\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
+            // Build and send responses using correct JSON protocol format
+            var response_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
+                const error_response = "{\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
                 try stream.writeAll(error_response);
                 continue;
             };
-            defer schema_buf.deinit(allocator);
+            defer response_buf.deinit(allocator);
+            const resp_writer = response_buf.writer(allocator);
 
-            try schema_buf.appendSlice(allocator, "SCHEMA: [");
+            // Build SCHEMA response: {"status_class":"00000","result":{"type":"SCHEMA","columns":[...]}}
+            try resp_writer.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
             if (columns) |cols| {
                 for (cols.array.items, 0..) |col, idx| {
-                    if (idx > 0) try schema_buf.appendSlice(allocator, ",");
-                    const col_str = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col.string});
-                    defer allocator.free(col_str);
-                    try schema_buf.appendSlice(allocator, col_str);
+                    if (idx > 0) try resp_writer.writeAll(",");
+                    try resp_writer.print("{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col.string});
                 }
             }
-            try schema_buf.appendSlice(allocator, "]\n");
+            try resp_writer.writeAll("]}}\n");
 
-            // Build and send RESULT responses (one per row)
+            // Build RESULT responses: {"status_class":"00000","result":{"type":"RESULT","data":{...}}}
             if (rows) |r| {
                 for (r.array.items) |row| {
-                    try schema_buf.appendSlice(allocator, "RESULT: ");
-
+                    try resp_writer.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"RESULT\",\"data\":");
                     // Serialize the row JSON value
-                    var row_writer = std.ArrayList(u8).initCapacity(allocator, 512) catch {
-                        try schema_buf.appendSlice(allocator, "{}\n");
-                        continue;
-                    };
-                    defer row_writer.deinit(allocator);
-
-                    // Use a custom JSON writer that preserves decimal scales
-                    const writer = row_writer.writer(allocator);
-                    try writeJsonValueWithDecimalScale(writer, row, allocator);
-                    try schema_buf.appendSlice(allocator, row_writer.items);
-                    try schema_buf.appendSlice(allocator, "\n");
+                    try writeJsonValueWithDecimalScale(resp_writer, row, allocator);
+                    try resp_writer.writeAll("}}\n");
                 }
             }
 
-            // Add STATUS at the end
-            const row_count = if (rows) |r| r.array.items.len else 0;
-            const status_msg = try std.fmt.allocPrint(allocator, "STATUS: {{\"status_class\":\"00000\",\"row_count\":{}}}\n", .{row_count});
-            defer allocator.free(status_msg);
-            try schema_buf.appendSlice(allocator, status_msg);
-
-            std.debug.print("DEBUG: Writing query response\n", .{});
-            stream.writeAll(schema_buf.items) catch |err| {
+            std.debug.print("DEBUG: Writing query response ({} bytes)\n", .{response_buf.items.len});
+            stream.writeAll(response_buf.items) catch |err| {
                 std.debug.print("ERROR: Failed to write response: {}\n", .{err});
                 return err;
             };

@@ -8,6 +8,7 @@ const fle_integration = @import("fle_integration.zig");
 pub const EvalError = error{
     TypeMismatch,
     DivisionByZero,
+    IntegerOverflow,
     Unsupported,
     RegexCompile,
     CharLengthExceeded,
@@ -334,7 +335,13 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
                 @memcpy(result[l.Str.len..], r.Str);
                 break :blk .{ .Str = result };
             }
-            if (l == .Int and r == .Int) break :blk .{ .Int = l.Int + r.Int };
+            if (l == .Int and r == .Int) {
+                var result: i64 = undefined;
+                if (@addWithOverflow(&result, l.Int, r.Int)) {
+                    return EvalError.IntegerOverflow;
+                }
+                break :blk .{ .Int = result };
+            }
             // Decimal + Int / Int + Decimal / Decimal + Decimal
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
@@ -350,7 +357,13 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
         .Sub => blk2: {
             // NULL - anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk2 .{ .Null = {} };
-            if (l == .Int and r == .Int) break :blk2 .{ .Int = l.Int - r.Int };
+            if (l == .Int and r == .Int) {
+                var result: i64 = undefined;
+                if (@subWithOverflow(&result, l.Int, r.Int)) {
+                    return EvalError.IntegerOverflow;
+                }
+                break :blk2 .{ .Int = result };
+            }
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
                 const rd = toDec(r);
@@ -365,7 +378,13 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
         .Mul => blk3: {
             // NULL * anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk3 .{ .Null = {} };
-            if (l == .Int and r == .Int) break :blk3 .{ .Int = l.Int * r.Int };
+            if (l == .Int and r == .Int) {
+                var result: i64 = undefined;
+                if (@mulWithOverflow(&result, l.Int, r.Int)) {
+                    return EvalError.IntegerOverflow;
+                }
+                break :blk3 .{ .Int = result };
+            }
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
                 const rd = toDec(r);
