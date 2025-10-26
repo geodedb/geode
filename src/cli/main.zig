@@ -555,6 +555,11 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
     const QuicTransport = @import("transport/quic");
     const quic_lib = QuicTransport.quic_lib;
 
+    // CANARY: REQ=REQ-AUTH-QUIC-001; FEATURE="QUIC Authentication"; ASPECT=ConnectionAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
+    // Connection-scoped authentication state
+    var authenticated_username: ?[]const u8 = null;
+    defer if (authenticated_username) |username| allocator.free(username);
+
     // Wait for handshake to complete
     if (conn.quic_connection) |qc| {
         var handshake_attempts: usize = 0;
@@ -641,7 +646,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
         const type_str = msg_type.string;
 
         if (std.mem.eql(u8, type_str, "HELLO")) {
-            // Handle HELLO handshake
+            // Handle HELLO handshake with authentication
             std.debug.print("Processing HELLO message\n", .{});
 
             // Extract client info (optional)
@@ -655,6 +660,52 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
                 "unknown";
 
             std.debug.print("Client: {s} version {s}\n", .{ client_name, client_ver });
+
+            // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
+            // Extract and validate authentication credentials
+            const geode_lib = @import("geode");
+            const user_mgmt = geode_lib.user_management;
+
+            // Check if authentication is enabled
+            if (user_mgmt.isAuthEnabled()) {
+                std.debug.print("Authentication is enabled, validating credentials\n", .{});
+
+                // Extract username and password from HELLO message
+                const username_value = obj.get("username");
+                const password_value = obj.get("password");
+
+                if (username_value == null or password_value == null) {
+                    // Auth is enabled but credentials not provided
+                    const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Authentication required\"}\n";
+                    try stream.writeAll(error_response);
+                    std.debug.print("Authentication failed: credentials not provided\n", .{});
+                    return;
+                }
+
+                if (username_value.? != .string or password_value.? != .string) {
+                    // Credentials are not strings
+                    const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Invalid credential format\"}\n";
+                    try stream.writeAll(error_response);
+                    std.debug.print("Authentication failed: invalid credential format\n", .{});
+                    return;
+                }
+
+                const username = username_value.?.string;
+                const password = password_value.?.string;
+
+                // Validate credentials
+                _ = user_mgmt.authenticate(username, password) catch {
+                    // Invalid credentials
+                    const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Authentication failed\"}\n";
+                    try stream.writeAll(error_response);
+                    std.debug.print("Authentication failed for user: {s}\n", .{username});
+                    return;
+                };
+
+                // Authentication successful - store username
+                authenticated_username = try allocator.dupe(u8, username);
+                std.debug.print("Authentication successful for user: {s}\n", .{username});
+            }
 
             // Send HELLO response
             const hello_response = "{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_ver\":\"0.16.0\",\"conformance\":\"ISO/IEC 39075:2024\"}\n";
@@ -680,10 +731,11 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
             // Use the geode module to execute queries
             const geode_lib = @import("geode");
 
-            // Execute query using embedded server
+            // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
+            // Execute query with authenticated user context
             const options = geode_lib.test_harness.QueryOptions{
                 .token = null,
-                .user = null,
+                .user = authenticated_username,
                 .strict_offset_validation = true, // QUIC mode enforces US001 (OFFSET requires ORDER BY)
             };
 
@@ -2105,29 +2157,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     // Determine execution mode based on --server flag
-    if (server) |server_addr| {
-        // Execute query via QUIC connection to server
-        try executeQuicQuery(allocator, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password);
-    } else {
-        // No --server and no --embedded: use embedded persistent mode (default)
-        // This is the default for tests that need data persistence
+    // Default to connecting to localhost:3141 if neither --server nor --embedded specified
+    const server_addr = server orelse "127.0.0.1:3141";
 
-        // Enable authentication if requested
-        if (enable_auth) {
-            const geode_lib_auth = @import("geode");
-            const user_mgmt = geode_lib_auth.user_management;
-            user_mgmt.initUserStore(allocator) catch |err| {
-                std.debug.print("Failed to initialize user store: {}\n", .{err});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            };
-            user_mgmt.setAuthEnabled(true);
-            // Don't call ensureDefaultUser here - tests should create users explicitly
-            // Auto-creating users on every query command causes timeouts due to password hashing
-        }
-
-        try executeEmbeddedQuery(allocator, query_text.?, format, token, user, password, null);
-        std.process.exit(@intFromEnum(ExitCode.success));
-    }
+    // Execute query via QUIC connection to server
+    try executeQuicQuery(allocator, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password);
 }
 
 /// Execute query in embedded mode (embedded database for testing, edge deployments, offline environments)
@@ -2151,13 +2185,33 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
         std.debug.print("{{\"mode\":\"embedded\",\"persistent\":true,\"data_dir\":\"{s}\"}}\n", .{data_dir.?});
     }
 
-    // No authentication initialization in embedded mode
-    // This function always runs locally and doesn't require server authentication
-    // Skipping auth avoids spawning Argon2ID threads (4 threads for password hashing) on every query
-    // which was causing Python subprocess to hang waiting for threads to terminate
-
     // Use the geode module to execute the query via test harness
     const geode_lib = @import("geode");
+
+    // CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI Authentication"; ASPECT=EmbeddedAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
+    // Validate authentication if auth is enabled
+    const user_mgmt = geode_lib.user_management;
+    if (user_mgmt.isAuthEnabled()) {
+        // Auth is enabled - credentials are required
+        if (user == null or password == null) {
+            // Missing credentials
+            const stderr_fd = std.fs.File{ .handle = 2 };
+            const stdout_fd = std.fs.File{ .handle = 1 };
+            _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
+            _ = try stderr_fd.writeAll("Authentication failed\n");
+            std.process.exit(1);
+        }
+
+        // Validate credentials
+        _ = user_mgmt.authenticate(user.?, password.?) catch {
+            // Invalid credentials
+            const stderr_fd = std.fs.File{ .handle = 2 };
+            const stdout_fd = std.fs.File{ .handle = 1 };
+            _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
+            _ = try stderr_fd.writeAll("Authentication failed\n");
+            std.process.exit(1);
+        };
+    }
 
     // Execute query using the test harness with authentication
     var mut_ally = allocator;
