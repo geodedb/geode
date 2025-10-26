@@ -328,6 +328,8 @@ pub const ExecutionError = error{
     Unauthenticated,
     Unauthorized,
     SearchNotPermitted,
+    DuplicateIndex,
+    IncompatibleIndexDataType,
 };
 
 pub const ExecutionResult = struct {
@@ -835,8 +837,12 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             catalog_mutex.lock();
             defer catalog_mutex.unlock();
 
+            // Use scoped key format (label:index_name) to match loadCatalog behavior
+            const scoped_key = try catalog_mod.getScopedIndexKey(std.heap.page_allocator, ci.label, index_name);
+            defer std.heap.page_allocator.free(scoped_key);
+
             // Check if index already exists
-            if (!ci.if_not_exists and catalog.indexes.contains(index_name)) {
+            if (!ci.if_not_exists and catalog.indexes.contains(scoped_key)) {
                 return error.DuplicateIndex;
             }
 
@@ -864,8 +870,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 }
             }
 
-            // Add to catalog if not exists
-            if (!catalog.indexes.contains(index_name)) {
+            // Add to catalog if not exists (use scoped key)
+            if (!catalog.indexes.contains(scoped_key)) {
                 // Create IndexInfo with all the details
                 const index_info = IndexInfo{
                     .name = try std.heap.page_allocator.dupe(u8, index_name),
@@ -889,7 +895,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         break :blk cols;
                     },
                 };
-                try catalog.indexes.put(try std.heap.page_allocator.dupe(u8, index_name), index_info);
+                // Use scoped key for storage
+                const scoped_key_persistent = try std.heap.page_allocator.dupe(u8, scoped_key);
+                try catalog.indexes.put(scoped_key_persistent, index_info);
                 // Save catalog to disk after creating index
                 saveCatalog() catch {};
             }

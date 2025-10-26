@@ -4277,6 +4277,47 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
     } else if (std.mem.eql(u8, proc_name, "cdc.set_guardrail")) {
         // CANARY: REQ=REQ-CDC-PROC-008; FEATURE="CDCProcedures"; ASPECT=SetGuardrail; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+
+        // Validate arguments
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+
+            // Require exactly 2 arguments
+            if (args.len != 2) {
+                return error.InvalidGuardrailConfiguration;
+            }
+
+            // First argument must be a string (threshold name)
+            if (args[0].* != .String) {
+                return error.InvalidGuardrailConfiguration;
+            }
+            const threshold_name = args[0].String;
+
+            // Validate threshold name (must be one of the valid types)
+            const valid_thresholds = [_][]const u8{ "warn_threshold", "abort_threshold", "max_events" };
+            var is_valid_name = false;
+            for (valid_thresholds) |valid_name| {
+                if (std.mem.eql(u8, threshold_name, valid_name)) {
+                    is_valid_name = true;
+                    break;
+                }
+            }
+            if (!is_valid_name) {
+                return error.InvalidGuardrailConfiguration;
+            }
+
+            // Second argument must be an integer (threshold value)
+            if (args[1].* != .Int) {
+                return error.InvalidGuardrailConfiguration;
+            }
+            const threshold_value = args[1].Int;
+
+            // Value must be non-negative
+            if (threshold_value < 0) {
+                return error.InvalidGuardrailConfiguration;
+            }
+        }
+
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
         const row = try allocator.alloc(eval.Value, 1);
