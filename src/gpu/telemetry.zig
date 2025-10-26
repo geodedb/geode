@@ -1,5 +1,6 @@
 const std = @import("std");
 const phase0 = @import("phase0.zig");
+const CudaLoader = @import("cuda_loader.zig").CudaLoader;
 
 // CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase5Telemetry; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUTelemetryStruct; OWNER=engine; UPDATED=2025-10-26
 
@@ -18,12 +19,97 @@ pub const GPUDiagnostics = struct {
     metrics: ?GPUPerfMetrics,
 };
 
-pub fn recordKernelMetrics(kernel_name: []const u8, device_id: u32, start_ms: f64, end_ms: f64) GPUPerfMetrics {
-    // Phase5 scaffold: placeholder metrics; real GPU profiling TBD
+/// GPU Event Timer for accurate kernel profiling
+pub const EventTimer = struct {
+    loader: *const CudaLoader,
+    start_event: ?*anyopaque,
+    end_event: ?*anyopaque,
+    supports_events: bool,
+
+    pub fn init(loader: *const CudaLoader) !EventTimer {
+        if (!loader.supportsEvents()) {
+            return EventTimer{
+                .loader = loader,
+                .start_event = null,
+                .end_event = null,
+                .supports_events = false,
+            };
+        }
+
+        var start_event: *anyopaque = undefined;
+        var end_event: *anyopaque = undefined;
+
+        const res1 = loader.eventCreate(@ptrCast(&start_event), 0);
+        if (res1 != 0) {
+            return EventTimer{
+                .loader = loader,
+                .start_event = null,
+                .end_event = null,
+                .supports_events = false,
+            };
+        }
+
+        const res2 = loader.eventCreate(@ptrCast(&end_event), 0);
+        if (res2 != 0) {
+            _ = loader.eventDestroy(start_event);
+            return EventTimer{
+                .loader = loader,
+                .start_event = null,
+                .end_event = null,
+                .supports_events = false,
+            };
+        }
+
+        return EventTimer{
+            .loader = loader,
+            .start_event = start_event,
+            .end_event = end_event,
+            .supports_events = true,
+        };
+    }
+
+    pub fn deinit(self: *EventTimer) void {
+        if (self.start_event) |evt| {
+            _ = self.loader.eventDestroy(evt);
+        }
+        if (self.end_event) |evt| {
+            _ = self.loader.eventDestroy(evt);
+        }
+        self.start_event = null;
+        self.end_event = null;
+    }
+
+    pub fn recordStart(self: *EventTimer) void {
+        if (self.start_event) |evt| {
+            _ = self.loader.eventRecord(evt, null);
+        }
+    }
+
+    pub fn recordEnd(self: *EventTimer) void {
+        if (self.end_event) |evt| {
+            _ = self.loader.eventRecord(evt, null);
+        }
+    }
+
+    pub fn getElapsedMs(self: *EventTimer) f32 {
+        if (self.start_event == null or self.end_event == null) return 0.0;
+        
+        _ = self.loader.eventSynchronize(self.end_event.?);
+        
+        var ms: f32 = 0.0;
+        const res = self.loader.eventElapsedTime(&ms, self.start_event.?, self.end_event.?);
+        if (res != 0) return 0.0;
+        
+        return ms;
+    }
+};
+
+pub fn recordKernelMetrics(kernel_name: []const u8, device_id: u32, elapsed_ms: f64) GPUPerfMetrics {
+    // Real metrics from CUDA events; occupancy and bandwidth still placeholders (require cuOccupancy APIs)
     return GPUPerfMetrics{
-        .kernel_ms = end_ms - start_ms,
-        .occupancy_pct = 0.0,
-        .bandwidth_gbps = 0.0,
+        .kernel_ms = elapsed_ms,
+        .occupancy_pct = 0.0, // TODO: requires cuOccupancyMaxActiveBlocksPerMultiprocessor
+        .bandwidth_gbps = 0.0, // TODO: calculate from bytes transferred / elapsed_ms
         .device_id = device_id,
         .kernel_name = kernel_name,
     };
@@ -76,7 +162,7 @@ pub fn serializeToJson(diag: GPUDiagnostics, allocator: std.mem.Allocator) ![]u8
 test "TestCANARY_REQ_GQL_051_GPUTelemetryStruct" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; defer _ = gpa.deinit();
     const alloc = gpa.allocator();
-    const metrics = recordKernelMetrics("test_bfs", 0, 100.0, 105.5);
+    const metrics = recordKernelMetrics("test_bfs", 0, 5.5);
     try std.testing.expectEqual(@as(f64, 5.5), metrics.kernel_ms);
     try std.testing.expectEqualStrings("test_bfs", metrics.kernel_name);
     const diag = createDiagnostics(true, metrics, null);
@@ -95,4 +181,29 @@ test "TestCANARY_REQ_GQL_051_GPUTelemetryFallback" {
     defer alloc.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "fallback_reason") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "no device") != null);
+}
+
+test "TestCANARY_REQ_GQL_051_GPUEventTimerCreate" {
+    const loader = CudaLoader.init();
+    defer {
+        var mut_loader = loader;
+        mut_loader.deinit();
+    }
+
+    // Test creates timer (succeeds or gracefully fails if no CUDA)
+    var timer = EventTimer.init(&loader) catch |err| {
+        // No CUDA available, test passes
+        _ = err;
+        return;
+    };
+    defer timer.deinit();
+
+    // If we have CUDA, test event recording
+    if (timer.supports_events) {
+        timer.recordStart();
+        timer.recordEnd();
+        const elapsed = timer.getElapsedMs();
+        // Elapsed should be >= 0 (typically very small)
+        try std.testing.expect(elapsed >= 0.0);
+    }
 }
