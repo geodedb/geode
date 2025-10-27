@@ -9,6 +9,6 @@ test "Advanced UNION parsing" {
 
 test "EXCEPT syntax" {
     const src = "MATCH (a) RETURN a EXCEPT DISTINCT MATCH (b) RETURN b";
-    // This test just ensures the syntax is recognized  
+    // This test just ensures the syntax is recognized
     try std.testing.expect(src.len > 0);
 }

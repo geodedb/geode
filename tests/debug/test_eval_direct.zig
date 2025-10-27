@@ -10,14 +10,14 @@ pub fn main() !void {
     // Test evaluating a simple string expression
     const string_expr = ast.Expr{ .String = "hello" };
     std.debug.print("Testing string expression evaluation...\n", .{});
-    
+
     const env = eval.Env{ .names = &.{}, .values = &.{} };
-    
+
     const result = eval.evalExpr(allocator, string_expr, env) catch |err| {
         std.debug.print("Evaluation error: {}\n", .{err});
         return;
     };
-    
+
     std.debug.print("Evaluation completed successfully!\n", .{});
     std.debug.print("Result: {}\n", .{result});
 }
