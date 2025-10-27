@@ -4,60 +4,24 @@ project_name: geode
 
 before:
   hooks:
-    - go mod tidy
-    - go mod vendor
+    # Build Zig binaries for all target platforms
+    - zig build -Doptimize=ReleaseSafe -p dist/linux-amd64
+    - zig build -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe -p dist/linux-arm64
+    - zig build -Dtarget=arm-linux-gnueabihf -Doptimize=ReleaseSafe -p dist/linux-armv7
+    - zig build -Dtarget=riscv64-linux-gnu -Doptimize=ReleaseSafe -p dist/linux-riscv64
+    - zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe -p dist/linux-amd64-musl
+    - zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSafe -p dist/linux-arm64-musl
+    - zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe -p dist/macos-amd64
+    - zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe -p dist/macos-arm64
+    - zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe -p dist/windows-amd64
+    - zig build -Dtarget=aarch64-windows-gnu -Doptimize=ReleaseSafe -p dist/windows-arm64
 
-# Zig builds use custom build hooks since GoReleaser doesn't natively support Zig
+# Zig builds are handled in before.hooks since GoReleaser doesn't natively support Zig
 builds:
   # We don't use GoReleaser's build system since this is a Zig project
-  # Instead, we'll use hooks to invoke zig build for each platform
+  # All binaries are pre-built in before.hooks and packaged from dist/ directory
   - id: geode-placeholder
     skip: true
-
-# Custom build hooks for Zig compilation
-hooks:
-  pre:
-    - cmd: zig build -Doptimize=ReleaseSafe -p dist/linux-amd64
-      env:
-        - GOOS=linux
-        - GOARCH=amd64
-    - cmd: zig build -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe -p dist/linux-arm64
-      env:
-        - GOOS=linux
-        - GOARCH=arm64
-    - cmd: zig build -Dtarget=arm-linux-gnueabihf -Doptimize=ReleaseSafe -p dist/linux-armv7
-      env:
-        - GOOS=linux
-        - GOARCH=arm
-        - GOARM=7
-    - cmd: zig build -Dtarget=riscv64-linux-gnu -Doptimize=ReleaseSafe -p dist/linux-riscv64
-      env:
-        - GOOS=linux
-        - GOARCH=riscv64
-    - cmd: zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe -p dist/linux-amd64-musl
-      env:
-        - GOOS=linux
-        - GOARCH=amd64
-    - cmd: zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSafe -p dist/linux-arm64-musl
-      env:
-        - GOOS=linux
-        - GOARCH=arm64
-    - cmd: zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe -p dist/macos-amd64
-      env:
-        - GOOS=darwin
-        - GOARCH=amd64
-    - cmd: zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe -p dist/macos-arm64
-      env:
-        - GOOS=darwin
-        - GOARCH=arm64
-    - cmd: zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe -p dist/windows-amd64
-      env:
-        - GOOS=windows
-        - GOARCH=amd64
-    - cmd: zig build -Dtarget=aarch64-windows-gnu -Doptimize=ReleaseSafe -p dist/windows-arm64
-      env:
-        - GOOS=windows
-        - GOARCH=arm64
 
 archives:
   - id: geode-archives
