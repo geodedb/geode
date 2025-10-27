@@ -26,6 +26,9 @@ auth
 *.txt
 *.jsonl
 *.xml
+*.json
+*.o
+*.csv
 
 .direnv/
 .zig-cache/

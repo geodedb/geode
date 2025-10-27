@@ -107,7 +107,10 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 ### Test Execution
 ```bash
 # Run all tests
-python3 extended_test_runner.py
+python3 scripts/test/extended_test_runner.py
+
+# Or use make targets
+make geodetestlab-comprehensive
 
 # Generate governance status
 make status-generate

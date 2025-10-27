@@ -332,12 +332,12 @@ geodetestlab: build geodetestlab-comprehensive geodetestlab-auth geodetestlab-us
 # Run comprehensive geodetestlab test suite
 geodetestlab-comprehensive: build
 	@echo "Running comprehensive geodetestlab tests..."
-	@if [ -x "parallel_test_runner.py" ]; then \
+	@if [ -x "scripts/test/parallel_test_runner.py" ]; then \
 		echo "Using parallel test runner with default settings..."; \
-		python3 parallel_test_runner.py --max-workers 4 --timeout 120; \
-	elif [ -x "extended_test_runner.py" ]; then \
+		python3 scripts/test/parallel_test_runner.py --max-workers 4 --timeout 120; \
+	elif [ -x "scripts/test/extended_test_runner.py" ]; then \
 		echo "Using extended test runner..."; \
-		python3 extended_test_runner.py; \
+		python3 scripts/test/extended_test_runner.py; \
 	elif [ -f "geodetestlab/geodetestlab/core/runner.py" ]; then \
 		echo "Using geodetestlab core runner..."; \
 		python3 -m geodetestlab.geodetestlab.core.runner --config geodetestlab/config.yml; \
@@ -405,10 +405,10 @@ FILE ?= failures.csv
 # Run parallel geodetestlab tests with configurable workers and timeout
 geodetestlab-parallel: build
 	@echo "Running parallel geodetestlab tests (workers=$(WORKERS), timeout=$(TIMEOUT)s)..."
-	@if [ -x "parallel_test_runner.py" ]; then \
-		python3 parallel_test_runner.py --max-workers $(WORKERS) --timeout $(TIMEOUT); \
+	@if [ -x "scripts/test/parallel_test_runner.py" ]; then \
+		python3 scripts/test/parallel_test_runner.py --max-workers $(WORKERS) --timeout $(TIMEOUT); \
 	else \
-		echo "parallel_test_runner.py not found or not executable"; \
+		echo "scripts/test/parallel_test_runner.py not found or not executable"; \
 		echo "Please ensure the parallel test runner is available"; \
 		exit 1; \
 	fi
