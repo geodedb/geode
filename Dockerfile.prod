@@ -77,6 +77,9 @@ VOLUME ["/data"]
 USER geode
 WORKDIR /data
 
+# Set default log level (can be overridden with -e LOG_LEVEL=debug)
+ENV LOG_LEVEL=error
+
 # Expose default port
 EXPOSE 3141
 

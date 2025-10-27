@@ -565,10 +565,13 @@ pub fn build(b: *std.Build) void {
     vqt_packet_mod.addImport("quic_varint", vqt_varint_mod);
     vqt_packet_mod.addImport("quic_tls", vqt_tls_mod);
     vqt_packet_mod.addImport("quic_crypto", vqt_crypto_mod);
+    vqt_packet_mod.addImport("quic_logger", vqt_logger_mod);
     vqt_tls13_mod.addImport("quic_tls", vqt_tls_mod);
     vqt_tls13_mod.addImport("asn1", vqt_asn1_mod);
     vqt_tls13_mod.addImport("sig", vqt_sig_mod);
     vqt_tls13_mod.addImport("x509", vqt_x509_mod);
+    vqt_tls13_mod.addImport("quic_logger", vqt_logger_mod);
+    vqt_crypto_mod.addImport("quic_logger", vqt_logger_mod);
     vqt_sig_mod.addImport("asn1", vqt_asn1_mod);
     // No longer need ed25519 import - using std.crypto.sign.Ed25519
     vqt_x509_mod.addImport("asn1", vqt_asn1_mod);
@@ -784,10 +787,13 @@ pub fn build(b: *std.Build) void {
     vq_packet_mod.addImport("quic_varint", vq_varint_mod);
     vq_packet_mod.addImport("quic_tls", vq_tls_mod);
     vq_packet_mod.addImport("quic_crypto", vq_crypto_mod);
+    vq_packet_mod.addImport("quic_logger", vq_logger_mod);
     vq_tls13_mod.addImport("quic_tls", vq_tls_mod);
     vq_tls13_mod.addImport("asn1", vq_asn1_mod);
     vq_tls13_mod.addImport("sig", vq_sig_mod);
     vq_tls13_mod.addImport("x509", vq_x509_mod);
+    vq_tls13_mod.addImport("quic_logger", vq_logger_mod);
+    vq_crypto_mod.addImport("quic_logger", vq_logger_mod);
     vq_sig_mod.addImport("asn1", vq_asn1_mod);
     // No longer need ed25519 import - using std.crypto.sign.Ed25519
     vq_x509_mod.addImport("asn1", vq_asn1_mod);

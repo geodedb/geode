@@ -22,7 +22,7 @@ services:
       - CLUSTER_NAME=geode-cluster
       - RAFT_PORT=8300
       - RAFT_PEERS=geode-follower-1:8300,geode-follower-2:8300
-      - GEODE_LOG_LEVEL=info
+      - LOG_LEVEL=${LOG_LEVEL:-error}
       - GEODE_DISTRIBUTED=true
       - GEODE_SHARD_COUNT=3
       - GEODE_REPLICATION_FACTOR=2
@@ -72,7 +72,7 @@ services:
       - CLUSTER_NAME=geode-cluster
       - RAFT_PORT=8300
       - RAFT_JOIN=geode-leader:8300
-      - GEODE_LOG_LEVEL=info
+      - LOG_LEVEL=${LOG_LEVEL:-error}
       - GEODE_DISTRIBUTED=true
     command: >
       --listen-quic 0.0.0.0:7567
@@ -122,7 +122,7 @@ services:
       - CLUSTER_NAME=geode-cluster
       - RAFT_PORT=8300
       - RAFT_JOIN=geode-leader:8300
-      - GEODE_LOG_LEVEL=info
+      - LOG_LEVEL=${LOG_LEVEL:-error}
       - GEODE_DISTRIBUTED=true
     command: >
       --listen-quic 0.0.0.0:7567

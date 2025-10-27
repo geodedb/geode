@@ -245,6 +245,7 @@ pub const gpu = struct {
 pub const audit = struct {
     pub const config = @import("audit/config.zig");
     pub const logger = @import("audit/logger.zig");
+    pub const system_logger = @import("log/logger.zig");
     pub const events = @import("audit/events.zig");
     pub const time = @import("audit/time.zig");
 };

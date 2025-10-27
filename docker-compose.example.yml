@@ -17,7 +17,7 @@ services:
       - ./migrations:/migrations:ro
       - ./certs:/certs
     environment:
-      - GEODE_LOG_LEVEL=info
+      - LOG_LEVEL=${LOG_LEVEL:-error}
       - GEODE_LOG_JSON=true
       - GEODE_DATA_DIR=/data
       - GEODE_CERT_PATH=/certs

@@ -71,6 +71,9 @@ COPY --from=builder /build/zig-out/bin/ /usr/local/bin/
 USER geode
 WORKDIR /home/geode
 
+# Set default log level (can be overridden with -e LOG_LEVEL=debug)
+ENV LOG_LEVEL=error
+
 # Expose ports (QUIC-only + metrics)
 EXPOSE 8443/udp 9090/tcp
 
@@ -80,4 +83,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data", "--log-level", "info"]
+CMD ["--data-dir", "/data"]

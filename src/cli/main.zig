@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const audit_cli = @import("audit_cli");
 const geode = @import("geode");
+// Use std.log for debug logging (respects log level)
+const log = std.log.scoped(.cli);
 // const auth = @import("../security/auth.zig"); // Not needed for current implementation
 // const hash = @import("../types/hash.zig"); // Not needed for current implementation
 const crypto = std.crypto;
@@ -318,7 +320,7 @@ fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditConfi
 
     // TODO: Implement syslog logging if enabled
     if (cli_config.syslog_enabled) {
-        std.debug.print("Warning: Syslog audit logging not yet implemented\n", .{});
+        log.warn("Syslog audit logging not yet implemented", .{});
     }
 
     // Initialize Windows Event Log if enabled and on Windows
@@ -328,7 +330,7 @@ fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditConfi
         // Convert source name to UTF-16 for Windows API
         var source_utf16_buf: [256:0]u16 = undefined;
         const source_utf16_len = std.unicode.utf8ToUtf16Le(source_utf16_buf[0..], source) catch {
-            std.debug.print("Warning: Failed to convert event source name to UTF-16\n", .{});
+            log.warn("Failed to convert event source name to UTF-16", .{});
             return;
         };
         source_utf16_buf[source_utf16_len] = 0;
@@ -338,10 +340,10 @@ fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditConfi
             &source_utf16_buf);
 
         if (global_windows_eventlog_handle == null) {
-            std.debug.print("Warning: Failed to register Windows Event Log source '{s}'\n", .{source});
+            log.warn("Failed to register Windows Event Log source '{s}'", .{source});
         }
     } else if (cli_config.windows_eventlog_enabled and builtin.os.tag != .windows) {
-        std.debug.print("Warning: Windows Event Log is only supported on Windows systems\n", .{});
+        log.warn("Windows Event Log is only supported on Windows systems", .{});
     }
 }
 
@@ -357,7 +359,7 @@ fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const u8) 
         const json_line = std.fmt.bufPrint(&buf, "{{\"timestamp\":{d},\"category\":\"{s}\",\"action\":\"{s}\",\"outcome\":\"{s}\",\"actor\":\"geode-cli\"}}\n", .{ timestamp, category, action, outcome }) catch return;
 
         _ = file.writeAll(json_line) catch |err| {
-            std.debug.print("Warning: Failed to write audit event: {s}\n", .{@errorName(err)});
+            log.warn("Failed to write audit event: {s}", .{@errorName(err)});
         };
     }
 
@@ -576,7 +578,7 @@ const ClientConfig = struct {
 fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: anytype) !void {
     defer conn.close();
 
-    std.debug.print("DEBUG: Handling QUIC connection\n", .{});
+    log.debug("Handling QUIC connection", .{});
 
     // Import the QUIC library for direct access to handshake functions
     const QuicTransport = @import("transport/quic");
@@ -653,7 +655,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
         };
         defer allocator.free(msg);
 
-        std.debug.print("Received message: {s}\n", .{msg});
+        log.debug("Received message: {s}", .{msg});
 
         // Parse JSON message
         const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg, .{}) catch {
@@ -687,7 +689,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
 
         if (std.mem.eql(u8, type_str, "HELLO")) {
             // Handle HELLO handshake with authentication
-            std.debug.print("Processing HELLO message\n", .{});
+            log.debug("Processing HELLO message", .{});
 
             // Extract client info (optional)
             const client_name = if (obj.get("client_name")) |cn|
@@ -707,7 +709,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
 
             // Check if authentication is enabled
             const auth_enabled_status = user_mgmt.isAuthEnabled();
-            std.debug.print("DEBUG: isAuthEnabled() returned: {}\n", .{auth_enabled_status});
+            log.debug("isAuthEnabled() returned: {}", .{auth_enabled_status});
             if (auth_enabled_status) {
                 std.debug.print("Authentication is enabled, validating credentials\n", .{});
 
@@ -747,13 +749,13 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
                 authenticated_username = try allocator.dupe(u8, username);
                 std.debug.print("Authentication successful for user: {s}\n", .{username});
             } else {
-                std.debug.print("DEBUG: Authentication is NOT enabled, skipping credential validation\n", .{});
+                log.debug("Authentication is NOT enabled, skipping credential validation", .{});
             }
 
             // Send HELLO response
             const hello_response = "{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_ver\":\"0.16.0\",\"conformance\":\"ISO/IEC 39075:2024\"}\n";
             try stream.writeAll(hello_response);
-            std.debug.print("HELLO response sent\n", .{});
+            log.debug("HELLO response sent", .{});
         } else if (std.mem.eql(u8, type_str, "RUN_GQL")) {
             // Handle query execution
             const query_text_value = obj.get("text") orelse {
@@ -769,7 +771,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
             }
 
             const query_text = query_text_value.string;
-            std.debug.print("Query text: {s}\n", .{query_text});
+            log.debug("Query text: {s}", .{query_text});
 
             // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
             // Execute query with authenticated user context (using global geode import)
@@ -826,12 +828,12 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
                 }
             }
 
-            std.debug.print("DEBUG: Writing query response ({} bytes)\n", .{response_buf.items.len});
+            log.debug("Writing query response ({} bytes)", .{response_buf.items.len});
             stream.writeAll(response_buf.items) catch |err| {
                 std.debug.print("ERROR: Failed to write response: {}\n", .{err});
                 return err;
             };
-            std.debug.print("DEBUG: Query response sent successfully\n", .{});
+            log.debug("Query response sent successfully", .{});
         } else {
             // Unknown message type
             const error_msg = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"58000\",\"error\":\"Unknown message type: {s}\"}}\n", .{type_str});
@@ -2526,7 +2528,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, 
         try std.fmt.allocPrint(allocator, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\"}}\n", .{});
     defer allocator.free(hello_msg);
 
-    std.debug.print("DEBUG: Client sending HELLO: {s}\n", .{hello_msg});
+    log.debug("Client sending HELLO: {s}", .{hello_msg});
     stream.writeAll(hello_msg) catch |err| {
         std.debug.print("Error: Failed to send HELLO: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -2538,7 +2540,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, 
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer allocator.free(hello_response);
-    std.debug.print("DEBUG: Client received HELLO response: {s}\n", .{hello_response});
+    log.debug("Client received HELLO response: {s}", .{hello_response});
 
     // Check for authentication errors
     if (std.mem.indexOf(u8, hello_response, "\"type\":\"ERROR\"") != null or std.mem.indexOf(u8, hello_response, "Authentication failed") != null) {
@@ -2554,21 +2556,21 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, 
     const query_msg = try std.fmt.allocPrint(allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_text});
     defer allocator.free(query_msg);
 
-    std.debug.print("DEBUG: Client sending query: {s}\n", .{query_msg});
+    log.debug("Client sending query: {s}", .{query_msg});
     stream.writeAll(query_msg) catch |err| {
         std.debug.print("Error: Failed to send query: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    std.debug.print("DEBUG: Client query sent successfully\n", .{});
+    log.debug("Client query sent successfully", .{});
 
     // Receive first response (SCHEMA line)
-    std.debug.print("DEBUG: Client waiting for schema response\n", .{});
+    log.debug("Client waiting for schema response", .{});
     const schema_response = stream.readLine(65536) catch |err| {
         std.debug.print("Error: Failed to receive schema response: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer allocator.free(schema_response);
-    std.debug.print("DEBUG: Client received schema response: {s}\n", .{schema_response});
+    log.debug("Client received schema response: {s}", .{schema_response});
 
     // Check for errors in the SCHEMA response
     if (std.mem.indexOf(u8, schema_response, "\"type\":\"ERROR\"") != null) {
@@ -2583,10 +2585,10 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, 
 
     // Read all remaining lines until stream ends
     while (true) {
-        std.debug.print("DEBUG: Client trying to read next line\n", .{});
+        log.debug("Client trying to read next line", .{});
         const result_line = stream.readLine(65536) catch |err| {
             if (err == error.EndOfStream) {
-                std.debug.print("DEBUG: Client hit EndOfStream\n", .{});
+                log.debug("Client hit EndOfStream", .{});
                 break;
             }
             std.debug.print("Error: Failed to receive result response: {}\n", .{err});
@@ -2594,7 +2596,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, 
         };
         defer allocator.free(result_line);
 
-        std.debug.print("DEBUG: Client received line: {s}\n", .{result_line});
+        log.debug("Client received line: {s}", .{result_line});
 
         if (result_line.len == 0) break;
 

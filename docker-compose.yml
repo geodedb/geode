@@ -13,7 +13,8 @@ services:
       - geode-certs:/certs
       - ./certs:/certs:ro
     environment:
-      - GEODE_LOG_LEVEL=info
+      # Set LOG_LEVEL=error by default (override with docker-compose.override.yml or -e)
+      - LOG_LEVEL=${LOG_LEVEL:-error}
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'geode', 'query', 'RETURN 1 AS health', '--server', '127.0.0.1:3141']
@@ -24,7 +25,7 @@ services:
     networks:
       - geode-net
     entrypoint: ["/usr/local/bin/geode", "serve"]
-    command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--log-level", "info"]
+    command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141"]
 
   geode-cli:
     build:
