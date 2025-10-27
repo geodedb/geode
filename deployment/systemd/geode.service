@@ -7,7 +7,9 @@ After=network.target
 Type=simple
 User=geode
 Group=geode
-ExecStart=/usr/bin/geode serve --data-dir /var/lib/geode --log-level info
+# Production default: error-level logging only
+# Override via /etc/geode/geode.conf or systemd override for debug/info
+ExecStart=/usr/bin/geode serve --data-dir /var/lib/geode --log-level error
 Restart=on-failure
 RestartSec=5s
 

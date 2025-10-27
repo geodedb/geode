@@ -66,6 +66,19 @@ checksum:
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
+# Nightly builds (GoReleaser Pro feature)
+# Automatic nightly releases for development/testing
+# Triggered via GitHub Actions workflow (.github/workflows/nightly.yml) on schedule
+# Note: This configuration is handled by the nightly workflow with --nightly flag
+# The workflow uses: goreleaser release --nightly --clean
+# Features:
+# - Automatic nightly releases at 2 AM UTC
+# - Only builds if commits in last 24 hours
+# - Names: geode-nightly-YYYYMMDD
+# - Publishes as pre-release
+# - Docker images tagged as :nightly
+# - Keeps last 7 nightly releases
+
 changelog:
   sort: asc
   use: github
@@ -415,7 +428,7 @@ brews:
       (etc/"geode/certs").mkpath
 
     service: |
-      run [opt_bin/"geode", "serve", "--data-dir", var/"lib/geode", "--log-level", "info"]
+      run [opt_bin/"geode", "serve", "--data-dir", var/"lib/geode", "--log-level", "error"]
       working_dir var/"lib/geode"
       keep_alive true
       log_path var/"log/geode/geode.log"
