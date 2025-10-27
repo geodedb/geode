@@ -906,8 +906,9 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&bench_run.step);
 
     // Adaptive bias clamp variance benchmark integrated as a standalone executable but also invoked during `zig build test`.
-    const bias_clamp_variance_bench = b.addExecutable(.{ .name = "bench_bias_clamp_variance", .root_module = b.createModule(.{ .root_source_file = b.path("benchmark_bias_clamp_variance.zig"), .target = target, .optimize = optimize }) });
+    const bias_clamp_variance_bench = b.addExecutable(.{ .name = "bench_bias_clamp_variance", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_bias_clamp_variance.zig"), .target = target, .optimize = optimize }) });
     bias_clamp_variance_bench.root_module.addImport("geode", root_mod);
+    bias_clamp_variance_bench.root_module.addImport("cost_seed", b.createModule(.{ .root_source_file = b.path("src/planner/cost_seed.zig"), .target = target, .optimize = optimize }));
     b.installArtifact(bias_clamp_variance_bench);
     const run_bias_clamp_variance_bench = b.addRunArtifact(bias_clamp_variance_bench);
     test_step.dependOn(&run_bias_clamp_variance_bench.step);
@@ -920,20 +921,20 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_pathcache_degree_util_bench.step);
 
     // Federation mismatch false-positive guard benchmark (optional SLO)
-    const federation_mismatch_guard_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_guard", .root_module = b.createModule(.{ .root_source_file = b.path("benchmark_federation_mismatch_frequency.zig"), .target = target, .optimize = optimize }) });
+    const federation_mismatch_guard_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_guard", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_frequency.zig"), .target = target, .optimize = optimize }) });
     federation_mismatch_guard_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
     b.installArtifact(federation_mismatch_guard_bench);
     const run_federation_mismatch_guard_bench = b.addRunArtifact(federation_mismatch_guard_bench);
     test_step.dependOn(&run_federation_mismatch_guard_bench.step);
 
     // Federation mismatch latency variance envelope benchmark (optional SLO, unpromoted IMPL)
-    const federation_mismatch_latency_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_latency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
+    const federation_mismatch_latency_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_latency", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
     federation_mismatch_latency_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
     b.installArtifact(federation_mismatch_latency_bench);
     const run_federation_mismatch_latency_bench = b.addRunArtifact(federation_mismatch_latency_bench);
     test_step.dependOn(&run_federation_mismatch_latency_bench.step);
     // Also compile its tests explicitly (so the test block runs under the zig test harness aside from executable run)
-    const federation_mismatch_latency_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
+    const federation_mismatch_latency_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
     federation_mismatch_latency_test.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
     test_step.dependOn(&federation_mismatch_latency_test.step);
 

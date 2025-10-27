@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const fed_flag = @import("src/distributed/federation_flag.zig");
+const fed_flag = @import("federation_flag");
 
 // Federation mismatch latency variance envelope benchmark (skeleton, unpromoted).
 // Measures stability of repeated consistent federation metadata checks plus a single deliberate

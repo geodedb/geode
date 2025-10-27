@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const fed_flag = @import("src/distributed/federation_flag.zig");
+const fed_flag = @import("federation_flag");
 
 // Benchmark / guard: ensure federation ordering mismatch flag does NOT fire for consistent metadata
 // while firing exactly once for a deliberate mismatch scenario.

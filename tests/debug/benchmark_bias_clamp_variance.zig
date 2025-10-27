@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const seed = @import("src/planner/cost_seed.zig");
+const seed = @import("cost_seed");
 
 // Benchmark to measure variance (CV) of clamp streak lengths under synthetic workloads.
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBiasClampVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
