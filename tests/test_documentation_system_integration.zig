@@ -129,22 +129,22 @@ test "Documentation consistency across feature implementations" {
     defer allocator.free(claude_content);
 
     // Features that should have documentation based on recent implementations
-    const feature_docs = [_]struct { feature: []const u8, doc_file: []const u8 }{
-        .{ .feature = "ML Graph Embeddings", .doc_file = "docs/ML_GRAPH_EMBEDDINGS.md" },
-        .{ .feature = "Real-time Analytics", .doc_file = "docs/REAL_TIME_ANALYTICS.md" },
-        .{ .feature = "Enhanced Transaction Isolation", .doc_file = "docs/ENHANCED_TRANSACTION_ISOLATION.md" },
-        .{ .feature = "Distributed Query Coordination", .doc_file = "docs/DISTRIBUTED_QUERY_COORDINATION.md" },
-        .{ .feature = "CLI Subprocess Elimination", .doc_file = "docs/CLI_SUBPROCESS_ELIMINATION.md" },
-        .{ .feature = "Materialized Views", .doc_file = "docs/MATERIALIZED_VIEWS.md" },
+    const documented_features = [_]struct { name: []const u8, doc_file: []const u8 }{
+        .{ .name = "ML Graph Embeddings", .doc_file = "docs/ML_GRAPH_EMBEDDINGS.md" },
+        .{ .name = "Real-time Analytics", .doc_file = "docs/REAL_TIME_ANALYTICS.md" },
+        .{ .name = "Enhanced Transaction Isolation", .doc_file = "docs/ENHANCED_TRANSACTION_ISOLATION.md" },
+        .{ .name = "Distributed Query Coordination", .doc_file = "docs/DISTRIBUTED_QUERY_COORDINATION.md" },
+        .{ .name = "CLI Subprocess Elimination", .doc_file = "docs/CLI_SUBPROCESS_ELIMINATION.md" },
+        .{ .name = "Materialized Views", .doc_file = "docs/MATERIALIZED_VIEWS.md" },
     };
 
-    for (feature_docs) |feature_doc| {
+    for (documented_features) |feature_doc| {
         // Feature should be mentioned in CLAUDE.md
-        try expect(std.mem.indexOf(u8, claude_content, feature_doc.feature) != null);
+        try expect(std.mem.indexOf(u8, claude_content, feature_doc.name) != null);
 
         // Corresponding documentation file should exist
         std.fs.cwd().access(feature_doc.doc_file, .{}) catch |err| {
-            std.debug.print("Missing feature documentation: {} for feature: {} (error: {})\n", .{ feature_doc.doc_file, feature_doc.feature, err });
+            std.debug.print("Missing feature documentation: {} for feature: {} (error: {})\n", .{ feature_doc.doc_file, feature_doc.name, err });
             try expect(false);
         };
 
