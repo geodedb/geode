@@ -1,0 +1,32 @@
+# Lightweight CI Dockerfile - uses pre-built binaries from pipeline
+# This avoids slow recompilation and disk space issues in CI
+FROM debian:bookworm-slim
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    openssl \
+    libvulkan1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1000 geode \
+    && mkdir -p /data /certs /var/log/geode \
+    && chown -R geode:geode /data /certs /var/log/geode
+
+# Copy pre-built binaries from build context
+# These are provided by the CI pipeline via artifacts
+COPY --chown=geode:geode zig-out/bin/* /usr/local/bin/
+
+# Switch to non-root user
+USER geode
+WORKDIR /home/geode
+
+# Expose ports (QUIC + metrics)
+EXPOSE 8443/udp 9090/tcp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:8443", "--no-quic"]
+
+# Default entrypoint
+ENTRYPOINT ["/usr/local/bin/geode"]
+CMD ["serve", "--data-dir", "/data", "--log-level", "info"]

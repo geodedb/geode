@@ -511,3 +511,154 @@ jobs:
             release/*.sha256
             release/SHA256SUMS
             release/*.json
+
+  docker-release:
+    name: Build and Push Docker Images
+    needs: [build-matrix]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    strategy:
+      matrix:
+        variant:
+          - name: debian
+            dockerfile: Dockerfile.ci
+            platforms: linux/amd64,linux/arm64
+            tags: latest
+            source_artifact: linux-amd64-gnu
+          - name: alpine
+            dockerfile: Dockerfile.ci.alpine
+            platforms: linux/amd64,linux/arm64
+            tags: alpine
+            source_artifact: linux-amd64-musl
+          - name: gpu
+            dockerfile: Dockerfile.ci.gpu
+            platforms: linux/amd64,linux/arm64
+            tags: gpu
+            source_artifact: linux-amd64-gnu
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
+    steps:
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+        with:
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: geode-${{ matrix.variant.source_artifact }}-raw
+          path: ./artifacts
+
+      - name: Prepare build context
+        run: |
+          mkdir -p build-context/zig-out/bin
+          cp -r ./artifacts/bin/* build-context/zig-out/bin/ || true
+          cp ${{ matrix.variant.dockerfile }} build-context/Dockerfile
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},suffix=-${{ matrix.variant.name }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.variant.name }}
+            type=semver,pattern={{major}},suffix=-${{ matrix.variant.name }}
+            type=raw,value=${{ matrix.variant.tags }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./build-context
+          file: ./build-context/Dockerfile
+          push: true
+          platforms: ${{ matrix.variant.platforms }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=release-${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.variant.name }}
+          provenance: false
+          sbom: false
+
+      - name: Run Trivy security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-${{ matrix.variant.name }}
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.variant.name }}.sarif'
+          severity: 'CRITICAL,HIGH'
+          skip-version-check: true
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results-${{ matrix.variant.name }}.sarif'
+          wait-for-processing: false
+
+  docker-test:
+    name: Test Release Docker Images
+    needs: [docker-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      matrix:
+        variant: [debian, alpine, gpu]
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
+    steps:
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test Docker image
+        run: |
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-${{ matrix.variant }} --help
+
+      - name: Test basic query
+        run: |
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-${{ matrix.variant }} \
+            query "RETURN 1 AS x" --no-quic
+
+      - name: Verify binaries exist
+        run: |
+          docker run --rm --entrypoint /bin/sh ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-${{ matrix.variant }} -c "
+            ls -la /usr/local/bin/geode
+          "

@@ -307,3 +307,155 @@ jobs:
             geode-*.tar.gz
             geode-*.zip
           fail_on_unmatched_files: true
+
+  docker-build:
+    name: Build Docker Images
+    needs: [build-and-test]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    strategy:
+      matrix:
+        variant:
+          - name: debian
+            dockerfile: Dockerfile.ci
+            platforms: linux/amd64,linux/arm64
+            tags: latest,main
+          - name: alpine
+            dockerfile: Dockerfile.ci.alpine
+            platforms: linux/amd64,linux/arm64
+            tags: alpine
+          - name: gpu
+            dockerfile: Dockerfile.ci.gpu
+            platforms: linux/amd64,linux/arm64
+            tags: gpu
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
+    steps:
+      - uses: spyderorg/workflows/.github/actions/nix-setup@main
+        with:
+          git-credentials: ${{ secrets.GIT_CREDENTIALS }}
+          gh-access-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Download artifacts (Linux amd64)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-Linux-zig-0.15.1
+          path: ./artifacts/amd64
+
+      - name: Download artifacts (Linux arm64)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-Linux-zig-0.15.1
+          path: ./artifacts/arm64
+
+      - name: Prepare build context
+        run: |
+          # Create build contexts for each platform
+          mkdir -p build-context/amd64/zig-out/bin
+          mkdir -p build-context/arm64/zig-out/bin
+
+          # Copy binaries to build contexts
+          cp -r ./artifacts/amd64/zig-out/bin/* build-context/amd64/zig-out/bin/ || true
+          cp -r ./artifacts/arm64/zig-out/bin/* build-context/arm64/zig-out/bin/ || true
+
+          # Copy Dockerfile to each context
+          cp ${{ matrix.variant.dockerfile }} build-context/amd64/Dockerfile
+          cp ${{ matrix.variant.dockerfile }} build-context/arm64/Dockerfile
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch,suffix=-${{ matrix.variant.name }}
+            type=semver,pattern={{version}},suffix=-${{ matrix.variant.name }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.variant.name }}
+            type=sha,format=short,prefix=sha-,suffix=-${{ matrix.variant.name }}
+            type=raw,value=${{ matrix.variant.tags }},enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./build-context/amd64
+          file: ./build-context/amd64/Dockerfile
+          push: true
+          platforms: ${{ matrix.variant.platforms }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
+          provenance: false
+          sbom: false
+
+      - name: Run Trivy security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}-${{ matrix.variant.name }}
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.variant.name }}.sarif'
+          severity: 'CRITICAL,HIGH'
+          skip-version-check: true
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results-${{ matrix.variant.name }}.sarif'
+          wait-for-processing: false
+
+  docker-test:
+    name: Test Docker Images
+    needs: [docker-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      matrix:
+        variant: [debian, alpine, gpu]
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test Docker image
+        run: |
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}-${{ matrix.variant }} --help
+
+      - name: Test basic query
+        run: |
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}-${{ matrix.variant }} \
+            query "RETURN 1 AS x" --no-quic
+
+      - name: Verify binaries exist
+        run: |
+          docker run --rm --entrypoint /bin/sh ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}-${{ matrix.variant }} -c "
+            ls -la /usr/local/bin/geode
+          "
