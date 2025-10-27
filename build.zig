@@ -21,6 +21,9 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.linkLibC();
     exe.linkSystemLibrary("dl");
 
+    // Enable Position Independent Code for Vulkan dynamic linking
+    exe.root_module.pic = true;
+
     // Check for Nix-style environment variables first
     const vulkan_include = b.graph.env_map.get("VULKAN_INCLUDE_DIR");
     const vulkan_lib = b.graph.env_map.get("VULKAN_LIB_DIR");
@@ -249,8 +252,16 @@ pub fn build(b: *std.Build) void {
     }
 
     // Vulkan compute tests (Phase 1)
-    const vulkan_compute_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/vulkan_compute.zig"), .target = target, .optimize = optimize });
+    // Create vulkan_loader module first
     const vulkan_loader_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/vulkan_loader.zig"), .target = target, .optimize = optimize });
+
+    // Create vulkan_compute module with vulkan_loader as dependency
+    const vulkan_compute_mod = b.createModule(.{
+        .root_source_file = b.path("src/gpu/vulkan_compute.zig"),
+        .target = target,
+        .optimize = optimize
+    });
+    vulkan_compute_mod.addImport("vulkan_loader.zig", vulkan_loader_mod);
 
     const vulkan_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gpu/test_vulkan_basic.zig"), .target = target, .optimize = optimize }) });
     vulkan_tests.root_module.addImport("vulkan_compute", vulkan_compute_mod);
@@ -1134,18 +1145,33 @@ pub fn build(b: *std.Build) void {
     const gpu_phase1_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/phase1_kernels.zig"), .target = target, .optimize = optimize }),
     });
+    gpu_phase1_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
+    gpu_phase1_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
+    configureVulkanPaths(b, gpu_phase1_test);
     test_step.dependOn(&gpu_phase1_test.step);
+
     const gpu_phase2_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/pagerank_kernels.zig"), .target = target, .optimize = optimize }),
     });
+    gpu_phase2_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
+    gpu_phase2_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
+    configureVulkanPaths(b, gpu_phase2_test);
     test_step.dependOn(&gpu_phase2_test.step);
+
     const gpu_phase3_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/gpu_setops_kernels.zig"), .target = target, .optimize = optimize }),
     });
+    gpu_phase3_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
+    gpu_phase3_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
+    configureVulkanPaths(b, gpu_phase3_test);
     test_step.dependOn(&gpu_phase3_test.step);
+
     const gpu_phase4_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/shortest_path_kernels.zig"), .target = target, .optimize = optimize }),
     });
+    gpu_phase4_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
+    gpu_phase4_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
+    configureVulkanPaths(b, gpu_phase4_test);
     test_step.dependOn(&gpu_phase4_test.step);
     const gpu_phase5_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/telemetry.zig"), .target = target, .optimize = optimize }),
