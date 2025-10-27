@@ -390,7 +390,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_match_call_tests.step);
     test_step.dependOn(&run_decimal_tests.step);
     test_step.dependOn(&run_integration_tests.step);
-    test_step.dependOn(&run_vulkan_tests.step);
 
     // Extended built-ins CANARY adapter + decimal formatter tests
     const canary_extended_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_extended_builtins.zig"), .target = target, .optimize = optimize }) });
@@ -1175,17 +1174,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&temporal_test.step);
 
+    // GPU tests (moved to test-gpu step below - not part of default tests)
     const gpu_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/phase0.zig"), .target = target, .optimize = optimize }),
     });
-    test_step.dependOn(&gpu_test.step);
     const gpu_phase1_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/phase1_kernels.zig"), .target = target, .optimize = optimize }),
     });
     gpu_phase1_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
     gpu_phase1_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
     configureVulkanPaths(b, gpu_phase1_test);
-    test_step.dependOn(&gpu_phase1_test.step);
 
     const gpu_phase2_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/pagerank_kernels.zig"), .target = target, .optimize = optimize }),
@@ -1193,7 +1191,6 @@ pub fn build(b: *std.Build) void {
     gpu_phase2_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
     gpu_phase2_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
     configureVulkanPaths(b, gpu_phase2_test);
-    test_step.dependOn(&gpu_phase2_test.step);
 
     const gpu_phase3_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/gpu_setops_kernels.zig"), .target = target, .optimize = optimize }),
@@ -1201,7 +1198,6 @@ pub fn build(b: *std.Build) void {
     gpu_phase3_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
     gpu_phase3_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
     configureVulkanPaths(b, gpu_phase3_test);
-    test_step.dependOn(&gpu_phase3_test.step);
 
     const gpu_phase4_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/shortest_path_kernels.zig"), .target = target, .optimize = optimize }),
@@ -1209,38 +1205,48 @@ pub fn build(b: *std.Build) void {
     gpu_phase4_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
     gpu_phase4_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
     configureVulkanPaths(b, gpu_phase4_test);
-    test_step.dependOn(&gpu_phase4_test.step);
     const gpu_phase5_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/telemetry.zig"), .target = target, .optimize = optimize }),
     });
-    test_step.dependOn(&gpu_phase5_test.step);
 
     // GPU memory manager test
     const gpu_memory_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/memory_manager.zig"), .target = target, .optimize = optimize }),
     });
     gpu_memory_test.linkLibC();
-    test_step.dependOn(&gpu_memory_test.step);
 
     // GPU kernel sources test
     const gpu_kernels_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/kernel_sources.zig"), .target = target, .optimize = optimize }),
     });
-    test_step.dependOn(&gpu_kernels_test.step);
 
     // GPU cuda_loader test
     const gpu_loader_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/cuda_loader.zig"), .target = target, .optimize = optimize }),
     });
     gpu_loader_test.linkLibC();
-    test_step.dependOn(&gpu_loader_test.step);
 
     // GPU module_loader test
     const gpu_module_loader_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/module_loader.zig"), .target = target, .optimize = optimize }),
     });
     gpu_module_loader_test.linkLibC();
-    test_step.dependOn(&gpu_module_loader_test.step);
+
+    // GPU tests (optional, requires Vulkan - not run by default)
+    // Run with: zig build test-gpu
+    // Note: On macOS, requires MoltenVK (brew install molten-vk)
+    const test_gpu_step = b.step("test-gpu", "Run GPU/Vulkan tests (requires Vulkan)");
+    test_gpu_step.dependOn(&run_vulkan_tests.step);
+    test_gpu_step.dependOn(&gpu_test.step);
+    test_gpu_step.dependOn(&gpu_phase1_test.step);
+    test_gpu_step.dependOn(&gpu_phase2_test.step);
+    test_gpu_step.dependOn(&gpu_phase3_test.step);
+    test_gpu_step.dependOn(&gpu_phase4_test.step);
+    test_gpu_step.dependOn(&gpu_phase5_test.step);
+    test_gpu_step.dependOn(&gpu_memory_test.step);
+    test_gpu_step.dependOn(&gpu_kernels_test.step);
+    test_gpu_step.dependOn(&gpu_loader_test.step);
+    test_gpu_step.dependOn(&gpu_module_loader_test.step);
 
     // GPU unified module for benchmarks
     const gpu_mod = b.createModule(.{ .root_source_file = b.path("src/gpu.zig"), .target = target, .optimize = .ReleaseFast });

@@ -77,13 +77,14 @@ pub fn getSystemFingerprint(allocator: std.mem.Allocator) ![]u8 {
     const hostname_buf_size = if (builtin.os.tag == .windows) 256 else std.posix.HOST_NAME_MAX;
     var hostname_buf: [hostname_buf_size]u8 = undefined;
 
-    const hostname = if (builtin.os.tag == .windows)
-        std.posix.getenv("COMPUTERNAME") orelse "unknown"
-    else
-        std.posix.gethostname(&hostname_buf) catch "unknown";
+    const hostname = if (builtin.os.tag == .windows) blk: {
+        // On Windows, use std.process for environment variables
+        break :blk std.process.getEnvVarOwned(allocator, "COMPUTERNAME") catch "unknown";
+    } else std.posix.gethostname(&hostname_buf) catch "unknown";
 
-    // Get system username
-    const username = std.posix.getenv("USER") orelse std.posix.getenv("USERNAME") orelse "unknown";
+    // Get system username - use std.process for cross-platform compatibility
+    const username = std.process.getEnvVarOwned(allocator, "USER") catch
+        std.process.getEnvVarOwned(allocator, "USERNAME") catch "unknown";
 
     // Get user ID (0 on Windows since it doesn't have Unix-style UIDs)
     const uid: u32 = if (builtin.os.tag == .windows) 0 else std.posix.getuid();
@@ -98,7 +99,14 @@ pub const CredentialStore = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !CredentialStore {
-        const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
+        // Get home directory - use std.process for cross-platform compatibility
+        // Windows uses USERPROFILE, Unix uses HOME
+        const home = if (builtin.os.tag == .windows)
+            std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDirectory
+        else
+            std.process.getEnvVarOwned(allocator, "HOME") catch return error.NoHomeDirectory;
+        defer allocator.free(home);
+
         const geode_dir = try std.fmt.allocPrint(allocator, "{s}/.geode", .{home});
         defer allocator.free(geode_dir);
 
@@ -126,7 +134,10 @@ pub const CredentialStore = struct {
         defer file.close();
 
         // Set restrictive permissions (600 - owner read/write only)
-        try file.chmod(0o600);
+        // Windows doesn't support chmod - skip on Windows
+        if (builtin.os.tag != .windows) {
+            try file.chmod(0o600);
+        }
 
         // Write JSON
         var buf = std.ArrayList(u8).initCapacity(self.allocator, 256) catch unreachable;

@@ -23,24 +23,27 @@ const VERSION = "0.18.0";
 // On Windows, file handles are HANDLE (*anyopaque), not integers
 // On Unix, file handles are file descriptors (integers)
 fn getStdinHandle() std.fs.File.Handle {
-    return if (builtin.os.tag == .windows)
-        std.io.getStdIn().handle
-    else
-        std.posix.STDIN_FILENO;
+    if (builtin.os.tag == .windows) {
+        return windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch unreachable;
+    } else {
+        return std.posix.STDIN_FILENO;
+    }
 }
 
 fn getStdoutHandle() std.fs.File.Handle {
-    return if (builtin.os.tag == .windows)
-        std.io.getStdOut().handle
-    else
-        std.posix.STDOUT_FILENO;
+    if (builtin.os.tag == .windows) {
+        return windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch unreachable;
+    } else {
+        return std.posix.STDOUT_FILENO;
+    }
 }
 
 fn getStderrHandle() std.fs.File.Handle {
-    return if (builtin.os.tag == .windows)
-        std.io.getStdErr().handle
-    else
-        2;
+    if (builtin.os.tag == .windows) {
+        return windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch unreachable;
+    } else {
+        return 2;
+    }
 }
 
 // Command handler function type
@@ -1511,7 +1514,7 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Format: {"type": "RUN_GQL", "text": "query", "params": {...}}
 
     const stdin_file = std.fs.File{ .handle = getStdinHandle() }; // stdin
-    const stdout_fd = std.fs.File{ .handle = 1 }; // stdout
+    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() }; // stdout
 
     // Use the geode module to execute queries
 
@@ -2212,7 +2215,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
         if (user == null or password == null) {
             // Missing credentials
             const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-            const stdout_fd = std.fs.File{ .handle = 1 };
+            const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
             _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
             _ = try stderr_fd.writeAll("Authentication failed\n");
             std.process.exit(1);
@@ -2233,7 +2236,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
             if (stored_user.salt.len != 64) {
                 // Invalid salt format
                 const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-                const stdout_fd = std.fs.File{ .handle = 1 };
+                const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
                 _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
                 _ = try stderr_fd.writeAll("Authentication failed\n");
                 std.process.exit(1);
@@ -2270,7 +2273,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
             if (stored_user.password_hash.len != hash_hex.len) {
                 // Invalid password - length mismatch
                 const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-                const stdout_fd = std.fs.File{ .handle = 1 };
+                const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
                 _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
                 _ = try stderr_fd.writeAll("Authentication failed\n");
                 std.process.exit(1);
@@ -2280,7 +2283,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
             if (!std.mem.eql(u8, hash_hex[0..], stored_user.password_hash)) {
                 // Invalid password
                 const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-                const stdout_fd = std.fs.File{ .handle = 1 };
+                const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
                 _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
                 _ = try stderr_fd.writeAll("Authentication failed\n");
                 std.process.exit(1);
@@ -2289,7 +2292,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
         } else {
             // User not found
             const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-            const stdout_fd = std.fs.File{ .handle = 1 };
+            const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
             _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
             _ = try stderr_fd.writeAll("Authentication failed\n");
             std.process.exit(1);
@@ -2315,7 +2318,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
 
     // Skip empty queries
     if (trimmed_query.len == 0) {
-        const stdout_fd = std.fs.File{ .handle = 1 };
+        const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
         _ = try stdout_fd.writeAll("{\"status_class\":\"00000\",\"columns\":[],\"rows\":[],\"flagger_findings\":[]}\n");
         return;
     }
@@ -2337,7 +2340,7 @@ fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, fo
     defer allocator.free(result);
 
     // Write result to stdout
-    const stdout_fd = std.fs.File{ .handle = 1 };
+    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
     _ = try stdout_fd.writeAll(result);
     // Add newline to ensure Python TextIOWrapper detects end of output
     _ = try stdout_fd.writeAll("\n");
@@ -2734,7 +2737,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // If running in test mode (non-interactive), read from stdin and execute queries
     if (non_interactive) {
         const stdin_file = std.fs.File{ .handle = getStdinHandle() }; // stdin handle
-        const stdout_file = std.fs.File{ .handle = 1 }; // stdout handle
+        const stdout_file = std.fs.File{ .handle = getStdoutHandle() }; // stdout handle
 
         // Read all input at once
         const stdin_content = stdin_file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
@@ -2869,7 +2872,7 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         const sessions_json =
             \\{"sessions":[{"user":"testuser","expires":"2025-12-31"},{"user":"admin","expires":"2025-12-31"}]}
         ;
-        const stdout_fd = std.fs.File{ .handle = 1 };
+        const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
         _ = try stdout_fd.writeAll(sessions_json);
         _ = try stdout_fd.writeAll("\n");
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -5028,7 +5031,7 @@ fn cmdAuthToken(allocator: std.mem.Allocator) !void {
     defer allocator.free(content);
 
     // Output the content to stdout
-    const stdout_fd = std.fs.File{ .handle = 1 };
+    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
     _ = try stdout_fd.writeAll(content);
     if (content.len == 0 or content[content.len - 1] != '\n') {
         _ = try stdout_fd.writeAll("\n");
