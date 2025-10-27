@@ -34,8 +34,10 @@ archives:
       {{- else if eq .Arch "arm" }}armv{{ .Arm }}
       {{- else }}{{ .Arch }}{{ end }}
       {{- with .Libc }}-{{ . }}{{ end }}
-    builds:
-      - geode-placeholder
+    # Use formats array instead of deprecated format field
+    formats:
+      - tar.gz
+      - zip
     files:
       # Include binaries from custom Zig build
       - src: "dist/{{ .Os }}-{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}{{ with .Libc }}-{{ . }}{{ end }}/bin/*"
@@ -51,9 +53,6 @@ archives:
       - deployment/systemd/geode.service
       - deployment/systemd/geode@.service
       - deployment/systemd/geode-auth.service
-    format_overrides:
-      - goos: windows
-        format: zip
     wrap_in_directory: true
 
 checksum:
@@ -357,9 +356,11 @@ nfpms:
         dependencies:
           - libssl3
 
-# Homebrew tap
+# Homebrew formula (CLI tool)
+# Note: 'brews' is deprecated but still functional. Will migrate to new structure in future.
 brews:
-  - repository:
+  - name: geode
+    repository:
       owner: spyderorg
       name: homebrew-tap
       branch: main
