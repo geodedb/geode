@@ -37,7 +37,7 @@ RUN --mount=type=cache,target=/root/.cache \
 WORKDIR /build
 
 # Copy only necessary files for dependency resolution (better layer caching)
-COPY build.zig build.zig.zon ./
+COPY build.zig ./
 COPY src/ src/
 COPY vendor/ vendor/
 
