@@ -657,11 +657,11 @@ quic-smoke-strict: build
 # Vendor QUIC end-to-end test (verifies QUIC handshake, data transmission, clean teardown)
 quic-test-vendor: build
 	@echo "Running vendor QUIC end-to-end test..."
-	@if [ -x "./test_vendor_e2e.sh" ]; then \
-		./test_vendor_e2e.sh; \
+	@if [ -x "./scripts/test/test_vendor_e2e.sh" ]; then \
+		./scripts/test/test_vendor_e2e.sh; \
 	else \
 		echo "test_vendor_e2e.sh not found or not executable"; \
-		echo "Run: chmod +x test_vendor_e2e.sh"; \
+		echo "Run: chmod +x scripts/test/test_vendor_e2e.sh"; \
 		exit 1; \
 	fi
 	@echo "✓ Vendor QUIC tests passed"
