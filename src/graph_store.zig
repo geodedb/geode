@@ -147,8 +147,6 @@ pub const GraphStore = struct {
 
     pub fn setNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
         if (self.nodes.getPtr(node_id)) |node| {
-            const key_copy = try self.allocator.dupe(u8, key);
-
             // Note: Encryption is now handled by the caller (execution.zig) before calling setNodeProperty
             // This ensures consistent parameters (schema, record_id) between encryption and decryption
             const value_copy = switch (value) {
@@ -156,7 +154,19 @@ pub const GraphStore = struct {
                 else => value,
             };
 
-            try node.properties.put(key_copy, value_copy);
+            // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
+            const result = try node.properties.getOrPut(key);
+            if (!result.found_existing) {
+                // Key doesn't exist, allocate a copy
+                result.key_ptr.* = try self.allocator.dupe(u8, key);
+            } else {
+                // Key exists, free old value if it was a string
+                switch (result.value_ptr.*) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+            result.value_ptr.* = value_copy;
 
             // Save to persistent storage
             self.saveToFile() catch |err| {
@@ -327,8 +337,6 @@ pub const GraphStore = struct {
 
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
         if (self.edges.getPtr(edge_id)) |edge| {
-            const key_copy = try self.allocator.dupe(u8, key);
-
             // Note: Encryption is now handled by the caller (execution.zig) before calling setEdgeProperty
             // This ensures consistent parameters (schema, record_id) between encryption and decryption
             const value_copy = switch (value) {
@@ -336,7 +344,19 @@ pub const GraphStore = struct {
                 else => value,
             };
 
-            try edge.properties.put(key_copy, value_copy);
+            // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
+            const result = try edge.properties.getOrPut(key);
+            if (!result.found_existing) {
+                // Key doesn't exist, allocate a copy
+                result.key_ptr.* = try self.allocator.dupe(u8, key);
+            } else {
+                // Key exists, free old value if it was a string
+                switch (result.value_ptr.*) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+            result.value_ptr.* = value_copy;
 
             // Save to persistent storage
             self.saveToFile() catch |err| {

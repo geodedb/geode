@@ -5004,10 +5004,19 @@ fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
 // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
 fn cmdAuthToken(allocator: std.mem.Allocator) !void {
-    const home = std.posix.getenv("HOME") orelse {
-        std.debug.print("Error: HOME environment variable not set\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
+    // Get home directory - use std.process for cross-platform compatibility
+    // Windows uses USERPROFILE, Unix uses HOME
+    const home = if (builtin.os.tag == .windows)
+        std.process.getEnvVarOwned(allocator, "USERPROFILE") catch {
+            std.debug.print("Error: USERPROFILE environment variable not set\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+    else
+        std.process.getEnvVarOwned(allocator, "HOME") catch {
+            std.debug.print("Error: HOME environment variable not set\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    defer allocator.free(home);
 
     const credentials_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
     defer allocator.free(credentials_path);
