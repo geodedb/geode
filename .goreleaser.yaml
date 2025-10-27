@@ -361,7 +361,9 @@ nfpms:
           - libssl3
 
 # Homebrew formula (CLI tool)
-# Note: 'brews' is deprecated but still functional. Will migrate to new structure in future.
+# Note: 'brews' deprecation warning is expected - replacement field not yet available
+# 'homebrew_casks' mentioned in warning is for GUI apps only, not CLI tools like geode
+# Will migrate when GoReleaser provides the new field name for formulas
 brews:
   - name: geode
     repository:
