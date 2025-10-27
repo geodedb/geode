@@ -1,75 +1,89 @@
-# Production Dockerfile with optimizations and security hardening
-FROM debian:bookworm-slim AS builder
+# syntax=docker/dockerfile:1.4
+# Optimized production Dockerfile with GPU support and BuildKit cache mounts
+FROM ubuntu:24.04 AS builder
 
-# ARG needs to be declared at the beginning of the stage
-ARG TARGETARCH
+# Prevent apt from prompting for user input
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    xz-utils \
-    ca-certificates \
-    git \
-    build-essential \
+# Install build dependencies with BuildKit cache mounts to prevent disk space issues
+# The cache mount prevents "E: You don't have enough free space in /var/cache/apt/archives/"
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        xz-utils \
+        ca-certificates \
+        git \
+        build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Zig 0.15.1
+# Install Zig with cache mount for downloads
 ARG ZIG_VERSION=0.15.1
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
+ARG TARGETARCH=amd64
+RUN --mount=type=cache,target=/root/.cache \
+    if [ "$TARGETARCH" = "arm64" ]; then \
         ARCH="aarch64"; \
     else \
         ARCH="x86_64"; \
     fi && \
-    curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz | tar -xJ -C /opt && \
-    ln -s /opt/zig-${ARCH}-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
+    curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz" -o zig.tar.xz && \
+    tar -xf zig.tar.xz && \
+    mv "zig-linux-${ARCH}-${ZIG_VERSION}" /usr/local/zig && \
+    rm zig.tar.xz && \
+    ln -s /usr/local/zig/zig /usr/local/bin/zig && \
     zig version
 
 WORKDIR /build
 
-# Copy build configuration files first (for better caching)
-COPY build.zig ./
+# Copy only necessary files for dependency resolution (better layer caching)
+COPY build.zig build.zig.zon ./
+COPY src/ src/
+COPY vendor/ vendor/
 
-# Create empty src directory to satisfy build.zig
-RUN mkdir -p src && touch src/main.zig
-
-# Now copy the actual source code
-COPY . .
-
-# Build with maximum optimizations
-# Use TARGETARCH to build for the correct architecture
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
+# Build with Zig cache mount to speed up compilation
+RUN --mount=type=cache,target=/root/.cache/zig \
+    if [ "$TARGETARCH" = "arm64" ]; then \
         export ZIG_TARGET="aarch64-linux-gnu"; \
     else \
         export ZIG_TARGET="x86_64-linux-gnu"; \
     fi && \
-    zig build -Doptimize=ReleaseFast -Dtarget=$ZIG_TARGET && \
-    zig build tools -Doptimize=ReleaseFast -Dtarget=$ZIG_TARGET && \
-    # Only strip if we're building for the native architecture
-    if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "" ]; then \
-        strip /build/zig-out/bin/geode || true; \
-        strip /build/zig-out/bin/geoded || true; \
-        strip /build/zig-out/bin/geodec || true; \
-    fi
+    zig build -Doptimize=ReleaseFast
 
-# Distroless runtime for minimal attack surface
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+# Runtime stage - NVIDIA CUDA base for GPU support
+FROM nvidia/cuda:12.6.0-base-ubuntu24.04 AS runtime
 
-# Copy binaries
-COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geode /usr/local/bin/geode
-COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geoded /usr/local/bin/geoded
-COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/geodec /usr/local/bin/geodec
-COPY --from=builder --chown=nonroot:nonroot /build/zig-out/bin/cert_gen /usr/local/bin/cert_gen
+# Install only runtime dependencies (no build tools)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libvulkan1 \
+        vulkan-tools \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create data directories
-VOLUME ["/data", "/certs"]
+# Create non-root user for security
+RUN useradd -m -u 1000 geode
 
-# Non-root user by default
-USER nonroot
-WORKDIR /home/nonroot
+# Copy binaries from builder
+COPY --from=builder --chown=geode:geode /build/zig-out/bin/geode /usr/local/bin/geode
 
-# Expose ports (QUIC-only + metrics)
-EXPOSE 8443/udp 9090/tcp
+# Create data directory
+RUN mkdir -p /data && chown geode:geode /data
+VOLUME ["/data"]
 
-# Run geoded
-ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data", "--listen", "0.0.0.0:8443", "--log-level", "info"]
+# Switch to non-root user
+USER geode
+WORKDIR /data
+
+# Expose default port
+EXPOSE 3141
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD geode query "RETURN 1" || exit 1
+
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/geode"]
+CMD ["serve", "--listen", "0.0.0.0:3141"]
