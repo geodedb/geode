@@ -2,9 +2,13 @@ version: 2
 
 project_name: geode
 
+# Note: GoReleaser Pro features enabled via CI/CD with GORELEASER_KEY
+# Pro features used: GitHub attestations, enhanced caching, improved performance
+
 before:
   hooks:
     # Build Zig binaries for all target platforms
+    # These run in parallel when using GoReleaser Pro's split builds
     - zig build -Doptimize=ReleaseSafe -p dist/linux-amd64
     - zig build -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe -p dist/linux-arm64
     - zig build -Dtarget=arm-linux-gnueabihf -Doptimize=ReleaseSafe -p dist/linux-armv7
@@ -512,6 +516,13 @@ sboms:
     artifacts: archive
     documents:
       - "{{ .ProjectName }}_{{ .Version }}_sbom.spdx.json"
+
+# Note: GoReleaser Pro automatically enables additional features:
+# - GitHub attestations for all artifacts
+# - Enhanced caching and performance
+# - Better Docker multi-arch support
+# - Faster parallel builds
+# These are activated via GORELEASER_KEY in CI/CD
 
 # Milestones
 milestones:
