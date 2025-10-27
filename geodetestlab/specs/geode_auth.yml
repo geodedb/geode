@@ -82,7 +82,7 @@ tests:
 
   - name: "user-create-basic"
     description: "Create a new user"
-    args: ["user", "create", "testuser", "test@example.com"]
+    args: ["user", "create", "testuser", "test@example.com", "testpass123"]
     expect:
       exit_code: 0
       stdout_contains: ["created", "testuser"]
@@ -107,7 +107,7 @@ tests:
   - name: "user-show-details"
     description: "Show user details"
     setup:
-      - "user create alice alice@example.com"
+      - "user create alice alice@example.com alicepass123"
     args: ["user", "show", "alice"]
     expect:
       exit_code: 0
@@ -119,7 +119,7 @@ tests:
   - name: "user-enable-disable"
     description: "Test user enable/disable functionality"
     setup:
-      - "user create bob bob@example.com"
+      - "user create bob bob@example.com bobpass123"
     args: ["user", "disable", "bob"]
     expect:
       exit_code: 0
@@ -181,7 +181,7 @@ tests:
     description: "Verify audit logging is working"
     setup:
       - "auth login --user admin"
-      - "user create audit_test audit@test.com"
+      - "user create audit_test audit@test.com auditpass123"
     args: ["user", "delete", "audit_test", "--yes"]
     expect:
       exit_code: 0
@@ -199,7 +199,7 @@ tests:
   - name: "mfa-enable"
     description: "Test MFA functionality"
     setup:
-      - "user create mfauser mfa@example.com"
+      - "user create mfauser mfa@example.com mfapass123"
     args: ["user", "mfa", "enable", "mfauser"]
     expect:
       exit_code: 0
@@ -229,7 +229,7 @@ tests:
   - name: "privilege-escalation-prevention"
     description: "Test privilege escalation prevention"
     setup:
-      - "user create limited limited@example.com"
+      - "user create limited limited@example.com limitedpass123"
       - "role create limited_role 'Limited permissions'"
       - "user assign-role limited limited_role"
     args: ["grant", "admin", "system", "limited_role"]

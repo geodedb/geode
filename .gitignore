@@ -12,6 +12,7 @@ __pycache__/
 **/__pycache__/
 data/
 data_embedded/
+data_*/
 
 test_io
 test_compile

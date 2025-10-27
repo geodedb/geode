@@ -358,6 +358,21 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode",
                     insert_pos = 2
                 modified_args.insert(insert_pos, "--enable-auth")
 
+        # If using embedded mode with auth and spec has data directory, inject --data-dir for query commands
+        # This ensures query commands with --user flag can find the users in the correct data directory
+        if has_embedded and spec_data_dir:
+            has_user_flag = any("--user" in str(arg) for arg in modified_args)
+            has_data_dir = any("--data-dir" in str(arg) for arg in modified_args)
+            if has_user_flag and not has_data_dir:
+                # Find position to insert --data-dir (before first optional flag or at end)
+                insert_pos = len(modified_args)  # Default: append at end
+                for i, arg in enumerate(modified_args):
+                    if str(arg).startswith('-') and i > 0:
+                        insert_pos = i
+                        break
+                modified_args.insert(insert_pos, "--data-dir")
+                modified_args.insert(insert_pos + 1, spec_data_dir)
+
     # Get stdin content if present
     stdin_content = test_case.get("stdin", None)
 
