@@ -1,6 +1,7 @@
 // CANARY: REQ=REQ-AUTH-SESSION-001; FEATURE="LocalSessionStorage"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_001; OWNER=security; UPDATED=2025-10-14
 
 const std = @import("std");
+const builtin = @import("builtin");
 const crypto = std.crypto;
 
 /// Credential storage for local session management
@@ -70,13 +71,22 @@ pub const SessionToken = struct {
 
 /// Get system fingerprint (hostname + username)
 pub fn getSystemFingerprint(allocator: std.mem.Allocator) ![]u8 {
-    // Get hostname
-    var hostname_buf: [64]u8 = undefined;
-    const hostname = std.posix.gethostname(&hostname_buf) catch "unknown";
+    // Get hostname with platform-specific buffer sizes
+    // Windows: MAX_COMPUTERNAME_LENGTH is 15, but we use 256 for safety
+    // Unix: HOST_NAME_MAX varies (64 on Linux, 72 on macOS)
+    const hostname_buf_size = if (builtin.os.tag == .windows) 256 else std.posix.HOST_NAME_MAX;
+    var hostname_buf: [hostname_buf_size]u8 = undefined;
+
+    const hostname = if (builtin.os.tag == .windows)
+        std.posix.getenv("COMPUTERNAME") orelse "unknown"
+    else
+        std.posix.gethostname(&hostname_buf) catch "unknown";
 
     // Get system username
-    const uid = std.posix.getuid();
     const username = std.posix.getenv("USER") orelse std.posix.getenv("USERNAME") orelse "unknown";
+
+    // Get user ID (0 on Windows since it doesn't have Unix-style UIDs)
+    const uid: u32 = if (builtin.os.tag == .windows) 0 else std.posix.getuid();
 
     // Combine: hostname:username:uid
     return std.fmt.allocPrint(allocator, "{s}:{s}:{d}", .{ hostname, username, uid });

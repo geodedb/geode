@@ -1,0 +1,81 @@
+name: 'Setup Geode Development Environment'
+description: 'Sets up Nix, Zig, Go, and caching for Geode builds'
+author: 'Spyder Labs'
+
+inputs:
+  git-credentials:
+    description: 'Git credentials for private repositories'
+    required: false
+  gh-access-token:
+    description: 'GitHub access token'
+    required: false
+  cachix-auth-token:
+    description: 'Cachix authentication token'
+    required: false
+  zig-version:
+    description: 'Zig version to install'
+    required: false
+    default: '0.15.1'
+  go-version:
+    description: 'Go version to install (leave empty to skip Go setup)'
+    required: false
+    default: ''
+  enable-cache:
+    description: 'Enable Zig build artifact caching'
+    required: false
+    default: 'true'
+  cache-key-prefix:
+    description: 'Prefix for cache key (useful for matrix builds)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Nix setup with checkout
+      uses: spyderorg/workflows/.github/actions/nix-setup@main
+      with:
+        git-credentials: ${{ inputs.git-credentials }}
+        gh-access-token: ${{ inputs.gh-access-token }}
+        cachix-auth-token: ${{ inputs.cachix-auth-token }}
+
+    - name: Setup Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: ${{ inputs.zig-version }}
+
+    - name: Verify Zig installation
+      shell: bash
+      run: |
+        echo "Zig version: $(zig version)"
+        echo "Zig location: $(which zig)"
+
+    - name: Setup Go
+      if: inputs.go-version != ''
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+
+    - name: Verify Go installation
+      if: inputs.go-version != ''
+      shell: bash
+      run: |
+        echo "Go version: $(go version)"
+        echo "Go location: $(which go)"
+
+    - name: Cache Zig build artifacts
+      if: inputs.enable-cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          zig-cache
+          zig-out
+          ~/.cache/zig
+        key: ${{ inputs.cache-key-prefix }}${{ runner.os }}-zig-${{ inputs.zig-version }}-${{ hashFiles('build.zig','src/**/*.zig') }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}${{ runner.os }}-zig-${{ inputs.zig-version }}-
+          ${{ inputs.cache-key-prefix }}${{ runner.os }}-zig-
+
+branding:
+  icon: 'package'
+  color: 'blue'

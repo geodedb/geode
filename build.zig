@@ -19,10 +19,18 @@ pub fn precommit(b: *std.Build) void {
 /// Helper function to configure Vulkan paths from environment variables (for Nix) or use defaults
 fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.linkLibC();
-    exe.linkSystemLibrary("dl");
 
-    // Enable Position Independent Code for Vulkan dynamic linking
-    exe.root_module.pic = true;
+    const target_info = exe.root_module.resolved_target.?.result;
+
+    // dl library only exists on Unix-like systems
+    if (target_info.os.tag != .windows) {
+        exe.linkSystemLibrary("dl");
+    }
+
+    // Enable Position Independent Code for Vulkan dynamic linking (not needed on Windows)
+    if (target_info.os.tag != .windows) {
+        exe.root_module.pic = true;
+    }
 
     // Check for Nix-style environment variables first
     const vulkan_include = b.graph.env_map.get("VULKAN_INCLUDE_DIR");
@@ -31,15 +39,48 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
     if (vulkan_include) |include_path| {
         exe.addIncludePath(.{ .cwd_relative = include_path });
     } else {
-        // Fallback to traditional paths
-        exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+        // Platform-specific include paths
+        switch (target_info.os.tag) {
+            .windows => {
+                // Vulkan SDK on Windows (typically installed via LunarG installer)
+                // VK_SDK_PATH environment variable or default location
+            },
+            else => {
+                // Unix-like systems
+                exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+            },
+        }
     }
 
     if (vulkan_lib) |lib_path| {
         exe.addLibraryPath(.{ .cwd_relative = lib_path });
     } else {
-        // Fallback to traditional paths (platform-specific)
-        exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+        // Platform-specific fallback paths
+        switch (target_info.os.tag) {
+            .windows => {
+                // Vulkan SDK on Windows - typically managed by the Vulkan SDK installer
+                // Libraries are usually in the system path or VK_SDK_PATH
+                // Note: Windows builds without Vulkan SDK will fail at link time
+            },
+            .macos => {
+                // MoltenVK paths on macOS (if installed via Homebrew)
+                exe.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
+                exe.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
+            },
+            .linux => {
+                // Try common Linux paths based on architecture
+                if (target_info.cpu.arch == .aarch64) {
+                    exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+                } else {
+                    exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu" });
+                    exe.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+                }
+            },
+            else => {
+                // Generic fallback
+                exe.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+            },
+        }
     }
 
     exe.linkSystemLibrary("vulkan");
@@ -1204,15 +1245,18 @@ pub fn build(b: *std.Build) void {
     // GPU unified module for benchmarks
     const gpu_mod = b.createModule(.{ .root_source_file = b.path("src/gpu.zig"), .target = target, .optimize = .ReleaseFast });
 
-    // GPU BFS benchmark (optional, not part of regular test suite)
+    // GPU benchmarks (optional, requires Vulkan - not built by default)
+    // Build with: zig build bench-gpu
+    // Note: On macOS, requires MoltenVK (brew install molten-vk)
+    const bench_gpu_step = b.step("bench-gpu", "Build and run GPU benchmarks (requires Vulkan)");
+
+    // GPU BFS benchmark
     const bench_gpu_bfs = b.addExecutable(.{
         .name = "bench_gpu_bfs",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_bfs.zig"), .target = target, .optimize = .ReleaseFast }),
     });
     bench_gpu_bfs.root_module.addImport("gpu", gpu_mod);
     configureVulkanPaths(b, bench_gpu_bfs);
-    b.installArtifact(bench_gpu_bfs);
-    const bench_gpu_step = b.step("bench-gpu", "Run GPU benchmarks");
     const bench_gpu_bfs_run = b.addRunArtifact(bench_gpu_bfs);
     bench_gpu_step.dependOn(&bench_gpu_bfs_run.step);
 
@@ -1223,7 +1267,6 @@ pub fn build(b: *std.Build) void {
     });
     bench_gpu_pagerank.root_module.addImport("gpu", gpu_mod);
     configureVulkanPaths(b, bench_gpu_pagerank);
-    b.installArtifact(bench_gpu_pagerank);
     const bench_gpu_pagerank_run = b.addRunArtifact(bench_gpu_pagerank);
     bench_gpu_step.dependOn(&bench_gpu_pagerank_run.step);
 
@@ -1234,7 +1277,6 @@ pub fn build(b: *std.Build) void {
     });
     bench_gpu_setops.root_module.addImport("gpu", gpu_mod);
     configureVulkanPaths(b, bench_gpu_setops);
-    b.installArtifact(bench_gpu_setops);
     const bench_gpu_setops_run = b.addRunArtifact(bench_gpu_setops);
     bench_gpu_step.dependOn(&bench_gpu_setops_run.step);
 
@@ -1245,7 +1287,6 @@ pub fn build(b: *std.Build) void {
     });
     bench_gpu_shortest_path.root_module.addImport("gpu", gpu_mod);
     configureVulkanPaths(b, bench_gpu_shortest_path);
-    b.installArtifact(bench_gpu_shortest_path);
     const bench_gpu_shortest_path_run = b.addRunArtifact(bench_gpu_shortest_path);
     bench_gpu_step.dependOn(&bench_gpu_shortest_path_run.step);
 
