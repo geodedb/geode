@@ -1,0 +1,49 @@
+[Unit]
+Description=Geode Graph Database Server
+Documentation=https://github.com/spyderorg/geode
+After=network.target
+
+[Service]
+Type=simple
+User=geode
+Group=geode
+ExecStart=/usr/bin/geode serve --data-dir /var/lib/geode --log-level info
+Restart=on-failure
+RestartSec=5s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/geode /var/log/geode
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=512
+
+# Environment
+Environment="GEODE_DATA_DIR=/var/lib/geode"
+Environment="GEODE_LOG_DIR=/var/log/geode"
+Environment="GEODE_CERT_DIR=/etc/geode/certs"
+
+# Working directory
+WorkingDirectory=/var/lib/geode
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=geode
+
+[Install]
+WantedBy=multi-user.target

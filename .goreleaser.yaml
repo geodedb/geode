@@ -1,0 +1,557 @@
+version: 2
+
+project_name: geode
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod vendor
+
+# Zig builds use custom build hooks since GoReleaser doesn't natively support Zig
+builds:
+  # We don't use GoReleaser's build system since this is a Zig project
+  # Instead, we'll use hooks to invoke zig build for each platform
+  - id: geode-placeholder
+    skip: true
+
+# Custom build hooks for Zig compilation
+hooks:
+  pre:
+    - cmd: zig build -Doptimize=ReleaseSafe -p dist/linux-amd64
+      env:
+        - GOOS=linux
+        - GOARCH=amd64
+    - cmd: zig build -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe -p dist/linux-arm64
+      env:
+        - GOOS=linux
+        - GOARCH=arm64
+    - cmd: zig build -Dtarget=arm-linux-gnueabihf -Doptimize=ReleaseSafe -p dist/linux-armv7
+      env:
+        - GOOS=linux
+        - GOARCH=arm
+        - GOARM=7
+    - cmd: zig build -Dtarget=riscv64-linux-gnu -Doptimize=ReleaseSafe -p dist/linux-riscv64
+      env:
+        - GOOS=linux
+        - GOARCH=riscv64
+    - cmd: zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe -p dist/linux-amd64-musl
+      env:
+        - GOOS=linux
+        - GOARCH=amd64
+    - cmd: zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSafe -p dist/linux-arm64-musl
+      env:
+        - GOOS=linux
+        - GOARCH=arm64
+    - cmd: zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe -p dist/macos-amd64
+      env:
+        - GOOS=darwin
+        - GOARCH=amd64
+    - cmd: zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe -p dist/macos-arm64
+      env:
+        - GOOS=darwin
+        - GOARCH=arm64
+    - cmd: zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe -p dist/windows-amd64
+      env:
+        - GOOS=windows
+        - GOARCH=amd64
+    - cmd: zig build -Dtarget=aarch64-windows-gnu -Doptimize=ReleaseSafe -p dist/windows-arm64
+      env:
+        - GOOS=windows
+        - GOARCH=arm64
+
+archives:
+  - id: geode-archives
+    name_template: >-
+      geode_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macOS
+      {{- else }}{{ title .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- with .Libc }}-{{ . }}{{ end }}
+    builds:
+      - geode-placeholder
+    files:
+      # Include binaries from custom Zig build
+      - src: "dist/{{ .Os }}-{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}{{ with .Libc }}-{{ . }}{{ end }}/bin/*"
+        dst: "bin/"
+        strip_parent: true
+      # Include documentation
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+      - docs/QUICK_REFERENCE.md
+      - docs/API_REFERENCE.md
+      # Include systemd service files
+      - deployment/systemd/geode.service
+      - deployment/systemd/geode@.service
+      - deployment/systemd/geode-auth.service
+    format_overrides:
+      - goos: windows
+        format: zip
+    wrap_in_directory: true
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: "Breaking Changes"
+      regexp: '^.*!:.*$'
+      order: 0
+    - title: "Features"
+      regexp: '^.*feat(\(.+\))?:.*$'
+      order: 1
+    - title: "Bug Fixes"
+      regexp: '^.*fix(\(.+\))?:.*$'
+      order: 2
+    - title: "Security"
+      regexp: '^.*sec(\(.+\))?:.*$'
+      order: 3
+    - title: "Performance"
+      regexp: '^.*perf(\(.+\))?:.*$'
+      order: 4
+    - title: "Documentation"
+      regexp: '^.*docs(\(.+\))?:.*$'
+      order: 5
+    - title: "Refactor"
+      regexp: '^.*refactor(\(.+\))?:.*$'
+      order: 6
+    - title: "Tests"
+      regexp: '^.*test(\(.+\))?:.*$'
+      order: 7
+    - title: "CI/CD"
+      regexp: '^.*ci(\(.+\))?:.*$'
+      order: 8
+    - title: "Build System"
+      regexp: '^.*build(\(.+\))?:.*$'
+      order: 9
+    - title: "Other"
+      order: 999
+  filters:
+    exclude:
+      - '^chore:'
+      - '^style:'
+      - 'Merge pull request'
+      - 'Merge branch'
+
+# Docker images for multiple variants
+dockers:
+  # Debian-based image (default)
+  - id: geode-debian-amd64
+    goos: linux
+    goarch: amd64
+    ids: [geode-placeholder]
+    image_templates:
+      - "ghcr.io/spyderorg/geode:{{ .Version }}-debian"
+      - "ghcr.io/spyderorg/geode:latest-debian"
+      - "ghcr.io/spyderorg/geode:{{ .Major }}.{{ .Minor }}-debian"
+      - "ghcr.io/spyderorg/geode:{{ .Major }}-debian"
+    dockerfile: Dockerfile.ci
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source={{.GitURL}}"
+      - "--label=org.opencontainers.image.description=Geode Graph Database - Enterprise-ready graph database with GQL compliance"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+    extra_files:
+      - dist/linux-amd64/bin/geode
+      - LICENSE
+      - README.md
+
+  - id: geode-debian-arm64
+    goos: linux
+    goarch: arm64
+    ids: [geode-placeholder]
+    image_templates:
+      - "ghcr.io/spyderorg/geode:{{ .Version }}-debian-arm64"
+      - "ghcr.io/spyderorg/geode:latest-debian-arm64"
+    dockerfile: Dockerfile.ci
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source={{.GitURL}}"
+    extra_files:
+      - dist/linux-arm64/bin/geode
+
+  # Alpine-based image (minimal)
+  - id: geode-alpine-amd64
+    goos: linux
+    goarch: amd64
+    ids: [geode-placeholder]
+    image_templates:
+      - "ghcr.io/spyderorg/geode:{{ .Version }}-alpine"
+      - "ghcr.io/spyderorg/geode:latest-alpine"
+      - "ghcr.io/spyderorg/geode:{{ .Major }}.{{ .Minor }}-alpine"
+    dockerfile: Dockerfile.ci.alpine
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+    extra_files:
+      - dist/linux-amd64-musl/bin/geode
+
+  - id: geode-alpine-arm64
+    goos: linux
+    goarch: arm64
+    ids: [geode-placeholder]
+    image_templates:
+      - "ghcr.io/spyderorg/geode:{{ .Version }}-alpine-arm64"
+      - "ghcr.io/spyderorg/geode:latest-alpine-arm64"
+    dockerfile: Dockerfile.ci.alpine
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+    extra_files:
+      - dist/linux-arm64-musl/bin/geode
+
+  # GPU-enabled image
+  - id: geode-gpu-amd64
+    goos: linux
+    goarch: amd64
+    ids: [geode-placeholder]
+    image_templates:
+      - "ghcr.io/spyderorg/geode:{{ .Version }}-gpu"
+      - "ghcr.io/spyderorg/geode:latest-gpu"
+      - "ghcr.io/spyderorg/geode:{{ .Major }}.{{ .Minor }}-gpu"
+    dockerfile: Dockerfile.ci.gpu
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=com.nvidia.cuda.version=12.6.0"
+    extra_files:
+      - dist/linux-amd64/bin/geode
+
+# System packages (deb, rpm, apk)
+nfpms:
+  - id: geode-packages
+    package_name: geode
+    vendor: Spyder
+    homepage: https://github.com/spyderorg/geode
+    maintainer: Spyder <info@spyder.org>
+    description: |-
+      Geode Graph Database - Enterprise-ready graph database with ISO GQL compliance.
+
+      Geode is a high-performance graph database implementing the ISO/IEC 39075:2024
+      GQL standard with enterprise features including transparent data encryption,
+      row-level security, vector similarity search, and real-time analytics.
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+    section: database
+    priority: optional
+    provides:
+      - geode
+    dependencies:
+      - ca-certificates
+      - openssl
+    recommends:
+      - libvulkan1
+    file_name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "linux" }}Linux{{- else }}{{ title .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- with .Libc }}_{{ . }}{{ end }}
+    contents:
+      # Main binary
+      - src: dist/{{ .Os }}-{{ .Arch }}{{ with .Libc }}-{{ . }}{{ end }}/bin/geode
+        dst: /usr/bin/geode
+        file_info:
+          mode: 0755
+
+      # Tool binaries
+      - src: dist/{{ .Os }}-{{ .Arch }}{{ with .Libc }}-{{ . }}{{ end }}/bin/geode-auth
+        dst: /usr/bin/geode-auth
+        file_info:
+          mode: 0755
+        type: config|noreplace
+
+      - src: dist/{{ .Os }}-{{ .Arch }}{{ with .Libc }}-{{ . }}{{ end }}/bin/doccheck
+        dst: /usr/bin/geode-doccheck
+        file_info:
+          mode: 0755
+
+      # Documentation
+      - src: README.md
+        dst: /usr/share/doc/geode/README.md
+
+      - src: LICENSE
+        dst: /usr/share/doc/geode/LICENSE
+
+      - src: CHANGELOG.md
+        dst: /usr/share/doc/geode/CHANGELOG.md
+
+      - src: docs/QUICK_REFERENCE.md
+        dst: /usr/share/doc/geode/QUICK_REFERENCE.md
+
+      - src: docs/API_REFERENCE.md
+        dst: /usr/share/doc/geode/API_REFERENCE.md
+
+      # Systemd service files
+      - src: deployment/systemd/geode.service
+        dst: /lib/systemd/system/geode.service
+        type: config|noreplace
+        file_info:
+          mode: 0644
+
+      - src: deployment/systemd/geode@.service
+        dst: /lib/systemd/system/geode@.service
+        type: config|noreplace
+        file_info:
+          mode: 0644
+
+      - src: deployment/systemd/geode-auth.service
+        dst: /lib/systemd/system/geode-auth.service
+        type: config|noreplace
+        file_info:
+          mode: 0644
+
+      # Default configuration
+      - src: deployment/config/geode.conf
+        dst: /etc/geode/geode.conf
+        type: config|noreplace
+        file_info:
+          mode: 0644
+
+      # Data directory
+      - dst: /var/lib/geode
+        type: dir
+        file_info:
+          mode: 0750
+          owner: geode
+          group: geode
+
+      # Log directory
+      - dst: /var/log/geode
+        type: dir
+        file_info:
+          mode: 0755
+          owner: geode
+          group: geode
+
+      # Certificate directory
+      - dst: /etc/geode/certs
+        type: dir
+        file_info:
+          mode: 0750
+          owner: geode
+          group: geode
+
+    scripts:
+      preinstall: deployment/scripts/preinstall.sh
+      postinstall: deployment/scripts/postinstall.sh
+      preremove: deployment/scripts/preremove.sh
+      postremove: deployment/scripts/postremove.sh
+
+    overrides:
+      deb:
+        dependencies:
+          - libssl3
+        recommends:
+          - vulkan-tools
+      rpm:
+        dependencies:
+          - openssl-libs
+      apk:
+        dependencies:
+          - libssl3
+
+# Homebrew tap
+brews:
+  - repository:
+      owner: spyderorg
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+
+    directory: Formula
+
+    homepage: https://github.com/spyderorg/geode
+
+    description: |-
+      Geode Graph Database - Enterprise-ready graph database with ISO GQL compliance.
+      High-performance graph database implementing ISO/IEC 39075:2024 GQL standard.
+
+    license: Apache-2.0
+
+    dependencies:
+      - name: openssl@3
+        type: build
+      - name: zig
+        type: build
+
+    test: |
+      system "#{bin}/geode", "--version"
+      system "#{bin}/geode", "query", "RETURN 1 AS x", "--no-quic"
+
+    install: |
+      bin.install "geode"
+      bin.install "geode-auth"
+      bin.install "geode-doccheck"
+
+      # Install systemd service files (for Linux)
+      if OS.linux?
+        (lib/"systemd/system").install "deployment/systemd/geode.service"
+        (lib/"systemd/system").install "deployment/systemd/geode@.service"
+        (lib/"systemd/system").install "deployment/systemd/geode-auth.service"
+      end
+
+      # Install documentation
+      doc.install "README.md", "LICENSE", "CHANGELOG.md"
+      doc.install "docs/QUICK_REFERENCE.md"
+      doc.install "docs/API_REFERENCE.md"
+
+      # Create directories
+      (var/"lib/geode").mkpath
+      (var/"log/geode").mkpath
+      (etc/"geode/certs").mkpath
+
+    service: |
+      run [opt_bin/"geode", "serve", "--data-dir", var/"lib/geode", "--log-level", "info"]
+      working_dir var/"lib/geode"
+      keep_alive true
+      log_path var/"log/geode/geode.log"
+      error_log_path var/"log/geode/geode-error.log"
+
+release:
+  github:
+    owner: spyderorg
+    name: geode
+
+  name_template: "Geode v{{ .Version }}"
+
+  prerelease: auto
+  draft: false
+
+  header: |
+    ## Geode v{{ .Version }}
+
+    Enterprise-ready graph database with ISO/IEC 39075:2024 GQL compliance.
+
+    ### Highlights
+
+    <!-- Add release highlights here -->
+
+  footer: |
+    ---
+
+    ### Installation
+
+    **Linux (Debian/Ubuntu)**
+    ```bash
+    wget https://github.com/spyderorg/geode/releases/download/v{{ .Version }}/geode_{{ .Version }}_Linux_x86_64.deb
+    sudo dpkg -i geode_{{ .Version }}_Linux_x86_64.deb
+    ```
+
+    **macOS (Homebrew)**
+    ```bash
+    brew tap spyderorg/tap
+    brew install geode
+    ```
+
+    **Docker**
+    ```bash
+    docker pull ghcr.io/spyderorg/geode:{{ .Version }}
+    docker run -p 8443:8443/udp ghcr.io/spyderorg/geode:{{ .Version }}
+    ```
+
+    **Manual Installation**
+    Download the appropriate archive for your platform from the assets below.
+
+    ### Documentation
+    - [Quick Reference](https://github.com/spyderorg/geode/blob/main/docs/QUICK_REFERENCE.md)
+    - [API Reference](https://github.com/spyderorg/geode/blob/main/docs/API_REFERENCE.md)
+    - [Full Documentation](https://github.com/spyderorg/geode/tree/main/docs)
+
+  disable: false
+
+  extra_files:
+    - glob: dist/**/*
+    - glob: checksums.txt
+
+# Announce releases
+announce:
+  skip: "{{gt .Patch 0}}" # Only announce major and minor releases
+
+  discord:
+    enabled: true
+    message_template: |
+      🎉 Geode **v{{ .Version }}** has been released!
+
+      {{ .ReleaseNotes }}
+
+      Download: {{ .ReleaseURL }}
+
+  twitter:
+    enabled: false # Enable if you have Twitter API credentials
+    message_template: "Geode v{{ .Version }} released! {{.ReleaseURL}}"
+
+# Metadata
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
+
+# Signing
+signs:
+  - cmd: gpg
+    args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+    artifacts: all
+    stdin: "{{ .Env.GPG_PASSWORD }}"
+
+# SBOMs (Software Bill of Materials)
+sboms:
+  - id: archive
+    artifacts: archive
+    documents:
+      - "{{ .ProjectName }}_{{ .Version }}_sbom.spdx.json"
+
+# Milestones
+milestones:
+  - repo:
+      owner: spyderorg
+      name: geode
+    close: true
+    fail_on_error: false
