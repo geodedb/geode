@@ -168,7 +168,12 @@ pub const QuicTransport = struct {
                 defer cert_file.close();
 
                 const cert_size = try cert_file.getEndPos();
-                inline_cert_der = try self.allocator.alloc(u8, cert_size);
+                // Convert u64 to usize for 32-bit platforms with bounds checking
+                if (cert_size > std.math.maxInt(usize)) {
+                    std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"certificate file too large for this platform\"}}\n", .{});
+                    return error.FileTooLarge;
+                }
+                inline_cert_der = try self.allocator.alloc(u8, @as(usize, @intCast(cert_size)));
                 _ = try cert_file.readAll(inline_cert_der.?);
                 debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loaded certificate\",\"size\":{}}}", .{cert_size});
 
@@ -181,7 +186,13 @@ pub const QuicTransport = struct {
                 defer key_file.close();
 
                 const key_size = try key_file.getEndPos();
-                inline_priv_key = try self.allocator.alloc(u8, key_size);
+                // Convert u64 to usize for 32-bit platforms with bounds checking
+                if (key_size > std.math.maxInt(usize)) {
+                    std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"private key file too large for this platform\"}}\n", .{});
+                    if (inline_cert_der) |cert| self.allocator.free(cert);
+                    return error.FileTooLarge;
+                }
+                inline_priv_key = try self.allocator.alloc(u8, @as(usize, @intCast(key_size)));
                 _ = try key_file.readAll(inline_priv_key.?);
                 debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loaded private key\",\"size\":{}}}", .{key_size});
 

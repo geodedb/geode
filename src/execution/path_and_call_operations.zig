@@ -22,7 +22,8 @@ const rls = @import("../security/rls.zig");
 
 // CANARY: REQ=REQ-AUDIT-PROC-001; FEATURE="AuditProcedures"; ASPECT=EventID; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
 // Global audit event ID counter for audit.* procedures
-var audit_event_id_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(1001);
+// Use u32 for atomic counter to support 32-bit ARM platforms
+var audit_event_id_counter: std.atomic.Value(u32) = std.atomic.Value(u32).init(1001);
 
 // Global instances for audit and TDE functionality
 var global_audit_logger: ?audit_mod.AuditLogger = null;

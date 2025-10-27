@@ -5408,7 +5408,12 @@ fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target
     const backup_file = try std.fs.cwd().openFile(source, .{});
     defer backup_file.close();
     const file_size = try backup_file.getEndPos();
-    const file_data = try backup_file.readToEndAlloc(allocator, file_size);
+    // Convert u64 to usize for 32-bit platforms with bounds checking
+    if (file_size > std.math.maxInt(usize)) {
+        std.debug.print("Error: Backup file too large for this platform\n", .{});
+        return error.FileTooLarge;
+    }
+    const file_data = try backup_file.readToEndAlloc(allocator, @as(usize, @intCast(file_size)));
     defer allocator.free(file_data);
 
     // Send upload command
@@ -5609,12 +5614,18 @@ const SimplifiedRestoreManager = struct {
         const catalog_size = std.mem.readInt(u64, content[offset .. offset + 8][0..8], .little);
         std.debug.print("  Catalog size: {} bytes\n", .{catalog_size});
 
-        if (content.len < offset + @sizeOf(u64) + catalog_size) {
+        // Convert u64 to usize for 32-bit platforms
+        if (catalog_size > std.math.maxInt(usize)) {
+            return error.BackupDataTooLarge;
+        }
+        const catalog_size_usize = @as(usize, @intCast(catalog_size));
+
+        if (content.len < offset + @sizeOf(u64) + catalog_size_usize) {
             return error.TruncatedBackupContent;
         }
 
         // Validate catalog data (simplified - just check it's text)
-        const catalog_data = content[offset + @sizeOf(u64) .. offset + @sizeOf(u64) + catalog_size];
+        const catalog_data = content[offset + @sizeOf(u64) .. offset + @sizeOf(u64) + catalog_size_usize];
         if (!std.mem.startsWith(u8, catalog_data, "-- Geode")) {
             std.debug.print("Warning: Catalog data format unexpected\n", .{});
         }

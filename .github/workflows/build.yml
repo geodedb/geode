@@ -106,10 +106,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux GNU variants
           - runner: ubuntu-latest
             target: arm-linux-gnueabihf
             archive_os: linux
-            archive_arch: arm
+            archive_arch: armv7
           - runner: ubuntu-latest
             target: aarch64-linux-gnu
             archive_os: linux
@@ -118,10 +119,29 @@ jobs:
             target: riscv64-linux-gnu
             archive_os: linux
             archive_arch: riscv64
+          # Linux musl variants (for Alpine, static linking)
+          - runner: ubuntu-latest
+            target: x86_64-linux-musl
+            archive_os: linux
+            archive_arch: amd64-musl
+          - runner: ubuntu-latest
+            target: aarch64-linux-musl
+            archive_os: linux
+            archive_arch: arm64-musl
+          # macOS variants
           - runner: macos-14
             target: x86_64-macos
             archive_os: macos
             archive_arch: x86_64
+          - runner: macos-14
+            target: aarch64-macos
+            archive_os: macos
+            archive_arch: arm64
+          # Windows variants
+          - runner: windows-latest
+            target: x86_64-windows-gnu
+            archive_os: windows
+            archive_arch: amd64
           - runner: windows-latest
             target: aarch64-windows-gnu
             archive_os: windows

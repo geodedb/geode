@@ -502,14 +502,19 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
 
     // Apply SKIP and LIMIT from the union query (applies to entire result)
     if (union_query.offset) |skip_count| {
-        if (skip_count < result.rows.len) {
-            const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_count);
+        // Convert skip_count to usize for 32-bit platforms
+        const skip_usize = if (skip_count > std.math.maxInt(usize))
+            std.math.maxInt(usize)
+        else
+            @as(usize, @intCast(skip_count));
+        if (skip_usize < result.rows.len) {
+            const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_usize);
             // Free the skipped rows
-            for (result.rows[0..skip_count]) |row| {
+            for (result.rows[0..skip_usize]) |row| {
                 allocator.free(row);
             }
             // Transfer ownership of remaining rows
-            for (result.rows[skip_count..], 0..) |row, i| {
+            for (result.rows[skip_usize..], 0..) |row, i| {
                 new_rows[i] = row;
             }
             allocator.free(result.rows);
@@ -524,7 +529,12 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
         }
     }
 
-    if (union_query.limit) |limit_count| {
+    if (union_query.limit) |limit_count_u64| {
+        // Convert u64 to usize for 32-bit platforms
+        const limit_count = if (limit_count_u64 > std.math.maxInt(usize))
+            std.math.maxInt(usize)
+        else
+            @as(usize, @intCast(limit_count_u64));
         // Check if LIMIT without ORDER BY - need to flag it and sort
         // But only if we don't have SKIP (which makes ordering deterministic in UNION context)
         // And only add once

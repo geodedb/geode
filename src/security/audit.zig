@@ -955,12 +955,14 @@ pub const AuditLogger = struct {
             logger: *AuditLogger,
             thread_id: u32,
             iterations: u32,
-            success_count: *std.atomic.Value(u64),
+            // Use u32 for atomic counter to support 32-bit ARM platforms
+            success_count: *std.atomic.Value(u32),
             race_count: *std.atomic.Value(u32),
         };
 
         // Shared counters for thread coordination
-        var success_count = std.atomic.Value(u64).init(0);
+        // Use u32 for atomic counter to support 32-bit ARM platforms
+        var success_count = std.atomic.Value(u32).init(0);
         var race_count = std.atomic.Value(u32).init(0);
 
         // Thread worker function
@@ -1192,7 +1194,11 @@ pub const AuditLogger = struct {
 
         // Read entire file
         const file_size = try file.getEndPos();
-        const content = try allocator.alloc(u8, file_size);
+        // Convert u64 to usize for 32-bit platforms
+        if (file_size > std.math.maxInt(usize)) {
+            return error.FileTooLarge;
+        }
+        const content = try allocator.alloc(u8, @as(usize, @intCast(file_size)));
         defer allocator.free(content);
         _ = try file.read(content);
 
