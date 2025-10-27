@@ -31,7 +31,6 @@ pub fn bfsFrontierCountWithTelemetry(csr: CSR, start: u32, max_depth: u32, alloc
     return BFSResult{ .count = count, .diagnostics = diag };
 }
 
-
 fn cpuBfsFrontierCount(csr: CSR, start: u32, max_depth: u32, allocator: std.mem.Allocator) !usize {
     var visited = std.AutoHashMap(u32, void).init(allocator);
     defer visited.deinit();

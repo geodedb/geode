@@ -185,7 +185,7 @@ fn gpuPageRankCudaImpl(g: PRGraph, iterations: u32, d: f64, allocator: std.mem.A
         // Swap buffers for next iteration
         std.mem.swap(@TypeOf(d_ranks_in), &d_ranks_in, &d_ranks_out);
     }
-    
+
     // Synchronize once at the end before copying results back
     try mem_mgr.synchronize();
 

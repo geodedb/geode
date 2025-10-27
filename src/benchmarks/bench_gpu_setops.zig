@@ -56,7 +56,7 @@ fn runBenchmark(config: TestConfig, gpu_enabled: bool, allocator: std.mem.Alloca
 
         const union_speedup = union_cpu_ms / union_gpu_ms;
         std.debug.print("  UNION GPU: {d:.2} ms, speedup: {d:.2}x", .{ union_gpu_ms, union_speedup });
-        
+
         if (union_speedup >= 4.0) {
             std.debug.print(" ✅ Excellent\n", .{});
         } else if (union_speedup >= 2.0) {
@@ -87,7 +87,7 @@ fn runBenchmark(config: TestConfig, gpu_enabled: bool, allocator: std.mem.Alloca
 
         const intersect_speedup = intersect_cpu_ms / intersect_gpu_ms;
         std.debug.print("  INTERSECT GPU: {d:.2} ms, speedup: {d:.2}x", .{ intersect_gpu_ms, intersect_speedup });
-        
+
         if (intersect_speedup >= 3.0) {
             std.debug.print(" ✅ Excellent\n", .{});
         } else if (intersect_speedup >= 1.5) {

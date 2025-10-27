@@ -3566,7 +3566,8 @@ fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         if (std.mem.eql(u8, arg, "--embedded") or
             std.mem.eql(u8, arg, "--no-quic") or
             std.mem.eql(u8, arg, "--server") or
-            std.mem.eql(u8, arg, "--debug")) {
+            std.mem.eql(u8, arg, "--debug"))
+        {
             // Skip flag and its value if present
             if (std.mem.eql(u8, arg, "--server")) {
                 idx += 1; // Skip the server address value
@@ -3628,7 +3629,8 @@ fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !vo
         if (std.mem.eql(u8, arg, "--embedded") or
             std.mem.eql(u8, arg, "--no-quic") or
             std.mem.eql(u8, arg, "--server") or
-            std.mem.eql(u8, arg, "--debug")) {
+            std.mem.eql(u8, arg, "--debug"))
+        {
             // Skip flag and its value if present
             if (std.mem.eql(u8, arg, "--server")) {
                 idx += 1; // Skip the server address value
