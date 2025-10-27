@@ -124,14 +124,14 @@ test "Vulkan compute - simple vector addition" {
     const float_size = @sizeOf(f32);
     const buffer_size = n * float_size;
 
-    var input_a = std.ArrayList(f32).init(allocator);
-    defer input_a.deinit();
-    var input_b = std.ArrayList(f32).init(allocator);
-    defer input_b.deinit();
+    var input_a = try std.ArrayList(f32).initCapacity(allocator, n);
+    defer input_a.deinit(allocator);
+    var input_b = try std.ArrayList(f32).initCapacity(allocator, n);
+    defer input_b.deinit(allocator);
 
     for (0..n) |i| {
-        try input_a.append(@as(f32, @floatFromInt(i)));
-        try input_b.append(@as(f32, @floatFromInt(i * 2)));
+        try input_a.append(allocator, @as(f32, @floatFromInt(i)));
+        try input_b.append(allocator, @as(f32, @floatFromInt(i * 2)));
     }
 
     // Create buffers

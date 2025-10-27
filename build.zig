@@ -256,11 +256,7 @@ pub fn build(b: *std.Build) void {
     const vulkan_loader_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/vulkan_loader.zig"), .target = target, .optimize = optimize });
 
     // Create vulkan_compute module with vulkan_loader as dependency
-    const vulkan_compute_mod = b.createModule(.{
-        .root_source_file = b.path("src/gpu/vulkan_compute.zig"),
-        .target = target,
-        .optimize = optimize
-    });
+    const vulkan_compute_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/vulkan_compute.zig"), .target = target, .optimize = optimize });
     vulkan_compute_mod.addImport("vulkan_loader.zig", vulkan_loader_mod);
 
     const vulkan_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gpu/test_vulkan_basic.zig"), .target = target, .optimize = optimize }) });
