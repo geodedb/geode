@@ -148,19 +148,11 @@ test "MATCH + CALL - Dijkstra with start and end binding" {
     const edge_ac = try store.createEdge(node_a, node_c, "ROAD");
     const edge_cd = try store.createEdge(node_c, node_d, "ROAD");
 
-    // Set edge weights
-    if (store.edges.getPtr(edge_ab)) |edge| {
-        try edge.properties.put("weight", graph_store.PropertyValue{ .Float = 1.0 });
-    }
-    if (store.edges.getPtr(edge_bc)) |edge| {
-        try edge.properties.put("weight", graph_store.PropertyValue{ .Float = 2.0 });
-    }
-    if (store.edges.getPtr(edge_ac)) |edge| {
-        try edge.properties.put("weight", graph_store.PropertyValue{ .Float = 5.0 });
-    }
-    if (store.edges.getPtr(edge_cd)) |edge| {
-        try edge.properties.put("weight", graph_store.PropertyValue{ .Float = 1.0 });
-    }
+    // Set edge weights using setEdgeProperty to avoid memory leaks
+    try store.setEdgeProperty(edge_ab, "weight", graph_store.PropertyValue{ .Float = 1.0 });
+    try store.setEdgeProperty(edge_bc, "weight", graph_store.PropertyValue{ .Float = 2.0 });
+    try store.setEdgeProperty(edge_ac, "weight", graph_store.PropertyValue{ .Float = 5.0 });
+    try store.setEdgeProperty(edge_cd, "weight", graph_store.PropertyValue{ .Float = 1.0 });
 
     // Parse MATCH + CALL Dijkstra query
     const query = "MATCH (source:Person), (target:Person) WHERE source.name = 'A' AND target.name = 'D' CALL algo.shortestPath.dijkstra(source, target, 'weight') YIELD path, cost RETURN cost";
