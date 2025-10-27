@@ -86,6 +86,11 @@
             pkgs.yq # Command-line YAML/XML/TOML processor - jq wrapper for YAML, XML, TOML documents
             pkgs.pdftk # Command-line tool for working with PDFs
             pkgs.pdfid # Scan a file to look for certain PDF keywords
+            pkgs.vulkan-loader
+            pkgs.vulkan-headers
+            pkgs.vulkan-utility-libraries
+            pkgs.glslang
+            pkgs.cudaPackages.libnpp
             unstablePkgs.zig-zlint
           ];
 
@@ -180,6 +185,15 @@
             default = pkgs.mkShell {
               name = "geode-dev";
               shellHook = ''
+                # Export environment variables for Vulkan and CUDA
+                export GEODE_DEV="1"
+                export GEODE_NIX_BUILD="1"
+                export VULKAN_SDK="${pkgs.vulkan-headers.out}"
+                export VULKAN_INCLUDE_DIR="${pkgs.vulkan-headers.out}/include"
+                export VULKAN_LIB_DIR="${pkgs.vulkan-loader.out}/lib"
+                export CUDA_INCLUDE_DIR="${pkgs.cudaPackages.libnpp.out}/include"
+                export CUDA_LIB_DIR="${pkgs.cudaPackages.libnpp.out}/lib"
+
                 echo "🔺 Geode Development Environment"
                 echo "Zig version: $(zig version)"
                 echo "Available commands:"
@@ -189,13 +203,9 @@
                 echo "  make serve      - Start development server"
                 echo "  nix run         - Run Geode daemon"
                 echo ""
+                echo "Vulkan SDK: $VULKAN_SDK"
                 echo "For NixOS module usage, see: ./nix/modules/geode-daemon.nix"
               '';
-              
-              env = {
-                GEODE_DEV = "1";
-                GEODE_NIX_BUILD = "1";
-              };
               
               packages = builtins.filter (p: p != null) (
                 (with dev-env.packages.${system}; [

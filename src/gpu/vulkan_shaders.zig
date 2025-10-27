@@ -37,24 +37,24 @@ pub fn getShaderWords(name: []const u8) ?[]const u32 {
     const bytes = getShader(name) orelse return null;
     // SPIR-V is always a multiple of 4 bytes
     if (bytes.len % 4 != 0) return null;
-    
+
     // Cast to u32 array (alignment is guaranteed by @embedFile)
     return @as([*]const u32, @ptrCast(@alignCast(bytes.ptr)))[0 .. bytes.len / 4];
 }
 
 test "shader SPIR-V loading" {
     const testing = std.testing;
-    
+
     // Verify all shaders are loadable
     try testing.expect(pagerank_spirv.len > 0);
     try testing.expect(setops_spirv.len > 0);
     try testing.expect(shortest_path_spirv.len > 0);
     try testing.expect(vector_add_spirv.len > 0);
-    
+
     // Verify SPIR-V magic number (0x07230203)
     const pagerank_words = getShaderWords("pagerank").?;
     try testing.expectEqual(@as(u32, 0x07230203), pagerank_words[0]);
-    
+
     // Verify getShader function
     try testing.expect(getShader("pagerank") != null);
     try testing.expect(getShader("invalid") == null);

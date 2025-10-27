@@ -48,7 +48,7 @@ const vector_add_spirv = [_]u32{
 
 test "Vulkan compute - device initialization" {
     const allocator = testing.allocator;
-    
+
     var compute = vk_compute.VulkanCompute.init(allocator) catch |err| {
         if (err == vk_compute.VulkanError.InstanceCreationFailed) {
             std.debug.print("Vulkan not available, skipping test\n", .{});
@@ -57,17 +57,17 @@ test "Vulkan compute - device initialization" {
         return err;
     };
     defer compute.deinit();
-    
+
     // Verify device was initialized
     const device_name = compute.getDeviceName();
     std.debug.print("Vulkan device: {s}\n", .{device_name});
-    
+
     try testing.expect(device_name.len > 0);
 }
 
 test "Vulkan compute - buffer creation and copy" {
     const allocator = testing.allocator;
-    
+
     var compute = vk_compute.VulkanCompute.init(allocator) catch |err| {
         if (err == vk_compute.VulkanError.InstanceCreationFailed) {
             return error.SkipZigTest;
@@ -75,7 +75,7 @@ test "Vulkan compute - buffer creation and copy" {
         return err;
     };
     defer compute.deinit();
-    
+
     // Create host-visible buffer
     const buffer_size = 1024;
     var buffer = try vk_compute.VulkanBuffer.create(
@@ -85,24 +85,24 @@ test "Vulkan compute - buffer creation and copy" {
         true, // host_visible
     );
     defer buffer.destroy();
-    
+
     // Test data round-trip
     var test_data: [256]u8 = undefined;
     for (&test_data, 0..) |*byte, i| {
         byte.* = @intCast(i & 0xFF);
     }
-    
+
     try buffer.copyFromHost(&test_data);
-    
+
     var read_data: [256]u8 = undefined;
     try buffer.copyToHost(&read_data);
-    
+
     try testing.expectEqualSlices(u8, &test_data, &read_data);
 }
 
 test "Vulkan compute - simple vector addition" {
     const allocator = testing.allocator;
-    
+
     var compute = vk_compute.VulkanCompute.init(allocator) catch |err| {
         if (err == vk_compute.VulkanError.InstanceCreationFailed) {
             return error.SkipZigTest;
@@ -110,7 +110,7 @@ test "Vulkan compute - simple vector addition" {
         return err;
     };
     defer compute.deinit();
-    
+
     // Create pipeline from embedded SPIR-V
     var pipeline = try vk_compute.ComputePipeline.createFromSPIRV(
         &compute,
@@ -118,22 +118,22 @@ test "Vulkan compute - simple vector addition" {
         3, // 3 buffers: input_a, input_b, output
     );
     defer pipeline.destroy();
-    
+
     // Prepare test data
     const n: usize = 1024;
     const float_size = @sizeOf(f32);
     const buffer_size = n * float_size;
-    
+
     var input_a = std.ArrayList(f32).init(allocator);
     defer input_a.deinit();
     var input_b = std.ArrayList(f32).init(allocator);
     defer input_b.deinit();
-    
+
     for (0..n) |i| {
         try input_a.append(@as(f32, @floatFromInt(i)));
         try input_b.append(@as(f32, @floatFromInt(i * 2)));
     }
-    
+
     // Create buffers
     var buffer_a = try vk_compute.VulkanBuffer.create(
         &compute,
@@ -142,7 +142,7 @@ test "Vulkan compute - simple vector addition" {
         true,
     );
     defer buffer_a.destroy();
-    
+
     var buffer_b = try vk_compute.VulkanBuffer.create(
         &compute,
         buffer_size,
@@ -150,7 +150,7 @@ test "Vulkan compute - simple vector addition" {
         true,
     );
     defer buffer_b.destroy();
-    
+
     var buffer_out = try vk_compute.VulkanBuffer.create(
         &compute,
         buffer_size,
@@ -158,33 +158,33 @@ test "Vulkan compute - simple vector addition" {
         true,
     );
     defer buffer_out.destroy();
-    
+
     // Copy input data
     const input_a_bytes = std.mem.sliceAsBytes(input_a.items);
     const input_b_bytes = std.mem.sliceAsBytes(input_b.items);
-    
+
     try buffer_a.copyFromHost(input_a_bytes);
     try buffer_b.copyFromHost(input_b_bytes);
-    
+
     // Execute kernel
     var buffers = [_]vk_compute.VulkanBuffer{ buffer_a, buffer_b, buffer_out };
     const workgroup_count = [3]u32{ @intCast(n / 256), 1, 1 };
-    
+
     try pipeline.execute(&buffers, workgroup_count);
-    
+
     // Read results
     const output = try allocator.alloc(f32, n);
     defer allocator.free(output);
-    
+
     const output_bytes = std.mem.sliceAsBytes(output);
     try buffer_out.copyToHost(output_bytes);
-    
+
     // Verify results
     for (0..n) |i| {
         const expected = input_a.items[i] + input_b.items[i];
         const actual = output[i];
         try testing.expectApproxEqAbs(expected, actual, 0.001);
     }
-    
+
     std.debug.print("✅ Vulkan vector addition test passed ({} elements)\n", .{n});
 }

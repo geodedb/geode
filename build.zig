@@ -16,6 +16,32 @@ pub fn precommit(b: *std.Build) void {
     }
 }
 
+/// Helper function to configure Vulkan paths from environment variables (for Nix) or use defaults
+fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
+    exe.linkLibC();
+    exe.linkSystemLibrary("dl");
+
+    // Check for Nix-style environment variables first
+    const vulkan_include = b.graph.env_map.get("VULKAN_INCLUDE_DIR");
+    const vulkan_lib = b.graph.env_map.get("VULKAN_LIB_DIR");
+
+    if (vulkan_include) |include_path| {
+        exe.addIncludePath(.{ .cwd_relative = include_path });
+    } else {
+        // Fallback to traditional paths
+        exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    }
+
+    if (vulkan_lib) |lib_path| {
+        exe.addLibraryPath(.{ .cwd_relative = lib_path });
+    } else {
+        // Fallback to traditional paths (platform-specific)
+        exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+    }
+
+    exe.linkSystemLibrary("vulkan");
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -203,14 +229,14 @@ pub fn build(b: *std.Build) void {
 
     // Compile Vulkan shaders to SPIR-V (Phase 2)
     const shader_compile_step = b.step("shaders", "Compile Vulkan shaders to SPIR-V");
-    
+
     const shader_sources = [_][]const u8{
         "src/gpu/kernels/pagerank.comp",
         "src/gpu/kernels/setops.comp",
         "src/gpu/kernels/shortest_path.comp",
         "src/gpu/kernels/vector_add.comp",
     };
-    
+
     for (shader_sources) |shader_src| {
         const shader_compile = b.addSystemCommand(&[_][]const u8{
             "glslangValidator",
@@ -225,14 +251,11 @@ pub fn build(b: *std.Build) void {
     // Vulkan compute tests (Phase 1)
     const vulkan_compute_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/vulkan_compute.zig"), .target = target, .optimize = optimize });
     const vulkan_loader_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/vulkan_loader.zig"), .target = target, .optimize = optimize });
-    
+
     const vulkan_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gpu/test_vulkan_basic.zig"), .target = target, .optimize = optimize }) });
     vulkan_tests.root_module.addImport("vulkan_compute", vulkan_compute_mod);
     vulkan_tests.root_module.addImport("vulkan_loader", vulkan_loader_mod);
-    vulkan_tests.linkLibC();
-    vulkan_tests.addIncludePath(.{ .cwd_relative = "/usr/include" });
-    vulkan_tests.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
-    vulkan_tests.linkSystemLibrary("vulkan");
+    configureVulkanPaths(b, vulkan_tests);
     const run_vulkan_tests = b.addRunArtifact(vulkan_tests);
 
     // GQL Conformance tests
@@ -1165,11 +1188,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_bfs.zig"), .target = target, .optimize = .ReleaseFast }),
     });
     bench_gpu_bfs.root_module.addImport("gpu", gpu_mod);
-    bench_gpu_bfs.linkLibC();
-    bench_gpu_bfs.linkSystemLibrary("dl");
-    bench_gpu_bfs.addIncludePath(.{ .cwd_relative = "/usr/include" });
-    bench_gpu_bfs.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
-    bench_gpu_bfs.linkSystemLibrary("vulkan");
+    configureVulkanPaths(b, bench_gpu_bfs);
     b.installArtifact(bench_gpu_bfs);
     const bench_gpu_step = b.step("bench-gpu", "Run GPU benchmarks");
     const bench_gpu_bfs_run = b.addRunArtifact(bench_gpu_bfs);
@@ -1181,11 +1200,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_pagerank.zig"), .target = target, .optimize = .ReleaseFast }),
     });
     bench_gpu_pagerank.root_module.addImport("gpu", gpu_mod);
-    bench_gpu_pagerank.linkLibC();
-    bench_gpu_pagerank.linkSystemLibrary("dl");
-    bench_gpu_pagerank.addIncludePath(.{ .cwd_relative = "/usr/include" });
-    bench_gpu_pagerank.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
-    bench_gpu_pagerank.linkSystemLibrary("vulkan");
+    configureVulkanPaths(b, bench_gpu_pagerank);
     b.installArtifact(bench_gpu_pagerank);
     const bench_gpu_pagerank_run = b.addRunArtifact(bench_gpu_pagerank);
     bench_gpu_step.dependOn(&bench_gpu_pagerank_run.step);
@@ -1196,11 +1211,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_setops.zig"), .target = target, .optimize = .ReleaseFast }),
     });
     bench_gpu_setops.root_module.addImport("gpu", gpu_mod);
-    bench_gpu_setops.linkLibC();
-    bench_gpu_setops.linkSystemLibrary("dl");
-    bench_gpu_setops.addIncludePath(.{ .cwd_relative = "/usr/include" });
-    bench_gpu_setops.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
-    bench_gpu_setops.linkSystemLibrary("vulkan");
+    configureVulkanPaths(b, bench_gpu_setops);
     b.installArtifact(bench_gpu_setops);
     const bench_gpu_setops_run = b.addRunArtifact(bench_gpu_setops);
     bench_gpu_step.dependOn(&bench_gpu_setops_run.step);
@@ -1211,11 +1222,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_gpu_shortest_path.zig"), .target = target, .optimize = .ReleaseFast }),
     });
     bench_gpu_shortest_path.root_module.addImport("gpu", gpu_mod);
-    bench_gpu_shortest_path.linkLibC();
-    bench_gpu_shortest_path.linkSystemLibrary("dl");
-    bench_gpu_shortest_path.addIncludePath(.{ .cwd_relative = "/usr/include" });
-    bench_gpu_shortest_path.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
-    bench_gpu_shortest_path.linkSystemLibrary("vulkan");
+    configureVulkanPaths(b, bench_gpu_shortest_path);
     b.installArtifact(bench_gpu_shortest_path);
     const bench_gpu_shortest_path_run = b.addRunArtifact(bench_gpu_shortest_path);
     bench_gpu_step.dependOn(&bench_gpu_shortest_path_run.step);
