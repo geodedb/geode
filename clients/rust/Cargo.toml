@@ -1,0 +1,60 @@
+[package]
+name = "geode-client"
+version = "0.1.0"
+edition = "2021"
+authors = ["Geode Contributors"]
+description = "Rust client library for Geode graph database with full GQL support"
+license = "MIT"
+repository = "https://github.com/yourusername/geode"
+keywords = ["database", "graph", "gql", "geode"]
+categories = ["database"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# QUIC support
+quinn = "0.10"
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
+rustls-pemfile = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utilities
+bytes = "1.5"
+futures = "0.3"
+
+# Decimal support
+rust_decimal = "1.33"
+
+# Datetime support
+chrono = { version = "0.4", features = ["serde"] }
+
+# URL parsing
+url = "2.5"
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = "0.5"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "advanced"
+path = "examples/advanced.rs"
+
+[lib]
+name = "geode_client"
+path = "src/lib.rs"
+
+[features]
+default = ["quic"]
+quic = []

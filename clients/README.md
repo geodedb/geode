@@ -1,11 +1,24 @@
 # Geode Client Libraries - v0.16.0
 
-Comprehensive client libraries for Geode graph database supporting all features including RBAC, ABAC, transactions, and graph operations.
+Official client libraries for Geode graph database in **Go**, **Python**, and **Rust** with full GQL (ISO/IEC 39075:2024) support.
 
 **v0.16.0 Breaking Changes:**
 - TCP transport removed - QUIC+TLS is now mandatory for network connections
 - Default port changed from 7567 to 3141
 - All network connections use TLS 1.3
+
+## Available Clients
+
+| Client | Status | Best For |
+|--------|--------|----------|
+| **🐹 [Go](./go/)** | ✅ Production | High-performance servers, CLI tools |
+| **🐍 [Python](./python/)** | 🆕 Beta | Data science, web apps, scripting |
+| **🦀 [Rust](./rust/)** | 🆕 Alpha | Maximum performance, systems programming |
+
+### Quick Links
+- [Python Client →](./python/README.md) - Async Python client with type hints
+- [Rust Client →](./rust/README.md) - Type-safe Rust client with tokio
+- [Go Examples](./go/example/) - Production-ready Go examples
 
 ## Features Supported
 
@@ -54,6 +67,103 @@ Comprehensive client libraries for Geode graph database supporting all features 
 - **Specialized Types**: Hash, Currency (ISO 4217), LanguageTag (BCP-47)
 - **Scientific Types**: Temperature, Pressure with units
 - **Vector Types**: VectorF32 for embeddings
+
+## Client Feature Matrix
+
+| Feature | Go | Python | Rust |
+|---------|----|---------| -----|
+| **QUIC + TLS** | ✅ Full | ⚠️ Optional | 🔜 Planned |
+| **Process Mode** | ✅ | ✅ | ✅ |
+| **Async/Await** | ❌ (goroutines) | ✅ | ✅ |
+| **Query Builders** | ✅ | ✅ | ✅ |
+| **Auth/RBAC** | ✅ | ✅ | 🔜 Planned |
+| **Connection Pool** | ✅ | ✅ | ✅ Basic |
+| **Type System** | ✅ Full | ✅ Full | ✅ Full |
+| **Production Ready** | ✅ | ⚠️ Beta | ⚠️ Alpha |
+
+## Python Client (New)
+
+The Python client provides an async/await API with full type hints and modern Python best practices.
+
+### Installation
+
+```bash
+cd clients/python
+pip install .
+
+# With QUIC support
+pip install .[quic]
+```
+
+### Quick Start
+
+```python
+import asyncio
+from geode_client import open_database
+
+async def main():
+    client = open_database("process:./zig-out/bin/geode")
+
+    async with client.connection() as conn:
+        # Simple query
+        page, _ = await conn.query("RETURN 1 AS x")
+        print(f"Result: {page.rows[0]['x'].as_int}")
+
+        # Query with parameters
+        page, _ = await conn.query(
+            "MATCH (p:Person {name: $name}) RETURN p",
+            {"name": "Alice"}
+        )
+
+        # Transaction
+        await conn.begin()
+        await conn.query("CREATE (p:Person {name: $name})", {"name": "Bob"})
+        await conn.commit()
+
+asyncio.run(main())
+```
+
+[Full Python Documentation →](./python/README.md)
+
+## Rust Client (New)
+
+The Rust client provides a type-safe, high-performance async API using tokio.
+
+### Installation
+
+Add to `Cargo.toml`:
+```toml
+[dependencies]
+geode-client = { path = "../clients/rust" }
+tokio = { version = "1", features = ["full"] }
+```
+
+### Quick Start
+
+```rust
+use geode_client::{Client, Result};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let client = Client::new("process:./zig-out/bin/geode")?;
+    let mut conn = client.connect().await?;
+
+    // Simple query
+    let page = conn.query("RETURN 1 AS x", None).await?;
+    println!("Result: {}", page.rows[0].get("x").unwrap().as_int()?);
+
+    // Transaction
+    conn.begin().await?;
+    let mut params = std::collections::HashMap::new();
+    params.insert("name".to_string(), serde_json::json!("Bob"));
+    conn.query("CREATE (p:Person {name: $name})", Some(params)).await?;
+    conn.commit().await?;
+
+    Ok(())
+}
+```
+
+[Full Rust Documentation →](./rust/README.md)
 
 ## Go Client
 
