@@ -88,7 +88,7 @@ The CI/CD pipeline uses lightweight Dockerfiles that avoid recompilation:
 ### 4. Minimal Runtime Dependencies
 - Only ca-certificates, openssl, and libvulkan1
 - No build tools in final images
-- Non-root user (geode:1000)
+- Non-root user (geode:10000)
 
 ### 5. .dockerignore
 Excludes unnecessary files from build context:
@@ -138,7 +138,7 @@ No build arguments required - images use pre-built binaries from artifacts.
 
 ## Security Features
 
-1. **Non-root user**: Runs as `geode` user (UID 1000)
+1. **Non-root user**: Runs as `geode` user (UID 10000)
 2. **Minimal attack surface**: Only runtime dependencies
 3. **Health checks**: Built-in container health monitoring
 4. **No build tools**: gcc, make, etc. not in final image
@@ -151,8 +151,9 @@ No build arguments required - images use pre-built binaries from artifacts.
 - Check `zig-out/bin/` directory exists and contains binaries
 
 ### Permission denied
-- Images run as non-root user `geode:1000`
+- Images run as non-root user `geode:10000`
 - Mount volumes with proper ownership: `docker run -v ./data:/data:rw`
+- Or use host UID mapping: `docker run --user $(id -u):$(id -g) -v ./data:/data:rw`
 - Or override user: `docker run --user root`
 
 ### GPU not detected
