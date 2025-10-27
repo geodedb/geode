@@ -41,6 +41,12 @@ This directory contains test runners and utility scripts for the Geode test suit
 - `test_intersect_fix.py` - INTERSECT operation tests
 - `test_json_extraction_unit.py` - JSON extraction unit tests
 - `test_json_matching.py` - JSON matching tests
+- `test_multiple_operations.py` - Multiple operation tests
+- `test_single_create_schema.py` - Single schema creation tests
+- `test_specific_features.py` - Specific feature tests
+- `test_specific_suite.py` - Specific suite tests
+- `test_system_features.py` - System feature tests
+- `test_union_property_access_direct.py` - Union property access tests
 - `simple_test.py` - Simple test execution
 
 ### Shell Scripts

@@ -38,6 +38,51 @@ This directory contains debug and benchmark Zig files used for development and t
 - `io_decl_inspect.zig` - Inspect I/O declarations
 - `quick_validation.zig` - Quick validation checks
 
+## Test Files
+
+### Parser and Lexer Tests
+- `test_create_lexer.zig` - Lexer creation tests
+- `test_create_parser.zig` - Parser creation tests
+- `test_lexer_direct.zig` - Direct lexer tests
+- `test_parser_direct.zig` - Direct parser tests
+- `test_parser_fix.zig` - Parser fix validation
+- `test_property_parser.zig` - Property parser tests
+
+### Execution and Evaluation Tests
+- `test_eval_direct.zig` - Direct evaluation tests
+- `test_io.zig` - I/O operation tests
+- `test_advanced_union.zig` - Advanced union tests
+- `test_nested_functions.zig` - Nested function tests
+
+### Query Operation Tests
+- `test_create_index.zig` - Index creation tests
+- `test_match_delete.zig` - MATCH DELETE operation tests
+
+### Cost Model and Planner Tests
+- `test_cost_model_adaptive_bias.zig` - Adaptive bias cost model
+- `test_cost_model_adaptive_bias_parity.zig` - Bias parity tests
+- `test_cost_model_bias_clamp_warning.zig` - Bias clamp warning tests
+- `test_cost_model_bias_persistence.zig` - Bias persistence tests
+- `test_cost_model_bias_persistence_v2.zig` - Bias persistence v2
+- `test_cost_model_dynamic_alpha.zig` - Dynamic alpha tests
+- `test_cost_model_explain_bias.zig` - Explain bias tests
+- `test_cost_model_explain_v4.zig` - Explain v4 tests
+- `test_cost_model_planner_bias_application.zig` - Planner bias application
+
+### Data Structure Tests
+- `test_arraylist2.zig` - ArrayList test 2
+- `test_arraylist3.zig` - ArrayList test 3
+- `test_arraylist4.zig` - ArrayList test 4
+
+### Feature-Specific Tests
+- `test_gql_compliance.zig` - GQL compliance tests
+- `test_gql_features.zig` - GQL feature tests
+- `test_rbac_abac.zig` - RBAC/ABAC security tests
+- `test_rbac_simple.zig` - Simple RBAC tests
+- `test_telemetry_smoke.zig` - Telemetry smoke tests
+- `test_nvrtc_validation.zig` - NVRTC validation tests
+- `test_pagerank_threshold.zig` - PageRank threshold tests
+
 ## Usage
 
 These files are not part of the regular test suite. They are standalone programs used for debugging specific issues during development.

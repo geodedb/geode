@@ -11,11 +11,11 @@ echo "test1" | nc -u -w1 127.0.0.1 3141
 sleep 1
 
 echo "=== Test 2: raw Go UDP ==="
-go run test_raw_udp.go
+go run tests/quic_tests/test_raw_udp.go
 sleep 1
 
 echo "=== Test 3: quic-go (will timeout) ==="
-timeout 8 go run test_quic_connection.go 2>&1 || echo "QUIC test timed out or failed"
+timeout 8 go run tests/quic_tests/test_quic_connection.go 2>&1 || echo "QUIC test timed out or failed"
 
 sleep 2
 
