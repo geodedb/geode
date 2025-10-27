@@ -1,23 +1,21 @@
 """
-Geode Python Client - Core client implementation with QUIC and process modes.
+Geode Python Client - Full QUIC implementation.
+
+This client uses QUIC+TLS for all connections to Geode server.
 """
 
 import asyncio
 import json
-import os
 import ssl
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-try:
-    from aioquic.asyncio import connect
-    from aioquic.quic.configuration import QuicConfiguration
-    HAS_QUIC = True
-except ImportError:
-    HAS_QUIC = False
+from aioquic.asyncio import connect
+from aioquic.asyncio.protocol import QuicConnectionProtocol
+from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.events import QuicEvent, StreamDataReceived
 
 from .types import Value, decode_value
 
@@ -58,32 +56,113 @@ class QueryError(GeodeError):
     pass
 
 
+class AuthError(GeodeError):
+    """Raised when authentication fails."""
+    pass
+
+
+class GeodeProtocol(QuicConnectionProtocol):
+    """
+    QUIC protocol handler for Geode.
+
+    Manages bidirectional streams for query execution.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._stream_readers: Dict[int, asyncio.Queue] = {}
+        self._stream_futures: Dict[int, asyncio.Future] = {}
+        self._closed = False
+
+    def quic_event_received(self, event: QuicEvent) -> None:
+        """Handle QUIC events."""
+        if isinstance(event, StreamDataReceived):
+            stream_id = event.stream_id
+
+            # Create queue if not exists
+            if stream_id not in self._stream_readers:
+                self._stream_readers[stream_id] = asyncio.Queue()
+
+            # Put data in queue
+            if event.data:
+                self._stream_readers[stream_id].put_nowait(event.data)
+
+            # Mark end of stream
+            if event.end_stream:
+                self._stream_readers[stream_id].put_nowait(None)
+
+    async def create_bidirectional_stream(self) -> Tuple[int, asyncio.Queue]:
+        """
+        Create a new bidirectional stream.
+
+        Returns:
+            Tuple of (stream_id, reader_queue)
+        """
+        stream_id = self._quic.get_next_available_stream_id()
+        reader_queue = asyncio.Queue()
+        self._stream_readers[stream_id] = reader_queue
+        return stream_id, reader_queue
+
+    def write_to_stream(self, stream_id: int, data: bytes, end_stream: bool = False) -> None:
+        """Write data to a stream."""
+        self._quic.send_stream_data(stream_id, data, end_stream)
+        self.transmit()
+
+    async def read_from_stream(self, stream_id: int) -> Optional[bytes]:
+        """Read data from a stream."""
+        if stream_id not in self._stream_readers:
+            raise ConnectionError(f"Stream {stream_id} not found")
+
+        data = await self._stream_readers[stream_id].get()
+        return data
+
+    def close_stream(self, stream_id: int) -> None:
+        """Close a stream."""
+        if stream_id in self._stream_readers:
+            del self._stream_readers[stream_id]
+
+
 class Connection:
     """
-    A single connection to Geode server.
+    A single QUIC connection to Geode server.
 
-    Supports both QUIC network mode and process (stdio) mode.
-    Not thread-safe - use one connection per async task or thread.
+    Provides async interface for executing queries, managing transactions,
+    and authentication.
     """
 
     def __init__(
         self,
         *,
-        mode: str = "process",
-        path: Optional[str] = None,
-        addr: Optional[str] = None,
+        host: str = "127.0.0.1",
+        port: int = 8443,
         page_size: int = 1000,
         hello_name: str = "geode-python",
-        hello_ver: str = "0.1",
+        hello_ver: str = "0.1.0",
         conformance: str = "min",
         ca_cert: Optional[str] = None,
         client_cert: Optional[str] = None,
         client_key: Optional[str] = None,
         skip_verify: bool = False,
+        server_name: Optional[str] = None,
     ):
-        self.mode = mode
-        self.path = path or os.getenv("GEODE_SERVER_PATH", "./zig-out/bin/geode")
-        self.addr = addr or "127.0.0.1:8443"
+        """
+        Initialize connection parameters.
+
+        Args:
+            host: Server hostname or IP
+            port: Server port (default 8443)
+            page_size: Default page size for results
+            hello_name: Client name for HELLO handshake
+            hello_ver: Client version
+            conformance: GQL conformance level (min/full)
+            ca_cert: Path to CA certificate for server verification
+            client_cert: Path to client certificate for mTLS
+            client_key: Path to client key for mTLS
+            skip_verify: Skip TLS verification (insecure, dev only)
+            server_name: SNI server name (defaults to host)
+        """
+        self.host = host
+        self.port = port
         self.page_size = page_size
         self.hello_name = hello_name
         self.hello_ver = hello_ver
@@ -92,13 +171,15 @@ class Connection:
         self.client_cert = client_cert
         self.client_key = client_key
         self.skip_verify = skip_verify
+        self.server_name = server_name or host
 
         # Connection state
-        self._process: Optional[subprocess.Popen] = None
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
+        self._protocol: Optional[GeodeProtocol] = None
+        self._stream_id: Optional[int] = None
+        self._reader_queue: Optional[asyncio.Queue] = None
         self._connected = False
         self._lock = asyncio.Lock()
+        self._buffer = b""
 
     async def __aenter__(self) -> 'Connection':
         """Async context manager entry."""
@@ -110,132 +191,116 @@ class Connection:
         await self.close()
 
     async def connect(self) -> None:
-        """Establish connection to Geode server."""
+        """Establish QUIC connection to Geode server."""
         if self._connected:
             return
 
-        if self.mode == "quic":
-            await self._connect_quic()
-        else:
-            await self._connect_process()
-
-        # Send HELLO message
-        hello = {
-            "type": "HELLO",
-            "client_name": self.hello_name,
-            "client_ver": self.hello_ver,
-            "wanted_conformance": self.conformance,
-        }
-        await self._write_json(hello)
-        # Read and discard HELLO response
-        await self._read_line()
-        self._connected = True
-
-    async def _connect_process(self) -> None:
-        """Connect in process mode (stdio)."""
-        path = Path(self.path)
-        if not path.is_absolute():
-            path = Path.cwd() / path
-
-        # Check if executable exists, try to build if not
-        if not path.exists():
-            build_result = subprocess.run(
-                ["zig", "build"],
-                cwd=path.parent.parent.parent,
-                capture_output=True,
-            )
-            if build_result.returncode != 0 or not path.exists():
-                raise ConnectionError(f"Geode executable not found: {path}")
-
-        # Start process with stdio
-        self._process = await asyncio.create_subprocess_exec(
-            str(path),
-            "serve",
-            "--stdio",
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        self._reader = self._process.stdout
-        self._writer = self._process.stdin
-
-    async def _connect_quic(self) -> None:
-        """Connect in QUIC mode."""
-        if not HAS_QUIC:
-            raise ConnectionError(
-                "QUIC support requires aioquic library. "
-                "Install with: pip install aioquic"
-            )
-
-        # Parse address
-        if "://" not in self.addr:
-            addr = f"quic://{self.addr}"
-        else:
-            addr = self.addr
-
-        parsed = urlparse(addr)
-        host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or 8443
-
-        # Configure TLS
-        config = QuicConfiguration(
+        # Configure QUIC
+        configuration = QuicConfiguration(
             is_client=True,
             alpn_protocols=["geode/1"],
         )
 
+        # Configure TLS
         if self.ca_cert:
-            config.load_verify_locations(self.ca_cert)
-        if self.client_cert and self.client_key:
-            config.load_cert_chain(self.client_cert, self.client_key)
-        if self.skip_verify:
-            config.verify_mode = ssl.CERT_NONE
+            configuration.load_verify_locations(self.ca_cert)
 
-        # Connect via QUIC
-        async with connect(host, port, configuration=config) as protocol:
-            # Open bidirectional stream
-            reader, writer = await protocol.create_stream()
-            self._reader = reader
-            self._writer = writer
+        if self.skip_verify:
+            configuration.verify_mode = ssl.CERT_NONE
+
+        if self.client_cert and self.client_key:
+            configuration.load_cert_chain(self.client_cert, self.client_key)
+
+        # Connect
+        async with connect(
+            self.host,
+            self.port,
+            configuration=configuration,
+            create_protocol=GeodeProtocol,
+            server_name=self.server_name,
+        ) as protocol:
+            self._protocol = protocol
+
+            # Create bidirectional stream
+            self._stream_id, self._reader_queue = await protocol.create_bidirectional_stream()
+
+            # Send HELLO
+            hello = {
+                "type": "HELLO",
+                "client_name": self.hello_name,
+                "client_ver": self.hello_ver,
+                "wanted_conformance": self.conformance,
+            }
+            await self._write_json(hello)
+
+            # Read HELLO response
+            response = await self._read_json()
+            if not response:
+                raise ConnectionError("No HELLO response from server")
+
+            self._connected = True
+
+            # Keep connection alive
+            while self._connected:
+                await asyncio.sleep(0.1)
 
     async def _write_json(self, obj: Dict[str, Any]) -> None:
         """Write JSON object as a line."""
-        if not self._writer:
+        if not self._protocol or self._stream_id is None:
             raise ConnectionError("Not connected")
 
         line = json.dumps(obj) + "\n"
-        self._writer.write(line.encode("utf-8"))
-        await self._writer.drain()
+        self._protocol.write_to_stream(self._stream_id, line.encode("utf-8"))
 
     async def _read_line(self) -> bytes:
-        """Read a single line from the connection."""
-        if not self._reader:
+        """Read a single line from the stream."""
+        if not self._protocol or self._stream_id is None:
             raise ConnectionError("Not connected")
 
-        line = await self._reader.readline()
-        return line.rstrip(b"\n")
+        while True:
+            # Check if we have a complete line in buffer
+            newline_idx = self._buffer.find(b"\n")
+            if newline_idx != -1:
+                line = self._buffer[:newline_idx]
+                self._buffer = self._buffer[newline_idx + 1:]
+                return line
+
+            # Read more data
+            data = await self._protocol.read_from_stream(self._stream_id)
+            if data is None:
+                # End of stream
+                if self._buffer:
+                    line = self._buffer
+                    self._buffer = b""
+                    return line
+                raise ConnectionError("Stream closed")
+
+            self._buffer += data
 
     async def _read_json(self) -> Dict[str, Any]:
         """Read and parse JSON line."""
         line = await self._read_line()
+        if not line:
+            return {}
         return json.loads(line)
 
     async def begin(self) -> None:
         """Begin a transaction."""
         async with self._lock:
             await self._write_json({"type": "BEGIN"})
-            await self._read_line()
+            await self._read_json()
 
     async def commit(self) -> None:
         """Commit the current transaction."""
         async with self._lock:
             await self._write_json({"type": "COMMIT"})
-            await self._read_line()
+            await self._read_json()
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
         async with self._lock:
             await self._write_json({"type": "ROLLBACK"})
-            await self._read_line()
+            await self._read_json()
 
     async def query(
         self,
@@ -381,30 +446,31 @@ class Connection:
             rows.append(row)
         return rows
 
+    async def execute(self, text: str, params: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Execute a query without returning results.
+
+        Useful for CREATE, DELETE, SET operations.
+
+        Args:
+            text: GQL query text
+            params: Query parameters
+        """
+        page, _ = await self.query(text, params, page_size=0)
+
     async def close(self) -> None:
         """Close the connection."""
         if not self._connected:
             return
 
-        try:
-            if self._writer:
-                self._writer.close()
-                await self._writer.wait_closed()
-        except Exception:
-            pass
-
-        if self._process:
-            try:
-                self._process.terminate()
-                await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self._process.kill()
-                await self._process.wait()
-
         self._connected = False
-        self._reader = None
-        self._writer = None
-        self._process = None
+
+        if self._protocol:
+            self._protocol.close()
+            self._protocol = None
+
+        self._stream_id = None
+        self._reader_queue = None
 
 
 class Client:
@@ -414,80 +480,72 @@ class Client:
     Use this to create connections to Geode server.
     """
 
-    def __init__(self, dsn: str = ""):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8443,
+        **kwargs
+    ):
         """
-        Initialize client with DSN.
-
-        DSN formats:
-            - process:<path>?page_size=1000
-            - quic:<host:port>?page_size=1000&ca_cert=path
+        Initialize client.
 
         Args:
-            dsn: Data source name
+            host: Server hostname or IP
+            port: Server port (default 8443)
+            **kwargs: Additional connection parameters
         """
-        self.config = self._parse_dsn(dsn)
-
-    def _parse_dsn(self, dsn: str) -> Dict[str, Any]:
-        """Parse DSN into configuration."""
-        config = {
-            "mode": "process",
-            "path": "./zig-out/bin/geode",
-            "addr": "127.0.0.1:8443",
-            "page_size": 1000,
-            "hello_name": "geode-python",
-            "hello_ver": "0.1",
-            "conformance": "min",
-            "skip_verify": False,
+        self.host = host
+        self.port = port
+        self.config = {
+            "host": host,
+            "port": port,
+            **kwargs
         }
 
-        if not dsn:
-            if path := os.getenv("GEODE_SERVER_PATH"):
-                config["path"] = path
-            return config
+    @classmethod
+    def from_url(cls, url: str) -> 'Client':
+        """
+        Create client from URL.
 
-        # Parse DSN
-        if dsn.startswith("process:"):
-            config["mode"] = "process"
-            rest = dsn[8:]
-            if "?" in rest:
-                path, query = rest.split("?", 1)
-                config["path"] = path
-                self._apply_query_params(config, query)
-            else:
-                config["path"] = rest
+        URL format: quic://host:port?param=value
 
-        elif dsn.startswith("quic:"):
-            config["mode"] = "quic"
-            rest = dsn[5:].lstrip("/")
-            if "?" in rest:
-                addr, query = rest.split("?", 1)
-                config["addr"] = addr or "127.0.0.1:8443"
-                self._apply_query_params(config, query)
-            else:
-                config["addr"] = rest or "127.0.0.1:8443"
+        Args:
+            url: Connection URL
 
-        return config
+        Returns:
+            Client instance
+        """
+        parsed = urlparse(url)
 
-    def _apply_query_params(self, config: Dict[str, Any], query: str) -> None:
-        """Apply query parameters to config."""
-        params = parse_qs(query)
+        # Extract host and port
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 8443
 
-        if "page_size" in params:
-            config["page_size"] = int(params["page_size"][0])
-        if "hello_name" in params:
-            config["hello_name"] = params["hello_name"][0]
-        if "hello_ver" in params:
-            config["hello_ver"] = params["hello_ver"][0]
-        if "conformance" in params:
-            config["conformance"] = params["conformance"][0]
-        if "ca_cert" in params:
-            config["ca_cert"] = params["ca_cert"][0]
-        if "client_cert" in params:
-            config["client_cert"] = params["client_cert"][0]
-        if "client_key" in params:
-            config["client_key"] = params["client_key"][0]
-        if "skip_verify" in params:
-            config["skip_verify"] = params["skip_verify"][0].lower() in ("1", "true")
+        # Parse query parameters
+        config = {}
+        if parsed.query:
+            params = parse_qs(parsed.query)
+
+            if "page_size" in params:
+                config["page_size"] = int(params["page_size"][0])
+            if "hello_name" in params:
+                config["hello_name"] = params["hello_name"][0]
+            if "hello_ver" in params:
+                config["hello_ver"] = params["hello_ver"][0]
+            if "conformance" in params:
+                config["conformance"] = params["conformance"][0]
+            if "ca_cert" in params:
+                config["ca_cert"] = params["ca_cert"][0]
+            if "client_cert" in params:
+                config["client_cert"] = params["client_cert"][0]
+            if "client_key" in params:
+                config["client_key"] = params["client_key"][0]
+            if "skip_verify" in params:
+                config["skip_verify"] = params["skip_verify"][0].lower() in ("1", "true")
+            if "server_name" in params:
+                config["server_name"] = params["server_name"][0]
+
+        return cls(host, port, **config)
 
     async def connect(self) -> Connection:
         """Create and connect a new connection."""
@@ -506,19 +564,19 @@ class Client:
         return Connection(**self.config)
 
 
-def open_database(dsn: str = "") -> Client:
+def open_database(url: str) -> Client:
     """
-    Open a database client.
+    Open a database client from URL.
 
     Args:
-        dsn: Data source name
+        url: Connection URL (quic://host:port?options)
 
     Returns:
         Client instance
 
     Example:
-        client = open_database("quic:localhost:8443")
+        client = open_database("quic://localhost:8443")
         async with client.connection() as conn:
             page, _ = await conn.query("MATCH (n) RETURN n LIMIT 10")
     """
-    return Client(dsn)
+    return Client.from_url(url)

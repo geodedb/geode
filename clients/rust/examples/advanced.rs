@@ -1,15 +1,24 @@
-//! Advanced example demonstrating query builders.
+//! Advanced example demonstrating connection pooling and query builders with QUIC.
 
-use geode_client::{Client, QueryBuilder, PatternBuilder, EdgeDirection, Result};
+use geode_client::{Client, ConnectionPool, EdgeDirection, PatternBuilder, QueryBuilder, Result};
+use std::collections::HashMap;
+use tokio;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    println!("=== Geode Rust QUIC Client - Advanced Examples ===\n");
+
+    // Query builder examples
     query_builder_examples();
+
+    // Connection pooling example
+    connection_pool_example().await?;
+
     Ok(())
 }
 
 fn query_builder_examples() {
-    println!("=== Query Builder Examples ===\n");
+    println!("\n=== Query Builder Examples ===\n");
 
     // Complex query
     let (query, params) = QueryBuilder::new()
@@ -34,7 +43,7 @@ fn query_builder_examples() {
 
     println!("Pattern: {}\n", pattern);
 
-    // Simple query
+    // Simple query with parameters
     let (query, _) = QueryBuilder::new()
         .match_pattern("(n:Person)")
         .return_(&["n.name", "n.age"])
@@ -42,4 +51,67 @@ fn query_builder_examples() {
         .build();
 
     println!("Simple Query:\n{}\n", query);
+}
+
+async fn connection_pool_example() -> Result<()> {
+    println!("\n=== Connection Pool Example ===\n");
+
+    // Create connection pool
+    let pool = ConnectionPool::new("127.0.0.1", 8443, 10)
+        .skip_verify(true)
+        .page_size(1000);
+
+    println!("Created connection pool with max_size=10");
+
+    // Execute concurrent queries using the pool
+    let mut handles = vec![];
+
+    for i in 1..=5 {
+        let pool_clone = &pool;
+        let handle = tokio::spawn(async move {
+            match pool_clone.acquire().await {
+                Ok(conn) => {
+                    let mut params = HashMap::new();
+                    params.insert("id".to_string(), serde_json::json!(i));
+                    params.insert("msg".to_string(), serde_json::json!(format!("Query {}", i)));
+
+                    match conn
+                        .query("RETURN $id AS id, $msg AS message", Some(params))
+                        .await
+                    {
+                        Ok(page) => {
+                            if let Some(row) = page.rows.first() {
+                                if let (Ok(id), Ok(msg)) = (
+                                    row.get("id").unwrap().as_int(),
+                                    row.get("message").unwrap().as_string(),
+                                ) {
+                                    println!("  Query {}: id={}, message={}", i, id, msg);
+                                }
+                            }
+                            Ok(())
+                        }
+                        Err(e) => {
+                            println!("  Query {} failed: {}", i, e);
+                            Err(e)
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("  Failed to acquire connection for query {}: {}", i, e);
+                    Err(e)
+                }
+            }
+        });
+        handles.push(handle);
+    }
+
+    // Wait for all queries to complete
+    for handle in handles {
+        let _ = handle.await;
+    }
+
+    println!("\nAll concurrent queries completed!");
+    println!("Pool size: {}", pool.size().await);
+
+    Ok(())
 }

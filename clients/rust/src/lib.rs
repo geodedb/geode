@@ -1,11 +1,11 @@
 //! Geode Rust Client Library
 //!
-//! A high-performance async Rust client for Geode graph database with full GQL support.
+//! A high-performance async Rust client for Geode graph database with full GQL support via QUIC+TLS.
 //!
 //! # Features
 //!
-//! - 🚀 Async/await support using tokio
-//! - 🔒 QUIC + TLS 1.3 for secure networking
+//! - 🚀 Fully async using tokio with type safety
+//! - 🔒 QUIC + TLS 1.3 for secure, high-performance networking
 //! - 📝 Full GQL (ISO/IEC 39075:2024) support
 //! - 🏗️ Query builders for programmatic query construction
 //! - 🔐 Authentication & RBAC with RLS policies
@@ -19,11 +19,19 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     let client = Client::new("process:./zig-out/bin/geode")?;
+//!     // Create QUIC client
+//!     let client = Client::new("127.0.0.1", 8443)
+//!         .skip_verify(true);
+//!
+//!     // Connect via QUIC
 //!     let conn = client.connect().await?;
 //!
+//!     // Execute query
 //!     let page = conn.query("RETURN 1 AS x", None).await?;
 //!     println!("Result: {:?}", page);
+//!
+//!     // Close connection
+//!     conn.close().await?;
 //!
 //!     Ok(())
 //! }

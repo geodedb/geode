@@ -1,17 +1,14 @@
 """
 Authentication and authorization client for Geode.
+
+Provides full RBAC, user management, and RLS policy support.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from .client import Connection, GeodeError
-
-
-class AuthError(GeodeError):
-    """Raised when authentication fails."""
-    pass
+from .client import Connection, AuthError
 
 
 @dataclass
@@ -23,11 +20,7 @@ class User:
     is_active: bool
     created_at: datetime
     roles: List[str]
-    metadata: Dict[str, str] = None
-
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
+    metadata: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -54,13 +47,13 @@ class Permission:
 @dataclass
 class RLSPolicy:
     """Represents a Row-Level Security policy."""
-    id: int
-    name: str
-    table: str
-    graph: str
-    operation: str
-    permissive: bool
-    roles: List[int]
+    id: int = 0
+    name: str = ""
+    table: str = ""
+    graph: str = ""
+    operation: str = ""
+    permissive: bool = True
+    roles: List[int] = field(default_factory=list)
     using_expression: str = ""
     check_expression: str = ""
     enabled: bool = True
@@ -114,8 +107,9 @@ class AuthClient:
             "password": password,
         }
 
-        await self.conn._write_json(req)
-        resp = await self.conn._read_json()
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
 
         status = resp.get("status", "")
         if status != "00000":
@@ -124,11 +118,17 @@ class AuthClient:
 
         result = resp.get("result", {})
 
+        expires_at_str = result.get("expires_at", "")
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+        except ValueError:
+            expires_at = datetime.now()
+
         return SessionInfo(
             token=result.get("token", ""),
             user_id=int(result.get("user_id", 0)),
             username=result.get("username", ""),
-            expires_at=datetime.fromisoformat(result.get("expires_at", "")),
+            expires_at=expires_at,
             roles=result.get("roles", []),
         )
 
@@ -147,8 +147,9 @@ class AuthClient:
             "token": token,
         }
 
-        await self.conn._write_json(req)
-        resp = await self.conn._read_json()
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
 
         status = resp.get("status", "")
         if status != "00000":
@@ -191,8 +192,9 @@ class AuthClient:
         if metadata:
             req["metadata"] = metadata
 
-        await self.conn._write_json(req)
-        resp = await self.conn._read_json()
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
 
         status = resp.get("status", "")
         if status != "00000":
@@ -217,19 +219,135 @@ class AuthClient:
             "user_id": user_id,
         }
 
-        await self.conn._write_json(req)
-        resp = await self.conn._read_json()
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
 
         status = resp.get("status", "")
         if status != "00000":
             message = resp.get("message", "Delete user failed")
             raise AuthError(f"Delete user failed: {message}")
 
+    async def update_user(
+        self,
+        user_id: int,
+        email: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        roles: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> User:
+        """
+        Update a user's information.
+
+        Args:
+            user_id: User ID
+            email: New email address
+            is_active: Active status
+            roles: New roles list
+            metadata: Updated metadata
+
+        Returns:
+            Updated User object
+
+        Raises:
+            AuthError: If update fails
+        """
+        req = {
+            "type": "AUTH_UPDATE_USER",
+            "user_id": user_id,
+        }
+
+        if email is not None:
+            req["email"] = email
+        if is_active is not None:
+            req["is_active"] = is_active
+        if roles is not None:
+            req["roles"] = roles
+        if metadata is not None:
+            req["metadata"] = metadata
+
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
+
+        status = resp.get("status", "")
+        if status != "00000":
+            message = resp.get("message", "Update user failed")
+            raise AuthError(f"Update user failed: {message}")
+
+        result = resp.get("result", {})
+        return self._parse_user(result)
+
+    async def get_user(self, user_id: int) -> User:
+        """
+        Get user information.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            User object
+
+        Raises:
+            AuthError: If user not found
+        """
+        req = {
+            "type": "AUTH_GET_USER",
+            "user_id": user_id,
+        }
+
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
+
+        status = resp.get("status", "")
+        if status != "00000":
+            message = resp.get("message", "Get user failed")
+            raise AuthError(f"Get user failed: {message}")
+
+        result = resp.get("result", {})
+        return self._parse_user(result)
+
+    async def list_users(self, limit: int = 100, offset: int = 0) -> List[User]:
+        """
+        List all users.
+
+        Args:
+            limit: Maximum number of users to return
+            offset: Offset for pagination
+
+        Returns:
+            List of User objects
+
+        Raises:
+            AuthError: If operation fails
+        """
+        req = {
+            "type": "AUTH_LIST_USERS",
+            "limit": limit,
+            "offset": offset,
+        }
+
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
+
+        status = resp.get("status", "")
+        if status != "00000":
+            message = resp.get("message", "List users failed")
+            raise AuthError(f"List users failed: {message}")
+
+        result = resp.get("result", {})
+        users_data = result.get("users", [])
+        return [self._parse_user(user_data) for user_data in users_data]
+
     async def create_role(
         self,
         name: str,
         description: str,
         permissions: List[str],
+        parent_role: Optional[int] = None,
+        priority: int = 0,
     ) -> Role:
         """
         Create a new role.
@@ -238,6 +356,8 @@ class AuthClient:
             name: Role name
             description: Role description
             permissions: List of permission names
+            parent_role: Parent role ID for inheritance
+            priority: Role priority
 
         Returns:
             Created Role object
@@ -250,10 +370,15 @@ class AuthClient:
             "name": name,
             "description": description,
             "permissions": permissions,
+            "priority": priority,
         }
 
-        await self.conn._write_json(req)
-        resp = await self.conn._read_json()
+        if parent_role is not None:
+            req["parent_role"] = parent_role
+
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
 
         status = resp.get("status", "")
         if status != "00000":
@@ -262,6 +387,30 @@ class AuthClient:
 
         result = resp.get("result", {})
         return self._parse_role(result)
+
+    async def delete_role(self, role_id: int) -> None:
+        """
+        Delete a role.
+
+        Args:
+            role_id: Role ID
+
+        Raises:
+            AuthError: If deletion fails
+        """
+        req = {
+            "type": "AUTH_DELETE_ROLE",
+            "role_id": role_id,
+        }
+
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
+
+        status = resp.get("status", "")
+        if status != "00000":
+            message = resp.get("message", "Delete role failed")
+            raise AuthError(f"Delete role failed: {message}")
 
     async def grant_permission(self, role_id: int, permission_id: int) -> None:
         """
@@ -280,20 +429,50 @@ class AuthClient:
             "permission_id": permission_id,
         }
 
-        await self.conn._write_json(req)
-        resp = await self.conn._read_json()
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
 
         status = resp.get("status", "")
         if status != "00000":
             message = resp.get("message", "Grant permission failed")
             raise AuthError(f"Grant permission failed: {message}")
 
-    async def create_rls_policy(self, policy: RLSPolicy) -> None:
+    async def revoke_permission(self, role_id: int, permission_id: int) -> None:
+        """
+        Revoke a permission from a role.
+
+        Args:
+            role_id: Role ID
+            permission_id: Permission ID
+
+        Raises:
+            AuthError: If revoke fails
+        """
+        req = {
+            "type": "AUTH_REVOKE_PERMISSION",
+            "role_id": role_id,
+            "permission_id": permission_id,
+        }
+
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
+
+        status = resp.get("status", "")
+        if status != "00000":
+            message = resp.get("message", "Revoke permission failed")
+            raise AuthError(f"Revoke permission failed: {message}")
+
+    async def create_rls_policy(self, policy: RLSPolicy) -> RLSPolicy:
         """
         Create a new Row-Level Security policy.
 
         Args:
             policy: RLS policy definition
+
+        Returns:
+            Created RLS policy with ID
 
         Raises:
             AuthError: If policy creation fails
@@ -318,13 +497,18 @@ class AuthClient:
         if policy.audit_level:
             req["audit_level"] = policy.audit_level
 
-        await self.conn._write_json(req)
-        resp = await self.conn._read_json()
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
 
         status = resp.get("status", "")
         if status != "00000":
             message = resp.get("message", "Create policy failed")
             raise AuthError(f"Create policy failed: {message}")
+
+        result = resp.get("result", {})
+        policy.id = result.get("id", policy.id)
+        return policy
 
     async def enable_rls_policy(self, policy_id: int, enable: bool = True) -> None:
         """
@@ -343,13 +527,38 @@ class AuthClient:
             "enabled": enable,
         }
 
-        await self.conn._write_json(req)
-        resp = await self.conn._read_json()
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
 
         status = resp.get("status", "")
         if status != "00000":
             message = resp.get("message", "Enable policy failed")
             raise AuthError(f"Enable policy failed: {message}")
+
+    async def delete_rls_policy(self, policy_id: int) -> None:
+        """
+        Delete an RLS policy.
+
+        Args:
+            policy_id: Policy ID
+
+        Raises:
+            AuthError: If deletion fails
+        """
+        req = {
+            "type": "RLS_DELETE_POLICY",
+            "policy_id": policy_id,
+        }
+
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
+
+        status = resp.get("status", "")
+        if status != "00000":
+            message = resp.get("message", "Delete policy failed")
+            raise AuthError(f"Delete policy failed: {message}")
 
     async def check_permission(
         self,
@@ -378,8 +587,9 @@ class AuthClient:
             "action": action,
         }
 
-        await self.conn._write_json(req)
-        resp = await self.conn._read_json()
+        async with self.conn._lock:
+            await self.conn._write_json(req)
+            resp = await self.conn._read_json()
 
         status = resp.get("status", "")
         if status != "00000":
@@ -391,12 +601,18 @@ class AuthClient:
 
     def _parse_user(self, data: Dict[str, Any]) -> User:
         """Parse user data from JSON response."""
+        created_at_str = data.get("created_at", "")
+        try:
+            created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+        except ValueError:
+            created_at = datetime.now()
+
         return User(
             id=int(data.get("id", 0)),
             username=data.get("username", ""),
             email=data.get("email", ""),
             is_active=data.get("is_active", False),
-            created_at=datetime.fromisoformat(data.get("created_at", "")),
+            created_at=created_at,
             roles=data.get("roles", []),
             metadata=data.get("metadata", {}),
         )

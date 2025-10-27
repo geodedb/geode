@@ -3,16 +3,20 @@ Setup script for Geode Python client.
 """
 
 from setuptools import setup, find_packages
+from pathlib import Path
 
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+# Read README
+readme_path = Path(__file__).parent / "README.md"
+long_description = ""
+if readme_path.exists():
+    long_description = readme_path.read_text(encoding="utf-8")
 
 setup(
     name="geode-client",
     version="0.1.0",
     author="Geode Contributors",
     author_email="contact@example.com",
-    description="Python client library for Geode graph database",
+    description="Python QUIC client library for Geode graph database",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/geode",
@@ -27,15 +31,13 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Framework :: AsyncIO",
     ],
     python_requires=">=3.9",
     install_requires=[
-        # Core dependencies
+        "aioquic>=0.9.0",  # QUIC support (required)
     ],
     extras_require={
-        "quic": [
-            "aioquic>=0.9.0",
-        ],
         "dev": [
             "pytest>=7.0.0",
             "pytest-asyncio>=0.21.0",

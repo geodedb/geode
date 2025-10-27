@@ -1,10 +1,15 @@
 //! Core client implementation for Geode.
 
+use bytes::Bytes;
+use quinn::{ClientConfig, Connection as QuinnConnection, Endpoint, RecvStream, SendStream};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::Mutex;
 
 use crate::error::{Error, Result};
@@ -28,16 +33,54 @@ pub struct Page {
     pub final_page: bool,
 }
 
-/// Geode database client
-pub struct Client {
-    config: ClientConfig,
+/// Skip TLS verification (insecure, for development only)
+#[derive(Debug)]
+struct SkipServerVerification;
+
+impl ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> std::result::Result<ServerCertVerified, RustlsError> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, RustlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, RustlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ED25519,
+        ]
+    }
 }
 
-#[derive(Clone)]
-struct ClientConfig {
-    mode: String,
-    path: String,
-    addr: String,
+/// Geode database client
+pub struct Client {
+    host: String,
+    port: u16,
+    skip_verify: bool,
     page_size: usize,
     hello_name: String,
     hello_ver: String,
@@ -45,63 +88,134 @@ struct ClientConfig {
 }
 
 impl Client {
-    /// Create a new client from DSN
-    pub fn new(dsn: &str) -> Result<Self> {
-        let config = parse_dsn(dsn)?;
-        Ok(Self { config })
+    /// Create a new QUIC client
+    pub fn new(host: impl Into<String>, port: u16) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            skip_verify: false,
+            page_size: 1000,
+            hello_name: "geode-rust".to_string(),
+            hello_ver: "0.1.0".to_string(),
+            conformance: "min".to_string(),
+        }
+    }
+
+    /// Skip TLS verification (insecure, for development only)
+    pub fn skip_verify(mut self, skip: bool) -> Self {
+        self.skip_verify = skip;
+        self
+    }
+
+    /// Set page size for queries
+    pub fn page_size(mut self, size: usize) -> Self {
+        self.page_size = size;
+        self
+    }
+
+    /// Set client name
+    pub fn client_name(mut self, name: impl Into<String>) -> Self {
+        self.hello_name = name.into();
+        self
+    }
+
+    /// Set client version
+    pub fn client_version(mut self, version: impl Into<String>) -> Self {
+        self.hello_ver = version.into();
+        self
+    }
+
+    /// Set GQL conformance level
+    pub fn conformance(mut self, level: impl Into<String>) -> Self {
+        self.conformance = level.into();
+        self
     }
 
     /// Connect to the database
     pub async fn connect(&self) -> Result<Connection> {
-        Connection::new(self.config.clone()).await
+        Connection::new(
+            &self.host,
+            self.port,
+            self.skip_verify,
+            self.page_size,
+            &self.hello_name,
+            &self.hello_ver,
+            &self.conformance,
+        )
+        .await
     }
 }
 
-/// A single connection to Geode
+/// A single connection to Geode via QUIC
 pub struct Connection {
-    config: ClientConfig,
-    process: Option<Child>,
-    reader: Option<BufReader<tokio::process::ChildStdout>>,
-    writer: Option<tokio::process::ChildStdin>,
-    lock: Mutex<()>,
+    connection: QuinnConnection,
+    send_stream: Mutex<BufWriter<SendStream>>,
+    recv_stream: Mutex<BufReader<RecvStream>>,
+    page_size: usize,
 }
 
 impl Connection {
-    async fn new(config: ClientConfig) -> Result<Self> {
-        let mut conn = Self {
-            config: config.clone(),
-            process: None,
-            reader: None,
-            writer: None,
-            lock: Mutex::new(()),
+    async fn new(
+        host: &str,
+        port: u16,
+        skip_verify: bool,
+        page_size: usize,
+        hello_name: &str,
+        hello_ver: &str,
+        conformance: &str,
+    ) -> Result<Self> {
+        // Configure TLS
+        let mut crypto = if skip_verify {
+            rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+                .with_no_client_auth()
+        } else {
+            rustls::ClientConfig::builder()
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_no_client_auth()
         };
 
-        if config.mode == "quic" {
-            return Err(Error::connection("QUIC mode not yet implemented in Rust client"));
-        }
+        crypto.alpn_protocols = vec![b"geode/1".to_vec()];
 
-        // Process mode
-        let mut child = Command::new(&config.path)
-            .arg("serve")
-            .arg("--stdio")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
+        let mut client_config = ClientConfig::new(Arc::new(crypto));
+        let mut transport_config = quinn::TransportConfig::default();
+        transport_config.max_idle_timeout(Some(std::time::Duration::from_secs(60).try_into().unwrap()));
+        client_config.transport_config(Arc::new(transport_config));
 
-        let stdin = child.stdin.take().ok_or_else(|| Error::connection("Failed to open stdin"))?;
-        let stdout = child.stdout.take().ok_or_else(|| Error::connection("Failed to open stdout"))?;
+        // Create endpoint
+        let mut endpoint = Endpoint::client("[::]:0".parse().unwrap())?;
+        endpoint.set_default_client_config(client_config);
 
-        conn.process = Some(child);
-        conn.reader = Some(BufReader::new(stdout));
-        conn.writer = Some(stdin);
+        // Resolve address
+        let addr: SocketAddr = format!("{}:{}", host, port).parse()
+            .map_err(|_| Error::connection("Invalid address"))?;
+
+        // Connect
+        let connection = endpoint
+            .connect(addr, host)?
+            .await
+            .map_err(|e| Error::connection(&format!("QUIC connection failed: {}", e)))?;
+
+        // Open bidirectional stream
+        let (send, recv) = connection
+            .open_bi()
+            .await
+            .map_err(|e| Error::connection(&format!("Failed to open stream: {}", e)))?;
+
+        let mut conn = Self {
+            connection,
+            send_stream: Mutex::new(BufWriter::new(send)),
+            recv_stream: Mutex::new(BufReader::new(recv)),
+            page_size,
+        };
 
         // Send HELLO
         let hello = serde_json::json!({
             "type": "HELLO",
-            "client_name": config.hello_name,
-            "client_ver": config.hello_ver,
-            "wanted_conformance": config.conformance,
+            "client_name": hello_name,
+            "client_ver": hello_ver,
+            "wanted_conformance": conformance,
         });
         conn.write_json(&hello).await?;
         conn.read_line().await?; // Discard HELLO response
@@ -109,32 +223,24 @@ impl Connection {
         Ok(conn)
     }
 
-    async fn write_json(&mut self, obj: &serde_json::Value) -> Result<()> {
-        if let Some(writer) = &mut self.writer {
-            let mut line = serde_json::to_string(obj)?;
-            line.push('\n');
-            writer.write_all(line.as_bytes()).await?;
-            writer.flush().await?;
-            Ok(())
-        } else {
-            Err(Error::connection("Writer not available"))
-        }
+    async fn write_json(&self, obj: &serde_json::Value) -> Result<()> {
+        let mut writer = self.send_stream.lock().await;
+        let mut line = serde_json::to_string(obj)?;
+        line.push('\n');
+        writer.write_all(line.as_bytes()).await?;
+        writer.flush().await?;
+        Ok(())
     }
 
-    async fn read_line(&mut self) -> Result<String> {
-        if let Some(reader) = &mut self.reader {
-            let mut line = String::new();
-            reader.read_line(&mut line).await?;
-            Ok(line.trim_end().to_string())
-        } else {
-            Err(Error::connection("Reader not available"))
-        }
+    async fn read_line(&self) -> Result<String> {
+        let mut reader = self.recv_stream.lock().await;
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        Ok(line.trim_end().to_string())
     }
 
     /// Execute a query
-    pub async fn query(&mut self, text: &str, params: Option<HashMap<String, serde_json::Value>>) -> Result<Page> {
-        let _lock = self.lock.lock().await;
-
+    pub async fn query(&self, text: &str, params: Option<HashMap<String, serde_json::Value>>) -> Result<Page> {
         let mut run_msg = serde_json::json!({"type": "RUN_GQL", "text": text});
         if let Some(p) = params {
             run_msg["params"] = serde_json::to_value(p)?;
@@ -164,7 +270,7 @@ impl Connection {
         self.write_json(&serde_json::json!({
             "type": "PULL",
             "request_id": 1,
-            "page_size": self.config.page_size,
+            "page_size": self.page_size,
         })).await?;
 
         let bindings_line = self.read_line().await?;
@@ -196,75 +302,33 @@ impl Connection {
     }
 
     /// Begin a transaction
-    pub async fn begin(&mut self) -> Result<()> {
-        let _lock = self.lock.lock().await;
+    pub async fn begin(&self) -> Result<()> {
         self.write_json(&serde_json::json!({"type": "BEGIN"})).await?;
         self.read_line().await?;
         Ok(())
     }
 
     /// Commit a transaction
-    pub async fn commit(&mut self) -> Result<()> {
-        let _lock = self.lock.lock().await;
+    pub async fn commit(&self) -> Result<()> {
         self.write_json(&serde_json::json!({"type": "COMMIT"})).await?;
         self.read_line().await?;
         Ok(())
     }
 
     /// Rollback a transaction
-    pub async fn rollback(&mut self) -> Result<()> {
-        let _lock = self.lock.lock().await;
+    pub async fn rollback(&self) -> Result<()> {
         self.write_json(&serde_json::json!({"type": "ROLLBACK"})).await?;
         self.read_line().await?;
         Ok(())
     }
-}
 
-impl Drop for Connection {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.process.take() {
-            let _ = child.start_kill();
-        }
+    /// Close the connection
+    pub async fn close(&self) -> Result<()> {
+        self.connection.close(0u32.into(), b"goodbye");
+        Ok(())
     }
 }
 
-fn parse_dsn(dsn: &str) -> Result<ClientConfig> {
-    let mut config = ClientConfig {
-        mode: "process".to_string(),
-        path: "./zig-out/bin/geode".to_string(),
-        addr: "127.0.0.1:8443".to_string(),
-        page_size: 1000,
-        hello_name: "geode-rust".to_string(),
-        hello_ver: "0.1".to_string(),
-        conformance: "min".to_string(),
-    };
-
-    if dsn.is_empty() {
-        return Ok(config);
-    }
-
-    if let Some(rest) = dsn.strip_prefix("process:") {
-        let parts: Vec<&str> = rest.splitn(2, '?').collect();
-        config.path = parts[0].to_string();
-        if parts.len() > 1 {
-            // Parse query params
-            for pair in parts[1].split('&') {
-                let kv: Vec<&str> = pair.splitn(2, '=').collect();
-                if kv.len() == 2 {
-                    match kv[0] {
-                        "page_size" => config.page_size = kv[1].parse().unwrap_or(1000),
-                        _ => {}
-                    }
-                }
-            }
-        }
-    } else if dsn.starts_with("quic:") {
-        config.mode = "quic".to_string();
-        // QUIC parsing would go here
-    }
-
-    Ok(config)
-}
 
 fn parse_rows(raw_rows: &[serde_json::Value], type_map: &HashMap<String, String>) -> Result<Vec<HashMap<String, Value>>> {
     let mut rows = Vec::new();
