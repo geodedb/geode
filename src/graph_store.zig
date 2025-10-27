@@ -10,11 +10,24 @@ const fle_integration = @import("fle_integration.zig");
 /// Get the persistence file path, respecting GEODE_DATA_DIR environment variable
 /// Returns an allocated path that must be freed by the caller
 fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
+    const builtin = @import("builtin");
+
     // Check for GEODE_DATA_DIR environment variable
     const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| {
-        // If not set or error, use default /tmp path
+        // If not set or error, use platform-specific temp directory
         if (err == error.EnvironmentVariableNotFound) {
-            return try allocator.dupe(u8, "/tmp/geode_graph_store.dat");
+            // On Windows, use TEMP directory; on Unix, use /tmp
+            if (builtin.os.tag == .windows) {
+                const temp = std.process.getEnvVarOwned(allocator, "TEMP") catch
+                    std.process.getEnvVarOwned(allocator, "TMP") catch {
+                    // Fallback to current directory if no temp env var
+                    return try allocator.dupe(u8, "geode_graph_store.dat");
+                };
+                defer allocator.free(temp);
+                return try std.fmt.allocPrint(allocator, "{s}\\geode_graph_store.dat", .{temp});
+            } else {
+                return try allocator.dupe(u8, "/tmp/geode_graph_store.dat");
+            }
         }
         return err;
     };
@@ -26,7 +39,9 @@ fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
         std.log.warn("Failed to create graph store directory '{s}' (storage may fail): {any}", .{ data_dir, err });
     };
 
-    return try std.fmt.allocPrint(allocator, "{s}/graph_store.dat", .{data_dir});
+    // Use appropriate path separator for platform
+    const sep = if (builtin.os.tag == .windows) "\\" else "/";
+    return try std.fmt.allocPrint(allocator, "{s}{s}graph_store.dat", .{ data_dir, sep });
 }
 
 pub const Node = struct {
