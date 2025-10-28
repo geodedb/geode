@@ -64,6 +64,7 @@ const COMMANDS = [_]CommandEntry{
     .{ .name = "query", .handler = cmdQuery, .description = "Execute a GQL query" },
     .{ .name = "shell", .handler = cmdShell, .description = "Start interactive shell (REPL)" },
     .{ .name = "stdio", .handler = cmdStdio, .description = "JSON protocol for process mode (Go client compatibility)" },
+    .{ .name = "lsp", .handler = cmdLsp, .description = "Start Language Server Protocol server" },
     .{ .name = "backup", .handler = cmdBackup, .description = "Create database backup" },
     .{ .name = "restore", .handler = cmdRestore, .description = "Restore database from backup" },
     .{ .name = "migrate", .handler = cmdMigrate, .description = "Database migration commands" },
@@ -453,6 +454,7 @@ fn printMainUsage() void {
         "  serve               Start the database server\n" ++
         "  shell               Interactive GQL shell\n" ++
         "  query               Execute a GQL query\n" ++
+        "  lsp                 Start Language Server Protocol server\n" ++
         "  backup              Create database backup\n" ++
         "  restore             Restore database from backup\n" ++
         "  migrate             Run database migrations\n" ++
@@ -1513,6 +1515,45 @@ fn printRevokeUsage() void {
 // Subcommand implementations
 
 // JSON protocol handler for Go client compatibility (process/stdio mode)
+// CANARY: REQ=REQ-LSP-001; FEATURE="Language Server Protocol"; ASPECT=LSPServer; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-28
+fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Check for help flag
+    var i: usize = start_idx + 1;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
+            printLspUsage();
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
+    }
+
+    // Import and start the LSP server
+    const lsp = @import("lsp/server.zig");
+    var server = lsp.Server.init(allocator);
+    defer server.deinit();
+
+    try server.run();
+    std.process.exit(@intFromEnum(ExitCode.success));
+}
+
+fn printLspUsage() void {
+    std.debug.print("geode lsp - Language Server Protocol server for GQL/Geode\n\n", .{});
+    std.debug.print("Usage: geode lsp [options]\n\n", .{});
+    std.debug.print("Description:\n", .{});
+    std.debug.print("  Starts a Language Server Protocol (LSP) server for GQL files.\n", .{});
+    std.debug.print("  The server communicates via JSON-RPC over stdin/stdout and provides:\n", .{});
+    std.debug.print("    - Syntax error diagnostics\n", .{});
+    std.debug.print("    - Hover documentation for GQL keywords, functions, and types\n", .{});
+    std.debug.print("    - Code completion for GQL syntax\n", .{});
+    std.debug.print("    - Go-to-definition support\n", .{});
+    std.debug.print("    - Document formatting\n\n", .{});
+    std.debug.print("Options:\n", .{});
+    std.debug.print("  -h, --help         Show this help message\n\n", .{});
+    std.debug.print("Editor Integration:\n", .{});
+    std.debug.print("  See docs/LSP_IMPLEMENTATION.md for setup details\n\n", .{});
+    std.debug.print("Examples:\n", .{});
+    std.debug.print("  geode lsp\n\n", .{});
+}
+
 fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = argv;
     _ = start_idx;

@@ -1,0 +1,131 @@
+// CANARY: LSP_TRANSPORT_IMPLEMENTATION
+// LSP transport layer using Content-Length headers over stdio
+// Spec: specs/lsp/language-server-protocol/_specifications/base/0.9/specification.md
+
+const std = @import("std");
+const builtin = @import("builtin");
+const Allocator = std.mem.Allocator;
+
+// Import Windows-specific types when needed
+const windows = if (builtin.os.tag == .windows) std.os.windows else struct {};
+
+pub const TransportError = error{
+    InvalidHeader,
+    MissingContentLength,
+    InvalidContentLength,
+    ReadFailed,
+    WriteFailed,
+};
+
+// Cross-platform file handle helpers (copied from main.zig pattern)
+fn getStdinHandle() std.fs.File.Handle {
+    if (builtin.os.tag == .windows) {
+        return windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch unreachable;
+    } else {
+        return std.posix.STDIN_FILENO;
+    }
+}
+
+fn getStdoutHandle() std.fs.File.Handle {
+    if (builtin.os.tag == .windows) {
+        return windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch unreachable;
+    } else {
+        return std.posix.STDOUT_FILENO;
+    }
+}
+
+fn getStderrHandle() std.fs.File.Handle {
+    if (builtin.os.tag == .windows) {
+        return windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch unreachable;
+    } else {
+        return 2;
+    }
+}
+
+pub const Transport = struct {
+    allocator: Allocator,
+    stdin: std.fs.File,
+    stdout: std.fs.File,
+    stderr: std.fs.File,
+
+    pub fn init(allocator: Allocator) Transport {
+        return .{
+            .allocator = allocator,
+            .stdin = std.fs.File{ .handle = getStdinHandle() },
+            .stdout = std.fs.File{ .handle = getStdoutHandle() },
+            .stderr = std.fs.File{ .handle = getStderrHandle() },
+        };
+    }
+
+    pub fn readMessage(self: *Transport) ![]const u8 {
+        var content_length: ?usize = null;
+        var buf: [1024]u8 = undefined;
+
+        // Read headers
+        while (true) {
+            const line = try self.readLine(&buf);
+            if (line.len == 0) break; // Empty line separates headers from content
+
+            if (std.mem.startsWith(u8, line, "Content-Length: ")) {
+                const length_str = line["Content-Length: ".len..];
+                content_length = std.fmt.parseInt(usize, length_str, 10) catch {
+                    return TransportError.InvalidContentLength;
+                };
+            }
+            // Ignore Content-Type and other headers
+        }
+
+        if (content_length == null) {
+            return TransportError.MissingContentLength;
+        }
+
+        // Read content
+        const content = try self.allocator.alloc(u8, content_length.?);
+        errdefer self.allocator.free(content);
+
+        var total_read: usize = 0;
+        while (total_read < content_length.?) {
+            const n = try self.stdin.read(content[total_read..]);
+            if (n == 0) {
+                self.allocator.free(content);
+                return TransportError.ReadFailed;
+            }
+            total_read += n;
+        }
+
+        return content;
+    }
+
+    pub fn writeMessage(self: *Transport, message: []const u8) !void {
+        // Write headers
+        const header = try std.fmt.allocPrint(
+            self.allocator,
+            "Content-Length: {d}\r\n\r\n",
+            .{message.len},
+        );
+        defer self.allocator.free(header);
+
+        try self.stdout.writeAll(header);
+        try self.stdout.writeAll(message);
+    }
+
+    pub fn logMessage(self: *Transport, level: []const u8, message: []const u8) void {
+        const msg = std.fmt.allocPrint(self.allocator, "[{s}] {s}\n", .{ level, message }) catch return;
+        defer self.allocator.free(msg);
+        _ = self.stderr.writeAll(msg) catch {};
+    }
+
+    fn readLine(self: *Transport, buf: []u8) ![]const u8 {
+        var i: usize = 0;
+        while (i < buf.len) : (i += 1) {
+            const n = try self.stdin.read(buf[i .. i + 1]);
+            if (n == 0) return buf[0..i];
+            if (buf[i] == '\n') {
+                // Remove \r\n or \n
+                const end = if (i > 0 and buf[i - 1] == '\r') i - 1 else i;
+                return buf[0..end];
+            }
+        }
+        return buf[0..i];
+    }
+};

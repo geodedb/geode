@@ -10,3 +10,6 @@
 [submodule "grammar/gql-grammar"]
 	path = grammar/gql-grammar
 	url = git@github.com:TuGraph-family/gql-grammar.git
+[submodule "specs/lsp/language-server-protocol"]
+	path = specs/lsp/language-server-protocol
+	url = git@github.com:microsoft/language-server-protocol.git
