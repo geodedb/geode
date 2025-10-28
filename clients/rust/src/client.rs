@@ -212,16 +212,22 @@ impl Connection {
             .next()
             .ok_or_else(|| Error::connection(&format!("No addresses found for {}", addr_str)))?;
 
-        // Connect
-        let connection = endpoint
-            .connect(addr, host)?
+        // Connect with timeout
+        let connection = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            endpoint.connect(addr, host)?
+        )
             .await
+            .map_err(|_| Error::connection("Connection timeout"))?
             .map_err(|e| Error::connection(&format!("QUIC connection failed: {}", e)))?;
 
-        // Open bidirectional stream
-        let (send, recv) = connection
-            .open_bi()
+        // Open bidirectional stream with timeout
+        let (send, recv) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            connection.open_bi()
+        )
             .await
+            .map_err(|_| Error::connection("Stream open timeout"))?
             .map_err(|e| Error::connection(&format!("Failed to open stream: {}", e)))?;
 
         let mut conn = Self {
@@ -239,7 +245,15 @@ impl Connection {
             "wanted_conformance": conformance,
         });
         conn.write_json(&hello).await?;
-        conn.read_line().await?; // Discard HELLO response
+
+        // Read HELLO response with timeout
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            conn.read_line()
+        )
+            .await
+            .map_err(|_| Error::connection("HELLO response timeout"))?
+            .map_err(|e| Error::connection(&format!("Failed to read HELLO response: {}", e)))?;
 
         Ok(conn)
     }

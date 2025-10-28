@@ -247,6 +247,9 @@ class Connection:
         except asyncio.TimeoutError:
             print("[DEBUG] Context manager __aenter__() timed out!")
             raise ConnectionError("Connection handshake timed out")
+        except Exception as e:
+            print(f"[DEBUG] Connection failed: {e}")
+            raise ConnectionError(f"Failed to establish connection: {e}")
 
         # Create bidirectional stream
         self._stream_id, self._reader_queue = await self._protocol.create_bidirectional_stream()
@@ -265,11 +268,18 @@ class Connection:
         await asyncio.sleep(0.01)
         print("[DEBUG] Waiting for HELLO response...")
 
-        # Read HELLO response
-        response = await self._read_json()
-        print(f"[DEBUG] Received HELLO response: {response}")
-        if not response:
-            raise ConnectionError("No HELLO response from server")
+        # Read HELLO response with timeout
+        try:
+            response = await asyncio.wait_for(self._read_json(), timeout=5.0)
+            print(f"[DEBUG] Received HELLO response: {response}")
+            if not response:
+                raise ConnectionError("No HELLO response from server")
+        except asyncio.TimeoutError:
+            print("[DEBUG] HELLO response timed out!")
+            raise ConnectionError("Timeout waiting for HELLO response")
+        except Exception as e:
+            print(f"[DEBUG] Error reading HELLO response: {e}")
+            raise ConnectionError(f"Failed to read HELLO response: {e}")
 
         self._connected = True
 

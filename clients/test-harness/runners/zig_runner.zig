@@ -247,7 +247,15 @@ pub fn main() !void {
         .results = results.items,
     };
 
-    try printOutput(output, json_output);
+    if (json_output) {
+        // Use std.json.stringify with getStdOut helper for Zig 0.15
+        const stdout_file = getStdOut();
+        const stdout_writer = stdout_file.writer();
+        try std.json.stringify(output, .{ .whitespace = .indent_2 }, stdout_writer);
+        try stdout_writer.writeByte('\n');
+    } else {
+        try printOutput(output, json_output);
+    }
 
     if (output.summary.failed + output.summary.errors > 0) {
         std.process.exit(1);
