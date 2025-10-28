@@ -10,44 +10,44 @@ const parseGql = geode.parseGql;
 
 // GQL Keywords for completion
 const GQL_KEYWORDS = [_][]const u8{
-    "MATCH",     "CREATE",    "DELETE",    "MERGE",     "SET",
-    "REMOVE",    "RETURN",    "WHERE",     "ORDER",     "BY",
-    "LIMIT",     "OFFSET",    "SKIP",      "WITH",      "UNWIND",
-    "CALL",      "YIELD",     "UNION",     "ALL",       "OPTIONAL",
-    "AS",        "DISTINCT",  "AND",       "OR",        "NOT",
-    "XOR",       "IN",        "IS",        "NULL",      "TRUE",
-    "FALSE",     "CASE",      "WHEN",      "THEN",      "ELSE",
-    "END",       "ASC",       "DESC",      "GROUP",     "HAVING",
-    "INTERSECT", "EXCEPT",    "INSERT",    "UPDATE",    "DROP",
-    "USE",       "GRAPH",     "CATALOG",   "SCHEMA",    "TABLE",
-    "VIEW",      "INDEX",     "CONSTRAINT","ON",        "EXISTS",
-    "IF",        "NOT",       "SHOW",      "DESCRIBE",  "EXPLAIN",
+    "MATCH",     "CREATE",   "DELETE",     "MERGE",    "SET",
+    "REMOVE",    "RETURN",   "WHERE",      "ORDER",    "BY",
+    "LIMIT",     "OFFSET",   "SKIP",       "WITH",     "UNWIND",
+    "CALL",      "YIELD",    "UNION",      "ALL",      "OPTIONAL",
+    "AS",        "DISTINCT", "AND",        "OR",       "NOT",
+    "XOR",       "IN",       "IS",         "NULL",     "TRUE",
+    "FALSE",     "CASE",     "WHEN",       "THEN",     "ELSE",
+    "END",       "ASC",      "DESC",       "GROUP",    "HAVING",
+    "INTERSECT", "EXCEPT",   "INSERT",     "UPDATE",   "DROP",
+    "USE",       "GRAPH",    "CATALOG",    "SCHEMA",   "TABLE",
+    "VIEW",      "INDEX",    "CONSTRAINT", "ON",       "EXISTS",
+    "IF",        "NOT",      "SHOW",       "DESCRIBE", "EXPLAIN",
 };
 
 // GQL Functions for completion
 const GQL_FUNCTIONS = [_][]const u8{
-    "count",     "sum",       "avg",       "min",       "max",
-    "collect",   "size",      "length",    "type",      "id",
-    "labels",    "properties","keys",      "nodes",     "relationships",
-    "abs",       "ceil",      "floor",     "round",     "sqrt",
-    "rand",      "sign",      "exp",       "log",       "log10",
-    "sin",       "cos",       "tan",       "asin",      "acos",
-    "atan",      "atan2",     "pi",        "e",         "degrees",
-    "radians",   "toInteger", "toFloat",   "toString",  "toBoolean",
-    "head",      "last",      "tail",      "reverse",   "range",
-    "split",     "substring", "replace",   "toLower",   "toUpper",
-    "trim",      "lTrim",     "rTrim",     "left",      "right",
-    "startsWith","endsWith",  "contains",  "timestamp", "date",
-    "time",      "datetime",  "duration",  "coalesce",  "nullIf",
-    "distance",  "similarity","cosine",    "euclidean", "manhattan",
+    "count",      "sum",        "avg",      "min",       "max",
+    "collect",    "size",       "length",   "type",      "id",
+    "labels",     "properties", "keys",     "nodes",     "relationships",
+    "abs",        "ceil",       "floor",    "round",     "sqrt",
+    "rand",       "sign",       "exp",      "log",       "log10",
+    "sin",        "cos",        "tan",      "asin",      "acos",
+    "atan",       "atan2",      "pi",       "e",         "degrees",
+    "radians",    "toInteger",  "toFloat",  "toString",  "toBoolean",
+    "head",       "last",       "tail",     "reverse",   "range",
+    "split",      "substring",  "replace",  "toLower",   "toUpper",
+    "trim",       "lTrim",      "rTrim",    "left",      "right",
+    "startsWith", "endsWith",   "contains", "timestamp", "date",
+    "time",       "datetime",   "duration", "coalesce",  "nullIf",
+    "distance",   "similarity", "cosine",   "euclidean", "manhattan",
 };
 
 // GQL Types for completion
 const GQL_TYPES = [_][]const u8{
-    "INTEGER",   "FLOAT",     "STRING",    "BOOLEAN",   "DATE",
-    "TIME",      "DATETIME",  "DURATION",  "POINT",     "VECTOR",
-    "UUID",      "BYTES",     "JSON",      "LIST",      "MAP",
-    "NODE",      "RELATIONSHIP", "PATH",   "GRAPH",     "ANY",
+    "INTEGER", "FLOAT",        "STRING",   "BOOLEAN", "DATE",
+    "TIME",    "DATETIME",     "DURATION", "POINT",   "VECTOR",
+    "UUID",    "BYTES",        "JSON",     "LIST",    "MAP",
+    "NODE",    "RELATIONSHIP", "PATH",     "GRAPH",   "ANY",
 };
 
 pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protocol.Diagnostic {
