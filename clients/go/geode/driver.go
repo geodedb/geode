@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
@@ -162,7 +163,23 @@ func Wtf8Lossy(b []byte) string { // treat invalid sequences with replacement
 
 func newConn(cfg *dsnConfig) (*conn, error) {
 	if cfg.Mode == "quic" {
+		// Try to load test harness CA certificate
 		tlsConf := &tls.Config{ InsecureSkipVerify: true, NextProtos: []string{"geode/1"}, MinVersion: tls.VersionTLS13 }
+
+		// Look for test harness CA
+		caPath := filepath.Join(filepath.Dir(filepath.Dir(os.Args[0])), "test-harness", "certs", "ca.crt")
+		if _, err := os.Stat(caPath); err == nil {
+			caCert, err := os.ReadFile(caPath)
+			if err == nil {
+				caCertPool := x509.NewCertPool()
+				if caCertPool.AppendCertsFromPEM(caCert) {
+					fmt.Fprintf(os.Stderr, "[DEBUG] Loaded test harness CA from: %s\n", caPath)
+					tlsConf.RootCAs = caCertPool
+					tlsConf.InsecureSkipVerify = false
+				}
+			}
+		}
+
 		qConn, err := quic.DialAddr(context.Background(), cfg.Addr, tlsConf, nil)
 		if err != nil { return nil, err }
 		qStream, err := qConn.OpenStreamSync(context.Background())

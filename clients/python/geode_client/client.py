@@ -6,6 +6,7 @@ This client uses QUIC+TLS for all connections to Geode server.
 
 import asyncio
 import json
+import os
 import ssl
 from dataclasses import dataclass
 from pathlib import Path
@@ -211,18 +212,24 @@ class Connection:
         configuration.server_name = self.server_name
         print(f"[DEBUG] Server name: {self.server_name}")
 
-        # Configure TLS
-        if self.skip_verify:
-            print("[DEBUG] Skipping TLS verification")
-            # Even when skipping verification, load the server cert to complete handshake
-            try:
-                configuration.load_verify_locations("./data/server.crt")
-                print("[DEBUG] Loaded server cert for handshake")
-            except Exception as e:
-                print(f"[DEBUG] Could not load server cert: {e}")
+        # Configure TLS - try test harness CA first, then custom CA, then skip verification
+        ca_cert_path = self.ca_cert
+
+        # If no custom CA specified, try the test harness CA
+        if not ca_cert_path:
+            test_harness_ca = os.path.join(os.path.dirname(__file__), '../../test-harness/certs/ca.crt')
+            if os.path.exists(test_harness_ca):
+                ca_cert_path = test_harness_ca
+                print(f"[DEBUG] Using test harness CA: {test_harness_ca}")
+
+        if ca_cert_path and os.path.exists(ca_cert_path):
+            print(f"[DEBUG] Loading CA certificate: {ca_cert_path}")
+            configuration.load_verify_locations(ca_cert_path)
+        elif self.skip_verify:
+            print("[DEBUG] Skipping TLS verification (no CA certificate found)")
             configuration.verify_mode = ssl.CERT_NONE
-        elif self.ca_cert:
-            configuration.load_verify_locations(self.ca_cert)
+        else:
+            print("[DEBUG] WARNING: No CA certificate found and verify_ssl=True")
 
         if self.client_cert and self.client_key:
             configuration.load_cert_chain(self.client_cert, self.client_key)

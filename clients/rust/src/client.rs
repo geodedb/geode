@@ -176,7 +176,31 @@ impl Connection {
                 .with_no_client_auth();
             config
         } else {
-            let root_store = RootCertStore::empty();
+            // Try to load test harness CA certificate
+            let mut root_store = RootCertStore::empty();
+
+            let test_ca_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../test-harness/certs/ca.crt");
+
+            if test_ca_path.exists() {
+                eprintln!("[DEBUG] Loading test harness CA from: {:?}", test_ca_path);
+                let ca_file = std::fs::File::open(&test_ca_path)
+                    .map_err(|e| Error::connection(&format!("Failed to open CA file: {}", e)))?;
+                let mut ca_reader = std::io::BufReader::new(ca_file);
+
+                let certs = rustls_pemfile::certs(&mut ca_reader)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| Error::connection(&format!("Failed to parse CA certs: {}", e)))?;
+
+                for cert in certs {
+                    root_store.add(cert)
+                        .map_err(|e| Error::connection(&format!("Failed to add CA cert: {}", e)))?;
+                }
+                eprintln!("[DEBUG] Successfully loaded CA certificate");
+            } else {
+                eprintln!("[DEBUG] No test harness CA found at {:?}, using empty root store", test_ca_path);
+            }
+
             let mut config = RustlsClientConfig::builder()
                 .with_safe_default_cipher_suites()
                 .with_safe_default_kx_groups()
