@@ -67,7 +67,7 @@ pub const Parser = struct {
     }
 
     fn parseValue(self: *Parser, indent_level: usize) Error!Value {
-        self.skipWhitespaceAndComments();
+        // Note: caller should have already positioned us at the content (after indentation)
 
         if (self.pos >= self.input.len) {
             return Value{ .null_value = {} };
@@ -98,29 +98,59 @@ pub const Parser = struct {
             list.deinit(self.allocator);
         }
 
+        var is_first = true;
+
         while (self.pos < self.input.len) {
-            self.skipWhitespaceAndComments();
+            // Skip blank lines and comments (but not on first iteration if we're already positioned)
+            if (!is_first) {
+                self.skipWhitespaceAndComments();
+                if (self.pos >= self.input.len) break;
 
-            if (self.pos >= self.input.len) break;
+                // Check indentation before skipping it
+                const current_indent = self.getCurrentIndent();
+                if (current_indent < indent_level) break;
 
-            const current_indent = self.getCurrentIndent();
-            if (current_indent < indent_level) break;
-            if (current_indent > indent_level) {
-                return Error.InvalidIndentation;
+                // Skip to the list item position
+                self.skipIndent(indent_level);
             }
+            is_first = false;
 
-            if (self.input[self.pos] != '-') break;
+            if (self.pos >= self.input.len or self.input[self.pos] != '-') break;
 
-            // Skip '-' and space
+            // Skip '-' and following space, remembering where content starts
             self.pos += 1;
+            var content_col = indent_level + 1; // After the '-'
             if (self.pos < self.input.len and self.input[self.pos] == ' ') {
                 self.pos += 1;
+                content_col += 1; // After the space
             }
 
-            const item = try self.parseValue(indent_level + 2);
-            try list.append(self.allocator, item);
+            // Now parse the item value
+            // Check if value is on the same line (inline) or next line (nested)
+            const is_multiline = self.pos >= self.input.len or self.input[self.pos] == '\n';
+            const item = if (is_multiline) blk: {
+                // Value is on next line(s) - nested structure
+                self.skipToNextLine();
+                self.skipWhitespaceAndComments();
+                if (self.pos >= self.input.len) {
+                    break :blk Value{ .null_value = {} };
+                }
+                // Detect the actual indentation of the nested content
+                const nested_indent = self.getCurrentIndent();
+                if (nested_indent <= indent_level) {
+                    break :blk Value{ .null_value = {} };
+                }
+                // Skip to nested content and parse it
+                self.skipIndent(nested_indent);
+                break :blk try self.parseValue(nested_indent);
+            } else blk: {
+                // Value is inline on same line - parse it at the column where it starts
+                // This allows maps/lists to consume lines indented relative to this position
+                break :blk try self.parseValue(content_col);
+            };
 
-            self.skipToNextLine();
+            try list.append(self.allocator, item);
+            // Note: Don't skip to next line here - let next iteration handle positioning
         }
 
         return Value{ .list = list };
@@ -137,16 +167,24 @@ pub const Parser = struct {
             map.deinit();
         }
 
+        var is_first = true;
+
         while (self.pos < self.input.len) {
-            self.skipWhitespaceAndComments();
+            // Skip blank lines and comments (but not on first iteration if we're already positioned)
+            if (!is_first) {
+                self.skipWhitespaceAndComments();
+                if (self.pos >= self.input.len) break;
+
+                // Check indentation before skipping
+                const current_indent = self.getCurrentIndent();
+                if (current_indent < indent_level) break;
+
+                // Skip to the expected indentation level
+                self.skipIndent(indent_level);
+            }
+            is_first = false;
 
             if (self.pos >= self.input.len) break;
-
-            const current_indent = self.getCurrentIndent();
-            if (current_indent < indent_level) break;
-            if (current_indent > indent_level) {
-                return Error.InvalidIndentation;
-            }
 
             // Check if this is a list item (breaks map parsing)
             if (self.input[self.pos] == '-') break;
@@ -163,23 +201,33 @@ pub const Parser = struct {
                 return Error.UnexpectedToken;
             }
             self.pos += 1;
-
             self.skipWhitespace();
 
-            // Parse value
-            const value = if (self.pos >= self.input.len or self.input[self.pos] == '\n')
-                // Multi-line value
-                blk: {
-                    self.skipToNextLine();
-                    break :blk try self.parseValue(indent_level + 2);
+            // Parse value - check if inline or on next line(s)
+            const is_multiline = self.pos >= self.input.len or self.input[self.pos] == '\n';
+            const value = if (is_multiline) blk: {
+                // Value is on next line(s) - nested structure
+                self.skipToNextLine();
+                self.skipWhitespaceAndComments();
+                if (self.pos >= self.input.len) {
+                    break :blk Value{ .null_value = {} };
                 }
-            else
-                // Inline value
-                try self.parseScalar();
+                // Detect the actual indentation of nested content
+                const nested_indent = self.getCurrentIndent();
+                if (nested_indent <= indent_level) {
+                    // Content at same or less indentation means null/empty
+                    break :blk Value{ .null_value = {} };
+                }
+                // Skip to nested content and parse it
+                self.skipIndent(nested_indent);
+                break :blk try self.parseValue(nested_indent);
+            } else blk: {
+                // Value is inline - parse it directly
+                break :blk try self.parseScalar();
+            };
 
             try map.put(key, value);
-
-            self.skipToNextLine();
+            // Note: Don't skip to next line here - let next iteration handle positioning
         }
 
         return Value{ .map = map };
@@ -282,7 +330,10 @@ pub const Parser = struct {
             const current_indent = self.getCurrentIndent();
             if (current_indent < base_indent) break;
 
-            // Get the line
+            // Skip the base indentation
+            self.skipIndent(base_indent);
+
+            // Get the line (after indentation)
             const line_start = self.pos;
             while (self.pos < self.input.len and self.input[self.pos] != '\n') {
                 self.pos += 1;
@@ -356,6 +407,21 @@ pub const Parser = struct {
         return indent;
     }
 
+    fn skipIndent(self: *Parser, indent_level: usize) void {
+        var skipped: usize = 0;
+        while (self.pos < self.input.len and skipped < indent_level) {
+            if (self.input[self.pos] == ' ') {
+                skipped += 1;
+                self.pos += 1;
+            } else if (self.input[self.pos] == '\t') {
+                skipped += 4;
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
     fn skipWhitespace(self: *Parser) void {
         while (self.pos < self.input.len) {
             const c = self.input[self.pos];
@@ -367,18 +433,18 @@ pub const Parser = struct {
     fn skipWhitespaceAndComments(self: *Parser) void {
         while (self.pos < self.input.len) {
             const c = self.input[self.pos];
-            if (c == ' ' or c == '\t') {
-                self.pos += 1;
-            } else if (c == '\n' or c == '\r') {
+            // Skip newlines and comments, but stop at the indentation of the next line
+            if (c == '\n' or c == '\r') {
                 self.pos += 1;
                 self.line += 1;
                 self.col = 1;
             } else if (c == '#') {
-                // Skip comment
+                // Skip comment to end of line
                 while (self.pos < self.input.len and self.input[self.pos] != '\n') {
                     self.pos += 1;
                 }
             } else {
+                // Don't skip horizontal whitespace here - let it be handled by indentation logic
                 break;
             }
         }
@@ -402,6 +468,143 @@ pub const Parser = struct {
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) Error!Value {
     var parser = Parser.init(allocator, input);
     return try parser.parse();
+}
+
+/// Stringify a Value into YAML format
+pub fn stringify(allocator: std.mem.Allocator, value: Value) Error![]const u8 {
+    var buffer = try std.ArrayList(u8).initCapacity(allocator, 256);
+    errdefer buffer.deinit(allocator);
+
+    try stringifyValue(allocator, value, &buffer, 0);
+
+    return buffer.toOwnedSlice(allocator);
+}
+
+fn stringifyValue(allocator: std.mem.Allocator, value: Value, buffer: *std.ArrayList(u8), indent_level: usize) Error!void {
+    switch (value) {
+        .null_value => {
+            try buffer.appendSlice(allocator, "null");
+        },
+        .bool_value => |b| {
+            try buffer.appendSlice(allocator, if (b) "true" else "false");
+        },
+        .int_value => |i| {
+            var buf: [32]u8 = undefined;
+            const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch unreachable;
+            try buffer.appendSlice(allocator, str);
+        },
+        .float_value => |f| {
+            var buf: [64]u8 = undefined;
+            const str = std.fmt.bufPrint(&buf, "{d}", .{f}) catch unreachable;
+            try buffer.appendSlice(allocator, str);
+        },
+        .string_value => |s| {
+            // Check if string needs quoting
+            if (needsQuoting(s)) {
+                try buffer.append(allocator, '"');
+                for (s) |c| {
+                    if (c == '"' or c == '\\') {
+                        try buffer.append(allocator, '\\');
+                    }
+                    try buffer.append(allocator, c);
+                }
+                try buffer.append(allocator, '"');
+            } else {
+                try buffer.appendSlice(allocator, s);
+            }
+        },
+        .list => |list| {
+            if (list.items.len == 0) {
+                try buffer.appendSlice(allocator, "[]");
+                return;
+            }
+
+            for (list.items, 0..) |item, i| {
+                if (i > 0) {
+                    try buffer.append(allocator, '\n');
+                }
+                try addIndent(allocator, buffer, indent_level);
+                try buffer.appendSlice(allocator, "- ");
+                try stringifyValue(allocator, item, buffer, indent_level + 1);
+            }
+        },
+        .map => |map| {
+            if (map.count() == 0) {
+                try buffer.appendSlice(allocator, "{}");
+                return;
+            }
+
+            var iter = map.iterator();
+            var first = true;
+            while (iter.next()) |entry| {
+                if (!first) {
+                    try buffer.append(allocator, '\n');
+                } else {
+                    first = false;
+                }
+
+                try addIndent(allocator, buffer, indent_level);
+                try buffer.appendSlice(allocator, entry.key_ptr.*);
+                try buffer.appendSlice(allocator, ": ");
+
+                // Check if value is complex (map or list)
+                switch (entry.value_ptr.*) {
+                    .map, .list => {
+                        if (entry.value_ptr.* == .map and entry.value_ptr.map.count() == 0) {
+                            try buffer.appendSlice(allocator, "{}");
+                        } else if (entry.value_ptr.* == .list and entry.value_ptr.list.items.len == 0) {
+                            try buffer.appendSlice(allocator, "[]");
+                        } else {
+                            try buffer.append(allocator, '\n');
+                            try addIndent(allocator, buffer, indent_level + 1);
+                            try stringifyValue(allocator, entry.value_ptr.*, buffer, indent_level + 1);
+                        }
+                    },
+                    else => try stringifyValue(allocator, entry.value_ptr.*, buffer, indent_level),
+                }
+            }
+        },
+    }
+}
+
+fn addIndent(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), indent_level: usize) Error!void {
+    var i: usize = 0;
+    while (i < indent_level * 2) : (i += 1) {
+        try buffer.append(allocator, ' ');
+    }
+}
+
+fn needsQuoting(s: []const u8) bool {
+    if (s.len == 0) return true;
+
+    // Check for special YAML values
+    if (std.mem.eql(u8, s, "true") or
+        std.mem.eql(u8, s, "false") or
+        std.mem.eql(u8, s, "null") or
+        std.mem.eql(u8, s, "~"))
+    {
+        return true;
+    }
+
+    // Check for characters that need quoting
+    for (s) |c| {
+        if (c == ':' or c == '#' or c == '[' or c == ']' or
+            c == '{' or c == '}' or c == ',' or c == '&' or
+            c == '*' or c == '!' or c == '|' or c == '>' or
+            c == '\'' or c == '"' or c == '%' or c == '@' or
+            c == '`' or c == '\n' or c == '\r')
+        {
+            return true;
+        }
+    }
+
+    // Check if starts with special characters
+    const first = s[0];
+    if (first == '-' or first == '?' or first == ' ' or first == '\t') {
+        return true;
+    }
+
+    return false;
 }
 
 // Tests
