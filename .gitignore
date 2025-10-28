@@ -105,3 +105,4 @@ clients/test-harness/.pytest_cache/
 # Rust test runner artifacts
 clients/test-harness/runners/rust_runner/target/
 clients/test-harness/runners/rust_runner/Cargo.lock
+clients/test-harness/runners/zig_runner

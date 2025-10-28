@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const json = std.json;
 
 // Helper functions to get stdout/stderr in a cross-platform way
 fn getStdOut() std.fs.File {
@@ -163,18 +162,25 @@ pub fn main() !void {
         .results = results[0..],
     };
 
+    // NOTE: JSON output temporarily disabled due to Zig API changes
+    // The test harness will handle text output for now
+    // TODO: Re-implement JSON output using the new Zig 0.15 API
     if (json_output) {
-        const json_string = try std.json.stringifyAlloc(allocator, output, .{ .whitespace = .indent_2 });
-        defer allocator.free(json_string);
+        std.debug.print("Warning: JSON output format not yet supported in Zig runner\n", .{});
+    }
 
-        const stdout_file = getStdOut();
-        try stdout_file.writeAll(json_string);
-        try stdout_file.writeAll("\n");
-    } else {
-        std.debug.print("Tests: {d}\n", .{output.summary.total});
-        std.debug.print("Passed: {d}\n", .{output.summary.passed});
-        std.debug.print("Failed: {d}\n", .{output.summary.failed});
-        std.debug.print("Errors: {d}\n", .{output.summary.errors});
+    std.debug.print("Tests: {d}\n", .{output.summary.total});
+    std.debug.print("Passed: {d}\n", .{output.summary.passed});
+    std.debug.print("Failed: {d}\n", .{output.summary.failed});
+    std.debug.print("Errors: {d}\n", .{output.summary.errors});
+
+    if (output.summary.errors > 0 or output.summary.failed > 0) {
+        std.debug.print("\nErrors/Failures:\n", .{});
+        for (output.results) |result| {
+            if (result.@"error") |err| {
+                std.debug.print("  {s}: {s}\n", .{ result.test_name, err });
+            }
+        }
     }
 
     if (output.summary.failed + output.summary.errors > 0) {
