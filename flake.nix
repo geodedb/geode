@@ -229,32 +229,38 @@
                   openssl
                   zlib
                   libuv
-                  
+
+                  # Rust toolchain for client tests
+                  rustc
+                  cargo
+                  rustfmt
+                  clippy
+
                   # Debugging and analysis
                   gdb
                   valgrind
                   strace
-                  
+
                   # Network tools
                   tcpdump
                   wireshark-cli
                   netcat-gnu
-                  
+
                   # Container and orchestration
                   docker
                   docker-compose
-                  
+
                   # Monitoring and observability
                   prometheus
                   grafana
-                  
+
                   # Documentation and development
                   mdbook
                   plantuml
-                  
+
                   # Python environment for geodetestlab
                   pythonWithPackages
-                  
+
                   # Platform specific
                   (if pkgs.stdenv.isLinux then glibc else null)
                   (if system == "x86_64-linux" then wine else null)

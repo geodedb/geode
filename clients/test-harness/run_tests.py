@@ -339,7 +339,8 @@ class RustRunner(ClientRunner):
         """Build Rust runner if needed."""
         cargo_dir = Path(__file__).parent / "runners" / "rust_runner"
 
-        # Check if cargo is available
+        # Check if cargo is available (try PATH first, then common install location)
+        cargo_cmd = "cargo"
         cargo_check = await asyncio.create_subprocess_exec(
             "which", "cargo",
             stdout=asyncio.subprocess.PIPE,
@@ -348,13 +349,18 @@ class RustRunner(ClientRunner):
         await cargo_check.wait()
 
         if cargo_check.returncode != 0:
-            print(f"Cargo not found - Rust runner unavailable (install Rust to enable)")
-            return False
+            # Try common Rust installation location
+            home_cargo = Path.home() / ".cargo" / "bin" / "cargo"
+            if home_cargo.exists():
+                cargo_cmd = str(home_cargo)
+            else:
+                print(f"Cargo not found - Rust runner unavailable (install Rust to enable)")
+                return False
 
         if not self.runner_path.exists() and (cargo_dir / "Cargo.toml").exists():
             print(f"Building Rust runner (this may take a minute)...")
             proc = await asyncio.create_subprocess_exec(
-                "cargo", "build", "--release",
+                cargo_cmd, "build", "--release",
                 cwd=str(cargo_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

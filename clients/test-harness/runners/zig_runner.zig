@@ -164,12 +164,11 @@ pub fn main() !void {
     };
 
     if (json_output) {
-        var string = std.ArrayList(u8).init(allocator);
-        defer string.deinit();
+        const json_string = try std.json.stringifyAlloc(allocator, output, .{ .whitespace = .indent_2 });
+        defer allocator.free(json_string);
 
-        try std.json.stringify(output, .{ .whitespace = .indent_2 }, string.writer());
         const stdout_file = getStdOut();
-        try stdout_file.writeAll(string.items);
+        try stdout_file.writeAll(json_string);
         try stdout_file.writeAll("\n");
     } else {
         std.debug.print("Tests: {d}\n", .{output.summary.total});
