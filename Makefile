@@ -37,6 +37,7 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 .PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
 .PHONY: geodetestlab geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
 .PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
+.PHONY: client-test-harness client-test-setup client-test-basic client-test-all client-test-html client-test-coverage
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 all: sub build go-build test cross-test no-feature-flags status-generate
@@ -125,6 +126,14 @@ go-vendor-check:
 	@echo "  make geodetestlab-compare - Compare last two test runs"
 	@echo "  make geodetestlab-export [FILE=failures.csv] - Export failure data to CSV"
 	@echo "  make geodetestlab-trends [RUNS=5] - Analyze failure trends over N runs"
+	@echo ""
+	@echo "Client library test harness (multi-language):"
+	@echo "  make client-test-harness    - Run full client test suite with coverage (all 4 languages)"
+	@echo "  make client-test-basic      - Run basic client library tests (quick)"
+	@echo "  make client-test-all        - Run all test suites on all clients"
+	@echo "  make client-test-html       - Generate HTML dashboard report"
+	@echo "  make client-test-coverage   - Run tests with coverage analysis"
+	@echo "  make client-test-setup      - Setup client test environment"
 	@echo ""
 	@echo "Go client targets:"
 	@echo "  make go-build    - Build Go client library only"
@@ -469,6 +478,36 @@ geodetestlab-trends:
 		exit 1; \
 	fi
 
+# ============================================================================
+# Client Library Test Harness
+# ============================================================================
+# Comprehensive multi-language test suite for Python, Go, Rust, and Zig clients
+
+CLIENT_TEST_DIR := clients/test-harness
+
+client-test-setup:
+	@echo "==> Setting up client test harness..."
+	@cd $(CLIENT_TEST_DIR) && $(MAKE) setup
+
+client-test-basic: client-test-setup
+	@echo "==> Running basic client library tests..."
+	@cd $(CLIENT_TEST_DIR) && $(MAKE) test
+
+client-test-all: client-test-setup
+	@echo "==> Running all client library test suites..."
+	@cd $(CLIENT_TEST_DIR) && $(MAKE) test-all
+
+client-test-html: client-test-setup
+	@echo "==> Running client tests with HTML dashboard..."
+	@cd $(CLIENT_TEST_DIR) && $(MAKE) test-all-html
+
+client-test-coverage: client-test-setup
+	@echo "==> Running client tests with coverage analysis..."
+	@cd $(CLIENT_TEST_DIR) && $(MAKE) test-with-coverage
+
+client-test-harness: client-test-coverage
+	@echo "==> Client test harness: PASSED"
+
 fuzz:
 	$(ZIG) build fuzz $(ZIG_FLAGS)
 
@@ -564,11 +603,11 @@ canary-verify: canary
 .PHONY: verify-all verify-fast ci-verify
 
 # Full, strict E2E verification. Fails on vendoring issues immediately.
-verify-all: clean sub quic-init fmt go-prep build test integration-test dataset-integration-test quic-test geodetestlab cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
+verify-all: clean sub quic-init fmt go-prep build test integration-test dataset-integration-test quic-test geodetestlab client-test-harness cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
 	@echo "==> E2E verification: PASSED"
 
 # Faster dev loop (no fuzz/bench/docker/governance)
-verify-fast: go-prep build test quic-test-vendor geodetestlab-comprehensive cross-compile-required cross-go-clients
+verify-fast: go-prep build test quic-test-vendor geodetestlab-comprehensive client-test-basic cross-compile-required cross-go-clients
 	@echo "==> Fast verification: PASSED"
 
 # CI-friendly alias

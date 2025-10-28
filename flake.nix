@@ -104,8 +104,11 @@
             '';
           };
 
-          # Python environment for geodetestlab
+          # Python environment for geodetestlab and client test harness
           pythonWithPackages = pkgs.python3.withPackages (ps: with ps; [
+            pip
+            setuptools
+            wheel
             typer
             pydantic
             rich
@@ -196,12 +199,15 @@
 
                 echo "🔺 Geode Development Environment"
                 echo "Zig version: $(zig version)"
+                echo "Python version: $(python3 --version | cut -d' ' -f2)"
+                echo ""
                 echo "Available commands:"
-                echo "  make build      - Build Geode"
-                echo "  make test       - Run tests"
-                echo "  make release    - Build release version"
-                echo "  make serve      - Start development server"
-                echo "  nix run         - Run Geode daemon"
+                echo "  make build              - Build Geode"
+                echo "  make test               - Run tests"
+                echo "  make release            - Build release version"
+                echo "  make verify-all         - Full E2E verification (includes client tests)"
+                echo "  make client-test-harness - Run multi-language client test suite"
+                echo "  make geodetestlab       - Run geodetestlab test specifications"
                 echo ""
                 echo "Vulkan SDK: $VULKAN_SDK"
                 echo "For NixOS module usage, see: ./nix/modules/geode-daemon.nix"
