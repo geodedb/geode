@@ -1,5 +1,25 @@
 .PHONY: help setup test test-python test-go test-rust test-zig test-all clean build-all build-go build-rust build-zig report-html test-all-html test-auth test-perf analyze-perf analyze-coverage test-with-coverage
 
+# Python virtual environment settings
+VENV_DIR := .venv
+PYTHON := python3
+VENV_PYTHON := $(VENV_DIR)/bin/python3
+VENV_PIP := $(VENV_DIR)/bin/pip
+ACTIVATE := . $(VENV_DIR)/bin/activate
+
+# Check if we're in a venv or nix environment
+IN_VENV := $(shell python3 -c "import sys; print(1 if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix) else 0)" 2>/dev/null || echo 0)
+IN_NIX := $(shell [ -n "$$NIX_BUILD_TOP" ] || [ -n "$$GEODE_NIX_BUILD" ] && echo 1 || echo 0)
+
+# Always use venv Python if it exists, to ensure Python dependencies are available
+ifneq (,$(wildcard $(VENV_PYTHON)))
+    RUN_PYTHON := $(VENV_PYTHON)
+else ifeq ($(IN_VENV),1)
+    RUN_PYTHON := $(PYTHON)
+else
+    RUN_PYTHON := $(PYTHON)
+endif
+
 help:
 	@echo "Client Library Test Harness"
 	@echo ""
@@ -32,28 +52,20 @@ help:
 	@echo "  make test-with-coverage"
 	@echo "  make analyze-coverage REPORT=reports/results.json"
 
-setup:
+$(VENV_DIR):
+	@echo "Creating Python virtual environment..."
+	@$(PYTHON) -m venv $(VENV_DIR)
+	@echo "✓ Virtual environment created at $(VENV_DIR)"
+
+setup: $(VENV_DIR)
 	@echo "Setting up client test harness..."
-	@echo "Checking Python dependencies..."
-	@if [ -n "$$NIX_BUILD_TOP" ] || [ -n "$$GEODE_NIX_BUILD" ]; then \
-		echo "Nix environment detected - dependencies should be pre-installed"; \
-		echo "Checking for required packages..."; \
-		python3 -c "import yaml; import asyncio" 2>/dev/null || { \
-			echo "WARNING: Missing dependencies. Please exit and re-enter the nix shell:"; \
-			echo "  exit"; \
-			echo "  nix develop"; \
-			exit 1; \
-		}; \
-	else \
-		echo "Installing dependencies via pip..."; \
-		if command -v pip3 >/dev/null 2>&1; then \
-			pip3 install -r requirements.txt 2>/dev/null || python3 -m pip install -r requirements.txt --user; \
-		elif command -v pip >/dev/null 2>&1; then \
-			pip install -r requirements.txt 2>/dev/null || python3 -m pip install -r requirements.txt --user; \
-		else \
-			python3 -m pip install -r requirements.txt --user; \
-		fi; \
-	fi
+	@echo "Installing Python dependencies in virtual environment..."
+	@$(VENV_PIP) install --upgrade pip
+	@echo "Installing test harness dependencies..."
+	@$(VENV_PIP) install -r requirements.txt
+	@echo "Installing Python client and its dependencies..."
+	@$(VENV_PIP) install -r ../python/requirements.txt
+	@echo "✓ Python dependencies installed in $(VENV_DIR)"
 	@echo "Making scripts executable..."
 	@chmod +x runners/python_runner.py 2>/dev/null || true
 	@chmod +x run_tests.py 2>/dev/null || true
@@ -63,6 +75,13 @@ setup:
 	@echo "Building language runners..."
 	@$(MAKE) build-all
 	@echo "✓ Setup complete!"
+	@if [ "$(IN_VENV)" = "0" ] && [ "$(IN_NIX)" = "0" ]; then \
+		echo ""; \
+		echo "To use the test harness, activate the virtual environment:"; \
+		echo "  source $(VENV_DIR)/bin/activate"; \
+		echo ""; \
+		echo "Or run make targets which will use the venv automatically."; \
+	fi
 
 build-all:
 	@echo "Building available language runners..."
@@ -88,35 +107,35 @@ build-zig:
 
 test: setup
 	@echo "Running basic tests on all clients..."
-	python3 run_tests.py --spec specs/basic.yaml --verbose
+	$(RUN_PYTHON) run_tests.py --spec specs/basic.yaml --verbose
 
 test-python: setup
 	@echo "Running tests on Python client..."
-	python3 run_tests.py --clients python --verbose
+	$(RUN_PYTHON) run_tests.py --clients python --verbose
 
 test-go: setup
 	@echo "Running tests on Go client..."
-	python3 run_tests.py --clients go --verbose
+	$(RUN_PYTHON) run_tests.py --clients go --verbose
 
 test-rust: setup
 	@echo "Running tests on Rust client..."
-	python3 run_tests.py --clients rust --verbose
+	$(RUN_PYTHON) run_tests.py --clients rust --verbose
 
 test-zig: setup
 	@echo "Running tests on Zig client..."
-	python3 run_tests.py --clients zig --verbose
+	$(RUN_PYTHON) run_tests.py --clients zig --verbose
 
 test-all: setup
 	@echo "Running all test suites on all clients..."
-	python3 run_tests.py --verbose --report-json reports/results.json
+	$(RUN_PYTHON) run_tests.py --verbose --report-json reports/results.json
 
 test-transactions: setup
 	@echo "Running transaction tests..."
-	python3 run_tests.py --spec specs/transactions.yaml --verbose
+	$(RUN_PYTHON) run_tests.py --spec specs/transactions.yaml --verbose
 
 test-connections: setup
 	@echo "Running connection tests..."
-	python3 run_tests.py --spec specs/connections.yaml --verbose
+	$(RUN_PYTHON) run_tests.py --spec specs/connections.yaml --verbose
 
 clean:
 	@echo "Cleaning build artifacts..."
@@ -125,6 +144,7 @@ clean:
 	rm -rf runners/zig-out
 	rm -rf reports/*.json
 	rm -rf reports/*.html
+	rm -rf $(VENV_DIR)
 	@echo "Clean complete!"
 
 # Server management
@@ -143,7 +163,7 @@ stop-server:
 test-all-html: setup
 	@echo "Running all tests and generating HTML report..."
 	@mkdir -p reports
-	python3 run_tests.py --verbose --report-json reports/results.json --report-html reports/test_report.html
+	$(RUN_PYTHON) run_tests.py --verbose --report-json reports/results.json --report-html reports/test_report.html
 	@echo ""
 	@echo "Reports generated:"
 	@echo "  JSON: reports/results.json"
@@ -152,37 +172,37 @@ test-all-html: setup
 report-html:
 	@echo "Generating HTML report from JSON results..."
 	@mkdir -p reports
-	python3 generate_html_report.py ${REPORT:-reports/results.json} --output reports/test_report.html
+	$(RUN_PYTHON) generate_html_report.py ${REPORT:-reports/results.json} --output reports/test_report.html
 	@echo "HTML report generated: reports/test_report.html"
 
 # Authentication tests
 test-auth: setup
 	@echo "Running authentication tests..."
-	python3 run_tests.py --spec specs/auth.yaml --verbose
+	$(RUN_PYTHON) run_tests.py --spec specs/auth.yaml --verbose
 
 # Performance benchmarking
 test-perf: setup
 	@echo "Running performance benchmarks..."
 	@mkdir -p reports
-	python3 run_tests.py --spec specs/performance.yaml --verbose --report-json reports/perf_results.json
+	$(RUN_PYTHON) run_tests.py --spec specs/performance.yaml --verbose --report-json reports/perf_results.json
 
 analyze-perf:
 	@echo "Analyzing performance results..."
-	python3 analyze_performance.py reports/perf_results.json --verbose --markdown reports/perf_report.md
+	$(RUN_PYTHON) analyze_performance.py reports/perf_results.json --verbose --markdown reports/perf_report.md
 	@echo "Performance analysis complete!"
 	@echo "  Report: reports/perf_report.md"
 
 # Coverage analysis
 analyze-coverage:
 	@echo "Analyzing test coverage..."
-	python3 analyze_coverage.py ${REPORT:-reports/results.json} --verbose --markdown reports/coverage_report.md
+	$(RUN_PYTHON) analyze_coverage.py ${REPORT:-reports/results.json} --verbose --markdown reports/coverage_report.md
 	@echo "Coverage analysis complete!"
 	@echo "  Report: reports/coverage_report.md"
 
 test-with-coverage: setup
 	@echo "Running all tests with coverage analysis..."
 	@mkdir -p reports
-	python3 run_tests.py --verbose --report-json reports/results.json
-	python3 analyze_coverage.py reports/results.json --verbose --markdown reports/coverage_report.md
+	$(RUN_PYTHON) run_tests.py --verbose --report-json reports/results.json
+	$(RUN_PYTHON) analyze_coverage.py reports/results.json --verbose --markdown reports/coverage_report.md
 	@echo ""
 	@echo "Coverage report generated: reports/coverage_report.md"

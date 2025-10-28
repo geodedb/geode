@@ -1,14 +1,14 @@
 //! Core client implementation for Geode.
 
-use bytes::Bytes;
 use quinn::{ClientConfig, Connection as QuinnConnection, Endpoint, RecvStream, SendStream};
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{Certificate, ClientConfig as RustlsClientConfig, RootCertStore, ServerName};
+use rustls::client::{ServerCertVerifier, ServerCertVerified, HandshakeSignatureValid};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::Mutex;
 
@@ -40,11 +40,12 @@ struct SkipServerVerification;
 impl ServerCertVerifier for SkipServerVerification {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
+        _end_entity: &Certificate,
+        _intermediates: &[Certificate],
+        _server_name: &ServerName,
+        _scts: &mut dyn Iterator<Item = &[u8]>,
         _ocsp_response: &[u8],
-        _now: UnixTime,
+        _now: SystemTime,
     ) -> std::result::Result<ServerCertVerified, RustlsError> {
         Ok(ServerCertVerified::assertion())
     }
@@ -52,7 +53,7 @@ impl ServerCertVerifier for SkipServerVerification {
     fn verify_tls12_signature(
         &self,
         _message: &[u8],
-        _cert: &CertificateDer<'_>,
+        _cert: &Certificate,
         _dss: &DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, RustlsError> {
         Ok(HandshakeSignatureValid::assertion())
@@ -61,7 +62,7 @@ impl ServerCertVerifier for SkipServerVerification {
     fn verify_tls13_signature(
         &self,
         _message: &[u8],
-        _cert: &CertificateDer<'_>,
+        _cert: &Certificate,
         _dss: &DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, RustlsError> {
         Ok(HandshakeSignatureValid::assertion())
@@ -166,13 +167,15 @@ impl Connection {
     ) -> Result<Self> {
         // Configure TLS
         let mut crypto = if skip_verify {
-            rustls::ClientConfig::builder()
-                .dangerous()
+            RustlsClientConfig::builder()
+                .with_safe_defaults()
                 .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
                 .with_no_client_auth()
         } else {
-            rustls::ClientConfig::builder()
-                .with_root_certificates(rustls::RootCertStore::empty())
+            let root_store = RootCertStore::empty();
+            RustlsClientConfig::builder()
+                .with_safe_defaults()
+                .with_root_certificates(root_store)
                 .with_no_client_auth()
         };
 
@@ -188,8 +191,11 @@ impl Connection {
         endpoint.set_default_client_config(client_config);
 
         // Resolve address
-        let addr: SocketAddr = format!("{}:{}", host, port).parse()
-            .map_err(|_| Error::connection("Invalid address"))?;
+        let addr_str = format!("{}:{}", host, port);
+        let addr: SocketAddr = addr_str.to_socket_addrs()
+            .map_err(|e| Error::connection(&format!("Failed to resolve address {}: {}", addr_str, e)))?
+            .next()
+            .ok_or_else(|| Error::connection(&format!("No addresses found for {}", addr_str)))?;
 
         // Connect
         let connection = endpoint
@@ -287,7 +293,8 @@ impl Connection {
             });
         }
 
-        let raw_rows = bindings_result.get("rows").and_then(|r| r.as_array()).unwrap_or(&vec![]);
+        let empty_vec = vec![];
+        let raw_rows = bindings_result.get("rows").and_then(|r| r.as_array()).unwrap_or(&empty_vec);
         let rows = parse_rows(raw_rows, &type_map)?;
 
         Ok(Page {

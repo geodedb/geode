@@ -31,7 +31,9 @@ struct Args {
 
 #[derive(Debug, Deserialize)]
 struct TestSpec {
+    #[serde(default)]
     version: String,
+    #[serde(default)]
     name: String,
     #[serde(default)]
     description: String,
@@ -312,7 +314,7 @@ impl Runner {
             for col in &page.columns {
                 if let Some(value) = row.get(&col.name) {
                     // Convert to serde_json::Value
-                    row_map.insert(col.name.clone(), value.raw_value.clone());
+                    row_map.insert(col.name.clone(), value.to_json());
                 }
             }
             data.push(row_map);

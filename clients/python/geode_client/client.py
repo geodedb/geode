@@ -72,7 +72,6 @@ class GeodeProtocol(QuicConnectionProtocol):
         super().__init__(*args, **kwargs)
         self._stream_readers: Dict[int, asyncio.Queue] = {}
         self._stream_futures: Dict[int, asyncio.Future] = {}
-        self._closed = False
 
     def quic_event_received(self, event: QuicEvent) -> None:
         """Handle QUIC events."""
@@ -199,7 +198,11 @@ class Connection:
         configuration = QuicConfiguration(
             is_client=True,
             alpn_protocols=["geode/1"],
+            max_datagram_size=1500,  # Increase from default 1200 for large certificates
         )
+
+        # Set server name for SNI
+        configuration.server_name = self.server_name
 
         # Configure TLS
         if self.ca_cert:
@@ -217,7 +220,6 @@ class Connection:
             self.port,
             configuration=configuration,
             create_protocol=GeodeProtocol,
-            server_name=self.server_name,
         ) as protocol:
             self._protocol = protocol
 

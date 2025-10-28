@@ -1,5 +1,21 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const json = std.json;
+
+// Helper functions to get stdout/stderr in a cross-platform way
+fn getStdOut() std.fs.File {
+    return if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+}
+
+fn getStdErr() std.fs.File {
+    return if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDERR_FILENO };
+}
 
 // Simple YAML parser for test specs
 const yaml = struct {
@@ -103,8 +119,8 @@ pub fn main() !void {
     }
 
     if (spec_path == null) {
-        const stderr = std.io.getStdErr().writer();
-        try stderr.print("ERROR: --spec is required\n", .{});
+        const stderr_file = getStdErr();
+        try stderr_file.writeAll("ERROR: --spec is required\n");
         std.process.exit(2);
     }
 
@@ -117,17 +133,15 @@ pub fn main() !void {
 
     // For now, print message about YAML parsing
     // TODO: Implement proper YAML parser or use JSON specs
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
 
     if (verbose) {
-        try stderr.print("Zig runner: Loading spec from {s}\n", .{spec_path.?});
-        try stderr.print("Server: {s}\n", .{server});
+        std.debug.print("Zig runner: Loading spec from {s}\n", .{spec_path.?});
+        std.debug.print("Server: {s}\n", .{server});
     }
 
     // TODO: Parse YAML spec
     // For now, create a minimal test result
-    const results = [_]TestResult{
+    var results = [_]TestResult{
         .{
             .test_name = "placeholder",
             .status = "error",
@@ -146,20 +160,22 @@ pub fn main() !void {
 
     const output = Output{
         .summary = summary,
-        .results = &results,
+        .results = results[0..],
     };
 
     if (json_output) {
         var string = std.ArrayList(u8).init(allocator);
         defer string.deinit();
 
-        try json.stringify(output, .{ .whitespace = .indent_2 }, string.writer());
-        try stdout.print("{s}\n", .{string.items});
+        try std.json.stringify(output, .{ .whitespace = .indent_2 }, string.writer());
+        const stdout_file = getStdOut();
+        try stdout_file.writeAll(string.items);
+        try stdout_file.writeAll("\n");
     } else {
-        try stdout.print("Tests: {d}\n", .{output.summary.total});
-        try stdout.print("Passed: {d}\n", .{output.summary.passed});
-        try stdout.print("Failed: {d}\n", .{output.summary.failed});
-        try stdout.print("Errors: {d}\n", .{output.summary.errors});
+        std.debug.print("Tests: {d}\n", .{output.summary.total});
+        std.debug.print("Passed: {d}\n", .{output.summary.passed});
+        std.debug.print("Failed: {d}\n", .{output.summary.failed});
+        std.debug.print("Errors: {d}\n", .{output.summary.errors});
     }
 
     if (output.summary.failed + output.summary.errors > 0) {

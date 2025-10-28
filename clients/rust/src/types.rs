@@ -2,7 +2,6 @@
 
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::error::{Error, Result};
@@ -36,7 +35,7 @@ pub enum ValueKind {
 }
 
 /// Range type value
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Range {
     pub lower: Option<Box<Value>>,
     pub upper: Option<Box<Value>>,
@@ -228,6 +227,57 @@ impl Value {
             self.range_value.as_ref().ok_or_else(|| Error::type_error("Range value is None"))
         } else {
             Err(Error::type_error(format!("Cannot convert {:?} to range", self.kind)))
+        }
+    }
+
+    /// Convert to serde_json::Value for serialization
+    pub fn to_json(&self) -> serde_json::Value {
+        match self.kind {
+            ValueKind::Null => serde_json::Value::Null,
+            ValueKind::Int => serde_json::Value::Number(self.int_value.into()),
+            ValueKind::Bool => serde_json::Value::Bool(self.bool_value),
+            ValueKind::String | ValueKind::Xml | ValueKind::Json | ValueKind::Jsonb |
+            ValueKind::Url | ValueKind::Domain | ValueKind::Uuid | ValueKind::Enum |
+            ValueKind::BitString => serde_json::Value::String(self.string_value.clone()),
+            ValueKind::Decimal => serde_json::Value::String(
+                self.decimal_value.map(|d| d.to_string()).unwrap_or_default()
+            ),
+            ValueKind::Array => serde_json::Value::Array(
+                self.array_value.iter().map(|v| v.to_json()).collect()
+            ),
+            ValueKind::Object => {
+                let mut map = serde_json::Map::new();
+                for (k, v) in &self.object_value {
+                    map.insert(k.clone(), v.to_json());
+                }
+                serde_json::Value::Object(map)
+            }
+            ValueKind::Bytea => {
+                if self.bytes_value.is_empty() {
+                    serde_json::Value::String(self.string_value.clone())
+                } else {
+                    serde_json::Value::String(format!("\\x{}", hex::encode(&self.bytes_value)))
+                }
+            }
+            ValueKind::Date | ValueKind::Time | ValueKind::TimeTz |
+            ValueKind::Timestamp | ValueKind::TimestampTz | ValueKind::Interval => {
+                serde_json::Value::String(self.string_value.clone())
+            }
+            ValueKind::Range => {
+                if let Some(range) = &self.range_value {
+                    let mut map = serde_json::Map::new();
+                    if let Some(lower) = &range.lower {
+                        map.insert("lower".to_string(), lower.to_json());
+                    }
+                    if let Some(upper) = &range.upper {
+                        map.insert("upper".to_string(), upper.to_json());
+                    }
+                    map.insert("bounds".to_string(), serde_json::Value::String(range.bounds.clone()));
+                    serde_json::Value::Object(map)
+                } else {
+                    serde_json::Value::Null
+                }
+            }
         }
     }
 }

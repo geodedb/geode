@@ -80,9 +80,9 @@ class PythonRunner(ClientRunner):
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
             test_file.write_text(yaml.dump(test_spec))
 
-            # Run Python runner
+            # Run Python runner using the same Python interpreter
             proc = await asyncio.create_subprocess_exec(
-                "python3",
+                sys.executable,
                 str(self.runner_path),
                 "--spec",
                 str(test_file),

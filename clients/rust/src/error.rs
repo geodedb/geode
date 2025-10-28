@@ -1,6 +1,5 @@
 //! Error types for the Geode client.
 
-use std::fmt;
 use thiserror::Error;
 
 /// Result type alias for Geode operations
@@ -116,6 +115,12 @@ impl From<quinn::WriteError> for Error {
 
 impl From<quinn::ReadError> for Error {
     fn from(err: quinn::ReadError) -> Self {
+        Error::quic(err.to_string())
+    }
+}
+
+impl From<quinn::ConnectError> for Error {
+    fn from(err: quinn::ConnectError) -> Self {
         Error::quic(err.to_string())
     }
 }
