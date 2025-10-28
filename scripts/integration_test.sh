@@ -75,10 +75,17 @@ else
     echo
 fi
 
-# Test 6: Zig tests  
+# Test 6: Zig tests
 echo "=== Zig Unit Tests ==="
-# Note: These tests are currently disabled as they need updating
-echo "Zig unit tests temporarily disabled - need AST structure updates"
+echo "Running Zig unit tests..."
+if make test > /tmp/zig_test_output.log 2>&1; then
+    echo -e "${GREEN}PASS${NC}"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "See /tmp/zig_test_output.log for details"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
 echo
 
 # Summary
