@@ -124,3 +124,9 @@ impl From<quinn::ConnectError> for Error {
         Error::quic(err.to_string())
     }
 }
+
+impl From<quinn::ConfigError> for Error {
+    fn from(err: quinn::ConfigError) -> Self {
+        Error::quic(err.to_string())
+    }
+}

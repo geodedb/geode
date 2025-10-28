@@ -165,18 +165,26 @@ impl Connection {
         hello_ver: &str,
         conformance: &str,
     ) -> Result<Self> {
-        // Configure TLS
+        // Configure TLS (rustls 0.21 API - uses builder pattern)
         let mut crypto = if skip_verify {
-            RustlsClientConfig::builder()
-                .with_safe_defaults()
+            let mut config = RustlsClientConfig::builder()
+                .with_safe_default_cipher_suites()
+                .with_safe_default_kx_groups()
+                .with_safe_default_protocol_versions()
+                .unwrap()
                 .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-                .with_no_client_auth()
+                .with_no_client_auth();
+            config
         } else {
             let root_store = RootCertStore::empty();
-            RustlsClientConfig::builder()
-                .with_safe_defaults()
+            let mut config = RustlsClientConfig::builder()
+                .with_safe_default_cipher_suites()
+                .with_safe_default_kx_groups()
+                .with_safe_default_protocol_versions()
+                .unwrap()
                 .with_root_certificates(root_store)
-                .with_no_client_auth()
+                .with_no_client_auth();
+            config
         };
 
         crypto.alpn_protocols = vec![b"geode/1".to_vec()];
@@ -184,10 +192,17 @@ impl Connection {
         let mut client_config = ClientConfig::new(Arc::new(crypto));
         let mut transport_config = quinn::TransportConfig::default();
         transport_config.max_idle_timeout(Some(std::time::Duration::from_secs(60).try_into().unwrap()));
+        // Allow receiving larger UDP packets from server (for large TLS certificates)
+        transport_config.receive_window(quinn::VarInt::from_u32(8 * 1024 * 1024));
+        transport_config.send_window(8 * 1024 * 1024);
         client_config.transport_config(Arc::new(transport_config));
 
-        // Create endpoint
-        let mut endpoint = Endpoint::client("[::]:0".parse().unwrap())?;
+        // Create endpoint with larger UDP payload size (bind to IPv4 to match server)
+        let mut endpoint_config = quinn::EndpointConfig::default();
+        endpoint_config.max_udp_payload_size(4096)?;
+
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+        let mut endpoint = Endpoint::new(endpoint_config, None, socket, Arc::new(quinn::TokioRuntime))?;
         endpoint.set_default_client_config(client_config);
 
         // Resolve address

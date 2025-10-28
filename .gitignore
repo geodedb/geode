@@ -70,3 +70,38 @@ vendor/*
 # ignore mac files
 .DS_Store
 clients/go/gql/zig-cache/
+
+# Rust client artifacts
+clients/rust/target/
+clients/rust/Cargo.lock
+clients/**/target/
+**/Cargo.lock
+*.rs.bk
+
+# Python client artifacts
+clients/python/**/__pycache__/
+clients/python/**/*.pyc
+clients/python/**/*.pyo
+clients/python/**/*.pyd
+clients/python/.venv/
+clients/python/venv/
+clients/python/**/.pytest_cache/
+clients/python/**/*.egg-info/
+clients/python/dist/
+clients/python/build/
+clients/python/.eggs/
+
+# Test harness artifacts
+clients/test-harness/.venv/
+clients/test-harness/venv/
+clients/test-harness/**/__pycache__/
+clients/test-harness/**/*.pyc
+clients/test-harness/reports/
+clients/test-harness/coverage/
+clients/test-harness/.coverage
+clients/test-harness/htmlcov/
+clients/test-harness/.pytest_cache/
+
+# Rust test runner artifacts
+clients/test-harness/runners/rust_runner/target/
+clients/test-harness/runners/rust_runner/Cargo.lock
