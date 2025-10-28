@@ -97,15 +97,18 @@ class GeodeProtocol(QuicConnectionProtocol):
         Returns:
             Tuple of (stream_id, reader_queue)
         """
-        stream_id = self._quic.get_next_available_stream_id()
+        stream_id = self._quic.get_next_available_stream_id(is_unidirectional=False)
         reader_queue = asyncio.Queue()
         self._stream_readers[stream_id] = reader_queue
+        print(f"[DEBUG] Created stream ID: {stream_id}")
         return stream_id, reader_queue
 
     def write_to_stream(self, stream_id: int, data: bytes, end_stream: bool = False) -> None:
         """Write data to a stream."""
+        print(f"[DEBUG] Writing {len(data)} bytes to stream {stream_id}")
         self._quic.send_stream_data(stream_id, data, end_stream)
         self.transmit()
+        print(f"[DEBUG] Transmitted data on stream {stream_id}")
 
     async def read_from_stream(self, stream_id: int) -> Optional[bytes]:
         """Read data from a stream."""
@@ -174,6 +177,7 @@ class Connection:
 
         # Connection state
         self._protocol: Optional[GeodeProtocol] = None
+        self._connection_context = None
         self._stream_id: Optional[int] = None
         self._reader_queue: Optional[asyncio.Queue] = None
         self._connected = False
@@ -191,10 +195,12 @@ class Connection:
 
     async def connect(self) -> None:
         """Establish QUIC connection to Geode server."""
+        print(f"[DEBUG] connect() called, already connected: {self._connected}")
         if self._connected:
             return
 
         # Configure QUIC
+        print("[DEBUG] Configuring QUIC...")
         configuration = QuicConfiguration(
             is_client=True,
             alpn_protocols=["geode/1"],
@@ -203,48 +209,69 @@ class Connection:
 
         # Set server name for SNI
         configuration.server_name = self.server_name
+        print(f"[DEBUG] Server name: {self.server_name}")
 
         # Configure TLS
-        if self.ca_cert:
-            configuration.load_verify_locations(self.ca_cert)
-
         if self.skip_verify:
+            print("[DEBUG] Skipping TLS verification")
+            # Even when skipping verification, load the server cert to complete handshake
+            try:
+                configuration.load_verify_locations("./data/server.crt")
+                print("[DEBUG] Loaded server cert for handshake")
+            except Exception as e:
+                print(f"[DEBUG] Could not load server cert: {e}")
             configuration.verify_mode = ssl.CERT_NONE
+        elif self.ca_cert:
+            configuration.load_verify_locations(self.ca_cert)
 
         if self.client_cert and self.client_key:
             configuration.load_cert_chain(self.client_cert, self.client_key)
 
-        # Connect
-        async with connect(
+        # Connect - create context manager and enter it manually
+        print(f"[DEBUG] Connecting to {self.host}:{self.port}...")
+        self._connection_context = connect(
             self.host,
             self.port,
             configuration=configuration,
             create_protocol=GeodeProtocol,
-        ) as protocol:
-            self._protocol = protocol
+        )
 
-            # Create bidirectional stream
-            self._stream_id, self._reader_queue = await protocol.create_bidirectional_stream()
+        # Enter the context manager
+        print("[DEBUG] Entering context manager...")
+        try:
+            self._protocol = await asyncio.wait_for(
+                self._connection_context.__aenter__(),
+                timeout=5.0
+            )
+            print("[DEBUG] Protocol established")
+        except asyncio.TimeoutError:
+            print("[DEBUG] Context manager __aenter__() timed out!")
+            raise ConnectionError("Connection handshake timed out")
 
-            # Send HELLO
-            hello = {
-                "type": "HELLO",
-                "client_name": self.hello_name,
-                "client_ver": self.hello_ver,
-                "wanted_conformance": self.conformance,
-            }
-            await self._write_json(hello)
+        # Create bidirectional stream
+        self._stream_id, self._reader_queue = await self._protocol.create_bidirectional_stream()
 
-            # Read HELLO response
-            response = await self._read_json()
-            if not response:
-                raise ConnectionError("No HELLO response from server")
+        # Send HELLO
+        hello = {
+            "type": "HELLO",
+            "client_name": self.hello_name,
+            "client_ver": self.hello_ver,
+            "wanted_conformance": self.conformance,
+        }
+        print(f"[DEBUG] Sending HELLO message: {hello}")
+        await self._write_json(hello)
 
-            self._connected = True
+        # Yield to event loop to allow data to be transmitted
+        await asyncio.sleep(0.01)
+        print("[DEBUG] Waiting for HELLO response...")
 
-            # Keep connection alive
-            while self._connected:
-                await asyncio.sleep(0.1)
+        # Read HELLO response
+        response = await self._read_json()
+        print(f"[DEBUG] Received HELLO response: {response}")
+        if not response:
+            raise ConnectionError("No HELLO response from server")
+
+        self._connected = True
 
     async def _write_json(self, obj: Dict[str, Any]) -> None:
         """Write JSON object as a line."""
@@ -467,10 +494,18 @@ class Connection:
 
         self._connected = False
 
+        # Exit the context manager if we have one
+        if self._connection_context and self._protocol:
+            try:
+                await self._connection_context.__aexit__(None, None, None)
+            except Exception:
+                pass
+
         if self._protocol:
             self._protocol.close()
             self._protocol = None
 
+        self._connection_context = None
         self._stream_id = None
         self._reader_queue = None
 

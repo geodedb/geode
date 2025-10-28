@@ -594,7 +594,8 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
     // Wait for handshake to complete
     if (conn.quic_connection) |qc| {
         var handshake_attempts: usize = 0;
-        while (handshake_attempts < 50) : (handshake_attempts += 1) {
+        const max_attempts = 200;  // Increased from 50 to allow more time
+        while (handshake_attempts < max_attempts) : (handshake_attempts += 1) {
             // Poll to process handshake packets
             transport.poll(50) catch {};
 
@@ -605,6 +606,10 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
             }
 
             std.Thread.sleep(50 * std.time.ns_per_ms);
+        } else {
+            // Handshake failed to complete
+            std.debug.print("ERROR: Handshake failed to complete after {} attempts ({}ms)\n", .{max_attempts, max_attempts * 50});
+            return error.HandshakeFailed;
         }
     }
 

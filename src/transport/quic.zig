@@ -196,6 +196,40 @@ pub const QuicTransport = struct {
                 _ = try key_file.readAll(inline_priv_key.?);
                 debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loaded private key\",\"size\":{}}}", .{key_size});
 
+                // Decode PEM to DER if needed
+                if (std.mem.indexOf(u8, inline_priv_key.?, "-----BEGIN PRIVATE KEY-----")) |_| {
+                    debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"decoding PEM private key to DER\"}}", .{});
+
+                    const pem_data = inline_priv_key.?;
+                    const begin_marker = "-----BEGIN PRIVATE KEY-----";
+                    const end_marker = "-----END PRIVATE KEY-----";
+
+                    const begin_idx = std.mem.indexOf(u8, pem_data, begin_marker) orelse return error.InvalidPEM;
+                    const content_start = begin_idx + begin_marker.len;
+                    const end_idx = std.mem.indexOf(u8, pem_data[content_start..], end_marker) orelse return error.InvalidPEM;
+
+                    // Extract base64 content (skip newlines and whitespace)
+                    var base64_list = std.ArrayList(u8){};
+                    defer base64_list.deinit(self.allocator);
+                    for (pem_data[content_start .. content_start + end_idx]) |byte| {
+                        if (byte != '\n' and byte != '\r' and byte != ' ' and byte != '\t') {
+                            try base64_list.append(self.allocator, byte);
+                        }
+                    }
+
+                    // Decode base64 to get DER
+                    const decoder = std.base64.standard.Decoder;
+                    const decoded_size = try decoder.calcSizeForSlice(base64_list.items);
+                    const decoded_der = try self.allocator.alloc(u8, decoded_size);
+                    errdefer self.allocator.free(decoded_der);
+                    try decoder.decode(decoded_der, base64_list.items);
+
+                    // Free the PEM data and replace with DER
+                    self.allocator.free(inline_priv_key.?);
+                    inline_priv_key = decoded_der;
+                    debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"PEM decoded to DER\",\"der_size\":{}}}", .{decoded_size});
+                }
+
                 // Cache for future use
                 self.cached_cert = inline_cert_der;
                 self.cached_key = inline_priv_key;
