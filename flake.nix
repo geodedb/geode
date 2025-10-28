@@ -198,10 +198,11 @@
                 export VULKAN_LIB_DIR="${pkgs.vulkan-loader.out}/lib"
                 export CUDA_INCLUDE_DIR="${pkgs.cudaPackages.libnpp.out}/include"
                 export CUDA_LIB_DIR="${pkgs.cudaPackages.libnpp.out}/lib"
+                export PYTHONPATH="${pythonWithPackages}/lib/python3.12/site-packages:$PYTHONPATH"
 
                 echo "🔺 Geode Development Environment"
                 echo "Zig version: $(zig version)"
-                echo "Python version: $(python3 --version | cut -d' ' -f2)"
+                echo "Python version: $(${pythonWithPackages}/bin/python --version | cut -d' ' -f2)"
                 echo ""
                 echo "Available commands:"
                 echo "  make build              - Build Geode"
