@@ -121,6 +121,8 @@
             black
             isort
             flake8
+            aioquic
+            cryptography
           ]);
 
           # Geodetestlab package

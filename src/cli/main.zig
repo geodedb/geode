@@ -606,30 +606,36 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
         }
     }
 
-    // Poll and retry acceptStream until we get the stream
-    var stream_attempts: usize = 0;
-    const stream = while (stream_attempts < 100) : (stream_attempts += 1) {
-        // Poll the endpoint to process incoming packets
-        transport.poll(50) catch {};
+    // Poll and retry until we have incoming streams
+    if (conn.quic_connection) |qc| {
+        var poll_attempts: usize = 0;
+        while (poll_attempts < 500) : (poll_attempts += 1) {
+            // Poll the endpoint to process incoming packets
+            transport.poll(100) catch {};
 
-        // Try to accept a stream
-        if (conn.acceptStream()) |s| {
-            std.debug.print("Stream accepted after {} attempts\n", .{stream_attempts + 1});
-            break s;
-        } else |err| {
-            if (err == error.WouldBlock) {
-                // No stream yet, continue polling
-                // Add a small delay to avoid busy-waiting
-                std.Thread.sleep(10 * std.time.ns_per_ms);
-                continue;
+            // Check if we have incoming streams
+            if (quic_lib.hasIncomingStreams(qc)) {
+                std.debug.print("Found incoming streams after {} polls\n", .{poll_attempts + 1});
+                break;
             }
-            std.debug.print("Failed to accept stream: {}\n", .{err});
-            return err;
+            // Also check for stream 0 directly
+            if (quic_lib.getFirstStream(qc)) |sid| {
+                std.debug.print("Found stream {} after {} polls\n", .{ sid, poll_attempts + 1 });
+                break;
+            }
+
+            // Add a small delay to avoid busy-waiting
+            std.Thread.sleep(20 * std.time.ns_per_ms);
+        } else {
+            std.debug.print("Timed out waiting for incoming streams (after 10 seconds)\n", .{});
+            return error.Timeout;
         }
-    } else {
-        std.debug.print("Timed out waiting for stream\n", .{});
-        return error.Timeout;
-    };
+    }
+
+    // Accept the stream
+    std.debug.print("Attempting to accept stream\n", .{});
+    const stream = try conn.acceptStream();
+    std.debug.print("Stream accepted successfully\n", .{});
     defer stream.close();
 
     // Main message processing loop
