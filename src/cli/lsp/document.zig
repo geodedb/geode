@@ -128,6 +128,12 @@ pub const DocumentStore = struct {
     }
 
     pub fn open(self: *DocumentStore, uri: []const u8, text: []const u8, version: i32) !void {
+        // If document already exists, close it first to prevent leaks
+        if (self.documents.get(uri)) |existing_doc| {
+            _ = self.documents.remove(uri);
+            existing_doc.deinit();
+        }
+
         const doc = try Document.init(self.allocator, uri, text, version);
         try self.documents.put(doc.uri, doc);
     }

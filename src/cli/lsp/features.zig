@@ -205,7 +205,12 @@ fn getKeywordDocumentation(allocator: Allocator, keyword: []const u8) ![]const u
         .{ "MERGE", "**MERGE** - Ensures a pattern exists, creating it if necessary.\n\nExample:\n```gql\nMERGE (n:Person {email: 'alice@example.com'})\n```" },
     });
 
-    return docs.get(keyword) orelse try std.fmt.allocPrint(allocator, "**{s}** - GQL keyword", .{keyword});
+    // Always return an allocated copy so caller can safely free
+    if (docs.get(keyword)) |doc_text| {
+        return try allocator.dupe(u8, doc_text);
+    } else {
+        return try std.fmt.allocPrint(allocator, "**{s}** - GQL keyword", .{keyword});
+    }
 }
 
 fn getFunctionDocumentation(allocator: Allocator, func: []const u8) ![]const u8 {
@@ -217,7 +222,12 @@ fn getFunctionDocumentation(allocator: Allocator, func: []const u8) ![]const u8 
         .{ "similarity", "**similarity**(*vector1*, *vector2*) → FLOAT\n\nCalculates cosine similarity between two vectors.\n\nExample:\n```gql\nRETURN similarity([1.0, 0.0], [0.5, 0.866])\n```" },
     });
 
-    return docs.get(func) orelse try std.fmt.allocPrint(allocator, "**{s}**() - GQL function", .{func});
+    // Always return an allocated copy so caller can safely free
+    if (docs.get(func)) |doc_text| {
+        return try allocator.dupe(u8, doc_text);
+    } else {
+        return try std.fmt.allocPrint(allocator, "**{s}**() - GQL function", .{func});
+    }
 }
 
 fn getTypeDocumentation(allocator: Allocator, typ: []const u8) ![]const u8 {
@@ -231,5 +241,10 @@ fn getTypeDocumentation(allocator: Allocator, typ: []const u8) ![]const u8 {
         .{ "DATETIME", "**DATETIME** - Date and time with timezone support.\n\nExample: `datetime('2025-01-15T10:30:00Z')`" },
     });
 
-    return docs.get(typ) orelse try std.fmt.allocPrint(allocator, "**{s}** - GQL type", .{typ});
+    // Always return an allocated copy so caller can safely free
+    if (docs.get(typ)) |doc_text| {
+        return try allocator.dupe(u8, doc_text);
+    } else {
+        return try std.fmt.allocPrint(allocator, "**{s}** - GQL type", .{typ});
+    }
 }

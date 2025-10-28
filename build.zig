@@ -462,6 +462,12 @@ pub fn build(b: *std.Build) void {
     const run_cli_tests = b.addRunArtifact(cli_tests);
     test_step.dependOn(&run_cli_tests.step);
 
+    // LSP implementation tests
+    const lsp_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/test_runner.zig"), .target = target, .optimize = optimize }) });
+    lsp_tests.root_module.addImport("geode", root_mod);
+    const run_lsp_tests = b.addRunArtifact(lsp_tests);
+    test_step.dependOn(&run_lsp_tests.step);
+
     if (is_windows) {
         const echo_skip = b.addSystemCommand(&.{ "sh", "-lc", "echo 'Skipping fuzz on Windows (unsupported in Zig 0.15.1)'" });
         test_step.dependOn(&echo_skip.step);
