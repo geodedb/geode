@@ -18,6 +18,14 @@ pub fn build(b: *std.Build) void {
     const zig_client_path = b.pathFromRoot("../../zig");
     exe.addIncludePath(.{ .cwd_relative = zig_client_path });
 
+    // Add Geode source path for YAML parser
+    const geode_src_path = b.pathFromRoot("../../../src");
+    exe.root_module.addImport("geode", b.createModule(.{
+        .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ geode_src_path, "util/yaml.zig" }) },
+        .target = target,
+        .optimize = optimize,
+    }));
+
     b.installArtifact(exe);
 
     // Create run step
