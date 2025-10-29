@@ -100,33 +100,9 @@ impl Error {
     }
 }
 
-// Convert quinn errors to our Error type
-impl From<quinn::ConnectionError> for Error {
-    fn from(err: quinn::ConnectionError) -> Self {
-        Error::quic(err.to_string())
-    }
-}
-
-impl From<quinn::WriteError> for Error {
-    fn from(err: quinn::WriteError) -> Self {
-        Error::quic(err.to_string())
-    }
-}
-
-impl From<quinn::ReadError> for Error {
-    fn from(err: quinn::ReadError) -> Self {
-        Error::quic(err.to_string())
-    }
-}
-
-impl From<quinn::ConnectError> for Error {
-    fn from(err: quinn::ConnectError) -> Self {
-        Error::quic(err.to_string())
-    }
-}
-
-impl From<quinn::ConfigError> for Error {
-    fn from(err: quinn::ConfigError) -> Self {
+// Convert quiche errors to our Error type
+impl From<quiche::Error> for Error {
+    fn from(err: quiche::Error) -> Self {
         Error::quic(err.to_string())
     }
 }

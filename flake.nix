@@ -236,6 +236,7 @@
                   cargo
                   rustfmt
                   clippy
+                  boringssl
 
                   # Debugging and analysis
                   gdb

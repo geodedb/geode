@@ -249,7 +249,7 @@ pub fn main() !void {
 
     if (json_output) {
         // Build JSON output manually
-        var json_buf = std.ArrayList(u8).init(allocator);
+        var json_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
         defer json_buf.deinit();
         const writer = json_buf.writer();
 

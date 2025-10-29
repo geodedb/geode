@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::client::{Client, Connection};
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// Connection pool for managing QUIC connections
 pub struct ConnectionPool {
@@ -52,7 +52,12 @@ impl ConnectionPool {
 
         let connection = match conn {
             Some(c) => c,
-            None => self.client.connect().await?,
+            None => {
+                let client = self.client.clone();
+                tokio::task::spawn_blocking(move || client.connect())
+                    .await
+                    .map_err(|e| Error::pool(format!("Task join error: {}", e)))??
+            }
         };
 
         Ok(PooledConnection {

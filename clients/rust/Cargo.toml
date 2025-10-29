@@ -13,10 +13,10 @@ categories = ["database"]
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
 
-# QUIC support
-quinn = "0.10"
-rustls = { version = "0.21", features = ["dangerous_configuration"] }
-rustls-pemfile = "1.0"
+# QUIC support - using Cloudflare's quiche for better compatibility
+quiche = { version = "0.24.5", default-features = false, features = ["boringssl-boring-crate"] }
+boring = "4.3"  # System BoringSSL bindings
+ring = "0.17"  # For crypto operations
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
