@@ -8,13 +8,19 @@ to ensure feature parity and correctness.
 
 import argparse
 import asyncio
+import atexit
 import json
+import os
+import random
+import signal
+import socket
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import yaml
 
@@ -42,6 +48,198 @@ class TestSummary:
     skipped: int = 0
     errors: int = 0
     duration_ms: float = 0.0
+
+
+class GeodeServerManager:
+    """Manages Geode server instances with dynamic port allocation."""
+
+    # Class-level tracking of used ports to prevent collisions
+    _used_ports: Set[int] = set()
+    _all_servers: List['GeodeServerManager'] = []
+
+    def __init__(self, geode_binary: Optional[Path] = None, verbose: bool = False):
+        self.geode_binary = geode_binary or self._find_geode_binary()
+        self.verbose = verbose
+        self.port: Optional[int] = None
+        self.process: Optional[asyncio.subprocess.Process] = None
+        self.log_file: Optional[Path] = None
+        self._cleanup_registered = False
+
+        # Register this instance for cleanup
+        GeodeServerManager._all_servers.append(self)
+
+    def _find_geode_binary(self) -> Path:
+        """Find the geode binary."""
+        # Try relative to test harness
+        candidates = [
+            Path(__file__).parent.parent.parent / "zig-out" / "bin" / "geode",
+            Path.cwd() / "zig-out" / "bin" / "geode",
+            Path.cwd().parent.parent / "zig-out" / "bin" / "geode",
+        ]
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+
+        raise FileNotFoundError("Could not find geode binary")
+
+    def _find_free_port(self) -> int:
+        """Find an available port in the ephemeral range."""
+        max_attempts = 100
+        for _ in range(max_attempts):
+            # Use ephemeral port range (49152-65535)
+            port = random.randint(49152, 65535)
+
+            # Check if port is already used by this test run
+            if port in GeodeServerManager._used_ports:
+                continue
+
+            # Try to bind to the port to verify it's available
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    s.bind(('localhost', port))
+                    # Port is available
+                    GeodeServerManager._used_ports.add(port)
+                    return port
+            except OSError:
+                # Port is in use, try another
+                continue
+
+        raise RuntimeError(f"Could not find free port after {max_attempts} attempts")
+
+    async def start(self) -> str:
+        """Start the Geode server and return the server address."""
+        if self.process is not None:
+            raise RuntimeError("Server is already running")
+
+        # Allocate a unique port
+        self.port = self._find_free_port()
+
+        # Create log file in temp directory
+        self.log_file = Path(tempfile.mktemp(prefix=f"geode_server_{self.port}_", suffix=".log"))
+
+        listen_addr = f"localhost:{self.port}"
+
+        if self.verbose:
+            print(f"Starting Geode server on {listen_addr}")
+            print(f"Server log: {self.log_file}")
+
+        # Start server process
+        log_fd = open(self.log_file, 'w')
+        self.process = await asyncio.create_subprocess_exec(
+            str(self.geode_binary),
+            "serve",
+            "--listen",
+            listen_addr,
+            stdout=log_fd,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
+        # Register cleanup on exit
+        if not self._cleanup_registered:
+            atexit.register(self._emergency_cleanup)
+            self._cleanup_registered = True
+
+        # Wait for server to be ready
+        await self._wait_for_server_ready()
+
+        return listen_addr
+
+    async def _wait_for_server_ready(self, timeout: float = 5.0):
+        """Wait for server to be ready to accept connections."""
+        start_time = time.time()
+
+        # QUIC servers don't accept raw TCP connections, so we need to check the log
+        # for the "Server ready" message instead
+        while time.time() - start_time < timeout:
+            # Check if server process is still alive
+            if self.process.returncode is not None:
+                # Server crashed
+                log_content = ""
+                if self.log_file and self.log_file.exists():
+                    log_content = self.log_file.read_text()
+                raise RuntimeError(
+                    f"Server process exited with code {self.process.returncode}.\n"
+                    f"Last 20 lines of log:\n{chr(10).join(log_content.splitlines()[-20:])}"
+                )
+
+            # Check log file for ready message
+            if self.log_file and self.log_file.exists():
+                try:
+                    log_content = self.log_file.read_text()
+                    if "Server ready" in log_content or "accepting QUIC connections" in log_content:
+                        if self.verbose:
+                            print(f"Server ready on port {self.port}")
+                        return
+                except Exception:
+                    # Log file might be being written to
+                    pass
+
+            await asyncio.sleep(0.1)
+
+        raise TimeoutError(f"Server did not become ready within {timeout} seconds")
+
+    async def stop(self):
+        """Stop the Geode server."""
+        if self.process is None:
+            return
+
+        if self.verbose:
+            print(f"Stopping Geode server on port {self.port}")
+
+        # Try graceful shutdown first
+        try:
+            self.process.terminate()
+            await asyncio.wait_for(self.process.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            # Force kill if graceful shutdown times out
+            if self.verbose:
+                print(f"Server did not stop gracefully, force killing...")
+            self.process.kill()
+            await self.process.wait()
+
+        # Release the port
+        if self.port is not None:
+            GeodeServerManager._used_ports.discard(self.port)
+            self.port = None
+
+        self.process = None
+
+        # Clean up log file if verbose is off
+        if not self.verbose and self.log_file and self.log_file.exists():
+            try:
+                self.log_file.unlink()
+            except Exception:
+                pass
+
+    def _emergency_cleanup(self):
+        """Emergency cleanup called on exit."""
+        if self.process and self.process.returncode is None:
+            try:
+                self.process.kill()
+            except Exception:
+                pass
+
+    @classmethod
+    async def cleanup_all(cls):
+        """Clean up all server instances."""
+        for server in cls._all_servers:
+            try:
+                await server.stop()
+            except Exception as e:
+                print(f"Error stopping server: {e}", file=sys.stderr)
+        cls._all_servers.clear()
+        cls._used_ports.clear()
+
+    async def __aenter__(self):
+        """Context manager support."""
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Context manager support."""
+        await self.stop()
 
 
 class ClientRunner:
@@ -477,32 +675,56 @@ class TestHarness:
 
     def __init__(
         self,
-        server: str,
-        clients: List[str],
+        server: Optional[str] = None,
+        clients: List[str] = None,
         parallel: bool = False,
         verbose: bool = False,
         fail_fast: bool = False,
+        manage_server: bool = True,
     ):
         self.server = server
         self.verbose = verbose
         self.fail_fast = fail_fast
         self.parallel = parallel
+        self.manage_server = manage_server
+        self.server_manager: Optional[GeodeServerManager] = None
 
-        # Initialize runners
+        # Initialize runners (will be configured with actual server address in setup())
         self.runners: Dict[str, ClientRunner] = {}
-        if "python" in clients:
-            self.runners["python"] = PythonRunner(server)
-        if "go" in clients:
-            self.runners["go"] = GoRunner(server)
-        if "rust" in clients:
-            self.runners["rust"] = RustRunner(server)
-        if "zig" in clients:
-            self.runners["zig"] = ZigRunner(server)
+        self.requested_clients = clients or ["python", "go", "rust", "zig"]
 
     async def setup(self) -> bool:
         """Setup all runners."""
+        # Start server if managed
+        if self.manage_server:
+            if self.verbose:
+                print("Starting managed Geode server...")
+            try:
+                self.server_manager = GeodeServerManager(verbose=self.verbose)
+                self.server = await self.server_manager.start()
+                if self.verbose:
+                    print(f"Server started at {self.server}")
+            except Exception as e:
+                print(f"ERROR: Failed to start server: {e}", file=sys.stderr)
+                return False
+        elif not self.server:
+            print("ERROR: No server address provided and server management disabled", file=sys.stderr)
+            return False
+
+        # Initialize runners with server address
+        temp_runners = {}
+        if "python" in self.requested_clients:
+            temp_runners["python"] = PythonRunner(self.server)
+        if "go" in self.requested_clients:
+            temp_runners["go"] = GoRunner(self.server)
+        if "rust" in self.requested_clients:
+            temp_runners["rust"] = RustRunner(self.server)
+        if "zig" in self.requested_clients:
+            temp_runners["zig"] = ZigRunner(self.server)
+
+        # Setup each runner
         available_runners = {}
-        for name, runner in self.runners.items():
+        for name, runner in temp_runners.items():
             if self.verbose:
                 print(f"Setting up {name} runner...")
             if await runner.setup():
@@ -513,11 +735,32 @@ class TestHarness:
 
         if not available_runners:
             print(f"ERROR: No runners available - at least one language toolchain must be installed", file=sys.stderr)
+            # Clean up server if we started it
+            if self.server_manager:
+                await self.server_manager.stop()
             return False
 
         # Replace runners dict with only available ones
         self.runners = available_runners
         return True
+
+    async def teardown(self):
+        """Clean up resources."""
+        # Teardown all runners
+        for runner in self.runners.values():
+            try:
+                await runner.teardown()
+            except Exception as e:
+                if self.verbose:
+                    print(f"Error in runner teardown: {e}", file=sys.stderr)
+
+        # Stop server if managed
+        if self.server_manager:
+            try:
+                await self.server_manager.stop()
+            except Exception as e:
+                if self.verbose:
+                    print(f"Error stopping server: {e}", file=sys.stderr)
 
     async def run_spec(self, spec_path: Path) -> List[TestResult]:
         """Run a test specification file."""
@@ -690,8 +933,13 @@ async def main():
     )
     parser.add_argument(
         "--server",
-        default="localhost:8443",
-        help="Geode server address (default: localhost:8443)",
+        default=None,
+        help="Geode server address (default: auto-start server on random port)",
+    )
+    parser.add_argument(
+        "--no-manage-server",
+        action="store_true",
+        help="Don't start/stop server automatically (requires --server)",
     )
     parser.add_argument(
         "--spec", type=Path, help="Test specification file (runs all if not specified)"
@@ -722,6 +970,9 @@ async def main():
     # Parse clients
     clients = [c.strip() for c in args.clients.split(",")]
 
+    # Determine server management strategy
+    manage_server = not args.no_manage_server
+
     # Initialize harness
     harness = TestHarness(
         server=args.server,
@@ -729,50 +980,68 @@ async def main():
         parallel=args.parallel,
         verbose=args.verbose,
         fail_fast=args.fail_fast,
+        manage_server=manage_server,
     )
 
-    # Setup
-    if not await harness.setup():
-        sys.exit(3)
+    try:
+        # Setup
+        if not await harness.setup():
+            sys.exit(3)
 
-    # Find specs
-    if args.spec:
-        specs = [args.spec]
-    else:
-        spec_dir = Path(__file__).parent / "specs"
-        specs = sorted(spec_dir.glob("*.yaml"))
+        # Find specs
+        if args.spec:
+            specs = [args.spec]
+        else:
+            spec_dir = Path(__file__).parent / "specs"
+            specs = sorted(spec_dir.glob("*.yaml"))
 
-    if not specs:
-        print("ERROR: No test specifications found", file=sys.stderr)
-        sys.exit(2)
+        if not specs:
+            print("ERROR: No test specifications found", file=sys.stderr)
+            sys.exit(2)
 
-    # Run tests
-    all_results = []
-    for spec in specs:
-        results = await harness.run_spec(spec)
-        all_results.extend(results)
+        # Run tests
+        all_results = []
+        for spec in specs:
+            results = await harness.run_spec(spec)
+            all_results.extend(results)
 
-    # Generate summary
-    summaries = harness.generate_summary(all_results)
-    harness.print_summary(summaries)
+        # Generate summary
+        summaries = harness.generate_summary(all_results)
+        harness.print_summary(summaries)
 
-    # Save reports
-    if args.report_json:
-        harness.save_json_report(all_results, summaries, args.report_json)
+        # Save reports
+        if args.report_json:
+            harness.save_json_report(all_results, summaries, args.report_json)
 
-    if args.report_html:
-        # Import HTML report generator
-        from generate_html_report import generate_html_report
+        if args.report_html:
+            # Import HTML report generator
+            from generate_html_report import generate_html_report
 
-        # Prepare report data
-        report_data = harness._prepare_report_data(all_results, summaries)
+            # Prepare report data
+            report_data = harness._prepare_report_data(all_results, summaries)
 
-        # Generate HTML
-        generate_html_report(report_data, args.report_html)
+            # Generate HTML
+            generate_html_report(report_data, args.report_html)
 
-    # Exit code
-    failed = sum(s.failed + s.errors for s in summaries.values())
-    sys.exit(1 if failed > 0 else 0)
+        # Exit code
+        failed = sum(s.failed + s.errors for s in summaries.values())
+        exit_code = 1 if failed > 0 else 0
+
+    except KeyboardInterrupt:
+        print("\nInterrupted by user", file=sys.stderr)
+        exit_code = 130
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        exit_code = 1
+    finally:
+        # Ensure cleanup happens
+        await harness.teardown()
+        await GeodeServerManager.cleanup_all()
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
