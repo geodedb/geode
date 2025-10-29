@@ -10,6 +10,10 @@ from .client import (
     Page,
     Column,
     open_database,
+    GeodeError,
+    GeodeConnectionError,
+    QueryError,
+    AuthError,
 )
 from .types import (
     Value,
@@ -40,6 +44,11 @@ __all__ = [
     "Page",
     "Column",
     "open_database",
+    # Exceptions
+    "GeodeError",
+    "GeodeConnectionError",
+    "QueryError",
+    "AuthError",
     # Types
     "Value",
     "ValueKind",

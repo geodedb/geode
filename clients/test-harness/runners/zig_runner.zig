@@ -248,11 +248,31 @@ pub fn main() !void {
     };
 
     if (json_output) {
-        // Use std.json.stringify with getStdOut helper for Zig 0.15
+        // Build JSON output manually
+        var json_buf = std.ArrayList(u8).init(allocator);
+        defer json_buf.deinit();
+        const writer = json_buf.writer();
+
+        try writer.print("{{\"summary\":{{\"total\":{d},\"passed\":{d},\"failed\":{d},\"errors\":{d},\"skipped\":{d}}},\"results\":[", .{
+            output.summary.total,
+            output.summary.passed,
+            output.summary.failed,
+            output.summary.errors,
+            output.summary.skipped,
+        });
+
+        for (output.results, 0..) |result, i| {
+            if (i > 0) try writer.writeAll(",");
+            try writer.print("{{\"test_name\":\"{s}\",\"status\":\"{s}\"", .{ result.test_name, result.status });
+            if (result.@"error") |err| {
+                try writer.print(",\"error\":\"{s}\"", .{err});
+            }
+            try writer.print(",\"duration_ms\":{d}}}", .{result.duration_ms});
+        }
+        try writer.writeAll("]}\n");
+
         const stdout_file = getStdOut();
-        const stdout_writer = stdout_file.writer();
-        try std.json.stringify(output, .{ .whitespace = .indent_2 }, stdout_writer);
-        try stdout_writer.writeByte('\n');
+        try stdout_file.writeAll(json_buf.items);
     } else {
         try printOutput(output, json_output);
     }

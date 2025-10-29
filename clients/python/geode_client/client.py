@@ -47,7 +47,7 @@ class GeodeError(Exception):
     pass
 
 
-class ConnectionError(GeodeError):
+class GeodeConnectionError(GeodeError):
     """Raised when connection fails."""
     pass
 
@@ -114,7 +114,7 @@ class GeodeProtocol(QuicConnectionProtocol):
     async def read_from_stream(self, stream_id: int) -> Optional[bytes]:
         """Read data from a stream."""
         if stream_id not in self._stream_readers:
-            raise ConnectionError(f"Stream {stream_id} not found")
+            raise GeodeConnectionError(f"Stream {stream_id} not found")
 
         data = await self._stream_readers[stream_id].get()
         return data
@@ -248,15 +248,20 @@ class Connection:
         try:
             self._protocol = await asyncio.wait_for(
                 self._connection_context.__aenter__(),
-                timeout=5.0
+                timeout=10.0
             )
             print("[DEBUG] Protocol established")
         except asyncio.TimeoutError:
             print("[DEBUG] Context manager __aenter__() timed out!")
-            raise ConnectionError("Connection handshake timed out")
+            raise GeodeConnectionError("Connection handshake timed out after 10 seconds")
+        except ConnectionError as e:
+            print(f"[DEBUG] Connection error: {e}")
+            raise GeodeConnectionError(f"Connection refused or reset: {e}")
         except Exception as e:
-            print(f"[DEBUG] Connection failed: {e}")
-            raise ConnectionError(f"Failed to establish connection: {e}")
+            print(f"[DEBUG] Connection failed: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise GeodeConnectionError(f"Failed to establish connection: {e}")
 
         # Create bidirectional stream
         self._stream_id, self._reader_queue = await self._protocol.create_bidirectional_stream()
@@ -280,20 +285,20 @@ class Connection:
             response = await asyncio.wait_for(self._read_json(), timeout=5.0)
             print(f"[DEBUG] Received HELLO response: {response}")
             if not response:
-                raise ConnectionError("No HELLO response from server")
+                raise GeodeConnectionError("No HELLO response from server")
         except asyncio.TimeoutError:
             print("[DEBUG] HELLO response timed out!")
-            raise ConnectionError("Timeout waiting for HELLO response")
+            raise GeodeConnectionError("Timeout waiting for HELLO response")
         except Exception as e:
             print(f"[DEBUG] Error reading HELLO response: {e}")
-            raise ConnectionError(f"Failed to read HELLO response: {e}")
+            raise GeodeConnectionError(f"Failed to read HELLO response: {e}")
 
         self._connected = True
 
     async def _write_json(self, obj: Dict[str, Any]) -> None:
         """Write JSON object as a line."""
         if not self._protocol or self._stream_id is None:
-            raise ConnectionError("Not connected")
+            raise GeodeConnectionError("Not connected")
 
         line = json.dumps(obj) + "\n"
         self._protocol.write_to_stream(self._stream_id, line.encode("utf-8"))
@@ -301,7 +306,7 @@ class Connection:
     async def _read_line(self) -> bytes:
         """Read a single line from the stream."""
         if not self._protocol or self._stream_id is None:
-            raise ConnectionError("Not connected")
+            raise GeodeConnectionError("Not connected")
 
         while True:
             # Check if we have a complete line in buffer
@@ -319,7 +324,7 @@ class Connection:
                     line = self._buffer
                     self._buffer = b""
                     return line
-                raise ConnectionError("Stream closed")
+                raise GeodeConnectionError("Stream closed")
 
             self._buffer += data
 

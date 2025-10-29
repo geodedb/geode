@@ -196,13 +196,24 @@ pub const QuicTransport = struct {
                 _ = try key_file.readAll(inline_priv_key.?);
                 debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loaded private key\",\"size\":{}}}", .{key_size});
 
-                // Decode PEM to DER if needed
-                if (std.mem.indexOf(u8, inline_priv_key.?, "-----BEGIN PRIVATE KEY-----")) |_| {
-                    debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"decoding PEM private key to DER\"}}", .{});
+                // Decode PEM to DER if needed (support both PKCS#8 and EC PRIVATE KEY formats)
+                const pem_data = inline_priv_key.?;
+                var begin_marker: []const u8 = undefined;
+                var end_marker: []const u8 = undefined;
+                var is_pem = false;
 
-                    const pem_data = inline_priv_key.?;
-                    const begin_marker = "-----BEGIN PRIVATE KEY-----";
-                    const end_marker = "-----END PRIVATE KEY-----";
+                if (std.mem.indexOf(u8, pem_data, "-----BEGIN PRIVATE KEY-----")) |_| {
+                    begin_marker = "-----BEGIN PRIVATE KEY-----";
+                    end_marker = "-----END PRIVATE KEY-----";
+                    is_pem = true;
+                } else if (std.mem.indexOf(u8, pem_data, "-----BEGIN EC PRIVATE KEY-----")) |_| {
+                    begin_marker = "-----BEGIN EC PRIVATE KEY-----";
+                    end_marker = "-----END EC PRIVATE KEY-----";
+                    is_pem = true;
+                }
+
+                if (is_pem) {
+                    debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"decoding PEM private key to DER\",\"format\":\"{s}\"}}", .{begin_marker});
 
                     const begin_idx = std.mem.indexOf(u8, pem_data, begin_marker) orelse return error.InvalidPEM;
                     const content_start = begin_idx + begin_marker.len;

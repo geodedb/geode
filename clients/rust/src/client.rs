@@ -189,8 +189,7 @@ impl Connection {
                 let mut ca_reader = std::io::BufReader::new(ca_file);
 
                 let certs = rustls_pemfile::certs(&mut ca_reader)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| Error::connection(&format!("Failed to parse CA certs: {}", e)))?;
+                    .map_err(|e| Error::connection(&format!("Failed to parse CA cert: {}", e)))?;
 
                 for cert in certs {
                     root_store.add(cert)
