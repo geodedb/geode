@@ -576,6 +576,13 @@ const ClientConfig = struct {
     json_params: std.StringHashMap([]const u8) = undefined,
 };
 
+// Thread wrapper for handleQuicConnection
+fn handleQuicConnectionThread(allocator: std.mem.Allocator, transport: anytype, conn: anytype) void {
+    handleQuicConnection(allocator, transport, conn) catch |err| {
+        std.debug.print("Error in connection handler thread: {}\n", .{err});
+    };
+}
+
 // Handle a QUIC connection and process queries
 fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: anytype) !void {
     defer conn.close();
@@ -1045,12 +1052,21 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         connection_count += 1;
         std.debug.print("✅ Accepted QUIC connection #{}\n", .{connection_count});
 
-        // Handle the connection by processing queries
-        handleQuicConnection(allocator, &quic_server, conn) catch |err| {
-            std.debug.print("Error handling connection: {}\n", .{err});
+        // Spawn a thread to handle the connection so the main loop can continue polling
+        // This is critical for QUIC handshake completion as the main loop needs to keep
+        // processing incoming packets
+        const thread = std.Thread.spawn(.{}, handleQuicConnectionThread, .{ allocator, &quic_server, conn }) catch |err| {
+            std.debug.print("Failed to spawn handler thread: {}\n", .{err});
+            conn.close();
+            continue;
         };
+        thread.detach(); // Detach so we don't need to join
 
-        if (test_exit_after_first) break;
+        if (test_exit_after_first) {
+            // For testing, wait a bit for the handler to process
+            std.Thread.sleep(100 * std.time.ns_per_ms);
+            break;
+        }
     }
 }
 
