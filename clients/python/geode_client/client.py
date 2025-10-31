@@ -137,7 +137,7 @@ class Connection:
         self,
         *,
         host: str = "127.0.0.1",
-        port: int = 8443,
+        port: int = 3141,
         page_size: int = 1000,
         hello_name: str = "geode-python",
         hello_ver: str = "0.1.0",
@@ -153,7 +153,7 @@ class Connection:
 
         Args:
             host: Server hostname or IP
-            port: Server port (default 8443)
+            port: Server port (default 3141)
             page_size: Default page size for results
             hello_name: Client name for HELLO handshake
             hello_ver: Client version
@@ -212,24 +212,27 @@ class Connection:
         configuration.server_name = self.server_name
         print(f"[DEBUG] Server name: {self.server_name}")
 
-        # Configure TLS - try test harness CA first, then custom CA, then skip verification
-        ca_cert_path = self.ca_cert
-
-        # If no custom CA specified, try the test harness CA
-        if not ca_cert_path:
-            test_harness_ca = os.path.join(os.path.dirname(__file__), '../../test-harness/certs/ca.crt')
-            if os.path.exists(test_harness_ca):
-                ca_cert_path = test_harness_ca
-                print(f"[DEBUG] Using test harness CA: {test_harness_ca}")
-
-        if ca_cert_path and os.path.exists(ca_cert_path):
-            print(f"[DEBUG] Loading CA certificate: {ca_cert_path}")
-            configuration.load_verify_locations(ca_cert_path)
-        elif self.skip_verify:
-            print("[DEBUG] Skipping TLS verification (no CA certificate found)")
+        # Configure TLS
+        if self.skip_verify:
+            # Skip certificate verification
+            print("[DEBUG] Skipping TLS verification (skip_verify=True)")
             configuration.verify_mode = ssl.CERT_NONE
         else:
-            print("[DEBUG] WARNING: No CA certificate found and verify_ssl=True")
+            # Try to load CA certificate
+            ca_cert_path = self.ca_cert
+
+            # If no custom CA specified, try the test harness CA
+            if not ca_cert_path:
+                test_harness_ca = os.path.join(os.path.dirname(__file__), '../../test-harness/certs/ca.crt')
+                if os.path.exists(test_harness_ca):
+                    ca_cert_path = test_harness_ca
+                    print(f"[DEBUG] Using test harness CA: {test_harness_ca}")
+
+            if ca_cert_path and os.path.exists(ca_cert_path):
+                print(f"[DEBUG] Loading CA certificate: {ca_cert_path}")
+                configuration.load_verify_locations(ca_cert_path)
+            else:
+                print("[DEBUG] WARNING: No CA certificate found and skip_verify=False")
 
         if self.client_cert and self.client_key:
             configuration.load_cert_chain(self.client_cert, self.client_key)
@@ -542,7 +545,7 @@ class Client:
     def __init__(
         self,
         host: str = "127.0.0.1",
-        port: int = 8443,
+        port: int = 3141,
         **kwargs
     ):
         """
@@ -550,7 +553,7 @@ class Client:
 
         Args:
             host: Server hostname or IP
-            port: Server port (default 8443)
+            port: Server port (default 3141)
             **kwargs: Additional connection parameters
         """
         self.host = host
@@ -578,7 +581,7 @@ class Client:
 
         # Extract host and port
         host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or 8443
+        port = parsed.port or 3141
 
         # Parse query parameters
         config = {}
@@ -634,7 +637,7 @@ def open_database(url: str) -> Client:
         Client instance
 
     Example:
-        client = open_database("quic://localhost:8443")
+        client = open_database("quic://localhost:3141")
         async with client.connection() as conn:
             page, _ = await conn.query("MATCH (n) RETURN n LIMIT 10")
     """

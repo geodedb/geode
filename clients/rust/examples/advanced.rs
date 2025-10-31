@@ -57,7 +57,7 @@ async fn connection_pool_example() -> Result<()> {
     println!("\n=== Connection Pool Example ===\n");
 
     // Create connection pool
-    let pool = ConnectionPool::new("127.0.0.1", 8443, 10)
+    let pool = ConnectionPool::new("127.0.0.1", 3141, 10)
         .skip_verify(true)
         .page_size(1000);
 

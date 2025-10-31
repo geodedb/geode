@@ -42,7 +42,7 @@ use geode_client::{Client, Result};
 #[tokio::main]
 async fn main() -> Result<()> {
     // Create QUIC client (skip TLS verification for development)
-    let client = Client::new("127.0.0.1", 8443)
+    let client = Client::new("127.0.0.1", 3141)
         .skip_verify(true)
         .page_size(1000);
 
@@ -118,7 +118,7 @@ match conn.query("CREATE (p:Person {name: $name})", params).await {
 use geode_client::ConnectionPool;
 
 // Create connection pool
-let pool = ConnectionPool::new("127.0.0.1", 8443, 10)
+let pool = ConnectionPool::new("127.0.0.1", 3141, 10)
     .skip_verify(true)
     .page_size(1000);
 
@@ -135,7 +135,7 @@ println!("Pool size: {}", pool.size().await);
 The client uses a builder pattern for configuration:
 
 ```rust
-let client = Client::new("127.0.0.1", 8443)  // host and port
+let client = Client::new("127.0.0.1", 3141)  // host and port
     .skip_verify(true)                        // Skip TLS verification (development only)
     .page_size(1000)                          // Results page size
     .client_name("my-app")                    // Client name for server logs
@@ -245,7 +245,7 @@ The QUIC client provides:
 Ensure Geode server is running with QUIC enabled:
 
 ```bash
-./zig-out/bin/geode serve --listen 0.0.0.0:8443
+./zig-out/bin/geode serve --listen 0.0.0.0:3141
 ```
 
 ### TLS Verification Errors
@@ -253,7 +253,7 @@ Ensure Geode server is running with QUIC enabled:
 For development, you can skip verification:
 
 ```rust
-let client = Client::new("localhost", 8443).skip_verify(true);
+let client = Client::new("localhost", 3141).skip_verify(true);
 ```
 
 For production, ensure proper TLS certificates are configured on the server.

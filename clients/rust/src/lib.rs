@@ -17,21 +17,20 @@
 //! ```no_run
 //! use geode_client::{Client, Result};
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<()> {
+//! fn main() -> Result<()> {
 //!     // Create QUIC client
-//!     let client = Client::new("127.0.0.1", 8443)
+//!     let client = Client::new("127.0.0.1", 3141)
 //!         .skip_verify(true);
 //!
 //!     // Connect via QUIC
-//!     let conn = client.connect().await?;
+//!     let mut conn = client.connect()?;
 //!
 //!     // Execute query
-//!     let page = conn.query("RETURN 1 AS x", None).await?;
+//!     let page = conn.query("RETURN 1 AS x", None)?;
 //!     println!("Result: {:?}", page);
 //!
 //!     // Close connection
-//!     conn.close().await?;
+//!     conn.close()?;
 //!
 //!     Ok(())
 //! }
