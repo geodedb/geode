@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const ShardError = error{ InvalidShardCount };
+pub const ShardError = error{InvalidShardCount};
 
 fn fnv1a64(bytes: []const u8) u64 {
     var hash: u64 = 14695981039346656037; // FNV offset basis (corrected)

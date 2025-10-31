@@ -2,11 +2,11 @@ const std = @import("std");
 
 pub const Stream = struct {
     id: u32,
-    send_buf: usize,     // queued bytes ready to send
-    flow_window: usize,  // peer credit
+    send_buf: usize, // queued bytes ready to send
+    flow_window: usize, // peer credit
     blocked: bool,
-    deficit: usize,      // accumulated credit
-    quantum: usize,      // credit added per round
+    deficit: usize, // accumulated credit
+    quantum: usize, // credit added per round
 };
 
 pub const Transmission = struct {
@@ -44,9 +44,9 @@ pub fn scheduleOnce(active: []const Stream, max_packet: usize, out: []Transmissi
 test "drr: basic fairness & sizing" {
     var out: [8]Transmission = undefined;
     const streams = [_]Stream{
-        .{ .id=1, .send_buf=4096, .flow_window=1200, .blocked=false, .deficit=0, .quantum=1200 },
-        .{ .id=2, .send_buf=300,  .flow_window=300,  .blocked=false, .deficit=0, .quantum=1200 },
-        .{ .id=3, .send_buf=0,    .flow_window=1200, .blocked=false, .deficit=0, .quantum=1200 },
+        .{ .id = 1, .send_buf = 4096, .flow_window = 1200, .blocked = false, .deficit = 0, .quantum = 1200 },
+        .{ .id = 2, .send_buf = 300, .flow_window = 300, .blocked = false, .deficit = 0, .quantum = 1200 },
+        .{ .id = 3, .send_buf = 0, .flow_window = 1200, .blocked = false, .deficit = 0, .quantum = 1200 },
     };
 
     const n = try scheduleOnce(streams[0..], 1200, out[0..]);
@@ -62,8 +62,8 @@ test "drr: basic fairness & sizing" {
 test "drr: edge — empty/blocked" {
     var out: [4]Transmission = undefined;
     const streams = [_]Stream{
-        .{ .id=10, .send_buf=0, .flow_window=1000, .blocked=false, .deficit=500, .quantum=500 },
-        .{ .id=11, .send_buf=1000, .flow_window=1000, .blocked=true, .deficit=500, .quantum=500 },
+        .{ .id = 10, .send_buf = 0, .flow_window = 1000, .blocked = false, .deficit = 500, .quantum = 500 },
+        .{ .id = 11, .send_buf = 1000, .flow_window = 1000, .blocked = true, .deficit = 500, .quantum = 500 },
     };
     const n = try scheduleOnce(streams[0..], 1200, out[0..]);
     try std.testing.expectEqual(@as(usize, 0), n);
@@ -73,7 +73,7 @@ test "drr: edge — empty/blocked" {
 test "drr: invalid — out buffer too small" {
     var out: [0]Transmission = undefined;
     const streams = [_]Stream{
-        .{ .id=1, .send_buf=1000, .flow_window=1000, .blocked=false, .deficit=1000, .quantum=1000 },
+        .{ .id = 1, .send_buf = 1000, .flow_window = 1000, .blocked = false, .deficit = 1000, .quantum = 1000 },
     };
     const err = scheduleOnce(streams[0..], 1200, out[0..]);
     try std.testing.expectError(ScheduleError.OutOfSpace, err);

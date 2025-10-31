@@ -101,15 +101,36 @@ let page = conn.query(&query, Some(params)).await?;
 ### Transactions
 
 ```rust
-conn.begin().await?;
+conn.begin()?;
 
-match conn.query("CREATE (p:Person {name: $name})", params).await {
-    Ok(_) => conn.commit().await?,
+match conn.query("CREATE (p:Person {name: $name})", params) {
+    Ok(_) => conn.commit()?,
     Err(e) => {
-        conn.rollback().await?;
+        conn.rollback()?;
         return Err(e);
     }
 }
+```
+
+### Savepoints (Partial Rollback)
+
+```rust
+conn.begin()?;
+
+// Create initial data
+conn.query("CREATE (p:Person {name: 'Alice', age: 30})", None)?;
+
+// Create a savepoint
+let sp = conn.savepoint("before_update")?;
+
+// Make changes
+conn.query("MATCH (p:Person {name: 'Alice'}) SET p.age = 40", None)?;
+
+// Rollback to savepoint (undoes the age change)
+conn.rollback_to(&sp)?;
+
+// Alice's age is still 30
+conn.commit()?;
 ```
 
 ### Connection Pooling
@@ -199,11 +220,18 @@ let object_val = value.as_object()?;
 
 ## Examples
 
+The client includes comprehensive examples demonstrating all features:
+
+- `examples/basic.rs` - Simple connection and queries
+- `examples/advanced.rs` - Advanced features and patterns
+- `examples/transactions.rs` - Transaction management with savepoints
+
 Run examples:
 
 ```bash
 cargo run --example basic
 cargo run --example advanced
+cargo run --example transactions
 ```
 
 ## Development

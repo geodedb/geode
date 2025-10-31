@@ -11,7 +11,7 @@ pub const NewReno = struct {
     pub fn init(mss: usize) NewReno {
         return .{
             .mss = mss,
-            .cwnd = 10 * mss,       // RFC default initial window
+            .cwnd = 10 * mss, // RFC default initial window
             .ssthresh = std.math.maxInt(usize), // "infinite"
             .bytes_in_flight = 0,
             .in_recovery = false,

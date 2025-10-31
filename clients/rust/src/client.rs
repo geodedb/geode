@@ -27,6 +27,12 @@ pub struct Page {
     pub final_page: bool,
 }
 
+/// Savepoint within a transaction
+#[derive(Debug, Clone)]
+pub struct Savepoint {
+    pub name: String,
+}
+
 /// Geode database client using quiche
 #[derive(Clone)]
 pub struct Client {
@@ -506,6 +512,30 @@ impl Connection {
     /// Rollback a transaction
     pub fn rollback(&mut self) -> Result<()> {
         self.write_json(&serde_json::json!({"type": "ROLLBACK"}))?;
+        self.flush()?;
+        self.read_line()?;
+        Ok(())
+    }
+
+    /// Create a savepoint within the current transaction
+    pub fn savepoint(&mut self, name: &str) -> Result<Savepoint> {
+        self.write_json(&serde_json::json!({
+            "type": "SAVEPOINT",
+            "name": name
+        }))?;
+        self.flush()?;
+        self.read_line()?;
+        Ok(Savepoint {
+            name: name.to_string(),
+        })
+    }
+
+    /// Rollback to a savepoint
+    pub fn rollback_to(&mut self, savepoint: &Savepoint) -> Result<()> {
+        self.write_json(&serde_json::json!({
+            "type": "ROLLBACK_TO",
+            "name": savepoint.name
+        }))?;
         self.flush()?;
         self.read_line()?;
         Ok(())

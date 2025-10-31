@@ -99,6 +99,28 @@ async with client.connection() as conn:
         print(f"Transaction rolled back: {e}")
 ```
 
+### Savepoints (Partial Rollback)
+
+```python
+async with client.connection() as conn:
+    await conn.begin()
+
+    # Create initial data
+    await conn.execute("CREATE (p:Person {name: 'Alice', age: 30})")
+
+    # Create a savepoint
+    sp = await conn.savepoint("before_update")
+
+    # Make changes
+    await conn.execute("MATCH (p:Person {name: 'Alice'}) SET p.age = 40")
+
+    # Rollback to savepoint (undoes the age change)
+    await conn.rollback_to(sp)
+
+    # Alice's age is still 30
+    await conn.commit()
+```
+
 ### Query Builder
 
 ```python
@@ -329,12 +351,16 @@ except GeodeError as e:
 
 See the `examples/` directory for complete examples:
 
-- `quic_example.py` - Comprehensive QUIC client examples
+- `examples/basic_example.py` - Simple connection and queries
+- `examples/advanced_example.py` - Advanced features and patterns
+- `examples/quic_example.py` - Comprehensive QUIC client examples
+- `examples/transactions_example.py` - Transaction management with savepoints
 
 Run examples:
 
 ```bash
 python examples/quic_example.py
+python examples/transactions_example.py
 ```
 
 ## Development

@@ -9,6 +9,7 @@ from .client import (
     Connection,
     Page,
     Column,
+    Savepoint,
     open_database,
     GeodeError,
     GeodeConnectionError,
@@ -43,6 +44,7 @@ __all__ = [
     "Connection",
     "Page",
     "Column",
+    "Savepoint",
     "open_database",
     # Exceptions
     "GeodeError",

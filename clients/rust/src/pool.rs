@@ -106,3 +106,9 @@ impl std::ops::Deref for PooledConnection {
         self.connection.as_ref().unwrap()
     }
 }
+
+impl std::ops::DerefMut for PooledConnection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.connection.as_mut().unwrap()
+    }
+}

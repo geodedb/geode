@@ -9,12 +9,29 @@ const std = @import("std");
 pub const Poller = struct {
     pub const Event = struct { fd: i32, readable: bool, writable: bool, user: usize };
 
-    pub fn initLinux(allocator: std.mem.Allocator) !Poller { _ = allocator; return .{}; }
-    pub fn initKqueue(allocator: std.mem.Allocator) !Poller { _ = allocator; return .{}; }
-    pub fn initIOCP(allocator: std.mem.Allocator) !Poller { _ = allocator; return .{}; }
+    pub fn initLinux(allocator: std.mem.Allocator) !Poller {
+        _ = allocator;
+        return .{};
+    }
+    pub fn initKqueue(allocator: std.mem.Allocator) !Poller {
+        _ = allocator;
+        return .{};
+    }
+    pub fn initIOCP(allocator: std.mem.Allocator) !Poller {
+        _ = allocator;
+        return .{};
+    }
 
-    pub fn register(_: *Poller, fd: i32, mask: u32, user: usize) !void { _ = fd; _ = mask; _ = user; }
-    pub fn wait(_: *Poller, out_events: []Event, timeout_ms: i32) !usize { _ = out_events; _ = timeout_ms; return 0; }
+    pub fn register(_: *Poller, fd: i32, mask: u32, user: usize) !void {
+        _ = fd;
+        _ = mask;
+        _ = user;
+    }
+    pub fn wait(_: *Poller, out_events: []Event, timeout_ms: i32) !usize {
+        _ = out_events;
+        _ = timeout_ms;
+        return 0;
+    }
 };
 
 // === PSEUDOCODE for the single-threaded loop (Zig-like) ===

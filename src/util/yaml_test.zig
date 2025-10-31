@@ -509,17 +509,17 @@ test "yaml: DEBUG simple tests field" {
         \\tests:
         \\  - name: "test1"
     ;
-    
+
     std.debug.print("\n=== DEBUG: Parsing ===\n{s}\n=== END INPUT ===\n", .{input});
     var value = try yaml.parse(allocator, input);
     defer value.deinit(allocator);
-    
+
     std.debug.print("Root type: {}\n", .{value});
     if (value == .map) {
         std.debug.print("Map has {d} keys\n", .{value.map.count()});
         var iter = value.map.iterator();
         while (iter.next()) |entry| {
-            std.debug.print("  '{s}' -> {}\n", .{entry.key_ptr.*, entry.value_ptr.*});
+            std.debug.print("  '{s}' -> {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
         }
     }
 }

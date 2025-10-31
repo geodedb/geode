@@ -8,9 +8,13 @@ pub const TimerHeap = struct {
     pub fn init(allocator: std.mem.Allocator) !TimerHeap {
         return .{ .a = try std.ArrayList(Timer).initCapacity(allocator, 0) };
     }
-    pub fn deinit(self: *TimerHeap, allocator: std.mem.Allocator) void { self.a.deinit(allocator); }
+    pub fn deinit(self: *TimerHeap, allocator: std.mem.Allocator) void {
+        self.a.deinit(allocator);
+    }
 
-    fn less(a: Timer, b: Timer) bool { return a.deadline_us < b.deadline_us; }
+    fn less(a: Timer, b: Timer) bool {
+        return a.deadline_us < b.deadline_us;
+    }
 
     pub fn push(self: *TimerHeap, allocator: std.mem.Allocator, t: Timer) !void {
         try self.a.append(allocator, t);
@@ -52,9 +56,9 @@ pub const TimerHeap = struct {
 test "timer: order by deadline" {
     var th = try TimerHeap.init(std.testing.allocator);
     defer th.deinit(std.testing.allocator);
-    try th.push(std.testing.allocator, .{ .id=1, .deadline_us=300 });
-    try th.push(std.testing.allocator, .{ .id=2, .deadline_us=100 });
-    try th.push(std.testing.allocator, .{ .id=3, .deadline_us=200 });
+    try th.push(std.testing.allocator, .{ .id = 1, .deadline_us = 300 });
+    try th.push(std.testing.allocator, .{ .id = 2, .deadline_us = 100 });
+    try th.push(std.testing.allocator, .{ .id = 3, .deadline_us = 200 });
     try std.testing.expectEqual(@as(u64, 2), th.pop().?.id);
     try std.testing.expectEqual(@as(u64, 3), th.pop().?.id);
     try std.testing.expectEqual(@as(u64, 1), th.pop().?.id);

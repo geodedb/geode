@@ -22,6 +22,13 @@ from .types import Value, decode_value
 
 
 @dataclass
+class Savepoint:
+    """Represents a transaction savepoint."""
+    name: str
+    connection: 'Connection' = None
+
+
+@dataclass
 class Column:
     """Represents a column in the result set."""
     name: str
@@ -354,6 +361,40 @@ class Connection:
         """Rollback the current transaction."""
         async with self._lock:
             await self._write_json({"type": "ROLLBACK"})
+            await self._read_json()
+
+    async def savepoint(self, name: str) -> 'Savepoint':
+        """
+        Create a savepoint within the current transaction.
+
+        Args:
+            name: Savepoint name
+
+        Returns:
+            Savepoint object that can be used to rollback to this point
+
+        Example:
+            await conn.begin()
+            await conn.execute("CREATE (p:Person {name: 'Alice'})")
+            sp = await conn.savepoint("before_update")
+            await conn.execute("SET p.age = 30")
+            await conn.rollback_to(sp)  # Rolls back the SET operation
+            await conn.commit()
+        """
+        async with self._lock:
+            await self._write_json({"type": "SAVEPOINT", "name": name})
+            await self._read_json()
+        return Savepoint(name=name, connection=self)
+
+    async def rollback_to(self, savepoint: 'Savepoint') -> None:
+        """
+        Rollback to a savepoint.
+
+        Args:
+            savepoint: The savepoint to rollback to
+        """
+        async with self._lock:
+            await self._write_json({"type": "ROLLBACK_TO", "name": savepoint.name})
             await self._read_json()
 
     async def query(

@@ -54,6 +54,10 @@ path = "examples/basic.rs"
 name = "advanced"
 path = "examples/advanced.rs"
 
+[[example]]
+name = "transactions"
+path = "examples/transactions.rs"
+
 [lib]
 name = "geode_client"
 path = "src/lib.rs"

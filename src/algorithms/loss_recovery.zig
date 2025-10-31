@@ -32,9 +32,9 @@ pub fn detectLost(
 
 test "loss: threshold by reordering or time" {
     var pkts = [_]SentPacket{
-        .{ .pn=10, .sent_at_us=1000, .acked=false },
-        .{ .pn=11, .sent_at_us=1010, .acked=true  },
-        .{ .pn=12, .sent_at_us=1020, .acked=true  },
+        .{ .pn = 10, .sent_at_us = 1000, .acked = false },
+        .{ .pn = 11, .sent_at_us = 1010, .acked = true },
+        .{ .pn = 12, .sent_at_us = 1020, .acked = true },
     };
     var out: [4]u64 = undefined;
     const n = detectLost(pkts[0..], 12, 3000, 1000, 3, out[0..]);
@@ -45,8 +45,8 @@ test "loss: threshold by reordering or time" {
 
 test "loss: edge — not enough time nor reordering" {
     var pkts = [_]SentPacket{
-        .{ .pn=5, .sent_at_us=2000, .acked=false },
-        .{ .pn=6, .sent_at_us=2010, .acked=true  },
+        .{ .pn = 5, .sent_at_us = 2000, .acked = false },
+        .{ .pn = 6, .sent_at_us = 2010, .acked = true },
     };
     var out: [2]u64 = undefined;
     const n = detectLost(pkts[0..], 6, 2100, 1000, 5, out[0..]);
@@ -56,7 +56,7 @@ test "loss: edge — not enough time nor reordering" {
 
 test "loss: invalid — empty out buffer just truncates (non-panicking)" {
     var pkts = [_]SentPacket{
-        .{ .pn=1, .sent_at_us=0, .acked=false },
+        .{ .pn = 1, .sent_at_us = 0, .acked = false },
     };
     var out: [0]u64 = .{};
     const n = detectLost(pkts[0..], 10, 2000, 1000, 1, out[0..]);

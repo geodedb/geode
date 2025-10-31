@@ -4,7 +4,6 @@ const std = @import("std");
 /// Supports a subset of YAML needed for test specs: scalars, lists, maps
 /// CANARY: REQ=REQ-TEST-YAML-001; FEATURE="YAML Parser"; ASPECT=Testing;
 /// STATUS=IMPLEMENTED; TEST=yaml_parser_tests; OWNER=test-team; UPDATED=2025-10-28
-
 pub const Error = error{
     UnexpectedToken,
     InvalidIndentation,
@@ -357,7 +356,7 @@ pub const Parser = struct {
         var result = try self.allocator.alloc(u8, total_len);
         var offset: usize = 0;
         for (lines.items, 0..) |line, i| {
-            @memcpy(result[offset..offset + line.len], line);
+            @memcpy(result[offset .. offset + line.len], line);
             offset += line.len;
             if (i < lines.items.len - 1) {
                 result[offset] = '\n';
