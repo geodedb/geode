@@ -75,6 +75,33 @@ class Value:
         return self.kind == ValueKind.NULL
 
     @property
+    def raw_value(self) -> Any:
+        """Get the raw Python value for test compatibility."""
+        if self.kind == ValueKind.NULL:
+            return None
+        elif self.kind == ValueKind.INT:
+            return self.int_value
+        elif self.kind == ValueKind.BOOL:
+            return self.bool_value
+        elif self.kind == ValueKind.STRING:
+            return self.str_value
+        elif self.kind == ValueKind.DECIMAL:
+            return self.decimal_value
+        elif self.kind == ValueKind.ARRAY:
+            return [v.raw_value for v in self.array_value]
+        elif self.kind == ValueKind.OBJECT:
+            return {k: v.raw_value for k, v in self.object_value.items()}
+        elif self.kind == ValueKind.BYTEA:
+            return self.bytes_value
+        elif self.kind in (ValueKind.DATE, ValueKind.TIME, ValueKind.TIMESTAMP, ValueKind.TIMESTAMPTZ, ValueKind.TIMETZ):
+            return self.time_value
+        elif self.kind == ValueKind.RANGE:
+            return self.range_value
+        else:
+            # For other types, return str_value
+            return self.str_value
+
+    @property
     def as_int(self) -> int:
         """Get value as integer."""
         if self.kind == ValueKind.INT:

@@ -207,24 +207,24 @@ class Connection:
         if self._connected:
             return
 
-        # Configure QUIC
+        # Configure QUIC - using same pattern as vendor/quic/clients/python/test_client.py
         print("[DEBUG] Configuring QUIC...")
         configuration = QuicConfiguration(
             is_client=True,
             alpn_protocols=["geode/1"],
-            max_datagram_size=1500,  # Increase from default 1200 for large certificates
         )
-
-        # Set server name for SNI
-        configuration.server_name = self.server_name
-        print(f"[DEBUG] Server name: {self.server_name}")
 
         # Configure TLS
         if self.skip_verify:
-            # Skip certificate verification
+            # Skip certificate verification (match vendor client pattern)
             print("[DEBUG] Skipping TLS verification (skip_verify=True)")
-            configuration.verify_mode = ssl.CERT_NONE
+            configuration.verify_mode = 0  # Same as ssl.CERT_NONE
+            # DON'T set server_name when skipping verification - this causes cert issues
         else:
+            # Set server name for SNI only when verifying
+            configuration.server_name = self.server_name
+            print(f"[DEBUG] Server name for SNI: {self.server_name}")
+
             # Try to load CA certificate
             ca_cert_path = self.ca_cert
 
@@ -242,6 +242,7 @@ class Connection:
                 print("[DEBUG] WARNING: No CA certificate found and skip_verify=False")
 
         if self.client_cert and self.client_key:
+            print(f"[DEBUG] Loading client certificate")
             configuration.load_cert_chain(self.client_cert, self.client_key)
 
         # Connect - create context manager and enter it manually
@@ -253,14 +254,14 @@ class Connection:
             create_protocol=GeodeProtocol,
         )
 
-        # Enter the context manager
+        # Enter the context manager - this establishes the connection and completes handshake
         print("[DEBUG] Entering context manager...")
         try:
             self._protocol = await asyncio.wait_for(
                 self._connection_context.__aenter__(),
                 timeout=10.0
             )
-            print("[DEBUG] Protocol established")
+            print("[DEBUG] Connection established and handshake complete")
         except asyncio.TimeoutError:
             print("[DEBUG] Context manager __aenter__() timed out!")
             raise GeodeConnectionError("Connection handshake timed out after 10 seconds")
@@ -273,10 +274,10 @@ class Connection:
             traceback.print_exc()
             raise GeodeConnectionError(f"Failed to establish connection: {e}")
 
-        # Create bidirectional stream
+        # Create bidirectional stream AFTER handshake is complete
         self._stream_id, self._reader_queue = await self._protocol.create_bidirectional_stream()
 
-        # Send HELLO
+        # Send HELLO message
         hello = {
             "type": "HELLO",
             "client_name": self.hello_name,
@@ -285,10 +286,7 @@ class Connection:
         }
         print(f"[DEBUG] Sending HELLO message: {hello}")
         await self._write_json(hello)
-
-        # Yield to event loop to allow data to be transmitted
-        await asyncio.sleep(0.01)
-        print("[DEBUG] Waiting for HELLO response...")
+        print("[DEBUG] HELLO sent, waiting for response...")
 
         # Read HELLO response with timeout
         try:
@@ -304,6 +302,7 @@ class Connection:
             raise GeodeConnectionError(f"Failed to read HELLO response: {e}")
 
         self._connected = True
+        print("[DEBUG] Connection fully established")
 
     async def _write_json(self, obj: Dict[str, Any]) -> None:
         """Write JSON object as a line."""
