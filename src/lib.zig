@@ -346,6 +346,10 @@ pub const fle_commands = @import("admin/fle_commands.zig");
 // User management and authentication
 pub const user_management = @import("security/user_management.zig");
 
+// QUIC algorithms and connection management
+pub const algorithms = @import("algorithms.zig");
+pub const connection_manager = @import("transport/connection_manager.zig");
+
 test "lib.parseGql basic" {
     const ally = std.testing.allocator;
     var res = try parseGql("MATCH (a)-[r]->(b) RETURN a", ally);
