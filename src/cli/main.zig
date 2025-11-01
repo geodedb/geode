@@ -589,36 +589,14 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
 
     log.debug("Handling QUIC connection", .{});
 
-    // Import the QUIC library for direct access to handshake functions
-    const QuicTransport = @import("transport/quic");
-    const quic_lib = QuicTransport.quic_lib;
-
     // CANARY: REQ=REQ-AUTH-QUIC-001; FEATURE="QUIC Authentication"; ASPECT=ConnectionAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
     // Connection-scoped authentication state
     var authenticated_username: ?[]const u8 = null;
     defer if (authenticated_username) |username| allocator.free(username);
 
-    // Wait for handshake to complete
-    if (conn.quic_connection) |qc| {
-        var handshake_attempts: usize = 0;
-        const max_attempts = 200; // Increased from 50 to allow more time
-        while (handshake_attempts < max_attempts) : (handshake_attempts += 1) {
-            // Poll to process handshake packets
-            transport.poll(50) catch {};
-
-            // Check if handshake is complete
-            if (quic_lib.handshakeComplete(qc)) {
-                std.debug.print("Handshake completed after {} attempts\n", .{handshake_attempts + 1});
-                break;
-            }
-
-            std.Thread.sleep(50 * std.time.ns_per_ms);
-        } else {
-            // Handshake failed to complete
-            std.debug.print("ERROR: Handshake failed to complete after {} attempts ({}ms)\n", .{ max_attempts, max_attempts * 50 });
-            return error.HandshakeFailed;
-        }
-    }
+    // Handshake completion is now handled by the main loop polling
+    // No need to explicitly wait here - the main loop polls and processes packets
+    // By the time we reach this point, the connection is ready to accept streams
 
     // Accept incoming stream using the correct pattern from vendor/quic/cmd/quic-server.zig
     // The pattern is: try to accept, poll if no stream available yet, retry
@@ -632,7 +610,7 @@ fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: 
                 break :blk s;
             } else |err| {
                 // No stream available yet or other error
-                if (err == error.NoIncomingStreams or err == error.StreamNotAvailable) {
+                if (err == error.NoIncomingStreams or err == error.StreamNotAvailable or err == error.WouldBlock) {
                     // Poll the endpoint to process incoming packets and try again
                     transport.poll(50) catch {};
                     std.Thread.sleep(50 * std.time.ns_per_ms);
@@ -1040,30 +1018,34 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     while (true) {
         if (test_exit_after_first and connection_count > 0) break;
 
-        const conn = quic_server.accept() catch |err| {
-            std.debug.print("Accept error: {}\n", .{err});
-            std.Thread.sleep(1000000000); // Sleep 1s on error
-            continue;
-        };
+        // Poll to process packets (critical for handshake completion)
+        // Based on vendor/quic/cmd/quic-server.zig pattern
+        quic_server.poll(20) catch {};
 
-        connection_count += 1;
-        std.debug.print("✅ Accepted QUIC connection #{}\n", .{connection_count});
+        // Try to accept newly-ready connections (non-blocking)
+        while (quic_server.tryAccept()) |conn| {
+            connection_count += 1;
+            std.debug.print("✅ Accepted QUIC connection #{}\n", .{connection_count});
 
-        // Spawn a thread to handle the connection so the main loop can continue polling
-        // This is critical for QUIC handshake completion as the main loop needs to keep
-        // processing incoming packets
-        const thread = std.Thread.spawn(.{}, handleQuicConnectionThread, .{ allocator, &quic_server, conn }) catch |err| {
-            std.debug.print("Failed to spawn handler thread: {}\n", .{err});
-            conn.close();
-            continue;
-        };
-        thread.detach(); // Detach so we don't need to join
+            // Spawn a thread to handle the connection so the main loop can continue polling
+            // This is critical for QUIC handshake completion as the main loop needs to keep
+            // processing incoming packets
+            const thread = std.Thread.spawn(.{}, handleQuicConnectionThread, .{ allocator, &quic_server, conn }) catch |err| {
+                std.debug.print("Failed to spawn handler thread: {}\n", .{err});
+                conn.close();
+                continue;
+            };
+            thread.detach(); // Detach so we don't need to join
 
-        if (test_exit_after_first) {
-            // For testing, wait a bit for the handler to process
-            std.Thread.sleep(100 * std.time.ns_per_ms);
-            break;
+            if (test_exit_after_first) {
+                // For testing, wait a bit for the handler to process
+                std.Thread.sleep(100 * std.time.ns_per_ms);
+                break;
+            }
         }
+
+        // Small sleep to prevent busy-waiting
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 

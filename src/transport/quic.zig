@@ -160,86 +160,87 @@ pub const QuicTransport = struct {
                 // Load from disk and cache for future use
                 debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loading certificate files\",\"cert_path\":\"{s}\",\"key_path\":\"{s}\"}}", .{ self.cert_path, self.key_path });
 
-                // Load certificate file
-                const cert_file = std.fs.cwd().openFile(self.cert_path, .{}) catch |err| {
-                    std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"failed to open certificate file\",\"path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.cert_path, err });
-                    return err;
-                };
-                defer cert_file.close();
-
-                const cert_size = try cert_file.getEndPos();
-                // Convert u64 to usize for 32-bit platforms with bounds checking
-                if (cert_size > std.math.maxInt(usize)) {
-                    std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"certificate file too large for this platform\"}}\n", .{});
-                    return error.FileTooLarge;
-                }
-                inline_cert_der = try self.allocator.alloc(u8, @as(usize, @intCast(cert_size)));
-                _ = try cert_file.readAll(inline_cert_der.?);
-                debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loaded certificate\",\"size\":{}}}", .{cert_size});
-
-                // Load private key file
-                const key_file = std.fs.cwd().openFile(self.key_path, .{}) catch |err| {
-                    std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"failed to open private key file\",\"path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.key_path, err });
-                    if (inline_cert_der) |cert| self.allocator.free(cert);
-                    return err;
-                };
-                defer key_file.close();
-
-                const key_size = try key_file.getEndPos();
-                // Convert u64 to usize for 32-bit platforms with bounds checking
-                if (key_size > std.math.maxInt(usize)) {
-                    std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"private key file too large for this platform\"}}\n", .{});
-                    if (inline_cert_der) |cert| self.allocator.free(cert);
-                    return error.FileTooLarge;
-                }
-                inline_priv_key = try self.allocator.alloc(u8, @as(usize, @intCast(key_size)));
-                _ = try key_file.readAll(inline_priv_key.?);
-                debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loaded private key\",\"size\":{}}}", .{key_size});
-
-                // Decode PEM to DER if needed (support both PKCS#8 and EC PRIVATE KEY formats)
-                const pem_data = inline_priv_key.?;
-                var begin_marker: []const u8 = undefined;
-                var end_marker: []const u8 = undefined;
-                var is_pem = false;
-
-                if (std.mem.indexOf(u8, pem_data, "-----BEGIN PRIVATE KEY-----")) |_| {
-                    begin_marker = "-----BEGIN PRIVATE KEY-----";
-                    end_marker = "-----END PRIVATE KEY-----";
-                    is_pem = true;
-                } else if (std.mem.indexOf(u8, pem_data, "-----BEGIN EC PRIVATE KEY-----")) |_| {
-                    begin_marker = "-----BEGIN EC PRIVATE KEY-----";
-                    end_marker = "-----END EC PRIVATE KEY-----";
-                    is_pem = true;
-                }
-
-                if (is_pem) {
-                    debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"decoding PEM private key to DER\",\"format\":\"{s}\"}}", .{begin_marker});
-
-                    const begin_idx = std.mem.indexOf(u8, pem_data, begin_marker) orelse return error.InvalidPEM;
-                    const content_start = begin_idx + begin_marker.len;
-                    const end_idx = std.mem.indexOf(u8, pem_data[content_start..], end_marker) orelse return error.InvalidPEM;
-
-                    // Extract base64 content (skip newlines and whitespace)
-                    var base64_list = std.ArrayList(u8){};
-                    defer base64_list.deinit(self.allocator);
-                    for (pem_data[content_start .. content_start + end_idx]) |byte| {
-                        if (byte != '\n' and byte != '\r' and byte != ' ' and byte != '\t') {
-                            try base64_list.append(self.allocator, byte);
+                // Simple PEM -> DER loader (single object) for CERTIFICATE / (EC) PRIVATE KEY
+                // Based on vendor/quic/cmd/quic-server.zig proven implementation
+                const PemLoad = struct {
+                    fn loadPem(allocator: std.mem.Allocator, path: []const u8, markers: []const []const u8) ![]u8 {
+                        const data = try std.fs.cwd().readFileAlloc(allocator, path, 64 * 1024);
+                        errdefer allocator.free(data);
+                        var chosen_begin: ?[]const u8 = null;
+                        var chosen_end: ?[]const u8 = null;
+                        for (markers) |m| {
+                            var buf_begin: [64]u8 = undefined;
+                            var buf_end: [64]u8 = undefined;
+                            const begin_marker = try std.fmt.bufPrint(&buf_begin, "-----BEGIN {s}-----", .{m});
+                            const end_marker = try std.fmt.bufPrint(&buf_end, "-----END {s}-----", .{m});
+                            if (std.mem.indexOf(u8, data, begin_marker)) |_| {
+                                chosen_begin = try allocator.dupe(u8, begin_marker);
+                                chosen_end = try allocator.dupe(u8, end_marker);
+                                break;
+                            }
                         }
+                        if (chosen_begin == null or chosen_end == null) {
+                            allocator.free(data);
+                            return error.PemMarkerNotFound;
+                        }
+                        defer allocator.free(chosen_begin.?);
+                        defer allocator.free(chosen_end.?);
+                        const start = std.mem.indexOf(u8, data, chosen_begin.?) orelse {
+                            allocator.free(data);
+                            return error.PemMarkerNotFound;
+                        };
+                        const rest = data[start + chosen_begin.?.len ..];
+                        const end_rel = std.mem.indexOf(u8, rest, chosen_end.?) orelse {
+                            allocator.free(data);
+                            return error.PemMarkerNotFound;
+                        };
+                        const b64_region = rest[0..end_rel];
+                        // Collect base64 characters (skip newlines)
+                        var tmp = try allocator.alloc(u8, b64_region.len);
+                        defer allocator.free(tmp);
+                        var n: usize = 0;
+                        for (b64_region) |ch| {
+                            if (ch == '\n' or ch == '\r') continue;
+                            if (ch == ' ') continue;
+                            tmp[n] = ch;
+                            n += 1;
+                        }
+                        // Decode
+                        const out_buf = try allocator.alloc(u8, (n * 3) / 4 + 8);
+                        defer allocator.free(out_buf);
+                        // Compute decoded length manually: every 4 chars -> 3 bytes, minus padding '='.
+                        var pad: usize = 0;
+                        if (n >= 2 and tmp[n - 1] == '=') pad += 1;
+                        if (n >= 2 and tmp[n - 2] == '=') pad += 1;
+                        const need: usize = (n / 4) * 3 - pad;
+                        const exact = try allocator.alloc(u8, need);
+                        errdefer allocator.free(exact);
+                        // std.base64 Decoder.decode writes into exact; assume well-formed input.
+                        std.base64.standard.Decoder.decode(exact, tmp[0..n]) catch |e| {
+                            allocator.free(exact);
+                            allocator.free(data);
+                            return e;
+                        };
+                        allocator.free(data);
+                        return exact;
                     }
+                };
 
-                    // Decode base64 to get DER
-                    const decoder = std.base64.standard.Decoder;
-                    const decoded_size = try decoder.calcSizeForSlice(base64_list.items);
-                    const decoded_der = try self.allocator.alloc(u8, decoded_size);
-                    errdefer self.allocator.free(decoded_der);
-                    try decoder.decode(decoded_der, base64_list.items);
+                // Load both certificate and private key using PEM decoder
+                inline_cert_der = PemLoad.loadPem(self.allocator, self.cert_path, &[_][]const u8{"CERTIFICATE"}) catch |err| {
+                    std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"failed to load certificate\",\"path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.cert_path, err });
+                    return err;
+                };
+                errdefer if (inline_cert_der) |cert| self.allocator.free(cert);
+                debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loaded and decoded certificate\",\"der_size\":{}}}", .{inline_cert_der.?.len});
 
-                    // Free the PEM data and replace with DER
-                    self.allocator.free(inline_priv_key.?);
-                    inline_priv_key = decoded_der;
-                    debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"PEM decoded to DER\",\"der_size\":{}}}", .{decoded_size});
-                }
+                // Try PKCS#8 first (PRIVATE KEY) then EC PRIVATE KEY as fallback
+                inline_priv_key = PemLoad.loadPem(self.allocator, self.key_path, &[_][]const u8{ "PRIVATE KEY", "EC PRIVATE KEY" }) catch |err| {
+                    std.debug.print("{{\"level\":\"ERROR\",\"component\":\"quic_server\",\"msg\":\"failed to load private key\",\"path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.key_path, err });
+                    if (inline_cert_der) |cert| self.allocator.free(cert);
+                    return err;
+                };
+                debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"loaded and decoded private key\",\"der_size\":{}}}", .{inline_priv_key.?.len});
 
                 // Cache for future use
                 self.cached_cert = inline_cert_der;
@@ -345,6 +346,30 @@ pub const QuicTransport = struct {
         }
         debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"no endpoint available for accept\"}}", .{});
         return QuicError.ConnectionFailed;
+    }
+
+    pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
+        // Non-blocking accept - returns null if no connection is ready
+        // Based on vendor/quic/cmd/quic-server.zig pattern
+
+        if (self.endpoint) |ep| {
+            const quic_conn = quic_lib.tryAccept(ep) orelse return null;
+
+            const conn = self.allocator.create(QuicConnection) catch return null;
+            conn.* = QuicConnection{
+                .allocator = self.allocator,
+                .quic_connection = quic_conn,
+                .streams = std.ArrayList(*QuicStream){},
+            };
+
+            self.connections.append(self.allocator, conn) catch {
+                self.allocator.destroy(conn);
+                return null;
+            };
+            debugLog("{{\"level\":\"DEBUG\",\"component\":\"quic_server\",\"msg\":\"connection accepted via tryAccept\",\"total_connections\":{}}}", .{self.connections.items.len});
+            return conn;
+        }
+        return null;
     }
 
     pub fn poll(self: *QuicTransport, timeout_ms: u32) !void {
