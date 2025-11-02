@@ -576,64 +576,29 @@ const ClientConfig = struct {
     json_params: std.StringHashMap([]const u8) = undefined,
 };
 
-// Thread wrapper for handleQuicConnection
-fn handleQuicConnectionThread(allocator: std.mem.Allocator, transport: anytype, conn: anytype) void {
-    handleQuicConnection(allocator, transport, conn) catch |err| {
-        std.debug.print("Error in connection handler thread: {}\n", .{err});
+// Thread wrapper for handleQuicStream
+fn handleQuicStreamThread(allocator: std.mem.Allocator, conn: anytype, stream: anytype) void {
+    handleQuicStream(allocator, conn, stream) catch |err| {
+        std.debug.print("Error in stream handler thread: {}\n", .{err});
     };
 }
 
-// Handle a QUIC connection and process queries
-fn handleQuicConnection(allocator: std.mem.Allocator, transport: anytype, conn: anytype) !void {
-    defer conn.close();
+// Handle a QUIC stream and process queries
+fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !void {
+    defer stream.close();
 
-    log.debug("Handling QUIC connection", .{});
+    log.debug("Handling QUIC stream", .{});
 
     // CANARY: REQ=REQ-AUTH-QUIC-001; FEATURE="QUIC Authentication"; ASPECT=ConnectionAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
     // Connection-scoped authentication state
     var authenticated_username: ?[]const u8 = null;
     defer if (authenticated_username) |username| allocator.free(username);
 
-    // Handshake completion is now handled by the main loop polling
-    // No need to explicitly wait here - the main loop polls and processes packets
-    // By the time we reach this point, the connection is ready to accept streams
-
-    // Accept incoming stream using the correct pattern from vendor/quic/cmd/quic-server.zig
-    // The pattern is: try to accept, poll if no stream available yet, retry
-    std.debug.print("debug(cli): Waiting for incoming stream\n", .{});
-    const stream = blk: {
-        var poll_attempts: usize = 0;
-        while (poll_attempts < 200) : (poll_attempts += 1) {
-            // Try to accept an incoming stream
-            if (conn.acceptStream()) |s| {
-                std.debug.print("debug(cli): Stream accepted after {} attempts\n", .{poll_attempts + 1});
-                break :blk s;
-            } else |err| {
-                // No stream available yet or other error
-                if (err == error.NoIncomingStreams or err == error.StreamNotAvailable or err == error.WouldBlock) {
-                    // Poll the endpoint to process incoming packets and try again
-                    transport.poll(50) catch {};
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
-                    continue;
-                }
-                // Real error - propagate it
-                std.debug.print("ERROR: Failed to accept stream: {}\n", .{err});
-                return err;
-            }
-        } else {
-            std.debug.print("ERROR: Timed out waiting for incoming stream (after 10 seconds)\n", .{});
-            return error.Timeout;
-        }
-    };
-    defer stream.close();
-
     // Main message processing loop
     while (true) {
-        // Poll and retry readLine until we get a message or real error
+        // Retry readLine until we get a message or real error
         const msg = blk: while (true) {
-            // Poll the endpoint to process incoming packets before reading
-            transport.poll(50) catch {};
-
+            // Main loop handles all polling - we just retry reading
             // Try to read message
             if (stream.readLine(65536)) |m| {
                 break :blk m;
@@ -1013,10 +978,20 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     try quic_server.listen();
     std.debug.print("✅ Server ready - accepting QUIC connections\n", .{});
 
+    // Track active connections - streams are accepted in main loop after handshake completes
+    var active_connections = std.ArrayList(*QuicTransport.QuicConnection).initCapacity(allocator, 16) catch return error.OutOfMemory;
+    defer {
+        for (active_connections.items) |conn| {
+            conn.close();
+        }
+        active_connections.deinit(allocator);
+    }
+
     // Accept and handle connections
     var connection_count: u32 = 0;
+    var stream_count: u32 = 0;
     while (true) {
-        if (test_exit_after_first and connection_count > 0) break;
+        if (test_exit_after_first and stream_count > 0) break;
 
         // Poll to process packets (critical for handshake completion)
         // Based on vendor/quic/cmd/quic-server.zig pattern
@@ -1026,21 +1001,68 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         while (quic_server.tryAccept()) |conn| {
             connection_count += 1;
             std.debug.print("✅ Accepted QUIC connection #{}\n", .{connection_count});
-
-            // Spawn a thread to handle the connection so the main loop can continue polling
-            // This is critical for QUIC handshake completion as the main loop needs to keep
-            // processing incoming packets
-            const thread = std.Thread.spawn(.{}, handleQuicConnectionThread, .{ allocator, &quic_server, conn }) catch |err| {
-                std.debug.print("Failed to spawn handler thread: {}\n", .{err});
+            active_connections.append(allocator, conn) catch {
                 conn.close();
                 continue;
             };
-            thread.detach(); // Detach so we don't need to join
+        }
 
-            if (test_exit_after_first) {
-                // For testing, wait a bit for the handler to process
-                std.Thread.sleep(100 * std.time.ns_per_ms);
-                break;
+        // Try to accept streams from existing connections (after handshake completes)
+        var i: usize = 0;
+        while (i < active_connections.items.len) {
+            const conn = active_connections.items[i];
+
+            // Check if connection is drained (closed) - remove it
+            if (conn.isDrained()) {
+                std.debug.print("Connection drained, removing from active list\n", .{});
+                conn.close();
+                _ = active_connections.swapRemove(i);
+                continue; // Don't increment i since we removed an element
+            }
+
+            // Only try to accept streams if handshake is confirmed
+            if (!conn.isHandshakeConfirmed()) {
+                // Handshake still in progress - skip for now
+                i += 1;
+                continue;
+            }
+
+            // Try to accept a stream (non-blocking)
+            if (conn.acceptStream()) |stream| {
+                stream_count += 1;
+                std.debug.print("✅ Accepted stream #{} from connection\n", .{stream_count});
+
+                // Spawn thread to handle this stream
+                const thread = std.Thread.spawn(.{}, handleQuicStreamThread, .{ allocator, conn, stream }) catch |err| {
+                    std.debug.print("Failed to spawn stream handler thread: {}\n", .{err});
+                    stream.close();
+                    i += 1;
+                    continue;
+                };
+                thread.detach();
+
+                // Keep connection in list for potential future streams
+                i += 1;
+
+                if (test_exit_after_first) {
+                    std.Thread.sleep(100 * std.time.ns_per_ms);
+                    break;
+                }
+            } else |err| {
+                // No stream available - just continue (don't log WouldBlock spam)
+                if (err != error.WouldBlock) {
+                    std.debug.print("acceptStream error on connection {}: {}\n", .{ i, err });
+                }
+
+                // Check if connection is closed
+                if (err == error.ConnectionClosed or err == error.ConnectionDrained) {
+                    std.debug.print("Connection closed via error, removing from active list\n", .{});
+                    conn.close();
+                    _ = active_connections.swapRemove(i);
+                    continue; // Don't increment i since we removed an element
+                }
+                // WouldBlock or other non-fatal - just continue to next connection
+                i += 1;
             }
         }
 

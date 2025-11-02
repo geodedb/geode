@@ -403,6 +403,20 @@ pub const QuicConnection = struct {
         }
     }
 
+    pub fn isDrained(self: *QuicConnection) bool {
+        if (self.quic_connection) |conn| {
+            return quic_lib.isDrained(conn);
+        }
+        return true; // If no connection, consider it drained
+    }
+
+    pub fn isHandshakeConfirmed(self: *QuicConnection) bool {
+        if (self.quic_connection) |conn| {
+            return quic_lib.isHandshakeConfirmed(conn);
+        }
+        return false;
+    }
+
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
         // CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICStream; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICStream; OWNER=wire; UPDATED=2025-09-22
 
