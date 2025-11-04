@@ -14,8 +14,7 @@ const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic.zig");
-const quic_lib = @import("../vendor/quic/src/quic/api.zig");
-const conn_mod = @import("../vendor/quic/src/quic/conn.zig");
+const vendor_quic = @import("vendor_quic");
 // const cert_gen = @import("tools/cert_gen.zig");
 // Note: Some imports commented out to avoid missing dependency issues for CLI integration
 // const mvcc = @import("server/txn/mvcc.zig");
@@ -2692,16 +2691,15 @@ fn handleQuicConnection(
         var poll_attempts: usize = 0;
         while (poll_attempts < 10) : (poll_attempts += 1) {
             log.debug("Polling endpoint, attempt {}", .{poll_attempts});
-            quic_lib.poll(ep, 10) catch {};
+            vendor_quic.poll(ep, 10) catch {};
             // Check if we have incoming streams now
             if (conn.quic_connection) |qc| {
-                const c: *conn_mod.Connection = @ptrCast(@alignCast(qc));
-                if (c.hasIncomingStreams()) {
+                if (vendor_quic.hasIncomingStreams(qc)) {
                     log.debug("Found incoming streams after {} polls", .{poll_attempts + 1});
                     break;
                 }
                 // Also check for stream 0 directly
-                if (c.getFirstStream()) |sid| {
+                if (vendor_quic.getFirstStream(qc)) |sid| {
                     log.debug("Found stream {} after {} polls", .{ sid, poll_attempts + 1 });
                     break;
                 }
@@ -3600,7 +3598,7 @@ pub fn main() !void {
                 var i: usize = 0;
                 while (i < 10) : (i += 1) {
                     log.debug("Test mode poll {}", .{i});
-                    quic_lib.poll(ep, 50) catch {};
+                    vendor_quic.poll(ep, 50) catch {};
                 }
             }
             log.debug("Test mode - calling handleQuicConnection", .{});
@@ -3624,7 +3622,7 @@ pub fn main() !void {
                     var i: usize = 0;
                     while (i < 5) : (i += 1) {
                         log.debug("Main loop poll {}", .{i});
-                        quic_lib.poll(ep, 10) catch {};
+                        vendor_quic.poll(ep, 10) catch {};
                     }
                 }
                 log.debug("Main loop - calling handleQuicConnection", .{});

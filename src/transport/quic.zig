@@ -374,7 +374,7 @@ pub const QuicTransport = struct {
 
     pub fn poll(self: *QuicTransport, timeout_ms: u32) !void {
         if (self.endpoint) |ep| {
-            try quic_lib.poll(ep, timeout_ms);
+            try quic_lib.poll(ep, @intCast(timeout_ms));
         }
     }
 };

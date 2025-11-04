@@ -567,6 +567,7 @@ pub fn build(b: *std.Build) void {
     const vqt_sig_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/sig.zig"), .target = target, .optimize = optimize });
     const vqt_x509_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/x509.zig"), .target = target, .optimize = optimize });
     const vqt_logger_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/logger.zig"), .target = target, .optimize = optimize });
+    const vqt_byteorder_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/byteorder/byteorder.zig"), .target = target, .optimize = optimize });
     // Hook up submodule imports
     vqt_packet_mod.addImport("quic_varint", vqt_varint_mod);
     vqt_packet_mod.addImport("quic_tls", vqt_tls_mod);
@@ -593,6 +594,7 @@ pub fn build(b: *std.Build) void {
     vqt_conn_mod.addImport("quic_tls13", vqt_tls13_mod);
     vqt_conn_mod.addImport("quic_transport_params", vqt_tp_mod);
     vqt_conn_mod.addImport("quic_logger", vqt_logger_mod);
+    vqt_conn_mod.addImport("byteorder", vqt_byteorder_mod);
     vqt_endpoint_mod.addImport("quic_conn", vqt_conn_mod);
     vqt_endpoint_mod.addImport("quic_packet", vqt_packet_mod);
     vqt_endpoint_mod.addImport("quic_frame", vqt_frame_mod);
@@ -603,9 +605,14 @@ pub fn build(b: *std.Build) void {
     vqt_endpoint_mod.addImport("quic_recovery", vqt_recovery_mod);
     vqt_endpoint_mod.addImport("quic_transport_params", vqt_tp_mod);
     vqt_endpoint_mod.addImport("quic_logger", vqt_logger_mod);
+    vqt_endpoint_mod.addImport("byteorder", vqt_byteorder_mod);
     vqt_crypto_mod.addImport("quic_tls", vqt_tls_mod);
     vqt_endpoint_mod.addImport("config.zig", vqt_config_mod);
     vqt_endpoint_mod.addImport("loop_backend.zig", vqt_loop_mod);
+    vqt_endpoint_mod.addImport("x509", vqt_x509_mod);
+    vqt_endpoint_mod.addImport("sig", vqt_sig_mod);
+    vqt_endpoint_mod.addImport("asn1", vqt_asn1_mod);
+    vqt_varint_mod.addImport("byteorder", vqt_byteorder_mod);
     // Attach imports to vendor_quic_mod_for_test
     vendor_quic_mod_for_test.addImport("quic_endpoint", vqt_endpoint_mod);
     vendor_quic_mod_for_test.addImport("quic_conn", vqt_conn_mod);
@@ -622,6 +629,7 @@ pub fn build(b: *std.Build) void {
     vendor_quic_mod_for_test.addImport("asn1", vqt_asn1_mod);
     vendor_quic_mod_for_test.addImport("sig", vqt_sig_mod);
     vendor_quic_mod_for_test.addImport("x509", vqt_x509_mod);
+    vendor_quic_mod_for_test.addImport("byteorder", vqt_byteorder_mod);
     // No longer need ed25519 import - using std.crypto.sign.Ed25519
 
     const transport_quic_mod_for_test = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
@@ -789,6 +797,7 @@ pub fn build(b: *std.Build) void {
     const vq_sig_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/sig.zig"), .target = target, .optimize = optimize });
     const vq_x509_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/x509.zig"), .target = target, .optimize = optimize });
     const vq_logger_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/logger.zig"), .target = target, .optimize = optimize });
+    const vq_byteorder_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/byteorder/byteorder.zig"), .target = target, .optimize = optimize });
     // Hook up submodule imports
     vq_packet_mod.addImport("quic_varint", vq_varint_mod);
     vq_packet_mod.addImport("quic_tls", vq_tls_mod);
@@ -815,6 +824,7 @@ pub fn build(b: *std.Build) void {
     vq_conn_mod.addImport("quic_tls13", vq_tls13_mod);
     vq_conn_mod.addImport("quic_transport_params", vq_tp_mod);
     vq_conn_mod.addImport("quic_logger", vq_logger_mod);
+    vq_conn_mod.addImport("byteorder", vq_byteorder_mod);
     vq_endpoint_mod.addImport("quic_conn", vq_conn_mod);
     vq_endpoint_mod.addImport("quic_packet", vq_packet_mod);
     vq_endpoint_mod.addImport("quic_frame", vq_frame_mod);
@@ -825,9 +835,14 @@ pub fn build(b: *std.Build) void {
     vq_endpoint_mod.addImport("quic_recovery", vq_recovery_mod);
     vq_endpoint_mod.addImport("quic_transport_params", vq_tp_mod);
     vq_endpoint_mod.addImport("quic_logger", vq_logger_mod);
+    vq_endpoint_mod.addImport("byteorder", vq_byteorder_mod);
     vq_crypto_mod.addImport("quic_tls", vq_tls_mod);
     vq_endpoint_mod.addImport("config.zig", vq_config_mod);
     vq_endpoint_mod.addImport("loop_backend.zig", vq_loop_mod);
+    vq_endpoint_mod.addImport("x509", vq_x509_mod);
+    vq_endpoint_mod.addImport("sig", vq_sig_mod);
+    vq_endpoint_mod.addImport("asn1", vq_asn1_mod);
+    vq_varint_mod.addImport("byteorder", vq_byteorder_mod);
     // Finally attach imports to the public vendor_quic module so api.zig resolves named imports
     vendor_quic_mod.addImport("quic_endpoint", vq_endpoint_mod);
     vendor_quic_mod.addImport("quic_conn", vq_conn_mod);
@@ -844,6 +859,7 @@ pub fn build(b: *std.Build) void {
     vendor_quic_mod.addImport("asn1", vq_asn1_mod);
     vendor_quic_mod.addImport("sig", vq_sig_mod);
     vendor_quic_mod.addImport("x509", vq_x509_mod);
+    vendor_quic_mod.addImport("byteorder", vq_byteorder_mod);
     // No longer need ed25519 import - using std.crypto.sign.Ed25519
 
     // Create transport QUIC module for unified binary and tests
