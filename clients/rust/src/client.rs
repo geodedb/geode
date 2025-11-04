@@ -1,10 +1,17 @@
-//! Geode client implementation using Cloudflare's quiche library for QUIC transport.
+//! Geode client implementation using quinn library for QUIC transport.
 
-use quiche;
+use quinn::{Endpoint, ClientConfig, Connection as QuinnConnection};
+use rustls::pki_types::CertificateDer;
+use rustls::RootCertStore;
+use rustls_pemfile;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::time::{Duration, Instant};
+use std::fs::File;
+use std::io::BufReader;
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{Error, Result};
 use crate::types::{decode_value, Value};
@@ -33,11 +40,12 @@ pub struct Savepoint {
     pub name: String,
 }
 
-/// Geode database client using quiche
+/// Geode database client using quinn
 #[derive(Clone)]
 pub struct Client {
     host: String,
     port: u16,
+    ca_cert_path: Option<String>,
     skip_verify: bool,
     page_size: usize,
     hello_name: String,
@@ -51,12 +59,19 @@ impl Client {
         Self {
             host: host.into(),
             port,
+            ca_cert_path: None,
             skip_verify: false,
             page_size: 1000,
             hello_name: "geode-rust".to_string(),
             hello_ver: "0.1.0".to_string(),
             conformance: "min".to_string(),
         }
+    }
+
+    /// Set CA certificate path for server verification
+    pub fn ca_cert(mut self, path: impl Into<String>) -> Self {
+        self.ca_cert_path = Some(path.into());
+        self
     }
 
     /// Skip TLS verification (insecure, for development only)
@@ -89,242 +104,184 @@ impl Client {
         self
     }
 
-    /// Connect to the database
-    pub fn connect(&self) -> Result<Connection> {
+    /// Connect to the database (async)
+    pub async fn connect(&self) -> Result<Connection> {
         Connection::new(
             &self.host,
             self.port,
+            self.ca_cert_path.as_deref(),
             self.skip_verify,
             self.page_size,
             &self.hello_name,
             &self.hello_ver,
             &self.conformance,
-        )
+        ).await
     }
 }
 
-/// A single connection to Geode via QUIC (using quiche)
+/// A single connection to Geode via QUIC (using quinn)
 pub struct Connection {
-    socket: UdpSocket,
-    conn: quiche::Connection,
+    connection: QuinnConnection,
+    send_stream: quinn::SendStream,
+    recv_stream: quinn::RecvStream,
     page_size: usize,
-    peer_addr: SocketAddr,
-    stream_id: u64,
-    recv_buffer: Vec<u8>,
-    send_buffer: Vec<u8>,
+    read_buffer: Vec<u8>,
 }
 
 impl Connection {
-    fn new(
+    async fn new(
         host: &str,
         port: u16,
+        ca_cert_path: Option<&str>,
         skip_verify: bool,
         page_size: usize,
         hello_name: &str,
         hello_ver: &str,
         conformance: &str,
     ) -> Result<Self> {
-        eprintln!("[QUICHE] Creating connection to {}:{}", host, port);
+        eprintln!("[QUINN] Creating connection to {}:{}", host, port);
 
         // Resolve server address
         let addr_str = format!("{}:{}", host, port);
-        let peer_addr: SocketAddr = addr_str
+        let server_addr: SocketAddr = addr_str
             .to_socket_addrs()
             .map_err(|e| Error::connection(&format!("Failed to resolve address {}: {}", addr_str, e)))?
             .next()
             .ok_or_else(|| Error::connection(&format!("No addresses found for {}", addr_str)))?;
 
-        eprintln!("[QUICHE] Resolved server address: {}", peer_addr);
-
-        // Bind local UDP socket
-        let bind_addr = if peer_addr.is_ipv6() {
-            "[::]:0"
-        } else {
-            "0.0.0.0:0"
-        };
-
-        let socket = UdpSocket::bind(bind_addr)
-            .map_err(|e| Error::connection(&format!("Failed to bind socket: {}", e)))?;
-
-        socket.set_nonblocking(true)
-            .map_err(|e| Error::connection(&format!("Failed to set nonblocking: {}", e)))?;
-
-        eprintln!("[QUICHE] Bound local socket to: {:?}", socket.local_addr());
-
-        // Configure QUIC
-        let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)
-            .map_err(|e| Error::connection(&format!("Failed to create QUIC config: {}", e)))?;
-
-        // Set ALPN protocol
-        config
-            .set_application_protos(&[b"geode/1"])
-            .map_err(|e| Error::connection(&format!("Failed to set ALPN: {}", e)))?;
+        eprintln!("[QUINN] Resolved server address: {}", server_addr);
 
         // Configure TLS
+        let mut roots = RootCertStore::empty();
+
         if skip_verify {
-            config.verify_peer(false);
-            eprintln!("[QUICHE] TLS peer verification DISABLED (skip_verify=true)");
+            eprintln!("[QUINN] TLS peer verification DISABLED (skip_verify=true)");
+            // Create a dangerous configuration that skips verification
+            let crypto = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+                .with_no_client_auth();
+
+            let mut client_config = ClientConfig::new(Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap()));
+            client_config.transport_config(Arc::new(create_transport_config()));
+
+            // Create endpoint
+            let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
+                .map_err(|e| Error::connection(&format!("Failed to create endpoint: {}", e)))?;
+            endpoint.set_default_client_config(client_config);
+
+            // Connect
+            eprintln!("[QUINN] Connecting to {} with skip_verify=true", server_addr);
+            let connection = endpoint
+                .connect(server_addr, host)
+                .map_err(|e| Error::connection(&format!("Failed to initiate connection: {}", e)))?
+                .await
+                .map_err(|e| Error::connection(&format!("Connection failed: {}", e)))?;
+
+            eprintln!("[QUINN] QUIC connection established");
+
+            // Open bidirectional stream
+            let (mut send_stream, mut recv_stream) = connection
+                .open_bi()
+                .await
+                .map_err(|e| Error::connection(&format!("Failed to open stream: {}", e)))?;
+
+            eprintln!("[QUINN] Bidirectional stream opened");
+
+            // Create connection
+            let mut conn = Self {
+                connection,
+                send_stream,
+                recv_stream,
+                page_size,
+                read_buffer: Vec::new(),
+            };
+
+            // Send HELLO message
+            conn.send_hello(hello_name, hello_ver, conformance).await?;
+
+            Ok(conn)
         } else {
-            // Try to load CA certificate
-            let test_ca_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            // Load CA certificate
+            let default_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../test-harness/certs/ca.crt");
 
-            if test_ca_path.exists() {
-                eprintln!("[QUICHE] Loading CA certificate from: {:?}", test_ca_path);
-                config.load_verify_locations_from_file(test_ca_path.to_str().unwrap())
-                    .map_err(|e| Error::connection(&format!("Failed to load CA cert: {}", e)))?;
+            let ca_path: Option<&str> = if let Some(ref path) = ca_cert_path {
+                Some(path)
+            } else if default_path.exists() {
+                default_path.to_str()
             } else {
-                eprintln!("[QUICHE] No CA certificate found, using system trust store");
+                None
+            };
+
+            if let Some(path) = ca_path {
+                eprintln!("[QUINN] Loading CA certificate from: {}", path);
+                let cert_file = File::open(path)
+                    .map_err(|e| Error::connection(&format!("Failed to open CA cert: {}", e)))?;
+                let mut reader = BufReader::new(cert_file);
+
+                for cert_result in rustls_pemfile::certs(&mut reader) {
+                    let cert = cert_result
+                        .map_err(|e| Error::connection(&format!("Failed to parse CA cert: {}", e)))?;
+                    roots.add(cert)
+                        .map_err(|e| Error::connection(&format!("Failed to add CA cert: {}", e)))?;
+                }
+            } else {
+                eprintln!("[QUINN] No CA certificate specified, using system trust store");
+                for cert in rustls_native_certs::load_native_certs()
+                    .map_err(|e| Error::connection(&format!("Failed to load system certs: {}", e)))? {
+                    roots.add(cert)
+                        .map_err(|e| Error::connection(&format!("Failed to add system cert: {}", e)))?;
+                }
             }
+
+            let crypto = rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+
+            let mut client_config = ClientConfig::new(Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap()));
+            client_config.transport_config(Arc::new(create_transport_config()));
+
+            // Create endpoint
+            let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
+                .map_err(|e| Error::connection(&format!("Failed to create endpoint: {}", e)))?;
+            endpoint.set_default_client_config(client_config);
+
+            // Connect
+            eprintln!("[QUINN] Connecting to {}", server_addr);
+            let connection = endpoint
+                .connect(server_addr, host)
+                .map_err(|e| Error::connection(&format!("Failed to initiate connection: {}", e)))?
+                .await
+                .map_err(|e| Error::connection(&format!("Connection failed: {}", e)))?;
+
+            eprintln!("[QUINN] QUIC connection established");
+
+            // Open bidirectional stream
+            let (mut send_stream, mut recv_stream) = connection
+                .open_bi()
+                .await
+                .map_err(|e| Error::connection(&format!("Failed to open stream: {}", e)))?;
+
+            eprintln!("[QUINN] Bidirectional stream opened");
+
+            // Create connection
+            let mut conn = Self {
+                connection,
+                send_stream,
+                recv_stream,
+                page_size,
+                read_buffer: Vec::new(),
+            };
+
+            // Send HELLO message
+            conn.send_hello(hello_name, hello_ver, conformance).await?;
+
+            Ok(conn)
         }
+    }
 
-        // Set transport parameters
-        config.set_max_idle_timeout(60000); // 60 seconds
-        config.set_max_recv_udp_payload_size(4096);
-        config.set_max_send_udp_payload_size(4096);
-        config.set_initial_max_data(10_000_000);
-        config.set_initial_max_stream_data_bidi_local(1_000_000);
-        config.set_initial_max_stream_data_bidi_remote(1_000_000);
-        config.set_initial_max_streams_bidi(100);
-        config.set_disable_active_migration(true);
-
-        // Generate connection ID (scid - source connection ID)
-        let mut scid = [0; quiche::MAX_CONN_ID_LEN];
-        use ring::rand::SecureRandom;
-        ring::rand::SystemRandom::new().fill(&mut scid)
-            .map_err(|_| Error::connection("Failed to generate connection ID"))?;
-        let scid = quiche::ConnectionId::from_ref(&scid);
-
-        eprintln!("[QUICHE] Creating QUIC connection with scid: {:?}", scid);
-
-        // Get local socket address
-        let local_addr = socket.local_addr()
-            .map_err(|e| Error::connection(&format!("Failed to get local address: {}", e)))?;
-
-        // Create QUIC connection
-        let mut conn = quiche::connect(Some(&host), &scid, local_addr, peer_addr, &mut config)
-            .map_err(|e| Error::connection(&format!("Failed to create connection: {}", e)))?;
-
-        eprintln!("[QUICHE] QUIC connection created, starting handshake");
-
-        // Prepare buffers
-        let mut out = vec![0; 4096];
-        let mut recv_buffer = vec![0; 65535];
-        let send_buffer = Vec::new();
-
-        // Send initial packet (ClientHello)
-        let (write, send_info) = conn.send(&mut out)
-            .map_err(|e| Error::connection(&format!("Failed to send initial packet: {}", e)))?;
-
-        eprintln!("[QUICHE] Sending initial packet ({} bytes) to {}", write, send_info.to);
-        socket.send_to(&out[..write], send_info.to)
-            .map_err(|e| Error::connection(&format!("Failed to send UDP packet: {}", e)))?;
-
-        // Handshake loop with timeout
-        let start = Instant::now();
-        let timeout = Duration::from_secs(10);
-
-        while !conn.is_established() {
-            if start.elapsed() > timeout {
-                eprintln!("[QUICHE] Handshake timeout after {} seconds", timeout.as_secs());
-                eprintln!("[QUICHE] Connection state: is_established={}, is_in_early_data={}",
-                    conn.is_established(), conn.is_in_early_data());
-                return Err(Error::connection("Handshake timeout"));
-            }
-
-            // Check if connection is established now
-            if conn.is_established() {
-                eprintln!("[QUICHE] Handshake complete!");
-                break;
-            }
-
-            // Try to receive packets (non-blocking)
-            match socket.recv_from(&mut recv_buffer) {
-                Ok((len, from)) => {
-                    eprintln!("[QUICHE] Received {} bytes from {}", len, from);
-
-                    // Process received packet
-                    let recv_info = quiche::RecvInfo {
-                        to: socket.local_addr().unwrap(),
-                        from,
-                    };
-
-                    match conn.recv(&mut recv_buffer[..len], recv_info) {
-                        Ok(bytes_read) => {
-                            eprintln!("[QUICHE] Packet processed successfully ({} bytes)", bytes_read);
-                            eprintln!("[QUICHE] Connection is_established: {}", conn.is_established());
-                        }
-                        Err(quiche::Error::Done) => {
-                            eprintln!("[QUICHE] Packet processing done (no more data)");
-                        }
-                        Err(e) => {
-                            eprintln!("[QUICHE] Failed to process packet: {}", e);
-                            // Don't fail immediately, might be transient
-                        }
-                    }
-
-                    // After processing, send any pending packets
-                    loop {
-                        let (write, send_info) = match conn.send(&mut out) {
-                            Ok(v) => v,
-                            Err(quiche::Error::Done) => break,
-                            Err(e) => {
-                                eprintln!("[QUICHE] Send error: {}", e);
-                                return Err(Error::connection(&format!("QUIC send error: {}", e)));
-                            }
-                        };
-
-                        eprintln!("[QUICHE] Sending {} bytes to {}", write, send_info.to);
-                        socket.send_to(&out[..write], send_info.to)
-                            .map_err(|e| Error::connection(&format!("Failed to send UDP packet: {}", e)))?;
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No data available, but still try to send any pending packets
-                    loop {
-                        let (write, send_info) = match conn.send(&mut out) {
-                            Ok(v) => v,
-                            Err(quiche::Error::Done) => break,
-                            Err(e) => {
-                                eprintln!("[QUICHE] Send error: {}", e);
-                                return Err(Error::connection(&format!("QUIC send error: {}", e)));
-                            }
-                        };
-
-                        eprintln!("[QUICHE] Sending {} bytes to {} (no incoming data)", write, send_info.to);
-                        socket.send_to(&out[..write], send_info.to)
-                            .map_err(|e| Error::connection(&format!("Failed to send UDP packet: {}", e)))?;
-                    }
-
-                    // Small sleep before retrying
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => {
-                    eprintln!("[QUICHE] Socket recv error: {}", e);
-                    return Err(Error::connection(&format!("Socket recv error: {}", e)));
-                }
-            }
-        }
-
-        eprintln!("[QUICHE] Handshake completed! Connection established");
-
-        // Open bidirectional stream
-        let stream_id = conn.stream_writable_next()
-            .ok_or_else(|| Error::connection("No writable streams available"))?;
-
-        eprintln!("[QUICHE] Opened stream ID: {}", stream_id);
-
-        let mut connection = Self {
-            socket,
-            conn,
-            page_size,
-            peer_addr,
-            stream_id,
-            recv_buffer,
-            send_buffer,
-        };
-
-        // Send HELLO message
+    async fn send_hello(&mut self, hello_name: &str, hello_ver: &str, conformance: &str) -> Result<()> {
         let hello = serde_json::json!({
             "type": "HELLO",
             "client_name": hello_name,
@@ -332,114 +289,66 @@ impl Connection {
             "wanted_conformance": conformance,
         });
 
-        connection.write_json(&hello)?;
-        connection.flush()?;
+        self.write_json(&hello).await?;
 
         // Read HELLO response
-        let _response = connection.read_line()?;
-        eprintln!("[QUICHE] HELLO exchange completed");
+        let _response = self.read_line().await?;
+        eprintln!("[QUINN] HELLO exchange completed");
 
-        Ok(connection)
+        Ok(())
     }
 
-    fn write_json(&mut self, obj: &serde_json::Value) -> Result<()> {
+    async fn write_json(&mut self, obj: &serde_json::Value) -> Result<()> {
         let mut line = serde_json::to_string(obj)?;
         line.push('\n');
 
-        eprintln!("[QUICHE] Writing JSON: {}", line.trim());
+        eprintln!("[QUINN] Writing JSON: {}", line.trim());
 
-        // Write to stream
-        self.conn.stream_send(self.stream_id, line.as_bytes(), false)
+        self.send_stream.write_all(line.as_bytes())
+            .await
             .map_err(|e| Error::connection(&format!("Failed to write to stream: {}", e)))?;
 
         Ok(())
     }
 
-    fn flush(&mut self) -> Result<()> {
-        let mut out = vec![0; 4096];
-
-        // Send all pending data
-        loop {
-            let (write, send_info) = match self.conn.send(&mut out) {
-                Ok(v) => v,
-                Err(quiche::Error::Done) => break,
-                Err(e) => return Err(Error::connection(&format!("Flush error: {}", e))),
-            };
-
-            self.socket.send_to(&out[..write], send_info.to)
-                .map_err(|e| Error::connection(&format!("Failed to send UDP packet: {}", e)))?;
-        }
-
-        Ok(())
-    }
-
-    fn read_line(&mut self) -> Result<String> {
+    async fn read_line(&mut self) -> Result<String> {
         let mut line = String::new();
-        let start = Instant::now();
-        let timeout = Duration::from_secs(5);
 
         loop {
-            if start.elapsed() > timeout {
-                return Err(Error::connection("Read timeout"));
+            // Check if we have a complete line in the buffer
+            if let Some(pos) = self.read_buffer.iter().position(|&b| b == b'\n') {
+                let line_bytes: Vec<u8> = self.read_buffer.drain(..=pos).collect();
+                line = String::from_utf8_lossy(&line_bytes[..line_bytes.len() - 1]).to_string();
+                eprintln!("[QUINN] Read line: {}", line);
+                return Ok(line);
             }
 
-            // Try to receive packets from network
-            match self.socket.recv_from(&mut self.recv_buffer) {
-                Ok((len, from)) => {
-                    let recv_info = quiche::RecvInfo {
-                        to: self.socket.local_addr().unwrap(),
-                        from,
-                    };
+            // Read more data from the stream
+            let mut buf = [0u8; 4096];
+            let n = tokio::time::timeout(
+                Duration::from_secs(5),
+                self.recv_stream.read(&mut buf)
+            )
+                .await
+                .map_err(|_| Error::connection("Read timeout"))?
+                .map_err(|e| Error::connection(&format!("Stream read error: {}", e)))?
+                .ok_or_else(|| Error::connection("Stream closed"))?;
 
-                    self.conn.recv(&mut self.recv_buffer[..len], recv_info)
-                        .map_err(|e| Error::connection(&format!("QUIC recv error: {}", e)))?;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No network data, continue to check stream data
-                }
-                Err(e) => return Err(Error::connection(&format!("Socket error: {}", e))),
-            }
-
-            // Try to read from stream
-            let mut buf = vec![0; 65535];
-            match self.conn.stream_recv(self.stream_id, &mut buf) {
-                Ok((len, fin)) => {
-                    let data = String::from_utf8_lossy(&buf[..len]);
-                    line.push_str(&data);
-
-                    if line.contains('\n') {
-                        // Found complete line
-                        let newline_pos = line.find('\n').unwrap();
-                        let result = line[..newline_pos].to_string();
-                        eprintln!("[QUICHE] Read line: {}", result);
-                        return Ok(result);
-                    }
-
-                    if fin {
-                        return Ok(line);
-                    }
-                }
-                Err(quiche::Error::Done) => {
-                    // No data available yet, sleep briefly
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => return Err(Error::connection(&format!("Stream recv error: {}", e))),
-            }
+            self.read_buffer.extend_from_slice(&buf[..n]);
         }
     }
 
     /// Execute a query
-    pub fn query(&mut self, text: &str, params: Option<HashMap<String, serde_json::Value>>) -> Result<Page> {
+    pub async fn query(&mut self, text: &str, params: Option<HashMap<String, serde_json::Value>>) -> Result<Page> {
         let mut run_msg = serde_json::json!({"type": "RUN_GQL", "text": text});
         if let Some(p) = params {
             run_msg["params"] = serde_json::to_value(p)?;
         }
 
-        self.write_json(&run_msg)?;
-        self.flush()?;
+        self.write_json(&run_msg).await?;
 
         // Read schema
-        let schema_line = self.read_line()?;
+        let schema_line = self.read_line().await?;
         let schema: serde_json::Value = serde_json::from_str(&schema_line)?;
 
         let result = schema.get("result").ok_or_else(|| Error::connection("Missing result"))?;
@@ -461,10 +370,9 @@ impl Connection {
             "type": "PULL",
             "request_id": 1,
             "page_size": self.page_size,
-        }))?;
-        self.flush()?;
+        })).await?;
 
-        let bindings_line = self.read_line()?;
+        let bindings_line = self.read_line().await?;
         let bindings: serde_json::Value = serde_json::from_str(&bindings_line)?;
         let bindings_result = bindings.get("result").ok_or_else(|| Error::connection("Missing result"))?;
 
@@ -494,58 +402,51 @@ impl Connection {
     }
 
     /// Begin a transaction
-    pub fn begin(&mut self) -> Result<()> {
-        self.write_json(&serde_json::json!({"type": "BEGIN"}))?;
-        self.flush()?;
-        self.read_line()?;
+    pub async fn begin(&mut self) -> Result<()> {
+        self.write_json(&serde_json::json!({"type": "BEGIN"})).await?;
+        self.read_line().await?;
         Ok(())
     }
 
     /// Commit a transaction
-    pub fn commit(&mut self) -> Result<()> {
-        self.write_json(&serde_json::json!({"type": "COMMIT"}))?;
-        self.flush()?;
-        self.read_line()?;
+    pub async fn commit(&mut self) -> Result<()> {
+        self.write_json(&serde_json::json!({"type": "COMMIT"})).await?;
+        self.read_line().await?;
         Ok(())
     }
 
     /// Rollback a transaction
-    pub fn rollback(&mut self) -> Result<()> {
-        self.write_json(&serde_json::json!({"type": "ROLLBACK"}))?;
-        self.flush()?;
-        self.read_line()?;
+    pub async fn rollback(&mut self) -> Result<()> {
+        self.write_json(&serde_json::json!({"type": "ROLLBACK"})).await?;
+        self.read_line().await?;
         Ok(())
     }
 
     /// Create a savepoint within the current transaction
-    pub fn savepoint(&mut self, name: &str) -> Result<Savepoint> {
+    pub async fn savepoint(&mut self, name: &str) -> Result<Savepoint> {
         self.write_json(&serde_json::json!({
             "type": "SAVEPOINT",
             "name": name
-        }))?;
-        self.flush()?;
-        self.read_line()?;
+        })).await?;
+        self.read_line().await?;
         Ok(Savepoint {
             name: name.to_string(),
         })
     }
 
     /// Rollback to a savepoint
-    pub fn rollback_to(&mut self, savepoint: &Savepoint) -> Result<()> {
+    pub async fn rollback_to(&mut self, savepoint: &Savepoint) -> Result<()> {
         self.write_json(&serde_json::json!({
             "type": "ROLLBACK_TO",
             "name": savepoint.name
-        }))?;
-        self.flush()?;
-        self.read_line()?;
+        })).await?;
+        self.read_line().await?;
         Ok(())
     }
 
     /// Close the connection
-    pub fn close(&mut self) -> Result<()> {
-        self.conn.close(true, 0, b"goodbye")
-            .map_err(|e| Error::connection(&format!("Failed to close connection: {}", e)))?;
-        self.flush()?;
+    pub async fn close(&mut self) -> Result<()> {
+        self.connection.close(0u32.into(), b"goodbye");
         Ok(())
     }
 }
@@ -563,4 +464,53 @@ fn parse_rows(raw_rows: &[serde_json::Value], type_map: &HashMap<String, String>
         }
     }
     Ok(rows)
+}
+
+fn create_transport_config() -> quinn::TransportConfig {
+    let mut config = quinn::TransportConfig::default();
+    config.max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()));
+    config
+}
+
+// Certificate verifier that skips all verification (insecure, for development only)
+#[derive(Debug)]
+struct SkipServerVerification;
+
+impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ED25519,
+        ]
+    }
 }

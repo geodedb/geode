@@ -54,7 +54,7 @@ impl ConnectionPool {
             Some(c) => c,
             None => {
                 let client = self.client.clone();
-                tokio::task::spawn_blocking(move || client.connect())
+                tokio::task::spawn(async move { client.connect().await })
                     .await
                     .map_err(|e| Error::pool(format!("Task join error: {}", e)))??
             }

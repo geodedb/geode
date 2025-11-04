@@ -25,7 +25,16 @@ class PythonTestRunner:
 
     def __init__(self, server: str, verbose: bool = False):
         host, port = server.split(":")
-        self.client = Client(host=host, port=int(port), skip_verify=True)
+
+        # Use CA certificate for TLS verification
+        ca_cert_path = Path(__file__).parent.parent / "certs" / "ca.crt"
+
+        self.client = Client(
+            host=host,
+            port=int(port),
+            ca_cert=str(ca_cert_path),
+            skip_verify=False
+        )
         self.verbose = verbose
         self.connection: Optional[Connection] = None
 

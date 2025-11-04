@@ -13,9 +13,11 @@ categories = ["database"]
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
 
-# QUIC support - using Cloudflare's quiche for better compatibility
-quiche = { version = "0.24.5", default-features = false, features = ["boringssl-boring-crate"] }
-boring = "4.3"  # System BoringSSL bindings
+# QUIC support - using quinn (pure Rust, no C++ dependencies)
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls-pemfile = "2.0"  # For loading certificates
+rustls-native-certs = "0.7"  # For loading system certificates
 ring = "0.17"  # For crypto operations
 
 # Serialization

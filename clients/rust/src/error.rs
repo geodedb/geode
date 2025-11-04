@@ -100,9 +100,3 @@ impl Error {
     }
 }
 
-// Convert quiche errors to our Error type
-impl From<quiche::Error> for Error {
-    fn from(err: quiche::Error) -> Self {
-        Error::quic(err.to_string())
-    }
-}

@@ -249,9 +249,9 @@ pub fn main() !void {
 
     if (json_output) {
         // Build JSON output manually
-        var json_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
-        defer json_buf.deinit();
-        const writer = json_buf.writer();
+        var json_buf = try std.ArrayList(u8).initCapacity(allocator, 0);
+        defer json_buf.deinit(allocator);
+        const writer = json_buf.writer(allocator);
 
         try writer.print("{{\"summary\":{{\"total\":{d},\"passed\":{d},\"failed\":{d},\"errors\":{d},\"skipped\":{d}}},\"results\":[", .{
             output.summary.total,

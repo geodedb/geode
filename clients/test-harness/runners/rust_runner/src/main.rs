@@ -158,7 +158,7 @@ impl Runner {
         for step in setup {
             if step.step_type == "query" && !step.text.is_empty() {
                 self.ensure_connection().await?;
-                if let Some(conn) = &self.connection {
+                if let Some(conn) = &mut self.connection {
                     conn.query(&step.text, None).await?;
                 }
             }
@@ -175,7 +175,7 @@ impl Runner {
                     }
                     continue;
                 }
-                if let Some(conn) = &self.connection {
+                if let Some(conn) = &mut self.connection {
                     if let Err(e) = conn.query(&step.text, None).await {
                         if self.verbose {
                             eprintln!("Cleanup warning: {}", e);
@@ -292,7 +292,7 @@ impl Runner {
 
         let conn = self
             .connection
-            .as_ref()
+            .as_mut()
             .context("No active connection")?;
 
         // Convert params to Option<HashMap<String, serde_json::Value>>
@@ -337,26 +337,26 @@ impl Runner {
                     Ok(())
                 }
                 "disconnect" => {
-                    if let Some(conn) = self.connection.take() {
+                    if let Some(mut conn) = self.connection.take() {
                         conn.close().await?;
                     }
                     Ok(())
                 }
                 "begin" => {
                     self.ensure_connection().await?;
-                    if let Some(conn) = &self.connection {
+                    if let Some(conn) = &mut self.connection {
                         conn.begin().await?;
                     }
                     Ok(())
                 }
                 "commit" => {
-                    if let Some(conn) = &self.connection {
+                    if let Some(conn) = &mut self.connection {
                         conn.commit().await?;
                     }
                     Ok(())
                 }
                 "rollback" => {
-                    if let Some(conn) = &self.connection {
+                    if let Some(conn) = &mut self.connection {
                         conn.rollback().await?;
                     }
                     Ok(())

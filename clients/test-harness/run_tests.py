@@ -25,6 +25,12 @@ from typing import Any, Dict, List, Optional, Set
 import yaml
 
 
+class IndentedDumper(yaml.Dumper):
+    """Custom YAML dumper that properly indents list items."""
+    def increase_indent(self, flow=False, indentless=False):
+        return super(IndentedDumper, self).increase_indent(flow, False)
+
+
 @dataclass
 class TestResult:
     """Result of a single test execution."""
@@ -121,9 +127,16 @@ class GeodeServerManager:
 
         listen_addr = f"localhost:{self.port}"
 
+        # Certificate paths for TLS
+        cert_dir = Path(__file__).parent / "certs"
+        cert_path = cert_dir / "server.crt"
+        key_path = cert_dir / "server.key"
+
         if self.verbose:
             print(f"Starting Geode server on {listen_addr}")
             print(f"Server log: {self.log_file}")
+            print(f"Server cert: {cert_path}")
+            print(f"Server key: {key_path}")
 
         # Start server process
         log_fd = open(self.log_file, 'w')
@@ -132,6 +145,10 @@ class GeodeServerManager:
             "serve",
             "--listen",
             listen_addr,
+            "--cert",
+            str(cert_path),
+            "--key",
+            str(key_path),
             stdout=log_fd,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -276,7 +293,7 @@ class PythonRunner(ClientRunner):
             # Create temporary test file
             test_spec = {"tests": [test]}
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
-            test_file.write_text(yaml.dump(test_spec))
+            test_file.write_text(yaml.dump(test_spec, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False))
 
             # Run Python runner using the same Python interpreter
             proc = await asyncio.create_subprocess_exec(
@@ -352,7 +369,7 @@ class GoRunner(ClientRunner):
             # Create temporary test file
             test_spec = {"tests": [test]}
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
-            test_file.write_text(yaml.dump(test_spec))
+            test_file.write_text(yaml.dump(test_spec, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False))
 
             # Run Go runner
             proc = await asyncio.create_subprocess_exec(
@@ -478,7 +495,7 @@ class RustRunner(ClientRunner):
             # Create temporary test file
             test_spec = {"tests": [test]}
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
-            test_file.write_text(yaml.dump(test_spec))
+            test_file.write_text(yaml.dump(test_spec, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False))
 
             # Run Rust runner
             proc = await asyncio.create_subprocess_exec(
@@ -584,7 +601,7 @@ class ZigRunner(ClientRunner):
             # Create temporary test file
             test_spec = {"tests": [test]}
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
-            test_file.write_text(yaml.dump(test_spec))
+            test_file.write_text(yaml.dump(test_spec, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False))
 
             # Run Zig runner
             proc = await asyncio.create_subprocess_exec(
