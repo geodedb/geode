@@ -252,20 +252,29 @@ pub const Parser = struct {
             return try self.parseQuotedString(c);
         }
 
-        // Handle null
+        // Handle null (check word boundary)
         if (std.mem.startsWith(u8, self.input[self.pos..], "null")) {
-            self.pos += 4;
-            return Value{ .null_value = {} };
+            const after_pos = self.pos + 4;
+            if (after_pos >= self.input.len or isDelimiter(self.input[after_pos])) {
+                self.pos = after_pos;
+                return Value{ .null_value = {} };
+            }
         }
 
-        // Handle boolean
+        // Handle boolean (check word boundary)
         if (std.mem.startsWith(u8, self.input[self.pos..], "true")) {
-            self.pos += 4;
-            return Value{ .bool_value = true };
+            const after_pos = self.pos + 4;
+            if (after_pos >= self.input.len or isDelimiter(self.input[after_pos])) {
+                self.pos = after_pos;
+                return Value{ .bool_value = true };
+            }
         }
         if (std.mem.startsWith(u8, self.input[self.pos..], "false")) {
-            self.pos += 5;
-            return Value{ .bool_value = false };
+            const after_pos = self.pos + 5;
+            if (after_pos >= self.input.len or isDelimiter(self.input[after_pos])) {
+                self.pos = after_pos;
+                return Value{ .bool_value = false };
+            }
         }
 
         // Handle empty map/object
@@ -604,6 +613,10 @@ fn needsQuoting(s: []const u8) bool {
     }
 
     return false;
+}
+
+fn isDelimiter(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '#' or c == ',' or c == '}' or c == ']';
 }
 
 // Tests
