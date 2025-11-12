@@ -110,6 +110,10 @@ const buildExplainJson = query_executor.buildExplainJson;
 const canonicalValuesKey = query_executor.canonicalValuesKey;
 const collectTextDiagnostics = query_executor.collectTextDiagnostics;
 const collectPlannerDiagnostics = query_executor.collectPlannerDiagnostics;
+const hasEqualityPredicate = query_executor.hasEqualityPredicate;
+const hasAggregationFunction = query_executor.hasAggregationFunction;
+const canonicalRowKey = query_executor.canonicalRowKey;
+const buildAdditionalStatusesAlloc = query_executor.buildAdditionalStatusesAlloc;
 
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
@@ -343,33 +347,7 @@ fn buildScanValuesResult(state: *ServerState) !void {
     state.active_result = true;
 }
 
-// Minimal predicate inspector: returns true if expression tree contains an equality operation.
-fn hasEqualityPredicate(expr: anytype) bool {
-    // Attempt to match Binary nodes; AST uses union(enum) with .Binary carrying op + left/right.
-    if (@hasField(@TypeOf(expr), "op") and @hasField(@TypeOf(expr), "left") and @hasField(@TypeOf(expr), "right")) {
-        // best-effort: assume equality op tag name contains Eq
-        // Use @tagName on op if enum
-        if (@typeInfo(@TypeOf(expr.op)) == .Enum) {
-            const opname = @tagName(expr.op);
-            if (std.mem.eql(u8, opname, "Eq")) return true;
-            if (std.mem.eql(u8, opname, "And") or std.mem.eql(u8, opname, "Or")) {
-                if (hasEqualityPredicate(expr.left.*) or hasEqualityPredicate(expr.right.*)) return true;
-            }
-        }
-        if (hasEqualityPredicate(expr.left.*)) return true;
-        if (hasEqualityPredicate(expr.right.*)) return true;
-    }
-    // Generic recursion for other containers
-    const T = @TypeOf(expr);
-    if (@hasField(T, "left") and @hasField(T, "right")) {
-        if (hasEqualityPredicate(expr.left)) return true;
-        if (hasEqualityPredicate(expr.right)) return true;
-    }
-    if (@hasField(T, "expr")) if (hasEqualityPredicate(expr.expr)) return true;
-    if (@hasField(T, "terms")) for (expr.terms) |t| if (hasEqualityPredicate(t)) return true;
-    if (@hasField(T, "args")) for (expr.args) |a| if (hasEqualityPredicate(a)) return true;
-    return false;
-}
+// Removed: hasEqualityPredicate() function (~25 lines) now in query_executor module (M3.3 Phase 3 fourth increment)
 
 // Removed: Query utility functions now in query_executor module (M3.3 Phase 3 query utilities extraction)
 // Original: valueTypeName() function (~9 lines)
@@ -484,121 +462,9 @@ const StageTimings = struct {
 // Value-based canonical key: encodes row values directly to avoid JSON reparsing.
 // Removed: canonicalValuesKey() function (~34 lines) now in query_executor module (M3.3 Phase 3 second increment)
 
-// Build canonical key for a row JSON string so that numerically equal values with different scales map identically.
-fn canonicalRowKey(allocator: std.mem.Allocator, row: []const u8) []const u8 {
-    if (row.len < 2) return row; // fallback
-    var idx: usize = 0;
-    if (row[idx] == '{') idx += 1;
-    var key_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return row;
-    const w = key_buf.writer(allocator);
-    var field_i: usize = 0;
-    while (idx < row.len) : (idx += 1) {
-        while (idx < row.len and (row[idx] == ' ' or row[idx] == ',')) idx += 1;
-        if (idx >= row.len or row[idx] == '}') break;
-        if (row[idx] != '"') break; // malformed
-        idx += 1; // skip opening quote of key
-        while (idx < row.len and row[idx] != '"') idx += 1; // skip key chars
-        if (idx >= row.len) break;
-        idx += 1; // skip closing quote
-        while (idx < row.len and row[idx] != ':') idx += 1;
-        if (idx >= row.len) break;
-        idx += 1; // colon
-        while (idx < row.len and row[idx] == ' ') idx += 1;
-        if (idx >= row.len) break;
-        if (field_i > 0) w.writeAll("|") catch {};
-        const ch = row[idx];
-        if (ch == 'n') { // null
-            w.writeAll("n") catch {};
-            while (idx < row.len and row[idx] != ',' and row[idx] != '}') idx += 1;
-            if (idx >= row.len or row[idx] == '}') break;
-            field_i += 1;
-            continue;
-        } else if (ch == '"') { // string
-            idx += 1;
-            const start = idx;
-            while (idx < row.len and row[idx] != '"') idx += 1;
-            const s = if (idx <= row.len) row[start..idx] else &.{};
-            w.writeAll("s:") catch {};
-            w.print("{d}:", .{s.len}) catch {};
-            w.writeAll(s) catch {};
-            if (idx < row.len) idx += 1;
-            while (idx < row.len and row[idx] != ',' and row[idx] != '}') idx += 1;
-            if (idx >= row.len or row[idx] == '}') break;
-            field_i += 1;
-            continue;
-        } else {
-            // number or bool token
-            const startn = idx;
-            var neg = false;
-            if (row[idx] == '-') {
-                neg = true;
-                idx += 1;
-            }
-            var mantissa: i128 = 0;
-            var saw_digit = false;
-            while (idx < row.len and row[idx] >= '0' and row[idx] <= '9') : (idx += 1) {
-                mantissa = mantissa * 10 + (row[idx] - '0');
-                saw_digit = true;
-            }
-            var scale: u8 = 0;
-            var is_dec = false;
-            if (idx < row.len and row[idx] == '.') {
-                is_dec = true;
-                idx += 1;
-                while (idx < row.len and row[idx] >= '0' and row[idx] <= '9') : (idx += 1) {
-                    mantissa = mantissa * 10 + (row[idx] - '0');
-                    scale += 1;
-                    saw_digit = true;
-                }
-            }
-            if (!saw_digit) {
-                // bool token -> canonical as string
-                var endtok = startn;
-                while (endtok < row.len and row[endtok] != ',' and row[endtok] != '}') endtok += 1;
-                const tok = row[startn..endtok];
-                w.writeAll("s:") catch {};
-                w.print("{d}:", .{tok.len}) catch {};
-                w.writeAll(tok) catch {};
-                idx = endtok;
-            } else {
-                if (neg) mantissa = -mantissa;
-                if (is_dec) {
-                    while (scale > 0 and @mod(mantissa, 10) == 0) : (scale -= 1) mantissa = @divTrunc(mantissa, 10);
-                    if (scale == 0) {
-                        // becomes int
-                        w.writeAll("i:") catch {};
-                        w.print("{d}", .{mantissa}) catch {};
-                    } else {
-                        w.writeAll("d:") catch {};
-                        w.print("{d}:", .{mantissa}) catch {};
-                        w.print("{d}", .{scale}) catch {};
-                    }
-                } else {
-                    w.writeAll("i:") catch {};
-                    w.print("{d}", .{mantissa}) catch {};
-                }
-            }
-            while (idx < row.len and row[idx] != ',' and row[idx] != '}') idx += 1;
-            if (idx >= row.len or row[idx] == '}') break;
-            field_i += 1;
-            continue;
-        }
-    }
-    return key_buf.toOwnedSlice(allocator) catch row;
-}
+// Removed: canonicalRowKey() function (~100 lines) now in query_executor module (M3.3 Phase 3 fourth increment)
 
-fn buildAdditionalStatusesAlloc(allocator: std.mem.Allocator, codes: []const diagnostics.Code, primary: diagnostics.Code) []const []const u8 {
-    if (codes.len <= 1) return &.{};
-    var extras = allocator.alloc([]const u8, codes.len - 1) catch return &.{};
-    var ei: usize = 0;
-    var i: usize = 0;
-    while (i < codes.len) : (i += 1) {
-        if (codes[i] == primary) continue;
-        extras[ei] = diagnostics.codeName(codes[i]);
-        ei += 1;
-    }
-    return extras[0..ei];
-}
+// Removed: buildAdditionalStatusesAlloc() function (~11 lines) now in query_executor module (M3.3 Phase 3 fourth increment)
 
 // Shared DISTINCT dedup helper: mutates rows_json in-place, frees removed row value slices when provided.
 fn distinctDedup(allocator: std.mem.Allocator, have_values: bool, value_arity: usize, rows_json: *std.ArrayList([]const u8), rows_values: *std.ArrayList([]const eval.Value), out_hash_size: ?*usize) void {
@@ -5811,39 +5677,7 @@ fn executeDropGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerSta
     }
 }
 
-// Helper function to detect if an expression contains aggregation functions
-fn hasAggregationFunction(expr: geode.ast.Expr) bool {
-    return switch (expr) {
-        .Call => |call| {
-            const callee = call.callee.*;
-            if (callee == .Ident) {
-                const func_name = callee.Ident.orig;
-                if (std.mem.eql(u8, func_name, "count") or
-                    std.mem.eql(u8, func_name, "sum") or
-                    std.mem.eql(u8, func_name, "avg") or
-                    std.mem.eql(u8, func_name, "min") or
-                    std.mem.eql(u8, func_name, "max"))
-                {
-                    return true;
-                }
-            }
-            // Check arguments recursively
-            for (call.args) |arg| {
-                if (hasAggregationFunction(arg.*)) {
-                    return true;
-                }
-            }
-            return false;
-        },
-        .Binary => |bin| {
-            return hasAggregationFunction(bin.left.*) or hasAggregationFunction(bin.right.*);
-        },
-        .Unary => |un| {
-            return hasAggregationFunction(un.expr.*);
-        },
-        else => false,
-    };
-}
+// Removed: hasAggregationFunction() function (~32 lines) now in query_executor module (M3.3 Phase 3 fourth increment)
 
 // Helper function to convert eval.Value to graph_exec.BindingValue
 fn convertEvalValueToBindingValue(val: geode.eval.Value) graph_exec.BindingValue {
