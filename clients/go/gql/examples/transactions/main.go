@@ -13,7 +13,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/spyder/geode/clients/go/gql"
+	"geode/clients/go/gql"
 )
 
 func basicTransactionExample(ctx context.Context) error {

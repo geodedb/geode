@@ -455,7 +455,7 @@ pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyRe
     // Calculate key hash for identification
     var key_hash_bytes: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(&derived_key, &key_hash_bytes, .{});
-    const key_hash = try std.fmt.allocPrint(allocator, "{}", .{std.fmt.fmtSliceHexLower(&key_hash_bytes)});
+    const key_hash = try std.fmt.allocPrint(allocator, "{x}", .{key_hash_bytes});
 
     return .{
         .key_id = key_id,
@@ -484,7 +484,7 @@ pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !DeriveWalKe
     // Calculate key hash
     var hash: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(&wal_key, &hash, .{});
-    const hash_str = try std.fmt.allocPrint(allocator, "{}", .{std.fmt.fmtSliceHexLower(&hash)});
+    const hash_str = try std.fmt.allocPrint(allocator, "{x}", .{hash});
 
     // Check if rotation is needed (every 100 segments)
     const rotation_required = (wal_segment % 100) == 99;
