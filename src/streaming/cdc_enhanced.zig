@@ -1,5 +1,11 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
+const cdc_sinks = @import("cdc_sinks.zig");
+const MemorySink = cdc_sinks.MemorySink;
+const FileSink = cdc_sinks.FileSink;
+const WebhookSink = @import("sinks/webhook_sink.zig").WebhookSink;
+const KafkaSink = @import("sinks/kafka_sink.zig").KafkaSink;
+
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-11-12
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Lifecycle"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Retention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Retention; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Ingest; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Ingest; OWNER=streaming; UPDATED=2025-09-20
@@ -935,99 +941,11 @@ const Sink = struct {
     }
 };
 
-const MemorySink = struct {
-    allocator: Allocator,
-    events: std.ArrayList(ChangeEvent),
-
-    pub fn init(allocator: Allocator) MemorySink {
-        return MemorySink{
-            .allocator = allocator,
-            .events = std.ArrayList(ChangeEvent).initCapacity(allocator, 0) catch @panic("OOM"),
-        };
-    }
-
-    pub fn deinit(self: *MemorySink) void {
-        // free owned allocations inside events first
-        for (self.events.items) |*ev| {
-            freeEventShallow(self.allocator, ev);
-        }
-        self.events.deinit(self.allocator);
-    }
-
-    pub fn send(self: *MemorySink, events: []const ChangeEvent) !void {
-        for (events) |event| {
-            // Deep copy event to avoid double-free - duplicate the allocated strings
-            const copied_event = ChangeEvent{
-                .timestamp = event.timestamp,
-                .transaction_id = event.transaction_id,
-                .sequence = event.sequence,
-                .change_type = event.change_type,
-                .entity_type = event.entity_type,
-                .entity_id = event.entity_id,
-                .before = if (event.before) |b| try self.allocator.dupe(u8, b) else null,
-                .after = if (event.after) |a| try self.allocator.dupe(u8, a) else null,
-                .metadata = blk: {
-                    var new_meta = std.StringHashMap([]const u8).init(self.allocator);
-                    var it = event.metadata.iterator();
-                    while (it.next()) |entry| {
-                        const key_copy = try self.allocator.dupe(u8, entry.key_ptr.*);
-                        const val_copy = try self.allocator.dupe(u8, entry.value_ptr.*);
-                        try new_meta.put(key_copy, val_copy);
-                    }
-                    break :blk new_meta;
-                },
-            };
-            try self.events.append(self.allocator, copied_event);
-        }
-    }
-};
-
-const FileSink = struct {
-    allocator: Allocator,
-    file: std.fs.File,
-
-    pub fn init(allocator: Allocator, path: []const u8) !FileSink {
-        const file = try std.fs.cwd().createFile(path, .{ .truncate = false });
-        return FileSink{
-            .allocator = allocator,
-            .file = file,
-        };
-    }
-
-    pub fn deinit(self: *FileSink) void {
-        self.file.close();
-    }
-
-    pub fn send(self: *FileSink, events: []const ChangeEvent) !void {
-        for (events) |event| {
-            const json = try serializeEvent(self.allocator, event);
-            defer self.allocator.free(json);
-            try self.file.writeAll(json);
-            try self.file.writeAll("\n");
-        }
-    }
-};
-
-const KafkaSink = struct {
-    allocator: Allocator,
-    // Kafka producer would be initialized here
-
-    pub fn init(allocator: Allocator) KafkaSink {
-        return KafkaSink{
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *KafkaSink) void {
-        _ = self;
-    }
-
-    pub fn send(self: *KafkaSink, events: []const ChangeEvent) !void {
-        _ = self;
-        _ = events;
-        // Send to Kafka
-    }
-};
+// Sink implementations moved to separate modules:
+// - MemorySink and FileSink in cdc_sinks.zig
+// - KafkaSink in sinks/kafka_sink.zig
+// - WebhookSink in sinks/webhook_sink.zig
+// - KinesisSink and PubSubSink remain here (simple stub implementations)
 
 const KinesisSink = struct {
     allocator: Allocator,
@@ -1046,26 +964,6 @@ const KinesisSink = struct {
         _ = self;
         _ = events;
         // Send to Kinesis
-    }
-};
-
-const WebhookSink = struct {
-    allocator: Allocator,
-
-    pub fn init(allocator: Allocator) WebhookSink {
-        return WebhookSink{
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *WebhookSink) void {
-        _ = self;
-    }
-
-    pub fn send(self: *WebhookSink, events: []const ChangeEvent) !void {
-        _ = self;
-        _ = events;
-        // Send via HTTP webhook
     }
 };
 
