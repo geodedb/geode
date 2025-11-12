@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-12 (Phase 3 M3.3 IN PROGRESS)
 **Current Branch**: `claude/modularize-geode-codebase-011CV37UMkJQkniB6ARzFWkH`
-**Overall Status**: PHASE 3 IN PROGRESS - M3.3 Second Increment Complete (14.4% cumulative server reduction)
+**Overall Status**: PHASE 3 IN PROGRESS - M3.3 Third Increment Complete (14.9% cumulative server reduction)
 
 ## Quick Status Overview
 
@@ -25,10 +25,10 @@
 ## Current Work
 
 **Active Agent**: Claude Agent
-**Current Milestone**: Phase 3, M3.3 - Extract Query Executor ⏳ IN PROGRESS (Second Increment Complete)
+**Current Milestone**: Phase 3, M3.3 - Extract Query Executor ⏳ IN PROGRESS (Third Increment Complete)
 **Next Milestone**: Phase 3, M3.3 continuation (extract query evaluation and statement execution functions)
 **Blocking Issues**: None
-**Recent Achievement**: M3.3 second increment extracted additional query utilities (288 lines total module, -107 lines from server). Cumulative Phase 3 reduction: 14.4% (1,013 lines) across 7 modules (1,360 lines total)
+**Recent Achievement**: M3.3 third increment extracted diagnostic utilities (335 lines total module, -38 lines from server). Cumulative Phase 3 reduction: 14.9% (1,051 lines) across 7 modules (1,407 lines total)
 
 ---
 
@@ -537,27 +537,28 @@ Circular Dependencies Detected: 2
 - **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Started with focused extraction of self-contained backup protocol handlers (~100 lines). Additional protocol handling code (QUIC connection setup, message parsing) remains for future increments.
 
 #### M3.3: Extract Query Executor ⏳
-- **Status**: IN PROGRESS (Second Increment Complete - Query Utility Functions Extracted)
-- **Current File**: `src/server/main.zig` (6,026 lines, was 6,275 after M3.2)
+- **Status**: IN PROGRESS (Third Increment Complete - Query Utility & Diagnostic Functions Extracted)
+- **Current File**: `src/server/main.zig` (5,988 lines, was 6,275 after M3.2)
 - **Created Files**:
-  - `src/server/query_executor.zig` (288 lines) - Query utility functions
+  - `src/server/query_executor.zig` (335 lines) - Query utility and diagnostic functions
 - **Tasks**:
   - [x] Identify query utility functions
   - [x] Create `query_executor.zig` with utility functions
   - [x] Extract parseParams, writeJsonValue, valueTypeName, bindingValue functions (first increment)
   - [x] Extract buildExplainJson, canonicalValuesKey functions (second increment)
+  - [x] Extract collectTextDiagnostics, collectPlannerDiagnostics functions (third increment)
   - [x] Update `server/main.zig` imports and remove extracted functions
   - [ ] Extract query evaluation functions (evaluateSimpleQuery, evaluateUnion, evaluateBinarySet)
   - [ ] Extract statement execution functions (execute*Statement functions)
   - [ ] Extract additional query utilities
   - [ ] Verify all queries execute correctly
-- **Verification**: Server functionality maintained, query utilities working
+- **Verification**: Server functionality maintained, query utilities and diagnostics working
 - **Agent**: Claude Agent
 - **Started**: 2025-11-12
-- **Completed**: Second increment complete (7 utility functions total)
+- **Completed**: Third increment complete (9 utility/diagnostic functions total)
 - **Test Results**: Functionality preserved through incremental approach
 - **Issues**: None
-- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Completed two increments extracting 7 utility functions (~250 lines total). Query evaluation functions (~1,161 lines) and statement execution functions (~1,271 lines) remain for future increments.
+- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Completed three increments extracting 9 utility and diagnostic functions (~297 lines total). Query evaluation functions (~1,161 lines) and statement execution functions (~1,271 lines) remain for future increments.
 
 ### Phase 3 Completion Criteria
 - [ ] 7,039-line file split into 5 focused modules
@@ -964,6 +965,36 @@ Circular Dependencies Detected: 2
 ---
 
 ## Change Log
+
+### 2025-11-12 (Session 15 - Phase 3 M3.3 Third Increment)
+- **Phase 3 M3.3 - Extract Query Executor**: THIRD INCREMENT COMPLETE
+  - **Diagnostic Utility Functions Extraction**:
+    - Updated src/server/query_executor.zig module (288 -> 335 lines, +47 lines)
+    - Added geode and diagnostics imports for diagnostic functions
+    - Extracted collectTextDiagnostics() - Parse diagnostics aggregation (~27 lines)
+    - Extracted collectPlannerDiagnostics() - Planner diagnostics aggregation (~10 lines)
+    - Functions are pure with no ServerState dependencies - safe extraction
+  - **Server Main Updates**:
+    - Updated src/server/main.zig (6,026 -> 5,988 lines, -38 lines, -0.6%)
+    - Added const aliases for 2 diagnostic functions (lines 111-112)
+    - Removed collectTextDiagnostics() function definition (~27 lines)
+    - Removed collectPlannerDiagnostics() function definition (~10 lines)
+    - Updated extraction documentation comments
+  - **Cumulative M3.3 Progress (Third Increment)**:
+    - query_executor.zig: 335 lines (was 288, +47 lines)
+    - Server reduced: 6,026 -> 5,988 lines (-38 lines, -0.6%)
+    - Total functions extracted: 9 (5 first + 2 second + 2 third increment)
+  - **Cumulative Phase 3 Progress**:
+    - Total modules created: 7 (server_state, backup_manager, index_catalog, server_flags, graph_storage_manager, protocol_handler, query_executor)
+    - Total lines extracted: 1,407 lines across 7 modules
+    - Server reduction: 7,039 -> 5,988 lines (-1,051 lines, -14.9%)
+  - **Status**: M3.3 IN PROGRESS - Query utility and diagnostic functions extracted (9 functions total), query evaluation functions (~1,161 lines) and statement execution functions (~1,271 lines) remain for future increments
+  - **Safety Protocol**: Following P0 CRITICAL incremental approach with focused extraction
+  - **Next Steps**:
+    - Continue extracting safe utility functions if any remain
+    - Or begin extracting query evaluation functions
+    - Build up query_executor.zig incrementally
+- **Rationale**: Phase 3 M3.3 continues incremental extraction per P0 CRITICAL safety protocols. Third increment focused on diagnostic utility functions (collectTextDiagnostics, collectPlannerDiagnostics) with no ServerState coupling, maintaining safety and testability.
 
 ### 2025-11-12 (Session 14 - Phase 3 M3.3 Second Increment)
 - **Phase 3 M3.3 - Extract Query Executor**: SECOND INCREMENT COMPLETE
