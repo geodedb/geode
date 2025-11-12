@@ -114,6 +114,9 @@ const hasEqualityPredicate = query_executor.hasEqualityPredicate;
 const hasAggregationFunction = query_executor.hasAggregationFunction;
 const canonicalRowKey = query_executor.canonicalRowKey;
 const buildAdditionalStatusesAlloc = query_executor.buildAdditionalStatusesAlloc;
+const writeBindingsAdaptive = query_executor.writeBindingsAdaptive;
+const distinctDedup = query_executor.distinctDedup;
+const convertEvalValueToBindingValue = query_executor.convertEvalValueToBindingValue;
 
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
@@ -377,37 +380,7 @@ fn writeErrorWithFlags(allocator: std.mem.Allocator, out_file: std.fs.File, code
 // Original: buildExplainJson() function (~76 lines)
 // Total extracted (first increment): ~164 lines to query_executor.zig module
 
-// Custom bindings writer: include final flag only if (has_params or multi_page_needed or explicit pagination triggered)
-fn writeBindingsAdaptive(file: std.fs.File, ordered: bool, order_keys: []const []const u8, rows_json: []const u8, final_flag: bool, include_final: bool, flags: []const []const u8) void {
-    file.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":") catch {};
-    file.writeAll(if (ordered) "true" else "false") catch {};
-    file.writeAll(",\"order_keys\":[") catch {};
-    var i: usize = 0;
-    while (i < order_keys.len) : (i += 1) {
-        if (i > 0) file.writeAll(",") catch {};
-        file.writeAll("\"") catch {};
-        file.writeAll(order_keys[i]) catch {};
-        file.writeAll("\"") catch {};
-    }
-    file.writeAll("],\"rows\":") catch {};
-    file.writeAll(rows_json) catch {};
-    if (include_final) {
-        file.writeAll(",\"final\":") catch {};
-        file.writeAll(if (final_flag) "true" else "false") catch {};
-    }
-    if (flags.len > 0) {
-        file.writeAll(",\"flagger_findings\":[") catch {};
-        var fi: usize = 0;
-        while (fi < flags.len) : (fi += 1) {
-            if (fi > 0) file.writeAll(",") catch {};
-            file.writeAll("\"") catch {};
-            file.writeAll(flags[fi]) catch {};
-            file.writeAll("\"") catch {};
-        }
-        file.writeAll("]") catch {};
-    }
-    file.writeAll("}}\n") catch {};
-}
+// Removed: writeBindingsAdaptive() function (~30 lines) now in query_executor module (M3.3 Phase 3 fifth increment)
 
 const StageTimings = struct {
     project_ns: i128 = 0,
@@ -466,45 +439,7 @@ const StageTimings = struct {
 
 // Removed: buildAdditionalStatusesAlloc() function (~11 lines) now in query_executor module (M3.3 Phase 3 fourth increment)
 
-// Shared DISTINCT dedup helper: mutates rows_json in-place, frees removed row value slices when provided.
-fn distinctDedup(allocator: std.mem.Allocator, have_values: bool, value_arity: usize, rows_json: *std.ArrayList([]const u8), rows_values: *std.ArrayList([]const eval.Value), out_hash_size: ?*usize) void {
-    var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
-    var out_rows = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return;
-    defer out_rows.deinit(allocator);
-    var out_values = if (have_values) std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch return else std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch return;
-    defer out_values.deinit(allocator);
-    var alloc_keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return;
-    defer {
-        for (alloc_keys.items) |k| allocator.free(k);
-        alloc_keys.deinit(allocator);
-    }
-    var idx: usize = 0;
-    while (idx < rows_json.items.len) : (idx += 1) {
-        const row = rows_json.items[idx];
-        const key = if (have_values and idx < rows_values.items.len) canonicalValuesKey(allocator, rows_values.items[idx][0..value_arity]) else canonicalRowKey(allocator, row);
-        if (!seen.contains(key)) {
-            seen.put(key, {}) catch {};
-            out_rows.append(allocator, row) catch {};
-            if (have_values and idx < rows_values.items.len) out_values.append(allocator, rows_values.items[idx]) catch {};
-            if (key.ptr != row.ptr) alloc_keys.append(allocator, key) catch {};
-        } else {
-            allocator.free(row);
-            allocator.free(key);
-            if (have_values and idx < rows_values.items.len) allocator.free(rows_values.items[idx]);
-        }
-    }
-    const unique = seen.count();
-    rows_json.clearRetainingCapacity();
-    for (out_rows.items) |r| rows_json.append(allocator, r) catch {};
-    if (out_hash_size) |p| p.* = unique;
-    if (have_values) {
-        // Replace original rows_values with compacted out_values (ownership of slices moves as-is)
-        for (rows_values.items) |v| allocator.free(v);
-        rows_values.clearRetainingCapacity();
-        for (out_values.items) |v| rows_values.append(allocator, v) catch {};
-    }
-}
+// Removed: distinctDedup() function (~38 lines) now in query_executor module (M3.3 Phase 3 fifth increment)
 
 const AllocTracker = struct { ctx: *anyopaque, getFn: *const fn (*anyopaque) usize };
 
@@ -5680,16 +5615,7 @@ fn executeDropGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerSta
 // Removed: hasAggregationFunction() function (~32 lines) now in query_executor module (M3.3 Phase 3 fourth increment)
 
 // Helper function to convert eval.Value to graph_exec.BindingValue
-fn convertEvalValueToBindingValue(val: geode.eval.Value) graph_exec.BindingValue {
-    return switch (val) {
-        .Null => .Null,
-        .Bool => |b| .{ .Value = .{ .Bool = b } },
-        .Int => |i| .{ .Value = .{ .Int = i } },
-        .Str => |s| .{ .Value = .{ .String = s } },
-        .Decimal => |d| .{ .Value = .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } },
-        else => .Null,
-    };
-}
+// Removed: convertEvalValueToBindingValue() function (~10 lines) now in query_executor module (M3.3 Phase 3 fifth increment)
 
 // Execute SESSION SET statement with full ISO GQL syntax support
 fn executeSessionSetStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.SessionSetStatement) ![]const u8 {

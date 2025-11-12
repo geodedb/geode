@@ -5,6 +5,7 @@ const protocol = @import("../lib.zig").protocol;
 const geode = @import("geode");
 const diagnostics = geode.diagnostics;
 const ast = geode.ast;
+const graph_exec = @import("../graph_exec.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=QUERY_EXECUTOR; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.3 - Query Executor Module (Incremental Extraction)
@@ -513,4 +514,88 @@ pub fn buildAdditionalStatusesAlloc(allocator: std.mem.Allocator, codes: []const
         ei += 1;
     }
     return extras[0..ei];
+}
+
+/// Custom bindings writer: include final flag only if (has_params or multi_page_needed or explicit pagination triggered)
+pub fn writeBindingsAdaptive(file: std.fs.File, ordered: bool, order_keys: []const []const u8, rows_json: []const u8, final_flag: bool, include_final: bool, flags: []const []const u8) void {
+    file.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":") catch {};
+    file.writeAll(if (ordered) "true" else "false") catch {};
+    file.writeAll(",\"order_keys\":[") catch {};
+    var i: usize = 0;
+    while (i < order_keys.len) : (i += 1) {
+        if (i > 0) file.writeAll(",") catch {};
+        file.writeAll("\"") catch {};
+        file.writeAll(order_keys[i]) catch {};
+        file.writeAll("\"") catch {};
+    }
+    file.writeAll("],\"rows\":") catch {};
+    file.writeAll(rows_json) catch {};
+    if (include_final) {
+        file.writeAll(",\"final\":") catch {};
+        file.writeAll(if (final_flag) "true" else "false") catch {};
+    }
+    if (flags.len > 0) {
+        file.writeAll(",\"flagger_findings\":[") catch {};
+        var fi: usize = 0;
+        while (fi < flags.len) : (fi += 1) {
+            if (fi > 0) file.writeAll(",") catch {};
+            file.writeAll("\"") catch {};
+            file.writeAll(flags[fi]) catch {};
+            file.writeAll("\"") catch {};
+        }
+        file.writeAll("]") catch {};
+    }
+    file.writeAll("}}\n") catch {};
+}
+
+/// Shared DISTINCT dedup helper: mutates rows_json in-place, frees removed row value slices when provided.
+pub fn distinctDedup(allocator: std.mem.Allocator, have_values: bool, value_arity: usize, rows_json: *std.ArrayList([]const u8), rows_values: *std.ArrayList([]const eval.Value), out_hash_size: ?*usize) void {
+    var seen = std.StringHashMap(void).init(allocator);
+    defer seen.deinit();
+    var out_rows = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return;
+    defer out_rows.deinit(allocator);
+    var out_values = if (have_values) std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch return else std.ArrayList([]const eval.Value).initCapacity(allocator, 0) catch return;
+    defer out_values.deinit(allocator);
+    var alloc_keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return;
+    defer {
+        for (alloc_keys.items) |k| allocator.free(k);
+        alloc_keys.deinit(allocator);
+    }
+    var idx: usize = 0;
+    while (idx < rows_json.items.len) : (idx += 1) {
+        const row = rows_json.items[idx];
+        const key = if (have_values and idx < rows_values.items.len) canonicalValuesKey(allocator, rows_values.items[idx][0..value_arity]) else canonicalRowKey(allocator, row);
+        if (!seen.contains(key)) {
+            seen.put(key, {}) catch {};
+            out_rows.append(allocator, row) catch {};
+            if (have_values and idx < rows_values.items.len) out_values.append(allocator, rows_values.items[idx]) catch {};
+            if (key.ptr != row.ptr) alloc_keys.append(allocator, key) catch {};
+        } else {
+            allocator.free(row);
+            allocator.free(key);
+            if (have_values and idx < rows_values.items.len) allocator.free(rows_values.items[idx]);
+        }
+    }
+    const unique = seen.count();
+    rows_json.clearRetainingCapacity();
+    for (out_rows.items) |r| rows_json.append(allocator, r) catch {};
+    if (out_hash_size) |p| p.* = unique;
+    if (have_values) {
+        // Replace original rows_values with compacted out_values (ownership of slices moves as-is)
+        for (rows_values.items) |v| allocator.free(v);
+        rows_values.clearRetainingCapacity();
+        for (out_values.items) |v| rows_values.append(allocator, v) catch {};
+    }
+}
+
+/// Convert eval.Value to graph_exec.BindingValue for graph operations
+pub fn convertEvalValueToBindingValue(val: eval.Value) graph_exec.BindingValue {
+    return switch (val) {
+        .Null => .Null,
+        .Bool => |b| .{ .Value = .{ .Bool = b } },
+        .Int => |i| .{ .Value = .{ .Int = i } },
+        .Str => |s| .{ .Value = .{ .String = s } },
+        .Decimal => |d| .{ .Value = .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } },
+        else => .Null,
+    };
 }
