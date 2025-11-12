@@ -9,7 +9,7 @@ from pathlib import Path
 import uuid
 import time
 
-def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None, spec_config=None, spec_data_dir=None):
+def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None, spec_config=None, spec_data_dir=None):
     """Run a single test case with optional instance_id and loop_index for parallel/loop tests."""
     # Check if test should be skipped
     if test_case.get("skip", False):
@@ -659,7 +659,10 @@ def main():
     import shutil
     import os
 
-    specs_dir = Path("/home/benji/src/spyder/geode/geodetestlab/specs")
+    # Get project root directory (2 levels up from scripts/test/)
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent.parent
+    specs_dir = project_root / "geodetestlab" / "specs"
 
     # Run all specs and see what we can test
     total_passed = 0
