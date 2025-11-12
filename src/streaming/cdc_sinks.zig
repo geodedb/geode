@@ -298,5 +298,5 @@ test "SinkInterface - polymorphic sink access" {
     try iface.send(&events);
     try testing.expectEqual(@as(usize, 1), sink.events.items.len);
 
-    iface.deinit();
+    // Note: sink.deinit() is called by defer, don't call iface.deinit() which would double-free
 }

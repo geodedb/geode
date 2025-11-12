@@ -14,47 +14,47 @@ REQ-ANALYTICS-TEST-002,Pattern Detection Tests,PatternRecognition,TESTED,TestCAN
 REQ-ANALYTICS-TEST-003,Anomaly Detection Tests,StatisticalAnalysis,TESTED,TestCANARY_ANALYTICS_TEST_003,,analytics,2025-10-05,tests/test_real_time_analytics.zig
 REQ-ARCH-M2-FIX,DependencyInjection,CATALOG,IMPL,,,core,2025-10-17,src/execution/catalog.zig
 REQ-ARCH-M2-FIX,DependencyInjection,CATALOG,IMPL,,,core,2025-10-17,docs/refactoring/P2-2_PHASE1_STATUS.md
-REQ-AUDIT-001,AuditLogging,Configuration,IMPL,,,security,2025-10-19,src/execution/path_and_call_operations.zig
+REQ-AUDIT-001,AuditLogging,Configuration,IMPL,,,security,2025-10-19,src/execution/procedure_registry.zig
 REQ-AUDIT-CLI-001,CLI Audit Configuration,Configuration,IMPL,TestCANARY_REQ_AUDIT_CLI_001_Configuration,,audit,2025-09-30,src/cli/main.zig
 REQ-AUDIT-CLI-002,CLI Audit Initialization,Initialization,IMPL,TestCANARY_REQ_AUDIT_CLI_002_Initialization,,audit,2025-09-30,src/cli/main.zig
 REQ-AUDIT-CLI-003,CLI Audit Events,EventLogging,IMPL,TestCANARY_REQ_AUDIT_CLI_003_EventLogging,,audit,2025-09-30,src/cli/main.zig
 REQ-AUDIT-CLI-004,Windows Event Log Integration,EventLogging,IMPL,TestCANARY_REQ_AUDIT_CLI_004_WindowsEventLog,,audit,2025-09-30,src/cli/main.zig
-REQ-AUDIT-PROC-001,AuditProcedures,EventID,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,IMPL,,,audit,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,IMPL,,,audit,2025-10-25,src/execution/path_and_call_operations.zig
+REQ-AUDIT-PROC-001,AuditProcedures,EventID,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,IMPL,,,audit,2025-10-25,src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,IMPL,,,audit,2025-10-25,docs/archive/phase3_tde_completion_report.md
 REQ-AUTH-001,AuthenticationLogin,RealImplementation,IMPL,TestCANARY_REQ_AUTH_001_RealLogin,,cli,2025-09-30,src/cli/main.zig
 REQ-AUTH-001,UserManagement,Authentication,IMPLEMENTED,,,security,2025-10-14,src/security/user_management.zig
@@ -108,32 +108,32 @@ REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-002,Build System Module Dependencies In
 REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-003,Build System Module Dependencies Integration,GraphStorageIntegration,TESTED,TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStorageIntegration,,build,2025-10-05,tests/test_build_system_module_dependencies_integration.zig
 REQ-C4-001,MemoryLeakFix,Environment,IMPLEMENTED,,,core,2025-10-17,src/eval.zig
 REQ-C4-001,MemoryLeakFix,Environment,IMPLEMENTED,,,core,2025-10-17,docs/P0_CRITICAL_SECURITY_FIXES_COMPLETE.md
-REQ-CDC-PROC-001,CDCProcedures,Enable,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-002,CDCProcedures,Disable,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-003,CDCProcedures,Status,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-005,CDCProcedures,GetEvents,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-006,CDCProcedures,Pause,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-007,CDCProcedures,Resume,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-011,CDCProcedures,GetWatermark,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-019,CDCProcedures,GetWalStatus,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-020,CDCProcedures,ConfigureWalTail,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-025,CDCProcedures,Stop,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-CDC-PROC-026,CDCProcedures,Start,IMPL,,,cdc,2025-10-25,src/execution/path_and_call_operations.zig
+REQ-CDC-PROC-001,CDCProcedures,Enable,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-002,CDCProcedures,Disable,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-003,CDCProcedures,Status,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-005,CDCProcedures,GetEvents,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-006,CDCProcedures,Pause,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-007,CDCProcedures,Resume,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-011,CDCProcedures,GetWatermark,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-019,CDCProcedures,GetWalStatus,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-020,CDCProcedures,ConfigureWalTail,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-025,CDCProcedures,Stop,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
+REQ-CDC-PROC-026,CDCProcedures,Start,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
 REQ-CLI-AUTO-001,GQL Query Auto-detection,UserExperience,TESTED,TestCANARY_REQ_CLI_AUTO_001_GqlAutoDetection,,cli,2025-10-04,tests/cli_gql_autodetection_regression_test.sh
 REQ-CLI-AUTO-002,Basic GQL Query Auto-detection,UserExperience,TESTED,TestCANARY_REQ_CLI_AUTO_002_BasicGqlAutoDetection,,cli,2025-10-04,tests/cli_gql_autodetection_basic_test.sh
 REQ-CLI-BACKUP-001,CLI Backup System,UnitTests,TESTED,TestCLI_BackupUnit,,cli,2025-10-05,tests/test_cli_backup_unit.zig
@@ -201,8 +201,11 @@ REQ-EXEC-REFACTOR-001,ExecutionRefactoring,GRAPH_ALGORITHMS,IMPL,,,refactor,2025
 REQ-EXEC-REFACTOR-002,ExecutionRefactoring,SET_OPERATIONS,IMPL,,,refactor,2025-10-17,src/execution/set_operations.zig
 REQ-EXEC-REFACTOR-003,ExecutionRefactoring,CENTRALITY_ALGORITHMS,IMPL,,,refactor,2025-10-17,src/execution/centrality_algorithms.zig
 REQ-EXEC-REFACTOR-004,ExecutionRefactoring,CRUD_OPERATIONS,IMPL,,,refactor,2025-10-17,src/execution/crud_operations.zig
-REQ-EXEC-REFACTOR-005,ExecutionRefactoring,PATH_AND_CALL_OPERATIONS,IMPL,,,refactor,2025-10-17,src/execution/path_and_call_operations.zig
+REQ-EXEC-REFACTOR-006,ExecutionRefactoring,EXECUTION_HELPERS,IMPL,,,refactor,2025-11-12,src/execution/execution_helpers.zig
 REQ-EXEC-REFACTOR-006,ExecutionRefactoring,MATCH_OPERATIONS,IMPL,,,refactor,2025-10-17,src/execution/match_operations.zig
+REQ-EXEC-REFACTOR-006,ExecutionRefactoring,PROCEDURE_REGISTRY,IMPL,,,refactor,2025-11-12,src/execution/procedure_registry.zig
+REQ-EXEC-REFACTOR-006,ExecutionRefactoring,RECURSION_HANDLER,IMPL,,,refactor,2025-11-12,src/execution/recursion_handler.zig
+REQ-EXEC-REFACTOR-007,ExecutionRefactoring,CALL_OPERATIONS,IMPL,,,refactor,2025-11-12,src/execution/call_operations.zig
 REQ-EXEC-REFACTOR-007,ExecutionRefactoring,STATEMENT_HANDLERS,IMPL,,,refactor,2025-10-17,src/execution/statement_handlers.zig
 REQ-EXEC-REFACTOR-008,ExecutionRefactoring,AGGREGATION_EVALUATION,IMPL,,,refactor,2025-10-17,src/execution/aggregation_evaluation.zig
 REQ-EXEC-REFACTOR-009,FileModularization,ReturnAndSorting,IMPL,,,refactoring,2025-10-17,src/execution/return_and_sorting.zig
@@ -251,14 +254,13 @@ REQ-GQL-004,Pagination,PaginationOrderedVarianceEnvelope,BENCHED,,BenchmarkCANAR
 REQ-GQL-004,Pagination,PaginationPrefetchSimulation,TESTED,TestCANARY_REQ_GQL_004_PaginationPrefetchSimulation,,planner,2025-09-21,src/benchmarks/pagination_prefetch_sim.zig
 REQ-GQL-004,Pagination,PaginationPrefetchVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_004_PaginationPrefetchVarianceEnvelope,planner,2025-09-21,tests/benchmark_pagination_prefetch_variance.zig
 REQ-GQL-004,Pagination Legality (US001),IllegalOrderKeyPolicy,TESTED,TestGQL_IllegalOrderKey,,planner,2025-09-26,src/lib.zig
-REQ-GQL-004,Pagination Legality (US001),IllegalOrderKeyPolicy,TESTED,TestGQL_IllegalOrderKey,,planner,2025-09-26,src/server/main.zig
 REQ-GQL-004,Pagination Legality (US001),OrderKeyExprOverrideEnv,TESTED,TestGQL_IllegalOrderKey,,planner,2025-09-27,src/lib.zig
 REQ-GQL-004,Pagination Legality (US001),Planner,TESTED,TestCANARY_REQ_GQL_004_UnorderedLimitReject,,planner,2025-09-26,src/canary.zig
 REQ-GQL-004,Pagination Policy Override,Planner,TESTED,TestCANARY_REQ_GQL_004_OffsetWithoutOrderPolicyToggle,,planner,2025-09-20,src/canary.zig
 REQ-GQL-004,Pagination Policy Override,Planner,TESTED,TestCANARY_REQ_GQL_004_OffsetWithoutOrderPolicyToggle,,planner,2025-09-20,tests/canary_pagination_policy_toggle.zig
 REQ-GQL-004,PaginationExecutionStreaming,OrderedEmission,TESTED,TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission,,planner,2025-09-23,tests/e2e_protocol_more.zig
-REQ-GQL-004,PaginationExecutionStreaming,Scaffold,TESTED,TestCANARY_REQ_GQL_004_PaginationStreamingScaffold,,planner,2025-09-23,src/server/main.zig
 REQ-GQL-004,PaginationExecutionStreaming,Scaffold,TESTED,TestCANARY_REQ_GQL_004_PaginationStreamingScaffold,,planner,2025-09-26,src/server/main.zig
+REQ-GQL-004,PaginationExecutionStreaming,Scaffold,TESTED,TestCANARY_REQ_GQL_004_PaginationStreamingScaffold,,planner,2025-09-23,src/server/server_flags.zig
 REQ-GQL-004,PaginationVarianceAutoCalibration,AutoCalibrationLogic,IMPL,TestCANARY_REQ_GQL_004_PaginationVarianceAutoCalibration,,planner,2025-09-27,src/monitoring/variance_calibration.zig
 REQ-GQL-004,PaginationVarianceAutoCalibration,Test,TESTED,,,planner,2025-09-27,tests/canary_variance_autocalibration.zig
 REQ-GQL-005,Binary Protocol Core,Wire,IMPL,TestCANARY_REQ_GQL_005_HelloRoundTrip,,wire,2025-09-20,src/protocol.zig
@@ -615,7 +617,9 @@ REQ-GQL-028,WAL Segment Recycle,WALSegmentRecycleLatencyVarianceEnvelope,BENCHED
 REQ-GQL-028,WAL/Recovery,CorruptPageRecovery,TESTED,TestCANARY_REQ_GQL_028_CorruptPageRecovery,,storage,2025-09-21,tests/canary_wal_corrupt_page_recovery.zig
 REQ-GQL-028,WAL/Recovery,FailureInjection,TESTED,TestCANARY_REQ_GQL_028_WalFailureInjection,,storage,2025-09-21,tests/canary_wal_failure_injection.zig
 REQ-GQL-028,WAL/Recovery,RedoOptimizedVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_028_RedoOptimizedVarianceEnvelope,storage,2025-09-21,tests/benchmark_wal_redo_optimized_variance.zig
-REQ-GQL-031,Security Audit,AuditLogging,TESTED,e2e_rls_integration,,security,2025-09-25,src/security/audit.zig
+REQ-GQL-031,Security Audit,AuditFormatting,TESTED,audit_tests,,security,2025-11-12,src/security/audit_formatter.zig
+REQ-GQL-031,Security Audit,AuditLogging,TESTED,e2e_rls_integration,,security,2025-11-12,src/security/audit.zig
+REQ-GQL-031,Security Audit,AuditSinks,TESTED,audit_tests,,security,2025-11-12,src/security/audit_sink.zig
 REQ-GQL-032,Check Constraint Evaluation,Engine,IMPL,TestCANARY_REQ_GQL_032_CheckConstraint,,schema,2025-09-20,src/storage/constraints.zig
 REQ-GQL-032,Check Constraint Extended Ops,Engine,IMPL,TestCANARY_REQ_GQL_032_CheckConstraintRangeAnd,,schema,2025-09-20,src/storage/constraints.zig
 REQ-GQL-032,Composite Uniqueness,Engine,IMPL,TestCANARY_REQ_GQL_032_CompositeUnique,,schema,2025-09-20,src/storage/constraints.zig
@@ -648,7 +652,7 @@ REQ-GQL-042,CDC,CDCWatermarkAdvanceVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ
 REQ-GQL-042,CDC Backfill Latency,API,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency,streaming,2025-09-20,src/canary.zig
 REQ-GQL-042,CDC Backfill Latency,API,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency,streaming,2025-09-20,tests/benchmark_cdc_backfill_latency.zig
 REQ-GQL-042,CDC Core API,API,TESTED,TestCANARY_REQ_GQL_042_CDC_CoreStartStop,,streaming,2025-09-20,src/cdc/core.zig
-REQ-GQL-042,CDC Engine,API,TESTED,TestCANARY_REQ_GQL_042_CDC_API,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
+REQ-GQL-042,CDC Engine,API,TESTED,TestCANARY_REQ_GQL_042_CDC_API,,streaming,2025-11-12,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,AdaptiveBaselinePerf,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveBaselinePerf,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,AdaptiveDiffPerf,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,AdaptiveDiffPerfThreshold,IMPL,,BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf,streaming,2025-09-20,tests/benchmark_cdc_adaptive_diff_perf.zig
@@ -672,12 +676,14 @@ REQ-GQL-042,CDC Engine,GuardrailTimestamps,IMPL,TestCANARY_REQ_GQL_042_CDC_Guard
 REQ-GQL-042,CDC Engine,GuardrailTimestampsAbort,IMPL,TestCANARY_REQ_GQL_042_CDC_GuardrailTimestamps,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,GuardrailTimestampsMonotonic,TESTED,TestCANARY_REQ_GQL_042_CDC_GuardrailTimestampsMonotonic,,streaming,2025-09-20,tests/cdc_guardrail_timestamps_monotonic.zig
 REQ-GQL-042,CDC Engine,Ingest,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_Ingest,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
+REQ-GQL-042,CDC Engine,KafkaSink,TESTED,cdc_tests,,streaming,2025-11-12,src/streaming/sinks/kafka_sink.zig
 REQ-GQL-042,CDC Engine,MixedWorkload,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_MixedWorkload,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,Ordering,TESTED,TestCANARY_REQ_GQL_042_CDC_Ordering,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,OrderingConcurrency,TESTED,TestCANARY_REQ_GQL_042_CDC_OrderingConcurrency,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,OrderingPerf,BENCHED,,BenchmarkCANARY_REQ_GQL_042_CDC_OrderingPerf,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,ResumeTokenRestart,TESTED,TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,Retention,TESTED,TestCANARY_REQ_GQL_042_CDC_Retention,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
+REQ-GQL-042,CDC Engine,Sinks,TESTED,cdc_tests,,streaming,2025-11-12,src/streaming/cdc_sinks.zig
 REQ-GQL-042,CDC Engine,Telemetry,TESTED,TestCANARY_REQ_GQL_042_CDC_Telemetry,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,TxnAttribution,IMPL,TestCANARY_REQ_GQL_042_CDC_API,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,WALTail,BENCHED,TestCANARY_REQ_GQL_042_CDC_WalTailPromote,BenchmarkCANARY_REQ_GQL_042_CDC_WalTailPerf,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
@@ -695,6 +701,7 @@ REQ-GQL-042,CDC Engine,WALTailMalformedLogBufferWrap,TESTED,TestCANARY_REQ_GQL_0
 REQ-GQL-042,CDC Engine,WALTailMalformedPayloadHash,TESTED,TestCANARY_REQ_GQL_042_CDC_MalformedPayloadHash,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,WALTailMalformedSnapshotInterval,TESTED,TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Engine,WALTailMalformedSnapshotIntervalEnv,TESTED,TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
+REQ-GQL-042,CDC Engine,WebhookSink,TESTED,cdc_tests,,streaming,2025-11-12,src/streaming/sinks/webhook_sink.zig
 REQ-GQL-042,CDC Lifecycle,API,TESTED,TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig
 REQ-GQL-042,CDC Lifecycle,API,TESTED,TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle,,streaming,2025-09-20,tests/canary_cdc_lifecycle.zig
 REQ-GQL-042,CDC Resume Token,API,TESTED,TestCANARY_REQ_GQL_042_CDC_ResumeToken,,streaming,2025-09-20,src/canary.zig
@@ -831,8 +838,11 @@ REQ-GQL-073,MvccAdvanced,PredictiveSkewFilter,BENCHED,TestCANARY_REQ_GQL_073_Pre
 REQ-GQL-073,MvccAdvanced,PredictiveVersionCheck,TESTED,TestCANARY_REQ_GQL_073_PredictiveVersionCheck,BenchmarkCANARY_REQ_GQL_073_PredictiveVersionCheck,txn,2025-09-20,src/txn/mvcc_adv/predictive_version_check.zig
 REQ-GQL-073,MvccAdvanced,RepairThroughputBench,BENCHED,TestCANARY_REQ_GQL_073_RepairThroughputBench,BenchmarkCANARY_REQ_GQL_073_RepairThroughputBench,txn,2025-09-20,src/txn/mvcc_adv/repair_throughput_bench.zig
 REQ-GQL-073,MvccAdvanced,RepairThroughputBench,BENCHED,TestCANARY_REQ_GQL_073_RepairThroughputBench,BenchmarkCANARY_REQ_GQL_073_RepairThroughputBench,txn,2025-09-20,tests/benchmark_mvcc_repair_throughput.zig
+REQ-GQL-074,Network Transport,AlgorithmIntegration,TESTED,quic_algorithms_integration,,wire,2025-10-31,tests/quic_algorithms_integration_test.zig
+REQ-GQL-074,Network Transport,ConnectionManagement,IMPL,,,wire,2025-10-31,src/transport/connection_manager.zig
 REQ-GQL-074,Network Transport,QUICAccept,TESTED,TestCANARY_REQ_GQL_074_QUICAccept,,wire,2025-09-22,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICAccept,TESTED,TestCANARY_REQ_GQL_074_QUICAccept,,wire,2025-09-22,tests/canary_quic.zig
+REQ-GQL-074,Network Transport,QUICAlgorithms,IMPL,,,wire,2025-10-31,src/algorithms.zig
 REQ-GQL-074,Network Transport,QUICBasicE2E,TESTED,TestCANARY_REQ_GQL_074_QUICBasicE2E,,wire,2025-09-22,tests/e2e_quic_basic.zig
 REQ-GQL-074,Network Transport,QUICClientConnect,TESTED,TestCANARY_REQ_GQL_074_QUICClientConnect,,wire,2025-09-22,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICClientConnect,TESTED,TestCANARY_REQ_GQL_074_QUICClientConnect,,wire,2025-09-22,tests/canary_quic.zig
@@ -1078,7 +1088,7 @@ REQ-GQL-AUTH-004,MFA recovery code,TEST,TESTED,TestCANARY_REQ_GQL_AUTH_004_Recov
 "REQ-GQL-BACKUP-RESTORE"" {
     // CANARY: REQ=REQ-GQL-BACKUP-RESTORE",BackupRestore,Core,TESTED,TestCANARY_REQ_GQL_BACKUP_RESTORE,,team,2025-10-02,tests/integration/test_backup_restore.zig
 REQ-GQL-BENCH,Distributed Features Benchmark,Performance,TESTED,BenchmarkCANARY_Distributed,,bench,2025-09-29,benchmarks/benchmark_distributed_features.zig
-REQ-GQL-CALL-SUBQUERY,CallSubquery,Execution,IMPL,,,execution,2025-10-11,src/execution/path_and_call_operations.zig
+REQ-GQL-CALL-SUBQUERY,CallSubquery,Execution,IMPL,,,execution,2025-10-11,src/execution/call_operations.zig
 REQ-GQL-CATALOG-001,Enhanced Catalog Operations,RegressionTesting,IMPL,TestCatalogOperationsRegression,,parser,2025-10-04,tests/test_catalog_operations_regression.zig
 REQ-GQL-CATALOG-002,Graph Type Operations,FrameworkTesting,IMPL,TestGraphTypeFramework,,parser,2025-10-04,tests/test_catalog_operations_regression.zig
 REQ-GQL-CATALOG-003,End-to-End Catalog Operations,IntegrationTesting,IMPL,TestCatalogE2E,,server,2025-10-04,tests/test_catalog_integration_e2e.zig
@@ -1243,7 +1253,9 @@ REQ-GQL-SPATIAL-FUNC-001,SpatialFunctions,PostGISStyle,IMPL,,,types,2025-10-19,s
 "REQ-GQL-SPATIAL-INDEX"" {
     // CANARY: REQ=REQ-GQL-SPATIAL-INDEX",SpatialIndex,Core,TESTED,TestCANARY_REQ_GQL_SPATIAL_INDEX,,team,2025-10-02,tests/integration/test_spatial_index.zig
 REQ-GQL-SPATIAL-INDEX-001,Spatial Index Integration,Index,IMPL,TestCANARY_REQ_GQL_SPATIAL_INDEX_001_All,,index,2025-01-03,src/index/spatial_index.zig
-REQ-GQL-TDE-001,TDE baseline,SECURITY,TESTED,tests/e2e_security_tde_mfa.zig:1|tests/test_tde_integration.zig:1,,security,2025-09-26,src/security/tde.zig
+REQ-GQL-TDE-001,TDE Key Management,KeyManagement,TESTED,tde_tests,,security,2025-11-12,src/security/tde_key_manager.zig
+REQ-GQL-TDE-001,TDE Nonce Generation,NonceGeneration,TESTED,tde_tests,,security,2025-11-12,src/security/tde_nonce_gen.zig
+REQ-GQL-TDE-001,TDE baseline,SECURITY,TESTED,tests/e2e_security_tde_mfa.zig:1|tests/test_tde_integration.zig:1,,security,2025-11-12,src/security/tde.zig
 REQ-GQL-TDE-001,TDE baseline,TEST,TESTED,tests/test_tde_integration.zig:1,,security,2025-09-26,tests/test_tde_integration.zig
 REQ-GQL-TDE-001,TDE page encryption,STORAGE,TESTED,tests/e2e_security_tde_mfa.zig:1|tests/unit_tde_crypto.zig:1,,security,2025-09-26,src/storage/page_encryption.zig
 REQ-GQL-TDE-001,TDE performance benchmark,PERFORMANCE,BENCHED,,BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead,security,2025-09-26,benchmarks/benchmark_tde_overhead.zig
@@ -1505,51 +1517,58 @@ REQ-RLS-ENHANCED-INTEGRATION-005,Enhanced RLS Integration,AuditingIntegration,TE
 REQ-RLS-ENHANCED-INTEGRATION-006,Enhanced RLS Integration,ErrorHandlingRobustness,TESTED,test_error_handling_robustness,,security,2025-10-05,tests/test_rls_enhanced_integration.zig
 REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,IMPL,test_s3_backup_mock,,storage,2025-10-05,tests/test_s3_backup.zig
 REQ-SERVER-BACKUP-001,Server Backup API,UnitTests,TESTED,TestServer_BackupAPIUnit,,server,2025-10-05,tests/test_server_backup_api_unit.zig
+REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,PARTIAL,,,refactor,2025-11-12,src/server/server_state.zig
+REQ-SERVER-REFACTOR-002,ServerRefactoring,BACKUP_MANAGER,IMPL,,,refactor,2025-11-12,src/server/backup_manager.zig
+REQ-SERVER-REFACTOR-003,ServerRefactoring,INDEX_CATALOG,IMPL,,,refactor,2025-11-12,src/server/index_catalog.zig
+REQ-SERVER-REFACTOR-004,ServerRefactoring,FLAG_UTILITIES,IMPL,,,refactor,2025-11-12,src/server/server_flags.zig
+REQ-SERVER-REFACTOR-005,ServerRefactoring,GRAPH_STORAGE,IMPL,,,refactor,2025-11-12,src/server/graph_storage_manager.zig
+REQ-SERVER-REFACTOR-006,ServerRefactoring,PROTOCOL_HANDLER,IMPL,,,refactor,2025-11-12,src/server/protocol_handler.zig
+REQ-SERVER-REFACTOR-006,ServerRefactoring,QUERY_EXECUTOR,IMPL,,,refactor,2025-11-12,src/server/query_executor.zig
 REQ-SERVER-STARTUP-INTEGRATION-001,Server Startup Integration Tests,EndToEndServerTesting,TESTED,TestCANARY_REQ_SERVER_STARTUP_INTEGRATION_001_EndToEndServerTesting,,server,2025-10-05,tests/test_server_startup_integration.zig
 REQ-SERVER-STARTUP-REGRESSION-001,Server Startup Regression Tests,UnifiedBinaryServerStartup,TESTED,TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup,,server,2025-10-05,tests/test_server_startup_regression.zig
-REQ-TDE-PROC-001,TDEProcedures,KeyHierarchy,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-002,TDEProcedures,KeyRotation,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,IMPL,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,IMPL,,,security,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-012,MockKMSProvider,Testing,IMPL,,,security,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-041,TDETestProcedures,EncryptWALTest,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
-REQ-TDE-TEST-IMPL,TDETestImplementations,RealFunctionality,IMPL,,,tde,2025-10-25,src/security/tde.zig
-REQ-TDE-TEST-PROCEDURES,TDETestProcedures,RealImplementation,IMPL,,,tde,2025-10-25,src/execution/path_and_call_operations.zig
+REQ-TDE-PROC-001,TDEProcedures,KeyHierarchy,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-002,TDEProcedures,KeyRotation,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,IMPL,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,IMPL,,,security,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-012,MockKMSProvider,Testing,IMPL,,,security,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-041,TDETestProcedures,EncryptWALTest,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
+REQ-TDE-TEST-IMPL,TDETestImplementations,RealFunctionality,IMPL,,,tde,2025-11-12,src/security/tde.zig
+REQ-TDE-TEST-PROCEDURES,TDETestProcedures,RealImplementation,IMPL,,,tde,2025-10-25,src/execution/procedure_registry.zig
 REQ-TEST-001,RegressionTests,ExitCodeHandling,IMPLEMENTED,,,test,2025-10-18,src/test_regression_fixes.zig
 REQ-TEST-002,RegressionTests,ProcedureRegistry,IMPLEMENTED,,,test,2025-10-18,src/test_regression_fixes.zig
 REQ-TEST-CALL-REGRESSION,CallProcedureRegression,Testing,ACTIVE,,,test,2025-10-18,src/test_call_regression.zig

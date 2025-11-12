@@ -41,9 +41,9 @@ pub const WebhookSink = struct {
     }
 
     pub fn deinit(self: *WebhookSink) void {
-        if (self.config) |*cfg| {
-            cfg.headers.deinit();
-        }
+        // Note: We don't deinit config.headers because the config is owned by the caller
+        // The caller is responsible for deinit'ing any resources in the config
+        _ = self;
     }
 
     /// Send events to webhook endpoint

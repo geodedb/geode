@@ -176,9 +176,8 @@ pub const MultiSink = struct {
     }
 
     pub fn deinit(self: *MultiSink) void {
-        for (self.sinks.items) |sink| {
-            sink.close();
-        }
+        // Note: We don't close the sinks here because they're owned by the caller
+        // The caller is responsible for closing/deinit'ing the individual sinks
         self.sinks.deinit(self.allocator);
     }
 
@@ -326,7 +325,7 @@ test "MultiSink - writes to multiple destinations" {
     var sink2 = try FileSink.init("test_multi2.log");
     defer sink2.deinit();
 
-    var multi = MultiSink.init(testing.allocator);
+    var multi = try MultiSink.init(testing.allocator);
     defer multi.deinit();
 
     try multi.addSink(sink1.interface());

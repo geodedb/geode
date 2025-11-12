@@ -460,9 +460,14 @@ test "BFS - single node" {
     _ = try store.createNode(&[_][]const u8{});
 
     const columns = &[_][]const u8{"path"};
-    const result = try executeBFS(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 0);
+    var result = try executeBFS(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 0);
     defer {
         for (result.rows) |row| {
+            for (row) |val| {
+                if (val == .List) {
+                    testing.allocator.free(val.List);
+                }
+            }
             testing.allocator.free(row);
         }
         testing.allocator.free(result.rows);
@@ -482,9 +487,14 @@ test "DFS - single node" {
     _ = try store.createNode(&[_][]const u8{});
 
     const columns = &[_][]const u8{"path"};
-    const result = try executeDFS(testing.allocator, &store, columns, 1, 0);
+    var result = try executeDFS(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 0);
     defer {
         for (result.rows) |row| {
+            for (row) |val| {
+                if (val == .List) {
+                    testing.allocator.free(val.List);
+                }
+            }
             testing.allocator.free(row);
         }
         testing.allocator.free(result.rows);
@@ -506,7 +516,7 @@ test "Dijkstra - no path" {
     _ = n1; _ = n2;
 
     const columns = &[_][]const u8{ "path", "distance" };
-    const result = try executeDijkstra(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 2, "weight"); // start_id=1 end_id=2 OK
+    var result = try executeDijkstra(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 2, "weight"); // start_id=1 end_id=2 OK
     defer {
         for (result.rows) |row| {
             testing.allocator.free(row);
