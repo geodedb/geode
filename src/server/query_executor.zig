@@ -2,10 +2,12 @@ const std = @import("std");
 const eval = @import("../eval.zig");
 const exec = @import("../execution.zig");
 const protocol = @import("../lib.zig").protocol;
+const geode = @import("geode");
+const diagnostics = geode.diagnostics;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=QUERY_EXECUTOR; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.3 - Query Executor Module (Incremental Extraction)
-// Extracted query utility functions from server/main.zig for better separation of concerns
+// Extracted query utility and diagnostic functions from server/main.zig for better separation of concerns
 
 /// Map eval.Value type to human-readable type name string
 pub fn valueTypeName(v: eval.Value) []const u8 {
@@ -285,4 +287,49 @@ pub fn canonicalValuesKey(allocator: std.mem.Allocator, vals: []const eval.Value
         }
     }
     return buf.toOwnedSlice(allocator) catch &.{};
+}
+
+/// Aggregate diagnostics discovered during parsing / surface analysis for a single statement
+/// Currently detects:
+///  - US001 (unordered pagination): presence of LIMIT/OFFSET without ORDER BY
+///  - IllegalOrderKey: parser policy violation captured via parse error message
+/// Returns number of collected codes placed into out_codes (deduplicated) sorted by precedence
+pub fn collectTextDiagnostics(text: []const u8, parse_err_msg: ?[]const u8, out_codes: *[4]diagnostics.Code) usize {
+    var tmp: [4]diagnostics.Code = undefined;
+    var n: usize = 0;
+    // LIMIT alone is allowed without ORDER BY (has_limit removed since not used)
+    const has_offset = std.mem.indexOf(u8, text, "OFFSET") != null or std.mem.indexOf(u8, text, "SKIP") != null;
+    const has_order_kw = std.mem.indexOf(u8, text, "ORDER BY") != null;
+    var parsed_illegal = false;
+    if (parse_err_msg) |msg| {
+        if (diagnostics.mapParserMessage(msg)) |_| {
+            parsed_illegal = true;
+        }
+    }
+    // US001: LIMIT with SKIP/OFFSET requires ORDER BY for deterministic pagination
+    // LIMIT alone is allowed without ORDER BY
+    if (has_offset and (!has_order_kw or parsed_illegal)) {
+        tmp[n] = .US001;
+        n += 1;
+    }
+    if (parsed_illegal) {
+        tmp[n] = .IllegalOrderKey;
+        n += 1;
+    }
+    // Dedup + precedence
+    var i: usize = 0;
+    while (i < n) : (i += 1) out_codes.*[i] = tmp[i];
+    return diagnostics.foldCodes(out_codes.*[0..n]);
+}
+
+/// Planner diagnostics aggregation: include primary planner code plus US001 if unordered pagination also applies
+pub fn collectPlannerDiagnostics(q: geode.ast.Query, primary: diagnostics.Code, out_codes: *[4]diagnostics.Code) usize {
+    out_codes.*[0] = primary;
+    var n: usize = 1;
+    const unordered_pagination = (q.limit != null or q.offset != null) and q.order_by == null;
+    if (unordered_pagination and primary != .US001) {
+        out_codes.*[n] = .US001;
+        n += 1;
+    }
+    return diagnostics.foldCodes(out_codes.*[0..n]);
 }

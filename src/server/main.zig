@@ -108,6 +108,8 @@ const writeJsonValue = query_executor.writeJsonValue;
 const parseParams = query_executor.parseParams;
 const buildExplainJson = query_executor.buildExplainJson;
 const canonicalValuesKey = query_executor.canonicalValuesKey;
+const collectTextDiagnostics = query_executor.collectTextDiagnostics;
+const collectPlannerDiagnostics = query_executor.collectPlannerDiagnostics;
 
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
@@ -386,50 +388,10 @@ fn writeErrorWithFlags(allocator: std.mem.Allocator, out_file: std.fs.File, code
     } else |_| {}
 }
 
-// Aggregate diagnostics discovered during parsing / surface analysis for a single statement.
-// Currently we detect:
-//  - US001 (unordered pagination): presence of LIMIT/OFFSET without ORDER BY
-//  - IllegalOrderKey: parser policy violation captured via parse error message
-// Returns number of collected codes placed into out_codes (deduplicated) sorted by precedence.
-fn collectTextDiagnostics(text: []const u8, parse_err_msg: ?[]const u8, out_codes: *[4]diagnostics.Code) usize {
-    var tmp: [4]diagnostics.Code = undefined;
-    var n: usize = 0;
-    // LIMIT alone is allowed without ORDER BY (has_limit removed since not used)
-    const has_offset = std.mem.indexOf(u8, text, "OFFSET") != null or std.mem.indexOf(u8, text, "SKIP") != null;
-    const has_order_kw = std.mem.indexOf(u8, text, "ORDER BY") != null;
-    var parsed_illegal = false;
-    if (parse_err_msg) |msg| {
-        if (diagnostics.mapParserMessage(msg)) |_| {
-            parsed_illegal = true;
-        }
-    }
-    // US001: LIMIT with SKIP/OFFSET requires ORDER BY for deterministic pagination
-    // LIMIT alone is allowed without ORDER BY
-    if (has_offset and (!has_order_kw or parsed_illegal)) {
-        tmp[n] = .US001;
-        n += 1;
-    }
-    if (parsed_illegal) {
-        tmp[n] = .IllegalOrderKey;
-        n += 1;
-    }
-    // Dedup + precedence
-    var i: usize = 0;
-    while (i < n) : (i += 1) out_codes.*[i] = tmp[i];
-    return diagnostics.foldCodes(out_codes.*[0..n]);
-}
-
-// Planner diagnostics aggregation: include primary planner code plus US001 if unordered pagination also applies.
-fn collectPlannerDiagnostics(q: geode.ast.Query, primary: diagnostics.Code, out_codes: *[4]diagnostics.Code) usize {
-    out_codes.*[0] = primary;
-    var n: usize = 1;
-    const unordered_pagination = (q.limit != null or q.offset != null) and q.order_by == null;
-    if (unordered_pagination and primary != .US001) {
-        out_codes.*[n] = .US001;
-        n += 1;
-    }
-    return diagnostics.foldCodes(out_codes.*[0..n]);
-}
+// Removed: Diagnostic utility functions now in query_executor module (M3.3 Phase 3 third increment)
+// Original: collectTextDiagnostics() function (~27 lines)
+// Original: collectPlannerDiagnostics() function (~10 lines)
+// Total extracted: ~37 lines to query_executor.zig module
 
 // Removed: Query utility functions now in query_executor module (M3.3 Phase 3 query utilities extraction)
 // Original: writeJsonValue() function (~48 lines)
