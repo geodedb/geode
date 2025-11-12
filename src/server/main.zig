@@ -117,6 +117,9 @@ const buildAdditionalStatusesAlloc = query_executor.buildAdditionalStatusesAlloc
 const writeBindingsAdaptive = query_executor.writeBindingsAdaptive;
 const distinctDedup = query_executor.distinctDedup;
 const convertEvalValueToBindingValue = query_executor.convertEvalValueToBindingValue;
+const StageTimings = query_executor.StageTimings;
+const AllocTracker = query_executor.AllocTracker;
+const trackerGet = query_executor.trackerGet;
 
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
@@ -382,54 +385,7 @@ fn writeErrorWithFlags(allocator: std.mem.Allocator, out_file: std.fs.File, code
 
 // Removed: writeBindingsAdaptive() function (~30 lines) now in query_executor module (M3.3 Phase 3 fifth increment)
 
-const StageTimings = struct {
-    project_ns: i128 = 0,
-    distinct_ns: i128 = 0,
-    sort_ns: i128 = 0,
-    offset_ns: i128 = 0,
-    limit_ns: i128 = 0,
-    agg_build_ns: i128 = 0,
-    agg_emit_ns: i128 = 0,
-    expand_ns: i128 = 0,
-    project_rows_out: usize = 0,
-    distinct_rows_out: usize = 0,
-    sort_rows_out: usize = 0,
-    offset_rows_out: usize = 0,
-    limit_rows_out: usize = 0,
-    agg_rows_out: usize = 0,
-    expand_rows_out: usize = 0,
-    project_rows_in: usize = 0,
-    distinct_rows_in: usize = 0,
-    sort_rows_in: usize = 0,
-    offset_rows_in: usize = 0,
-    limit_rows_in: usize = 0,
-    agg_rows_in: usize = 0,
-    expand_rows_in: usize = 0,
-    // Approximate bytes processed/emitted per stage (JSON row bytes) for profiling.
-    project_bytes_out: usize = 0,
-    distinct_bytes_out: usize = 0,
-    sort_bytes_out: usize = 0,
-    offset_bytes_out: usize = 0,
-    limit_bytes_out: usize = 0,
-    expand_bytes_out: usize = 0,
-    // Approximate allocated bytes attributable to each stage (heuristic: bytes_out currently; future: real allocator diff)
-    project_bytes_alloc: usize = 0,
-    distinct_bytes_alloc: usize = 0,
-    sort_bytes_alloc: usize = 0,
-    offset_bytes_alloc: usize = 0,
-    limit_bytes_alloc: usize = 0,
-    agg_build_bytes_alloc: usize = 0,
-    agg_emit_bytes_alloc: usize = 0,
-    expand_bytes_alloc: usize = 0,
-    // Net allocator snapshots (used to derive per-stage allocation deltas)
-    net_after_project: usize = 0,
-    net_after_distinct: usize = 0,
-    net_after_sort: usize = 0,
-    net_after_offset: usize = 0,
-    net_after_limit: usize = 0,
-};
-// TODO(alloc-metrics): Counting allocator integration deferred; current bytes_alloc remains heuristic.
-
+// Removed: StageTimings struct (~46 lines) now in query_executor module (M3.3 Phase 3 sixth increment)
 // TODO(alloc-metrics): Counting allocator integration deferred; current bytes_alloc remains heuristic.
 
 // Value-based canonical key: encodes row values directly to avoid JSON reparsing.
@@ -441,13 +397,8 @@ const StageTimings = struct {
 
 // Removed: distinctDedup() function (~38 lines) now in query_executor module (M3.3 Phase 3 fifth increment)
 
-const AllocTracker = struct { ctx: *anyopaque, getFn: *const fn (*anyopaque) usize };
-
-fn trackerGet(ctx: *anyopaque) usize {
-    const T = @import("tracking_alloc").TrackingAllocator;
-    const t: *T = @ptrCast(@alignCast(ctx));
-    return t.net();
-}
+// Removed: AllocTracker struct (~1 line) now in query_executor module (M3.3 Phase 3 sixth increment)
+// Removed: trackerGet() function (~5 lines) now in query_executor module (M3.3 Phase 3 sixth increment)
 
 const graph_exec = @import("graph/exec.zig");
 

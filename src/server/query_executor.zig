@@ -11,6 +11,67 @@ const graph_exec = @import("../graph_exec.zig");
 // Phase 3 M3.3 - Query Executor Module (Incremental Extraction)
 // Extracted query utility, diagnostic, and AST analysis functions from server/main.zig for better separation of concerns
 
+/// Query execution stage timing metrics for performance profiling and optimization
+pub const StageTimings = struct {
+    project_ns: i128 = 0,
+    distinct_ns: i128 = 0,
+    sort_ns: i128 = 0,
+    offset_ns: i128 = 0,
+    limit_ns: i128 = 0,
+    agg_build_ns: i128 = 0,
+    agg_emit_ns: i128 = 0,
+    expand_ns: i128 = 0,
+    project_rows_out: usize = 0,
+    distinct_rows_out: usize = 0,
+    sort_rows_out: usize = 0,
+    offset_rows_out: usize = 0,
+    limit_rows_out: usize = 0,
+    agg_rows_out: usize = 0,
+    expand_rows_out: usize = 0,
+    project_rows_in: usize = 0,
+    distinct_rows_in: usize = 0,
+    sort_rows_in: usize = 0,
+    offset_rows_in: usize = 0,
+    limit_rows_in: usize = 0,
+    agg_rows_in: usize = 0,
+    expand_rows_in: usize = 0,
+    // Approximate bytes processed/emitted per stage (JSON row bytes) for profiling.
+    project_bytes_out: usize = 0,
+    distinct_bytes_out: usize = 0,
+    sort_bytes_out: usize = 0,
+    offset_bytes_out: usize = 0,
+    limit_bytes_out: usize = 0,
+    expand_bytes_out: usize = 0,
+    // Approximate allocated bytes attributable to each stage (heuristic: bytes_out currently; future: real allocator diff)
+    project_bytes_alloc: usize = 0,
+    distinct_bytes_alloc: usize = 0,
+    sort_bytes_alloc: usize = 0,
+    offset_bytes_alloc: usize = 0,
+    limit_bytes_alloc: usize = 0,
+    agg_build_bytes_alloc: usize = 0,
+    agg_emit_bytes_alloc: usize = 0,
+    expand_bytes_alloc: usize = 0,
+    // Net allocator snapshots (used to derive per-stage allocation deltas)
+    net_after_project: usize = 0,
+    net_after_distinct: usize = 0,
+    net_after_sort: usize = 0,
+    net_after_offset: usize = 0,
+    net_after_limit: usize = 0,
+};
+
+/// Memory allocation tracker for query execution profiling
+pub const AllocTracker = struct {
+    ctx: *anyopaque,
+    getFn: *const fn (*anyopaque) usize,
+};
+
+/// Get current allocation count from tracking allocator
+pub fn trackerGet(ctx: *anyopaque) usize {
+    const T = @import("tracking_alloc").TrackingAllocator;
+    const t: *T = @ptrCast(@alignCast(ctx));
+    return t.net();
+}
+
 /// Map eval.Value type to human-readable type name string
 pub fn valueTypeName(v: eval.Value) []const u8 {
     return switch (v) {
