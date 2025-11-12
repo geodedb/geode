@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-12 (Phase 3 M3.3 IN PROGRESS)
 **Current Branch**: `claude/modularize-geode-codebase-011CV37UMkJQkniB6ARzFWkH`
-**Overall Status**: PHASE 3 IN PROGRESS - M3.3 Sixth Increment Complete (19.0% cumulative server reduction)
+**Overall Status**: PHASE 3 IN PROGRESS - M3.3 Seventh Increment Complete (20.2% cumulative server reduction)
 
 ## Quick Status Overview
 
@@ -25,10 +25,10 @@
 ## Current Work
 
 **Active Agent**: Claude Agent
-**Current Milestone**: Phase 3, M3.3 - Extract Query Executor ⏳ IN PROGRESS (Sixth Increment Complete)
+**Current Milestone**: Phase 3, M3.3 - Extract Query Executor ⏳ IN PROGRESS (Seventh Increment Complete)
 **Next Milestone**: Phase 3, M3.3 continuation (extract query evaluation and statement execution functions)
 **Blocking Issues**: None
-**Recent Achievement**: M3.3 sixth increment extracted query execution profiling types (662 lines total module, -49 lines from server). Cumulative Phase 3 reduction: 19.0% (1,340 lines) across 7 modules (1,734 lines total)
+**Recent Achievement**: M3.3 seventh increment extracted graph property conversion utilities (750 lines total module, -79 lines from server). Cumulative Phase 3 reduction: 20.2% (1,419 lines) across 7 modules (1,822 lines total)
 
 ---
 
@@ -537,10 +537,10 @@ Circular Dependencies Detected: 2
 - **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Started with focused extraction of self-contained backup protocol handlers (~100 lines). Additional protocol handling code (QUIC connection setup, message parsing) remains for future increments.
 
 #### M3.3: Extract Query Executor ⏳
-- **Status**: IN PROGRESS (Sixth Increment Complete - Query Execution Profiling Types Extracted)
-- **Current File**: `src/server/main.zig` (5,699 lines, was 6,275 after M3.2)
+- **Status**: IN PROGRESS (Seventh Increment Complete - Graph Property Conversion Utilities Extracted)
+- **Current File**: `src/server/main.zig` (5,620 lines, was 6,275 after M3.2)
 - **Created Files**:
-  - `src/server/query_executor.zig` (662 lines) - Query utilities, diagnostics, AST analysis, formatting, conversion, and profiling types
+  - `src/server/query_executor.zig` (750 lines) - Query utilities, diagnostics, AST analysis, formatting, conversion, profiling types, and graph property utilities
 - **Tasks**:
   - [x] Identify query utility functions
   - [x] Create `query_executor.zig` with utility functions
@@ -550,18 +550,19 @@ Circular Dependencies Detected: 2
   - [x] Extract hasEqualityPredicate, hasAggregationFunction, canonicalRowKey, buildAdditionalStatusesAlloc (fourth increment)
   - [x] Extract writeBindingsAdaptive, distinctDedup, convertEvalValueToBindingValue (fifth increment)
   - [x] Extract StageTimings, AllocTracker, trackerGet (sixth increment)
+  - [x] Extract evalExprToPropertyValue, propertyValueToIndexKey (seventh increment)
   - [x] Update `server/main.zig` imports and remove extracted functions
   - [ ] Extract query evaluation functions (evaluateSimpleQuery, evaluateUnion, evaluateBinarySet)
   - [ ] Extract statement execution functions (execute*Statement functions)
   - [ ] Extract additional query utilities
   - [ ] Verify all queries execute correctly
-- **Verification**: Server functionality maintained, query utilities, diagnostics, AST analysis, formatting, and profiling types working
+- **Verification**: Server functionality maintained, query utilities, diagnostics, AST analysis, formatting, profiling, and graph conversion working
 - **Agent**: Claude Agent
 - **Started**: 2025-11-12
-- **Completed**: Sixth increment complete (16 functions + 3 types = 19 items total)
+- **Completed**: Seventh increment complete (18 functions + 3 types = 21 items total)
 - **Test Results**: Functionality preserved through incremental approach
 - **Issues**: None
-- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Completed six increments extracting 16 utility/diagnostic/AST/formatting functions and 3 profiling types (~608 lines total). Query evaluation functions (~1,161 lines) and statement execution functions (~1,271 lines) remain for future increments.
+- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Completed seven increments extracting 18 utility/diagnostic/AST/formatting/graph functions and 3 profiling types (~687 lines total). Query evaluation functions (~1,161 lines) and statement execution functions (~1,271 lines) remain for future increments.
 
 ### Phase 3 Completion Criteria
 - [ ] 7,039-line file split into 5 focused modules
@@ -1474,6 +1475,6 @@ If blocked or need architectural decisions:
 
 ---
 
-**Status Document Version**: 2.0
-**Last Status Update**: 2025-11-12 (M3.3 Sixth Increment Complete - Phase 3 IN PROGRESS)
-**Next Review**: When Phase 3 M3.3 seventh increment starts
+**Status Document Version**: 2.1
+**Last Status Update**: 2025-11-12 (M3.3 Seventh Increment Complete - Phase 3 IN PROGRESS)
+**Next Review**: When Phase 3 M3.3 eighth increment starts
