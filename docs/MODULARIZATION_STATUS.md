@@ -982,7 +982,7 @@ Circular Dependencies Detected: 2
     - Functions extracted: initIndexCatalog, chooseIndexForPredicate, indexStatsOnInsert, indexStatsOnDelete
     - Global state extracted: g_index_catalog_map, g_index_catalog_inited, g_disable_catalog, g_selectivity_estimator
     - Total extracted: ~114 lines of index management code
-  - **Flag Utilities Extraction (Current)**:
+  - **Flag Utilities Extraction (Commit b0b7a0b)**:
     - Extracted flag constants and computation utilities (~79 lines)
     - Created server_flags.zig module (138 lines)
     - Flag constants: F_ILLEGAL, F_PROPERTY_ORDER, F_NULLS_FIRST, F_NULLS_LAST, F_TIEBREAK, F_DISTINCT_UNORDERED, F_UNION_PHASES, F_ADAPT_EST, F_HEUR_INDEX
@@ -990,6 +990,13 @@ Circular Dependencies Detected: 2
     - Functions extracted: nullsFlag, paginationStreamScaffold, initImplDefinedFlags, computeBaseFlags, computeFlagsExtended
     - Utility functions added: getImplDefinedCodes, isImplDefinedInited, setNullsLast, getNullsLast, setOrderKeysExpr, getOrderKeysExpr, setAdaptEstimates, getAdaptEstimates, setEstimateAdjustFactor, getEstimateAdjustFactor
     - Total extracted: ~79 lines of flag management code
+  - **Graph Storage Management Extraction (Current)**:
+    - Extracted graph storage persistence and initialization functions (~248 lines)
+    - Created graph_storage_manager.zig module (293 lines)
+    - Global state: g_graph_storage, g_data_dir
+    - Functions extracted: getOrCreateGraphStorage, getNextNodeId, tryLoadGraphFromDir, saveGraphToDir, initializeSampleGraph
+    - Utility functions added: setDataDir, getDataDir, getCurrentGraphStorage, clearGraphStorage
+    - Total extracted: ~248 lines of graph storage management code
   - **Conservative Approach**: Given the critical nature of Phase 3 (P0 CRITICAL, highest risk) and the warning about "most complex refactoring", taking incremental approach
   - **Analysis Findings**:
     - ServerState struct at line 358 with 50+ fields
@@ -1007,19 +1014,23 @@ Circular Dependencies Detected: 2
     - `src/server/backup_manager.zig` (158 lines) - Simplified backup manager
     - `src/server/index_catalog.zig` (149 lines) - Index statistics and catalog management
     - `src/server/server_flags.zig` (138 lines) - Flag constants and computation utilities
+    - `src/server/graph_storage_manager.zig` (293 lines) - Graph persistence and initialization
   - **Files Modified**:
-    - `src/server/main.zig` - Reduced from 7,039 to 6,607 lines (-432 lines total, -6.1%)
+    - `src/server/main.zig` - Reduced from 7,039 to 6,371 lines (-668 lines total, -9.5%)
       - Added server_state import (line 27)
       - Added backup_manager import (lines 29-30)
       - Added index_catalog import (line 32)
       - Added server_flags import (line 34)
-      - Replaced type definitions with imports (lines 54-86)
+      - Added graph_storage_mgr import (line 36)
+      - Replaced type definitions with imports (lines 54-94)
       - Removed SessionConfiguration code (~147 lines)
       - Removed SimplifiedBackupManager code (~140 lines)
       - Removed IndexStats and index catalog system (~106 lines)
       - Removed UnionMetrics struct (1 line)
       - Removed flag constants and global state (~35 lines)
       - Removed flag utility functions (~45 lines)
+      - Removed graph storage globals (~2 lines)
+      - Removed graph storage functions (~248 lines)
   - **Extracted Types & Modules**:
     - `ServerStateInsertedValue` - MVCC transaction value tracking
     - `CatalogSchema` - Database schema metadata
@@ -1033,7 +1044,8 @@ Circular Dependencies Detected: 2
     - Index catalog functions: initIndexCatalog, chooseIndexForPredicate, indexStatsOnInsert, indexStatsOnDelete
     - Flag constants: F_ILLEGAL, F_PROPERTY_ORDER, F_NULLS_FIRST, F_NULLS_LAST, F_TIEBREAK, F_DISTINCT_UNORDERED, F_UNION_PHASES, F_ADAPT_EST, F_HEUR_INDEX
     - Flag utilities: nullsFlag, paginationStreamScaffold, initImplDefinedFlags, computeBaseFlags, computeFlagsExtended
-  - **Status**: Support types, session management, backup manager, index catalog, flag utilities, and utility types extracted successfully (~545 lines extracted to 4 modules), ServerState struct extraction blocked by dependency issues
+    - Graph storage functions: getOrCreateGraphStorage, getNextNodeId, tryLoadGraphFromDir, saveGraphToDir, initializeSampleGraph
+  - **Status**: Support types, session management, backup manager, index catalog, flag utilities, graph storage, and utility types extracted successfully (~793 lines extracted to 5 modules), ServerState struct extraction blocked by dependency issues
   - **Next Steps**:
     - Resolve mvcc and query_plan_cache import issues (blocking)
     - Extract ServerState struct once dependencies resolved (50+ fields, ~110 lines)

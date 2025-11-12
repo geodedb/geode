@@ -32,6 +32,8 @@ const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
 const index_catalog = @import("index_catalog.zig");
 // Import server flags (M3.1 Phase 3 modularization)
 const server_flags = @import("server_flags.zig");
+// Import graph storage manager (M3.1 Phase 3 modularization)
+const graph_storage_mgr = @import("graph_storage_manager.zig");
 // Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
@@ -84,6 +86,12 @@ const paginationStreamScaffold = server_flags.paginationStreamScaffold;
 const initImplDefinedFlags = server_flags.initImplDefinedFlags;
 const computeBaseFlags = server_flags.computeBaseFlags;
 const computeFlagsExtended = server_flags.computeFlagsExtended;
+// Import graph storage management (M3.1 Phase 3 graph persistence extraction)
+const getOrCreateGraphStorage = graph_storage_mgr.getOrCreateGraphStorage;
+const getNextNodeId = graph_storage_mgr.getNextNodeId;
+const tryLoadGraphFromDir = graph_storage_mgr.tryLoadGraphFromDir;
+const saveGraphToDir = graph_storage_mgr.saveGraphToDir;
+const initializeSampleGraph = graph_storage_mgr.initializeSampleGraph;
 
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
@@ -211,12 +219,11 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Includes: IndexStats struct, global catalog state, initIndexCatalog(), chooseIndexForPredicate(),
 // indexStatsOnInsert(), indexStatsOnDelete() - all imported above via const aliasing
 
-// Global graph storage singleton (temporary - should be persistent)
-var g_graph_storage: ?*graph_exec.GraphStorage = null;
+// Removed: Graph storage singleton and data directory now in graph_storage_manager module (M3.1 Phase 3 graph persistence extraction)
+// Original: g_graph_storage, g_data_dir variables (~2 lines) - now in graph_storage_manager.zig
+
 // Global MVCC manager for transaction conflict detection
 var g_mvcc_manager: ?*mvcc.MVCCManager = null;
-// Global data directory for persistence
-var g_data_dir: ?[]const u8 = null;
 
 // Removed: Implementation-defined flag cache and related functions now in server_flags module
 // Original: g_impl_defined_codes, g_impl_defined_inited variables (~2 lines)
@@ -235,259 +242,13 @@ fn getOrCreateMVCCManager(allocator: std.mem.Allocator) *mvcc.MVCCManager {
     return mgr;
 }
 
-fn getOrCreateGraphStorage(allocator: std.mem.Allocator) *graph_exec.GraphStorage {
-    std.log.err("DEBUG: getOrCreateGraphStorage called, g_graph_storage is {s}", .{if (g_graph_storage == null) "null" else "set"});
-    if (g_graph_storage) |graph| {
-        std.log.err("DEBUG: Returning existing graph with {} nodes", .{graph.nodes.count()});
-        return graph;
-    }
-
-    // Try to load from persistent data first if data directory is available
-    if (g_data_dir) |data_dir| {
-        if (tryLoadGraphFromDir(allocator, data_dir)) |loaded_graph| {
-            std.log.err("DEBUG: Loaded graph from persistent data: {} nodes, {} edges", .{ loaded_graph.nodes.count(), loaded_graph.edges.items.len });
-            g_graph_storage = loaded_graph;
-            return loaded_graph;
-        } else |err| {
-            std.log.err("DEBUG: Failed to load graph from persistent data: {}", .{err});
-            // Loading failed, continue to create new graph
-        }
-    } else {
-        std.log.err("DEBUG: No data directory available for persistence", .{});
-    }
-
-    // Create new graph and initialize with sample data if no persistent data
-    const graph = allocator.create(graph_exec.GraphStorage) catch unreachable;
-    graph.* = graph_exec.GraphStorage.init(allocator);
-    initializeSampleGraph(allocator, graph) catch {};
-    g_graph_storage = graph;
-    return graph;
-}
-
-fn getNextNodeId(graph: *graph_exec.GraphStorage) graph_exec.NodeId {
-    var max_id: graph_exec.NodeId = 0;
-    var iterator = graph.nodes.iterator();
-    while (iterator.next()) |entry| {
-        if (entry.key_ptr.* > max_id) {
-            max_id = entry.key_ptr.*;
-        }
-    }
-    return max_id + 1;
-}
-
-fn tryLoadGraphFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !*graph_exec.GraphStorage {
-    const g = allocator.create(graph_exec.GraphStorage) catch return error.OutOfMemory;
-    g.* = graph_exec.GraphStorage.init(allocator);
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
-    // nodes.jsonl and edges.jsonl simple line-delimited json
-    if (dir.openFile("nodes.jsonl", .{})) |nf| {
-        defer nf.close();
-        const content = try nf.readToEndAlloc(allocator, 1024 * 1024 * 10); // 10MB max
-        defer allocator.free(content);
-        var lines = std.mem.tokenizeScalar(u8, content, '\n');
-        while (lines.next()) |line| {
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch continue;
-            defer parsed.deinit();
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-            const idv = obj.get("id") orelse continue;
-            const id: u64 = switch (idv) {
-                .integer => |iv| @intCast(iv),
-                else => 0,
-            };
-            if (id == 0) continue;
-            var labels: []const []const u8 = &.{};
-            if (obj.get("labels")) |lv| if (lv == .array) {
-                const arr = lv.array.items;
-                var tmp = try allocator.alloc([]const u8, arr.len);
-                var i: usize = 0;
-                while (i < arr.len) : (i += 1) tmp[i] = if (arr[i] == .string) arr[i].string else "";
-                labels = tmp;
-            };
-            try g.addNode(allocator, id, labels);
-            if (obj.get("properties")) |pv| {
-                if (pv == .object) {
-                    var it = pv.object.iterator();
-                    while (it.next()) |e| {
-                        const key = e.key_ptr.*;
-                        const val = e.value_ptr.*;
-                        const pv2: graph_exec.PropertyValue = switch (val) {
-                            .null => .{ .Null = {} },
-                            .bool => |b| .{ .Bool = b },
-                            .integer => |n| .{ .Int = @intCast(n) },
-                            .string => |s| .{ .String = allocator.dupe(u8, s) catch s },
-                            else => .{ .Null = {} },
-                        };
-                        g.setNodeProperty(allocator, id, key, pv2) catch {};
-                    }
-                }
-            }
-        }
-    } else |_| {}
-    if (dir.openFile("edges.jsonl", .{})) |ef| {
-        defer ef.close();
-        const content = try ef.readToEndAlloc(allocator, 1024 * 1024 * 10); // 10MB max
-        defer allocator.free(content);
-        var lines = std.mem.tokenizeScalar(u8, content, '\n');
-        while (lines.next()) |line| {
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch continue;
-            defer parsed.deinit();
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-            const sv = obj.get("source") orelse continue;
-            const tv = obj.get("target") orelse continue;
-            const tyv = obj.get("type") orelse continue;
-            const sid: u64 = switch (sv) {
-                .integer => |iv| @intCast(iv),
-                else => 0,
-            };
-            const tid: u64 = switch (tv) {
-                .integer => |iv| @intCast(iv),
-                else => 0,
-            };
-            const ety: []const u8 = switch (tyv) {
-                .string => |s| s,
-                else => "",
-            };
-            if (sid == 0 or tid == 0) continue;
-            const eid = try g.addEdge(allocator, sid, tid, ety);
-            if (obj.get("properties")) |pv| {
-                if (pv == .object) {
-                    var it = pv.object.iterator();
-                    while (it.next()) |e| {
-                        const key = e.key_ptr.*;
-                        const val = e.value_ptr.*;
-                        const pv2: graph_exec.PropertyValue = switch (val) {
-                            .null => .{ .Null = {} },
-                            .bool => |b| .{ .Bool = b },
-                            .integer => |n| .{ .Int = @intCast(n) },
-                            .string => |s| .{ .String = allocator.dupe(u8, s) catch s },
-                            else => .{ .Null = {} },
-                        };
-                        g.setEdgeProperty(allocator, @intCast(eid), key, pv2) catch {};
-                    }
-                }
-            }
-        }
-    } else |_| {}
-    return g;
-}
-
-fn saveGraphToDir(allocator: std.mem.Allocator, g: *const graph_exec.GraphStorage, dir_path: []const u8) void {
-    // Create directory with error handling
-    std.fs.cwd().makePath(dir_path) catch |err| {
-        std.log.warn("Failed to create directory {s}: {}", .{ dir_path, err });
-        return;
-    };
-
-    // Save nodes with comprehensive error handling
-    const nodes_path = std.mem.concat(allocator, u8, &.{ dir_path, "/nodes.jsonl" }) catch {
-        std.log.warn("Failed to allocate nodes path", .{});
-        return;
-    };
-    defer allocator.free(nodes_path);
-
-    var nodes_content = std.ArrayList(u8).initCapacity(allocator, 0) catch {
-        std.log.warn("Failed to allocate nodes content buffer", .{});
-        return;
-    };
-    defer nodes_content.deinit(allocator);
-
-    var node_count: usize = 0;
-    var it = g.nodes.iterator();
-    while (it.next()) |entry| {
-        node_count += 1;
-        const node = entry.value_ptr.*;
-
-        // Validate node structure before processing
-        if (node_count > 10000) {
-            std.log.warn("Too many nodes, stopping save at {}", .{node_count});
-            break;
-        }
-
-        std.fmt.format(nodes_content.writer(allocator), "{{\"id\":{d},\"labels\":[", .{node.id}) catch continue;
-
-        // Safe label processing with validation
-        if (node.labels.len > 0 and node.labels.len < 100) { // Reasonable label count limit
-            for (node.labels, 0..) |label, li| {
-                if (li > 0) nodes_content.appendSlice(allocator, ",") catch continue;
-
-                // Validate label string
-                if (label.len > 0 and label.len < 256) { // Reasonable label length
-                    std.fmt.format(nodes_content.writer(allocator), "\"{s}\"", .{label}) catch {
-                        nodes_content.appendSlice(allocator, "\"\"") catch continue;
-                    };
-                } else {
-                    nodes_content.appendSlice(allocator, "\"\"") catch continue;
-                }
-            }
-        }
-        nodes_content.appendSlice(allocator, "],\"properties\":{") catch {};
-        var pit = node.properties.iterator();
-        var firstp = true;
-        while (pit.next()) |p| {
-            if (!firstp) nodes_content.appendSlice(allocator, ",") catch {} else firstp = false;
-            const k = p.key_ptr.*;
-            const v = p.value_ptr.*;
-            std.fmt.format(nodes_content.writer(allocator), "\"{s}\":", .{k}) catch {};
-            switch (v) {
-                .Null => nodes_content.appendSlice(allocator, "null") catch {},
-                .Bool => |b| std.fmt.format(nodes_content.writer(allocator), "{}", .{b}) catch {},
-                .Int => |iv| std.fmt.format(nodes_content.writer(allocator), "{d}", .{iv}) catch {},
-                .String => |s| std.fmt.format(nodes_content.writer(allocator), "\"{s}\"", .{s}) catch {},
-                .Decimal => nodes_content.appendSlice(allocator, "null") catch {},
-                .VectorF32 => |vec| std.fmt.format(nodes_content.writer(allocator), "\"[vector:{d}x{d}]\"", .{ vec.dim, vec.data.len }) catch {},
-            }
-        }
-        nodes_content.appendSlice(allocator, "}}\n") catch {};
-    }
-
-    std.fs.cwd().writeFile(.{ .sub_path = nodes_path, .data = nodes_content.items }) catch {};
-
-    // Save edges
-    const edges_path = std.mem.concat(allocator, u8, &.{ dir_path, "/edges.jsonl" }) catch return;
-    defer allocator.free(edges_path);
-
-    var edges_content = std.ArrayList(u8).initCapacity(allocator, 0) catch return;
-    defer edges_content.deinit(allocator);
-
-    var i: usize = 0;
-    while (i < g.edges.items.len) : (i += 1) {
-        const e = g.edges.items[i];
-        std.fmt.format(edges_content.writer(allocator), "{{\"source\":{d},\"target\":{d},\"type\":\"{s}\",\"properties\":{{}}}}\n", .{ e.source, e.target, e.edge_type }) catch {};
-    }
-
-    std.fs.cwd().writeFile(.{ .sub_path = edges_path, .data = edges_content.items }) catch {};
-}
-
-fn initializeSampleGraph(allocator: std.mem.Allocator, graph: *graph_exec.GraphStorage) !void {
-    // Add sample nodes
-    try graph.addNode(allocator, 1, &.{"Person"});
-    try graph.setNodeProperty(allocator, 1, "name", .{ .String = "Alice" });
-    try graph.setNodeProperty(allocator, 1, "age", .{ .Int = 30 });
-
-    try graph.addNode(allocator, 2, &.{"Person"});
-    try graph.setNodeProperty(allocator, 2, "name", .{ .String = "Bob" });
-    try graph.setNodeProperty(allocator, 2, "age", .{ .Int = 25 });
-
-    try graph.addNode(allocator, 3, &.{"Person"});
-    try graph.setNodeProperty(allocator, 3, "name", .{ .String = "Charlie" });
-    try graph.setNodeProperty(allocator, 3, "age", .{ .Int = 35 });
-
-    // Add sample edges
-    const e1 = try graph.addEdge(allocator, 1, 2, "KNOWS");
-    try graph.setEdgeProperty(allocator, e1, "since", .{ .Int = 2020 });
-
-    const e2 = try graph.addEdge(allocator, 2, 3, "KNOWS");
-    try graph.setEdgeProperty(allocator, e2, "since", .{ .Int = 2021 });
-
-    const e3 = try graph.addEdge(allocator, 1, 3, "WORKS_WITH");
-    try graph.setEdgeProperty(allocator, e3, "department", .{ .String = "Engineering" });
-}
-
-// Removed: computeBaseFlags() and computeFlagsExtended() functions now in server_flags module
-// Original code was ~22 lines, now extracted to server_flags.zig and imported above
+// Removed: Graph storage management functions now in graph_storage_manager module (M3.1 Phase 3 graph persistence extraction)
+// Original: getOrCreateGraphStorage() function (~28 lines)
+// Original: getNextNodeId() function (~10 lines)
+// Original: tryLoadGraphFromDir() function (~98 lines)
+// Original: saveGraphToDir() function (~86 lines)
+// Original: initializeSampleGraph() function (~24 lines)
+// Total extracted: ~246 lines to graph_storage_manager.zig module
 
 fn execInsertValue(state: *ServerState, expr_val: eval.Value) !void {
     var tmp: [128]u8 = undefined; // fixed buffer for small literals
@@ -3071,8 +2832,8 @@ pub fn main() !void {
     } else |_| {}
 
     // Apply ORDER BY key policy based on CLI flag
-    g_order_keys_expr = order_keys_mode_expr;
-    g_data_dir = data_dir;
+    server_flags.setOrderKeysExpr(order_keys_mode_expr);
+    graph_storage_mgr.setDataDir(data_dir);
 
     // Initialize persistent page manager if data_dir provided and wire StorageCatalog
     var pm_persist_active = false;
@@ -3092,17 +2853,20 @@ pub fn main() !void {
         }
 
         // Try to load graph from catalog
-        if (g_graph_storage == null) {
+        if (graph_storage_mgr.getCurrentGraphStorage() == null) {
             // For now, just use JSONL files
             const loaded = tryLoadGraphFromDir(gpa, dd) catch null;
             if (loaded) |lg| {
-                g_graph_storage = lg;
+                // Graph storage manager will handle storage internally
+                _ = lg; // Graph is loaded via tryLoadGraphFromDir which is now aliased
                 // Update catalog metadata
                 if (catalog.graph_metadata == null) {
                     catalog.initGraphMetadata() catch {};
                 }
-                catalog.saveGraphMetadata(@intCast(lg.nodes.count()), @intCast(lg.edges.items.len), 0, // max_node_id - would need to calculate
-                    if (lg.edges.items.len > 0) lg.edges.items.len - 1 else 0) catch {};
+                if (graph_storage_mgr.getCurrentGraphStorage()) |gs| {
+                    catalog.saveGraphMetadata(@intCast(gs.nodes.count()), @intCast(gs.edges.items.len), 0, // max_node_id - would need to calculate
+                        if (gs.edges.items.len > 0) gs.edges.items.len - 1 else 0) catch {};
+                }
             }
         }
     }
@@ -5312,7 +5076,7 @@ pub fn main() !void {
     }
     // Graceful shutdown: persist graph if data_dir provided and in-memory graph exists
     if (data_dir) |ddir| {
-        if (g_graph_storage) |gg| {
+        if (graph_storage_mgr.getCurrentGraphStorage()) |gg| {
             // Save to JSONL files
             saveGraphToDir(gpa, gg, ddir);
 
