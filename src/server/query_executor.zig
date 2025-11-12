@@ -7,10 +7,22 @@ const diagnostics = geode.diagnostics;
 const ast = geode.ast;
 const graph_exec = @import("../graph_exec.zig");
 const eval_extended = @import("../eval_extended.zig");
+const server_state = @import("server_state.zig");
+const server_flags = @import("server_flags.zig");
+const graph_storage_mgr = @import("graph_storage_manager.zig");
+const union_advanced = @import("../union_advanced.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=QUERY_EXECUTOR; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
-// Phase 3 M3.3 - Query Executor Module (Incremental Extraction)
-// Extracted query utility, diagnostic, and AST analysis functions from server/main.zig for better separation of concerns
+// Phase 3 M3.3 - Query Executor Module (Incremental Extraction - Eighth Increment)
+// Extracted query utility, diagnostic, AST analysis, and query evaluation functions from server/main.zig for better separation of concerns
+
+// Import types from other modules
+const UnionMetrics = server_state.UnionMetrics;
+const getOrCreateGraphStorage = graph_storage_mgr.getOrCreateGraphStorage;
+
+// Global configuration for MATCH query execution guards (set by server initialization)
+pub var g_match_max_results_override: ?usize = null;
+pub var g_match_max_frontier_override: ?usize = null;
 
 /// Query execution stage timing metrics for performance profiling and optimization
 pub const StageTimings = struct {
