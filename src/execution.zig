@@ -16,7 +16,9 @@ const graph_algorithms = @import("execution/graph_algorithms.zig");
 const set_operations = @import("execution/set_operations.zig");
 const centrality_algorithms = @import("execution/centrality_algorithms.zig");
 const crud_operations = @import("execution/crud_operations.zig");
-const path_and_call_operations = @import("execution/path_and_call_operations.zig");
+const recursion_handler = @import("execution/recursion_handler.zig");
+const call_operations = @import("execution/call_operations.zig");
+const execution_helpers = @import("execution/execution_helpers.zig");
 const match_operations = @import("execution/match_operations.zig");
 const statement_handlers = @import("execution/statement_handlers.zig");
 const aggregation_evaluation = @import("execution/aggregation_evaluation.zig");
@@ -68,19 +70,23 @@ pub const executeInsert = crud_operations.executeInsert;
 pub const executeMerge = crud_operations.executeMerge;
 pub const executeDelete = crud_operations.executeDelete;
 
-// Re-export path finding and CALL operation functions for backward compatibility (M1 Phase 5 extraction)
-pub const buildMemberPath = path_and_call_operations.buildMemberPath;
-pub const executeBFS = path_and_call_operations.executeBFS;
-pub const executeDFS = path_and_call_operations.executeDFS;
-pub const executeDijkstra = path_and_call_operations.executeDijkstra;
-pub const extractU32FromMap = path_and_call_operations.extractU32FromMap;
-pub const extractF64FromMap = path_and_call_operations.extractF64FromMap;
-pub const extractMapParameter = path_and_call_operations.extractMapParameter;
-pub const extractNodeId = path_and_call_operations.extractNodeId;
-pub const getEdgeWeight = path_and_call_operations.getEdgeWeight;
-pub const executeCallSubquery = path_and_call_operations.executeCallSubquery;
-pub const executeCallStatement = path_and_call_operations.executeCallStatement;
-pub const executeCallProcedure = path_and_call_operations.executeCallProcedure;
+// Re-export path finding and CALL operation functions for backward compatibility (M1 Phase 5 extraction, M2.3 Phase 2 modularization)
+// Recursion handler functions
+pub const buildMemberPath = recursion_handler.buildMemberPath;
+pub const executeBFS = recursion_handler.executeBFS;
+pub const executeDFS = recursion_handler.executeDFS;
+pub const executeDijkstra = recursion_handler.executeDijkstra;
+pub const getEdgeWeight = recursion_handler.getEdgeWeight;
+// Execution helper functions
+pub const extractU32FromMap = execution_helpers.extractU32FromMap;
+pub const extractF64FromMap = execution_helpers.extractF64FromMap;
+pub const extractMapParameter = execution_helpers.extractMapParameter;
+pub const extractNodeId = execution_helpers.extractNodeId;
+pub const filterYieldColumns = execution_helpers.filterYieldColumns;
+// Call operation functions
+pub const executeCallSubquery = call_operations.executeCallSubquery;
+pub const executeCallStatement = call_operations.executeCallStatement;
+pub const executeCallProcedure = call_operations.executeCallProcedure;
 
 // Re-export MATCH operation functions for backward compatibility (M1 Phase 6 extraction)
 pub const executeMatchCreateQuery = match_operations.executeMatchCreateQuery;

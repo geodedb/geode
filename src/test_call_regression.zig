@@ -4,7 +4,7 @@
 const std = @import("std");
 const testing = std.testing;
 const execution = @import("execution.zig");
-const path_and_call = @import("execution/path_and_call_operations.zig");
+const execution_helpers = @import("execution/execution_helpers.zig");
 const ast = @import("gql/ast.zig");
 const eval = @import("eval.zig");
 const graph_store = @import("graph_store.zig");
@@ -54,7 +54,7 @@ test "CALL procedure YIELD filtering regression" {
     };
 
     // Apply YIELD filtering
-    const filtered = try path_and_call.filterYieldColumns(allocator, result, yield_items);
+    const filtered = try execution_helpers.filterYieldColumns(allocator, result, yield_items);
     defer {
         allocator.free(filtered.columns);
         for (filtered.rows) |frow| {
