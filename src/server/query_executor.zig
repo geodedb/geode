@@ -172,3 +172,117 @@ pub fn parseParams(allocator: std.mem.Allocator, params_json: ?[]const u8, out_n
         while (j < rows.len) : (j += 1) out_rows.*[j] = rows[j .. j + 1];
     }
 }
+
+/// Build EXPLAIN JSON with logical query plan
+/// Canonical pipeline order with monotonic id: Project(0), Distinct(1), Sort(2), Offset(3), Limit(4), SetOpUnion(5)
+pub fn buildExplainJson(allocator: std.mem.Allocator, params: struct { ordered: bool, limit: ?usize, offset: ?usize, union_mode: ?[]const u8, distinct: bool, setop_kind: ?[]const u8 }) []const u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return "{\"logical\":[]}";
+    const w = buf.writer(allocator);
+    w.writeAll("{\"profile_version\":2,\"logical\":[") catch {};
+    var id: usize = 0;
+    // Project always present first
+    w.writeAll("{\"op\":\"Project\",\"id\":") catch {};
+    w.print("{d}", .{id}) catch {};
+    w.writeAll("}") catch {};
+    id += 1;
+    if (params.distinct) {
+        w.writeAll(",{\"op\":\"Distinct\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
+        w.writeAll("}") catch {};
+        id += 1;
+    }
+    if (params.ordered) {
+        w.writeAll(",{\"op\":\"Sort\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
+        w.writeAll("}") catch {};
+        id += 1;
+    }
+    if (params.offset) |_| {
+        w.writeAll(",{\"op\":\"Offset\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
+        w.writeAll("}") catch {};
+        id += 1;
+    }
+    if (params.limit) |_| {
+        w.writeAll(",{\"op\":\"Limit\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
+        w.writeAll("}") catch {};
+        id += 1;
+    }
+    if (params.union_mode) |um| {
+        const sop = if (params.setop_kind) |sk| sk else "SetOpUnion";
+        w.writeAll(",{\"op\":\"") catch {};
+        w.writeAll(sop) catch {};
+        w.writeAll("\",\"id\":") catch {};
+        w.print("{d}", .{id}) catch {};
+        w.writeAll(",\"mode\":\"") catch {};
+        w.writeAll(um) catch {};
+        w.writeAll("\"}") catch {};
+        id += 1;
+    }
+    w.writeAll("],\"properties\":{") catch {};
+    var first = true;
+    if (params.ordered) {
+        w.writeAll("\"ordered\":true") catch {};
+        first = false;
+    }
+    if (params.limit) |l| {
+        if (!first) w.writeAll(",") catch {};
+        first = false;
+        w.print("\"limit\":{d}", .{l}) catch {};
+    }
+    if (params.offset) |o| {
+        if (!first) w.writeAll(",") catch {};
+        first = false;
+        w.print("\"offset\":{d}", .{o}) catch {};
+    }
+    if (params.union_mode) |um2| {
+        if (!first) w.writeAll(",") catch {};
+        first = false;
+        w.print("\"union_mode\":\"{s}\"", .{um2}) catch {};
+    }
+    if (params.distinct) {
+        if (!first) w.writeAll(",") catch {};
+        first = false;
+        w.writeAll("\"distinct\":true") catch {};
+    }
+    w.writeAll("}}") catch {}; // Close properties object and outer JSON object
+    return buf.toOwnedSlice(allocator) catch "{\"logical\":[]}";
+}
+
+/// Build canonical key for value-based row deduplication
+/// Encodes row values directly to avoid JSON reparsing
+pub fn canonicalValuesKey(allocator: std.mem.Allocator, vals: []const eval.Value) []const u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return &.{};
+    const w = buf.writer(allocator);
+    var i: usize = 0;
+    while (i < vals.len) : (i += 1) {
+        if (i > 0) w.writeAll("|") catch {};
+        const v = vals[i];
+        switch (v) {
+            .Null => w.writeAll("n") catch {},
+            .Int => |iv| w.print("i:{d}", .{iv}) catch {},
+            .Bool => |bv| w.writeAll(if (bv) "s:4:true" else "s:5:false") catch {},
+            .Str => |s| blk: {
+                w.writeAll("s:") catch {};
+                w.print("{d}:", .{s.len}) catch {};
+                w.writeAll(s) catch {};
+                break :blk;
+            },
+            .Decimal => |d| blk2: {
+                var coeff = d.coeff;
+                var scale = d.scale;
+                if (scale > 0) {
+                    while (scale > 0 and @mod(coeff, 10) == 0) : (scale -= 1) coeff = @divTrunc(coeff, 10);
+                }
+                if (scale == 0) {
+                    w.print("i:{d}", .{coeff}) catch {};
+                } else {
+                    w.print("d:{d}:{d}", .{ coeff, scale }) catch {};
+                }
+                break :blk2;
+            },
+        }
+    }
+    return buf.toOwnedSlice(allocator) catch &.{};
+}
