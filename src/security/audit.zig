@@ -1,7 +1,9 @@
 const std = @import("std");
 const rls = @import("rls.zig");
+const audit_formatter = @import("audit_formatter.zig");
+const audit_sink = @import("audit_sink.zig");
 
-// CANARY: REQ=REQ-GQL-031; FEATURE="Security Audit"; ASPECT=AuditLogging; STATUS=TESTED; TEST=e2e_rls_integration; OWNER=security; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-031; FEATURE="Security Audit"; ASPECT=AuditLogging; STATUS=TESTED; TEST=e2e_rls_integration; OWNER=security; UPDATED=2025-11-12
 
 pub const AuditEventType = enum {
     access_granted,
@@ -273,79 +275,11 @@ pub const AuditLogger = struct {
         std.debug.print("AUDIT_CONFIG rotation_size_mb={d} retention_days={d}\n", .{ rotation_size_mb, retention_days });
     }
 
-    // Platform-specific output formatters
-    pub fn formatWindowsEventLog(self: *AuditLogger, event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
-        _ = self;
-        // Format as Windows Event Log XML
-        var buf = try std.ArrayList(u8).initCapacity(allocator, 4096);
-        defer buf.deinit(allocator);
-
-        const writer = buf.writer(allocator);
-        try writer.print("<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>\n", .{});
-        try writer.print("  <System>\n", .{});
-        try writer.print("    <Provider Name='Geode Audit' />\n", .{});
-        try writer.print("    <EventID>{d}</EventID>\n", .{@intFromEnum(event.event_type)});
-        try writer.print("    <TimeCreated SystemTime='{d}' />\n", .{event.timestamp});
-        try writer.print("    <Computer>localhost</Computer>\n", .{});
-        try writer.print("    <Security UserID='{d}' />\n", .{event.user_id orelse 0});
-        try writer.print("  </System>\n", .{});
-        try writer.print("  <EventData>\n", .{});
-        try writer.print("    <Data Name='EventType'>{s}</Data>\n", .{@tagName(event.event_type)});
-        try writer.print("    <Data Name='Resource'>{s}</Data>\n", .{event.resource});
-        try writer.print("    <Data Name='Action'>{s}</Data>\n", .{event.action});
-        if (event.reason) |reason| {
-            try writer.print("    <Data Name='Reason'>{s}</Data>\n", .{reason});
-        }
-        if (event.session_id) |session| {
-            try writer.print("    <Data Name='SessionID'>{s}</Data>\n", .{session});
-        }
-        try writer.print("  </EventData>\n", .{});
-        try writer.print("</Event>\n", .{});
-
-        return try buf.toOwnedSlice(allocator);
-    }
-
-    pub fn formatSyslog(self: *AuditLogger, event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
-        _ = self;
-        // Format as RFC3164/RFC5424 syslog message
-        // Priority = Facility (16 = local0) * 8 + Severity (based on event type)
-        const severity: u8 = switch (event.event_type) {
-            .authentication_failure, .authorization_failure => 3, // Error
-            .access_denied, .policy_violation => 4, // Warning
-            .access_granted => 6, // Info
-            else => 5, // Notice
-        };
-        const priority = 16 * 8 + severity; // local0 facility
-
-        var buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
-        defer buf.deinit(allocator);
-
-        const writer = buf.writer(allocator);
-        // RFC3164 format: <priority>timestamp hostname tag[pid]: message
-        const timestamp = std.time.milliTimestamp();
-        const datetime = @divFloor(timestamp, 1000);
-
-        // Format: <priority>Jan 01 12:00:00 hostname geode[pid]: message
-        try writer.print("<{d}>", .{priority});
-
-        // Simple timestamp formatting (would need proper date formatting in production)
-        try writer.print("Jan 01 12:00:00 ", .{});
-
-        try writer.print("localhost geode[{d}]: ", .{std.os.linux.getpid()});
-        try writer.print("event_type={s} ", .{@tagName(event.event_type)});
-        try writer.print("user_id={d} ", .{event.user_id orelse 0});
-        try writer.print("resource={s} ", .{event.resource});
-        try writer.print("action={s} ", .{event.action});
-        if (event.reason) |reason| {
-            try writer.print("reason={s} ", .{reason});
-        }
-        try writer.print("timestamp={d}", .{datetime});
-
-        return try buf.toOwnedSlice(allocator);
-    }
+    // Platform-specific output formatters moved to audit_formatter.zig
+    // Use audit_formatter.formatWindowsEventLog() and audit_formatter.formatSyslog()
 
     pub fn writeToWindowsEventLog(self: *AuditLogger, allocator: std.mem.Allocator) !u32 {
-        var events_written: u32 = 0;
+        _ = self;
 
         // Create test events to write
         const test_events = [_]AuditEvent{
@@ -379,29 +313,12 @@ pub const AuditLogger = struct {
             },
         };
 
-        // Write formatted events to Windows Event Log format file
-        const file = try std.fs.cwd().createFile("windows_event_log.xml", .{});
-        defer file.close();
-
-        try file.writeAll("<?xml version='1.0' encoding='UTF-8'?>\n");
-        try file.writeAll("<Events>\n");
-
-        for (test_events) |event| {
-            const formatted = try self.formatWindowsEventLog(event, allocator);
-            defer allocator.free(formatted);
-            try file.writeAll(formatted);
-            events_written += 1;
-        }
-
-        try file.writeAll("</Events>\n");
-
-        std.debug.print("WINDOWS_EVENTLOG events_written={d} file=windows_event_log.xml\n", .{events_written});
-
-        return events_written;
+        // Use audit_sink module to write formatted events
+        return try audit_sink.writeToWindowsEventLog(&test_events, allocator, "windows_event_log.xml");
     }
 
     pub fn writeToSyslog(self: *AuditLogger, allocator: std.mem.Allocator) !u32 {
-        var events_sent: u32 = 0;
+        _ = self;
 
         // Create test events for syslog
         const test_events = [_]AuditEvent{
@@ -435,21 +352,8 @@ pub const AuditLogger = struct {
             },
         };
 
-        // Write formatted events to syslog format file
-        const file = try std.fs.cwd().createFile("syslog_output.log", .{});
-        defer file.close();
-
-        for (test_events) |event| {
-            const formatted = try self.formatSyslog(event, allocator);
-            defer allocator.free(formatted);
-            try file.writeAll(formatted);
-            try file.writeAll("\n");
-            events_sent += 1;
-        }
-
-        std.debug.print("SYSLOG_OUTPUT events_sent={d} facility=local0 file=syslog_output.log\n", .{events_sent});
-
-        return events_sent;
+        // Use audit_sink module to write formatted events
+        return try audit_sink.writeToSyslog(&test_events, allocator, "syslog_output.log");
     }
 
     // Security Analysis Functions
@@ -739,7 +643,7 @@ pub const AuditLogger = struct {
         }
 
         // Output to Windows Event Log format
-        const win_event = try self.formatWindowsEventLog(test_event, allocator);
+        const win_event = try audit_formatter.formatWindowsEventLog(test_event, allocator);
         defer allocator.free(win_event);
         const win_file = try std.fs.cwd().createFile("combined_windows.xml", .{});
         defer win_file.close();
@@ -747,7 +651,7 @@ pub const AuditLogger = struct {
         outputs_tested += 1;
 
         // Output to Syslog format
-        const syslog_event = try self.formatSyslog(test_event, allocator);
+        const syslog_event = try audit_formatter.formatSyslog(test_event, allocator);
         defer allocator.free(syslog_event);
         const syslog_file = try std.fs.cwd().createFile("combined_syslog.log", .{});
         defer syslog_file.close();
