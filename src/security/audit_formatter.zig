@@ -21,9 +21,9 @@ pub const AuditEventType = @import("audit.zig").AuditEventType;
 /// Caller owns the returned memory.
 pub fn formatWindowsEventLog(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
     var buf = try std.ArrayList(u8).initCapacity(allocator, 4096);
-    errdefer buf.deinit();
+    errdefer buf.deinit(allocator);
 
-    const writer = buf.writer();
+    const writer = buf.writer(allocator);
     try writer.print("<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>\n", .{});
     try writer.print("  <System>\n", .{});
     try writer.print("    <Provider Name='Geode Audit' />\n", .{});
@@ -45,7 +45,7 @@ pub fn formatWindowsEventLog(event: AuditEvent, allocator: std.mem.Allocator) ![
     try writer.print("  </EventData>\n", .{});
     try writer.print("</Event>\n", .{});
 
-    return try buf.toOwnedSlice();
+    return try buf.toOwnedSlice(allocator);
 }
 
 /// Format an audit event as RFC3164/RFC5424 syslog message
@@ -88,7 +88,7 @@ pub fn formatSyslog(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
     }
     try writer.print("timestamp={d}", .{datetime});
 
-    return try buf.toOwnedSlice();
+    return try buf.toOwnedSlice(allocator);
 }
 
 /// Format an audit event as JSON (JSONL format)
@@ -99,7 +99,7 @@ pub fn formatSyslog(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
 /// Caller owns the returned memory.
 pub fn formatJson(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
     var buf = try std.ArrayList(u8).initCapacity(allocator, 256);
-    errdefer buf.deinit();
+    errdefer buf.deinit(allocator);
 
     const writer = buf.writer(allocator);
     try writer.print("{{\"timestamp\":{d},\"event_type\":\"{s}\",\"resource\":\"{s}\",\"action\":\"{s}\"", .{
@@ -133,7 +133,7 @@ pub fn formatJson(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
 
     try writer.writeAll("}\n");
 
-    return try buf.toOwnedSlice();
+    return try buf.toOwnedSlice(allocator);
 }
 
 // =============================================================================

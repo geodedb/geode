@@ -479,7 +479,7 @@ test "DFS - single node" {
     defer store.deinit();
 
     // Add single node
-    try store.addNode(1, std.StringHashMap(eval.Value).init(testing.allocator));
+    _ = try store.createNode(&[_][]const u8{});
 
     const columns = &[_][]const u8{"path"};
     const result = try executeDFS(testing.allocator, &store, columns, 1, 0);
