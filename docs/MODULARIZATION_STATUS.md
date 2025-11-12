@@ -956,7 +956,7 @@ Circular Dependencies Detected: 2
 ## Change Log
 
 ### 2025-11-12 (Session 11 - Phase 3 M3.1 Incremental Extraction)
-- **Phase 3 M3.1 - Extract Server State Management**: INCREMENTAL PROGRESS (Support & Session Types Extracted)
+- **Phase 3 M3.1 - Extract Server State Management**: INCREMENTAL PROGRESS (Support, Session & Backup Manager Extracted)
   - **Foundation (Commit 971bab0)**:
     - Successfully analyzed server/main.zig structure (7,039 lines)
     - Created server_state.zig module foundation
@@ -964,12 +964,17 @@ Circular Dependencies Detected: 2
   - **Support Types Extraction (Commit 241bedb)**:
     - Extracted 3 support types to server_state.zig (42 lines)
     - Updated server/main.zig to use extracted types
-  - **Session Types Extraction (Current)**:
+  - **Session Types Extraction (Commit a6cb10a)**:
     - Extracted SessionConfiguration with full implementation (~128 lines)
     - Extracted SessionParameterValue union (9 lines)
     - Extracted SessionResetType union (8 lines)
     - Updated server/main.zig to use extracted session types
     - Total extracted: ~147 lines of session management code
+  - **Backup Manager Extraction (Current)**:
+    - Extracted SimplifiedBackupManager struct (~140 lines)
+    - Created backup_manager.zig module (158 lines)
+    - Updated server/main.zig to import from backup_manager module
+    - Total extracted: ~136 lines of backup management code
   - **Conservative Approach**: Given the critical nature of Phase 3 (P0 CRITICAL, highest risk) and the warning about "most complex refactoring", taking incremental approach
   - **Analysis Findings**:
     - ServerState struct at line 358 with 50+ fields
@@ -984,24 +989,29 @@ Circular Dependencies Detected: 2
     - **Implication**: ServerState extraction requires resolving these dependency issues first
   - **Files Created**:
     - `src/server/server_state.zig` (194 lines) - Support and session types module
+    - `src/server/backup_manager.zig` (158 lines) - Simplified backup manager
   - **Files Modified**:
-    - `src/server/main.zig` - Reduced from 7,039 to 6,880 lines (-159 lines)
-      - Added import (line 27)
+    - `src/server/main.zig` - Reduced from 7,039 to 6,744 lines (-295 lines total, -4.2%)
+      - Added server_state import (line 27)
+      - Added backup_manager import (lines 28-30)
       - Replaced type definitions with imports (lines 189-195)
       - Removed SessionConfiguration code (was lines 194-340, ~147 lines)
-  - **Extracted Types**:
+      - Removed SimplifiedBackupManager code (was lines 41-180, ~140 lines)
+  - **Extracted Types & Modules**:
     - `ServerStateInsertedValue` - MVCC transaction value tracking
     - `CatalogSchema` - Database schema metadata
     - `CatalogGraph` - Database graph metadata
     - `SessionConfiguration` - Session management with schema, graph, timezone, parameters
     - `SessionParameterValue` - Session parameter value types union
     - `SessionResetType` - Session reset type union
-  - **Status**: Support and session types extracted successfully (~194 lines total), ServerState struct extraction blocked by dependency issues
+    - `SimplifiedBackupManager` - Backup/restore manager with 6 public methods (init, deinit, createFullBackup, createIncrementalBackup, restoreToPointInTime, runRetention, loadMetadata)
+  - **Status**: Support, session types, and backup manager extracted successfully (~352 lines extracted to 2 modules), ServerState struct extraction blocked by dependency issues
   - **Next Steps**:
-    - Resolve mvcc and query_plan_cache import issues
+    - Resolve mvcc and query_plan_cache import issues (blocking)
     - Extract ServerState struct once dependencies resolved (50+ fields, ~110 lines)
-    - Extract global state management functions (getOrCreateMVCCManager, getOrCreateGraphStorage, etc.)
-    - Extract SimplifiedBackupManager (lines 38-178, ~140 lines)
+    - Extract global state management functions (getOrCreateMVCCManager, getOrCreateGraphStorage, initIndexCatalog, etc.)
+    - Extract UnionMetrics and other utility types
+    - Consider extracting protocol handling functions
     - Maintain test coverage at each step
 - **Rationale**: Phase 3 M3.1 estimated at 4-5 hours. Following modularization principle: "Incremental changes - Small, reviewable commits." The server is the core of the system and requires extreme caution per plan guidelines. Dependency issues discovered require resolution before proceeding with full ServerState extraction.
 

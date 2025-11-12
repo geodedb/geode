@@ -25,6 +25,9 @@ const vendor_quic = @import("vendor_quic");
 const logger = @import("../log/logger.zig");
 // Import server state management (M3.1 Phase 3 modularization)
 const server_state = @import("server_state.zig");
+// Import backup manager (M3.1 Phase 3 modularization)
+const backup_manager = @import("backup_manager.zig");
+const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
 // Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
@@ -37,147 +40,8 @@ const CompressionType = backup.CompressionType;
 const BackupType = backup.BackupType;
 const BackupMetadata = backup.BackupMetadata;
 
-// Simplified backup manager for server integration
-const SimplifiedBackupManager = struct {
-    allocator: std.mem.Allocator,
-    config: BackupConfig,
-    backup_dir: []const u8,
-    last_backup_id: u128 = 0,
-
-    pub fn init(allocator: std.mem.Allocator, backup_dir: []const u8, config: BackupConfig) !SimplifiedBackupManager {
-        // Ensure backup directory exists
-        std.fs.cwd().makePath(backup_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
-
-        return .{
-            .allocator = allocator,
-            .config = config,
-            .backup_dir = try allocator.dupe(u8, backup_dir),
-        };
-    }
-
-    pub fn deinit(self: *SimplifiedBackupManager) void {
-        self.allocator.free(self.backup_dir);
-    }
-
-    pub fn createFullBackup(self: *SimplifiedBackupManager) !BackupMetadata {
-        self.last_backup_id += 1;
-        const backup_id = self.last_backup_id;
-        const timestamp = std.time.milliTimestamp();
-
-        // Create backup file path
-        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
-        defer self.allocator.free(backup_path);
-
-        // Create and write backup file
-        const file = try std.fs.cwd().createFile(backup_path, .{});
-        defer file.close();
-
-        // Write simplified backup content
-        var size_bytes: u64 = 0;
-        const header = "GEODE_BACKUP_V2\n";
-        try file.writeAll(header);
-        size_bytes += header.len;
-
-        const metadata_str = try std.fmt.allocPrint(self.allocator, "BACKUP_ID: {x}\nTIMESTAMP: {}\nTYPE: full\nLSN_START: 1000\nLSN_END: 1100\n", .{ backup_id, timestamp });
-        defer self.allocator.free(metadata_str);
-        try file.writeAll(metadata_str);
-        size_bytes += metadata_str.len;
-
-        // Simulate backing up data
-        const data_section = "DATA_SECTION\nSimulated backup data content\nEND_BACKUP\n";
-        try file.writeAll(data_section);
-        size_bytes += data_section.len;
-
-        return BackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = timestamp,
-            .backup_type = .full,
-            .start_lsn = 1000,
-            .end_lsn = 1100,
-            .size_bytes = size_bytes,
-            .compression = self.config.compression,
-            .encrypted = self.config.encryption,
-            .checksum = 0xDEADBEEF,
-            .parent_backup_id = null,
-        };
-    }
-
-    pub fn createIncrementalBackup(self: *SimplifiedBackupManager, _: u64) !BackupMetadata {
-        self.last_backup_id += 1;
-        const backup_id = self.last_backup_id;
-        const timestamp = std.time.milliTimestamp();
-
-        // Create backup file path
-        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/incr_{x}.backup", .{ self.backup_dir, backup_id });
-        defer self.allocator.free(backup_path);
-
-        // Create and write incremental backup file
-        const file = try std.fs.cwd().createFile(backup_path, .{});
-        defer file.close();
-
-        var size_bytes: u64 = 0;
-        const header = "GEODE_BACKUP_V2\n";
-        try file.writeAll(header);
-        size_bytes += header.len;
-
-        const metadata_str = try std.fmt.allocPrint(self.allocator, "BACKUP_ID: {x}\nTIMESTAMP: {}\nTYPE: incremental\nLSN_START: 1100\nLSN_END: 1200\n", .{ backup_id, timestamp });
-        defer self.allocator.free(metadata_str);
-        try file.writeAll(metadata_str);
-        size_bytes += metadata_str.len;
-
-        // Simulate incremental data
-        const data_section = "DATA_SECTION\nIncremental backup data\nEND_BACKUP\n";
-        try file.writeAll(data_section);
-        size_bytes += data_section.len;
-
-        return BackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = timestamp,
-            .backup_type = .incremental,
-            .start_lsn = 1100,
-            .end_lsn = 1200,
-            .size_bytes = size_bytes,
-            .compression = self.config.compression,
-            .encrypted = self.config.encryption,
-            .checksum = 0xDEADBEEF,
-            .parent_backup_id = self.last_backup_id - 1,
-        };
-    }
-
-    pub fn restoreToPointInTime(self: *SimplifiedBackupManager, target_time: i64, restore_dir: []const u8) !void {
-        _ = target_time;
-
-        // Ensure restore directory exists
-        std.fs.cwd().makePath(restore_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
-
-        // Simulate restore process by creating a restore marker file
-        const restore_marker_path = try std.fmt.allocPrint(self.allocator, "{s}/restore_complete.marker", .{restore_dir});
-        defer self.allocator.free(restore_marker_path);
-
-        const marker_file = try std.fs.cwd().createFile(restore_marker_path, .{});
-        defer marker_file.close();
-
-        try marker_file.writeAll("Restore completed successfully\n");
-    }
-
-    pub fn runRetention(self: *SimplifiedBackupManager) !void {
-        // Simplified retention - just log that it would run
-        _ = self;
-        // In a real implementation, this would clean up old backup files
-    }
-
-    pub fn loadMetadata(self: *SimplifiedBackupManager) !void {
-        // Simplified metadata loading
-        _ = self;
-        // In a real implementation, this would load backup metadata from disk
-    }
-};
+// Removed: SimplifiedBackupManager now imported from backup_manager module
+// Original code was at lines 41-180 (~140 lines), now extracted to backup_manager.zig
 
 const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_size: ?usize };
 
