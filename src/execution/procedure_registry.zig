@@ -7,7 +7,6 @@
 /// Extracted as part of Phase 2, M2.2 of the modularization effort.
 /// Note: M2.2 was adapted from "Pattern Comprehension" to "Procedure Registry"
 /// to match the actual code structure (95% of the original file was procedure handlers).
-
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
@@ -15,6 +14,13 @@ const graph_store = @import("../graph_store.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
+const execution_helpers = @import("execution_helpers.zig"); // added for extractNodeId
+const executeBFS = execution.executeBFS;
+const executeDFS = execution.executeDFS;
+const executeDijkstra = execution.executeDijkstra;
+const filterYieldColumns = execution_helpers.filterYieldColumns;
+const extractMapParameter = execution_helpers.extractMapParameter;
+const extractU32FromMap = execution_helpers.extractU32FromMap;
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const ExecutionError = execution.ExecutionError;
@@ -58,7 +64,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
                 var name_parts = try std.ArrayList(u8).initCapacity(allocator, 0);
                 defer name_parts.deinit(allocator);
 
-                try buildMemberPath(allocator, call.callee, &name_parts);
+                try recursion_handler.buildMemberPath(allocator, call.callee, &name_parts);
                 break :blk try name_parts.toOwnedSlice(allocator);
             }
             break :blk "unknown";
@@ -3557,7 +3563,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             else => &[_]*ast.Expr{},
         };
 
-        const start_id = extractNodeId(args, 0, context) orelse return error.MissingStartNode;
+        const start_id = execution_helpers.extractNodeId(args, 0, context) orelse return error.MissingStartNode;
         const config_map = extractMapParameter(args, 1);
         const max_depth = if (config_map) |map| extractU32FromMap(map, "maxDepth", 10) else 10;
 
@@ -3580,7 +3586,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             else => &[_]*ast.Expr{},
         };
 
-        const start_id = extractNodeId(args, 0, context) orelse return error.MissingStartNode;
+        const start_id = execution_helpers.extractNodeId(args, 0, context) orelse return error.MissingStartNode;
         const config_map = extractMapParameter(args, 1);
         const max_depth = if (config_map) |map| extractU32FromMap(map, "maxDepth", 10) else 10;
 
@@ -3604,8 +3610,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             else => &[_]*ast.Expr{},
         };
 
-        const start_id = extractNodeId(args, 0, context) orelse return error.MissingStartNode;
-        const end_id = extractNodeId(args, 1, context) orelse return error.MissingEndNode;
+        const start_id = execution_helpers.extractNodeId(args, 0, context) orelse return error.MissingStartNode;
+        const end_id = execution_helpers.extractNodeId(args, 1, context) orelse return error.MissingEndNode;
 
         // Third parameter can be a string (weight property) or a config map
         var weight_property: []const u8 = "weight";
@@ -3615,7 +3621,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
                 weight_property = args[2].String;
             } else {
                 // Try to extract as map
-                const config_map = extractMapParameter(args, 2);
+                const config_map = execution_helpers.extractMapParameter(args, 2);
                 if (config_map) |map| {
                     for (map) |prop| {
                         if (std.mem.eql(u8, prop.key, "relationshipWeightProperty")) {

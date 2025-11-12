@@ -81,6 +81,20 @@ pub fn status() KeyStatus {
     return KeyStatus{ .loaded = true, .key_id = dummy };
 }
 
+// Global rotation state (added to fix undeclared identifier usage in evaluation and cleanup functions)
+const RotationState = struct {
+    current_generation: i64,
+    last_rotation_time: i64,
+    rotation_in_progress: bool,
+    scheduled_rotation: ?i64,
+};
+var rotation_state: RotationState = .{
+    .current_generation = 1,
+    .last_rotation_time = std.time.milliTimestamp(),
+    .rotation_in_progress = false,
+    .scheduled_rotation = null,
+};
+
 // Phase 6: TDE Core Functions
 
 /// Initialize key hierarchy with master/data/wal keys

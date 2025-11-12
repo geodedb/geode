@@ -168,9 +168,9 @@ pub const MultiSink = struct {
     sinks: std.ArrayList(SinkInterface),
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) MultiSink {
+    pub fn init(allocator: std.mem.Allocator) !MultiSink {
         return MultiSink{
-            .sinks = std.ArrayList(SinkInterface).init(allocator),
+            .sinks = try std.ArrayList(SinkInterface).initCapacity(allocator, 4),
             .allocator = allocator,
         };
     }
@@ -179,11 +179,11 @@ pub const MultiSink = struct {
         for (self.sinks.items) |sink| {
             sink.close();
         }
-        self.sinks.deinit();
+        self.sinks.deinit(self.allocator);
     }
 
     pub fn addSink(self: *MultiSink, sink: SinkInterface) !void {
-        try self.sinks.append(sink);
+        try self.sinks.append(self.allocator, sink); // append expects allocator first
     }
 
     pub fn interface(self: *MultiSink) SinkInterface {

@@ -65,9 +65,9 @@ pub fn formatSyslog(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
     const priority = 16 * 8 + severity; // local0 facility
 
     var buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
-    errdefer buf.deinit();
+    errdefer buf.deinit(allocator);
 
-    const writer = buf.writer();
+    const writer = buf.writer(allocator);
     // RFC3164 format: <priority>timestamp hostname tag[pid]: message
     const timestamp = std.time.milliTimestamp();
     const datetime = @divFloor(timestamp, 1000);
@@ -98,10 +98,10 @@ pub fn formatSyslog(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
 ///
 /// Caller owns the returned memory.
 pub fn formatJson(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = try std.ArrayList(u8).initCapacity(allocator, 256);
     errdefer buf.deinit();
 
-    const writer = buf.writer();
+    const writer = buf.writer(allocator);
     try writer.print("{{\"timestamp\":{d},\"event_type\":\"{s}\",\"resource\":\"{s}\",\"action\":\"{s}\"", .{
         event.timestamp,
         @tagName(event.event_type),

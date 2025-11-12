@@ -417,7 +417,7 @@ pub fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, w
 test "buildMemberPath - simple identifier" {
     const testing = std.testing;
 
-    var ident_expr = ast.Expr{ .Ident = .{ .orig = "foo", .lower = "foo" } };
+    var ident_expr = ast.Expr{ .Ident = .{ .orig = "foo", .cnf = "FOO" } };
     var result = try std.ArrayList(u8).initCapacity(testing.allocator, 0);
     defer result.deinit(testing.allocator);
 
@@ -429,7 +429,7 @@ test "buildMemberPath - simple identifier" {
 test "buildMemberPath - member expression" {
     const testing = std.testing;
 
-    var ident_expr = ast.Expr{ .Ident = .{ .orig = "a", .lower = "a" } };
+    var ident_expr = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var member_expr = ast.Expr{ .Member = .{ .target = &ident_expr, .field = "b" } };
 
     var result = try std.ArrayList(u8).initCapacity(testing.allocator, 0);
@@ -457,10 +457,10 @@ test "BFS - single node" {
     defer store.deinit();
 
     // Add single node
-    try store.addNode(1, std.StringHashMap(eval.Value).init(testing.allocator));
+    _ = try store.createNode(&[_][]const u8{});
 
     const columns = &[_][]const u8{"path"};
-    const result = try executeBFS(testing.allocator, &store, columns, 1, 0);
+    const result = try executeBFS(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 0);
     defer {
         for (result.rows) |row| {
             testing.allocator.free(row);
@@ -501,11 +501,12 @@ test "Dijkstra - no path" {
     defer store.deinit();
 
     // Add two disconnected nodes
-    try store.addNode(1, std.StringHashMap(eval.Value).init(testing.allocator));
-    try store.addNode(2, std.StringHashMap(eval.Value).init(testing.allocator));
+    const n1 = try store.createNode(&[_][]const u8{});
+    const n2 = try store.createNode(&[_][]const u8{});
+    _ = n1; _ = n2;
 
     const columns = &[_][]const u8{ "path", "distance" };
-    const result = try executeDijkstra(testing.allocator, &store, columns, 1, 2, "weight");
+    const result = try executeDijkstra(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 2, "weight"); // start_id=1 end_id=2 OK
     defer {
         for (result.rows) |row| {
             testing.allocator.free(row);

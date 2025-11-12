@@ -4,8 +4,8 @@
 /// cryptographically secure random nonces as required by NIST SP 800-38D.
 ///
 /// Extracted as part of Phase 1, M1.3 of the modularization effort.
-
 const std = @import("std");
+const testing = std.testing; // global for test blocks
 
 // CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE Nonce Generation"; ASPECT=NonceGeneration; STATUS=TESTED; TEST=tde_tests; OWNER=security; UPDATED=2025-11-12
 
@@ -104,7 +104,7 @@ pub fn verifyNonce(nonce: []const u8) !void {
 // =============================================================================
 
 test "NonceGenerator - Random mode" {
-    const testing = std.testing;
+    _ = std.testing;
 
     var gen = NonceGenerator.init(.Random);
 
@@ -119,7 +119,7 @@ test "NonceGenerator - Random mode" {
 }
 
 test "NonceGenerator - Deterministic mode" {
-    const testing = std.testing;
+    _ = std.testing;
 
     var gen = NonceGenerator.init(.Deterministic);
 
@@ -139,7 +139,7 @@ test "NonceGenerator - Deterministic mode" {
 }
 
 test "generateSecureNonce - produces unique nonces" {
-    const testing = std.testing;
+    _ = std.testing;
 
     var nonce1: [NonceBytes]u8 = undefined;
     var nonce2: [NonceBytes]u8 = undefined;
@@ -152,7 +152,7 @@ test "generateSecureNonce - produces unique nonces" {
 }
 
 test "generateDeterministicNonce - produces expected values" {
-    const testing = std.testing;
+    _ = std.testing;
 
     var nonce: [NonceBytes]u8 = undefined;
 
@@ -169,7 +169,7 @@ test "generateDeterministicNonce - produces expected values" {
 }
 
 test "verifyNonce - valid nonce" {
-    const testing = std.testing;
+    _ = std.testing;
 
     var nonce: [NonceBytes]u8 = undefined;
     generateSecureNonce(&nonce);
@@ -178,7 +178,7 @@ test "verifyNonce - valid nonce" {
 }
 
 test "verifyNonce - invalid size" {
-    const testing = std.testing;
+    _ = std.testing;
 
     const nonce = [_]u8{1} ** 10; // Wrong size
 
@@ -186,7 +186,7 @@ test "verifyNonce - invalid size" {
 }
 
 test "verifyNonce - all zeros" {
-    const testing = std.testing;
+    _ = std.testing;
 
     const nonce = [_]u8{0} ** NonceBytes;
 
@@ -194,7 +194,7 @@ test "verifyNonce - all zeros" {
 }
 
 test "NonceGenerator - counter increments" {
-    const testing = std.testing;
+    _ = std.testing;
 
     var gen = NonceGenerator.init(.Deterministic);
 

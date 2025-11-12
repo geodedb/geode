@@ -4,7 +4,6 @@
 /// change events to Apache Kafka topics.
 ///
 /// Extracted as part of Phase 1, M1.2 of the modularization effort.
-
 const std = @import("std");
 const cdc_sinks = @import("../cdc_sinks.zig");
 
@@ -60,7 +59,7 @@ pub const KafkaSink = struct {
     /// Send events to Kafka topic
     pub fn send(self: *KafkaSink, events: []const ChangeEvent) !void {
         _ = self;
-        _ = events;
+
         // TODO: Implement Kafka producer sending
         // This would use a Kafka client library to produce events to the topic
         // For now, this is a placeholder implementation

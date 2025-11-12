@@ -4,7 +4,6 @@
 /// change events to HTTP endpoints via webhooks.
 ///
 /// Extracted as part of Phase 1, M1.2 of the modularization effort.
-
 const std = @import("std");
 const cdc_sinks = @import("../cdc_sinks.zig");
 
@@ -50,7 +49,7 @@ pub const WebhookSink = struct {
     /// Send events to webhook endpoint
     pub fn send(self: *WebhookSink, events: []const ChangeEvent) !void {
         _ = self;
-        _ = events;
+
         // TODO: Implement HTTP webhook sending
         // This would use an HTTP client to POST events to the configured URL
         // For now, this is a placeholder implementation
