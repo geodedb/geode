@@ -183,6 +183,14 @@ pub const SessionConfiguration = struct {
     }
 };
 
+/// Union operation metrics tracking input/output rows and hash table size
+pub const UnionMetrics = struct {
+    left_in: usize,
+    right_in: usize,
+    out: usize,
+    hash_size: ?usize,
+};
+
 // NOTE: ServerState struct extraction deferred due to complex dependency issues discovered:
 // 1. ServerState references mvcc.MVCCManager but mvcc import is commented out in main.zig (line 20)
 // 2. ServerState references query_plan_cache.QueryOptimizer but import is commented out (line 22)

@@ -970,11 +970,18 @@ Circular Dependencies Detected: 2
     - Extracted SessionResetType union (8 lines)
     - Updated server/main.zig to use extracted session types
     - Total extracted: ~147 lines of session management code
-  - **Backup Manager Extraction (Current)**:
+  - **Backup Manager Extraction (Commit 7856edc)**:
     - Extracted SimplifiedBackupManager struct (~140 lines)
     - Created backup_manager.zig module (158 lines)
     - Updated server/main.zig to import from backup_manager module
     - Total extracted: ~136 lines of backup management code
+  - **Index Catalog & UnionMetrics Extraction (Current)**:
+    - Extracted IndexStats struct and index catalog system (~106 lines)
+    - Created index_catalog.zig module (149 lines)
+    - Extracted UnionMetrics struct to server_state.zig (8 lines)
+    - Functions extracted: initIndexCatalog, chooseIndexForPredicate, indexStatsOnInsert, indexStatsOnDelete
+    - Global state extracted: g_index_catalog_map, g_index_catalog_inited, g_disable_catalog, g_selectivity_estimator
+    - Total extracted: ~114 lines of index management code
   - **Conservative Approach**: Given the critical nature of Phase 3 (P0 CRITICAL, highest risk) and the warning about "most complex refactoring", taking incremental approach
   - **Analysis Findings**:
     - ServerState struct at line 358 with 50+ fields
@@ -988,15 +995,19 @@ Circular Dependencies Detected: 2
     - Code at lines 3808-4083 uses mvcc_manager field despite missing import
     - **Implication**: ServerState extraction requires resolving these dependency issues first
   - **Files Created**:
-    - `src/server/server_state.zig` (194 lines) - Support and session types module
+    - `src/server/server_state.zig` (202 lines) - Support, session, and utility types module
     - `src/server/backup_manager.zig` (158 lines) - Simplified backup manager
+    - `src/server/index_catalog.zig` (149 lines) - Index statistics and catalog management
   - **Files Modified**:
-    - `src/server/main.zig` - Reduced from 7,039 to 6,744 lines (-295 lines total, -4.2%)
+    - `src/server/main.zig` - Reduced from 7,039 to 6,652 lines (-387 lines total, -5.5%)
       - Added server_state import (line 27)
-      - Added backup_manager import (lines 28-30)
-      - Replaced type definitions with imports (lines 189-195)
-      - Removed SessionConfiguration code (was lines 194-340, ~147 lines)
-      - Removed SimplifiedBackupManager code (was lines 41-180, ~140 lines)
+      - Added backup_manager import (lines 29-30)
+      - Added index_catalog import (line 32)
+      - Replaced type definitions with imports (lines 54-69)
+      - Removed SessionConfiguration code (~147 lines)
+      - Removed SimplifiedBackupManager code (~140 lines)
+      - Removed IndexStats and index catalog system (~106 lines)
+      - Removed UnionMetrics struct (1 line)
   - **Extracted Types & Modules**:
     - `ServerStateInsertedValue` - MVCC transaction value tracking
     - `CatalogSchema` - Database schema metadata
@@ -1004,8 +1015,11 @@ Circular Dependencies Detected: 2
     - `SessionConfiguration` - Session management with schema, graph, timezone, parameters
     - `SessionParameterValue` - Session parameter value types union
     - `SessionResetType` - Session reset type union
+    - `UnionMetrics` - Union operation metrics tracking
     - `SimplifiedBackupManager` - Backup/restore manager with 6 public methods (init, deinit, createFullBackup, createIncrementalBackup, restoreToPointInTime, runRetention, loadMetadata)
-  - **Status**: Support, session types, and backup manager extracted successfully (~352 lines extracted to 2 modules), ServerState struct extraction blocked by dependency issues
+    - `IndexStats` - Index statistics for cost-based optimization
+    - Index catalog functions: initIndexCatalog, chooseIndexForPredicate, indexStatsOnInsert, indexStatsOnDelete
+  - **Status**: Support types, session management, backup manager, index catalog, and utility types extracted successfully (~466 lines extracted to 3 modules), ServerState struct extraction blocked by dependency issues
   - **Next Steps**:
     - Resolve mvcc and query_plan_cache import issues (blocking)
     - Extract ServerState struct once dependencies resolved (50+ fields, ~110 lines)

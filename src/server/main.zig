@@ -28,6 +28,8 @@ const server_state = @import("server_state.zig");
 // Import backup manager (M3.1 Phase 3 modularization)
 const backup_manager = @import("backup_manager.zig");
 const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
+// Import index catalog (M3.1 Phase 3 modularization)
+const index_catalog = @import("index_catalog.zig");
 // Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
@@ -43,7 +45,7 @@ const BackupMetadata = backup.BackupMetadata;
 // Removed: SimplifiedBackupManager now imported from backup_manager module
 // Original code was at lines 41-180 (~140 lines), now extracted to backup_manager.zig
 
-const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_size: ?usize };
+// Removed: UnionMetrics now imported from server_state module (see below)
 
 // Lightweight server implementing JSON line protocol used by tests.
 // Focus: RETURN queries, UNION (ALL/DISTINCT), GROUP BY aggregation via exec.runGroupedQuery,
@@ -57,6 +59,14 @@ const CatalogGraph = server_state.CatalogGraph;
 const SessionConfiguration = server_state.SessionConfiguration;
 const SessionParameterValue = server_state.SessionParameterValue;
 const SessionResetType = server_state.SessionResetType;
+// Import union metrics (M3.1 Phase 3 utility types extraction)
+const UnionMetrics = server_state.UnionMetrics;
+// Import index catalog (M3.1 Phase 3 index management extraction)
+const IndexStats = index_catalog.IndexStats;
+const initIndexCatalog = index_catalog.initIndexCatalog;
+const chooseIndexForPredicate = index_catalog.chooseIndexForPredicate;
+const indexStatsOnInsert = index_catalog.indexStatsOnInsert;
+const indexStatsOnDelete = index_catalog.indexStatsOnDelete;
 
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
@@ -189,112 +199,10 @@ const F_UNION_PHASES = "U:UnionPhaseTimings";
 const F_ADAPT_EST = "U:AdaptiveEstimatesPlanned"; // groundwork flag (no behavior change yet)
 const F_HEUR_INDEX = "U:HeuristicIndexSelection"; // emitted when NodeIndexScan chosen via heuristic
 
-// Basic in-memory index catalog (phase 2 cost stub).
-const IndexStats = struct {
-    name: []const u8,
-    key: []const u8,
-    total_rows: usize,
-    distinct_keys: usize,
-    fn eqSelectivity(self: IndexStats) f64 {
-        if (self.distinct_keys == 0) return 1.0;
-        return 1.0 / @as(f64, @floatFromInt(self.distinct_keys));
-    }
-};
-
-var g_index_catalog_map: std.StringHashMap(IndexStats) = undefined; // key -> stats
-var g_index_catalog_inited = false;
-var g_disable_catalog = false; // env toggle
-var g_selectivity_estimator: ?*SelectivityEstimator = null;
-
-fn initIndexCatalog(allocator: std.mem.Allocator) void {
-    if (g_index_catalog_inited) return;
-    g_index_catalog_map = std.StringHashMap(IndexStats).init(allocator);
-
-    // Initialize selectivity estimator
-    const estimator = allocator.create(SelectivityEstimator) catch return;
-    estimator.* = SelectivityEstimator.init(allocator);
-    g_selectivity_estimator = estimator;
-
-    // Seed with synthetic stats for x,y columns
-    g_index_catalog_map.put("x", IndexStats{ .name = "idx_x", .key = "x", .total_rows = 1000, .distinct_keys = 200 }) catch {};
-    g_index_catalog_map.put("y", IndexStats{ .name = "idx_y", .key = "y", .total_rows = 1000, .distinct_keys = 500 }) catch {};
-
-    // Update selectivity estimator with same stats
-    if (g_selectivity_estimator) |est| {
-        est.updateStats("x", 1000, 200, 10) catch {};
-        est.updateStats("y", 1000, 500, 5) catch {};
-    }
-
-    g_index_catalog_inited = true;
-}
-
-fn chooseIndexForPredicate(allocator: std.mem.Allocator, predicate_expr: ?*const anyopaque, has_equality: bool, est_rows: usize) ?IndexStats {
-    _ = allocator; // currently unused for phase 2 stub
-    _ = predicate_expr; // future: inspect to derive property name
-    if (g_disable_catalog or !has_equality) return null;
-
-    // Use SelectivityEstimator if available for more sophisticated cost-based decision
-    if (g_selectivity_estimator) |estimator| {
-        var best: ?IndexStats = null;
-        var best_cost: f64 = @as(f64, @floatFromInt(est_rows)); // table scan cost
-
-        var it = g_index_catalog_map.iterator();
-        while (it.next()) |entry| {
-            const st = entry.value_ptr.*;
-            const index_cost = estimator.estimateIndexCost(st.key, .Equality, est_rows);
-            if (index_cost < best_cost * 0.9) { // require at least 10% benefit
-                best = st;
-                best_cost = index_cost;
-            }
-        }
-        return best;
-    }
-
-    // Fallback to original simple heuristic
-    var best: ?IndexStats = null;
-    var it = g_index_catalog_map.iterator();
-    while (it.next()) |entry| {
-        const st = entry.value_ptr.*;
-        if (best == null or st.eqSelectivity() < best.?.eqSelectivity()) best = st;
-    }
-    if (best) |b| {
-        // Very naive cost: full scan cost = est_rows, index cost = selectivity * total_rows + log(total_rows)
-        const scan_cost = @as(f64, @floatFromInt(est_rows));
-        const idx_rows = b.eqSelectivity() * @as(f64, @floatFromInt(b.total_rows));
-        const idx_cost = idx_rows + std.math.log(f64, 2, @as(f64, @floatFromInt(b.total_rows + 1)));
-        if (idx_cost < scan_cost * 0.9) { // require at least 10% benefit
-            return b;
-        }
-    }
-    return null;
-}
-
-// Maintenance: adjust stats for insert/delete operations (prototype; real impl needs per-index key detection).
-fn indexStatsOnInsert(key: []const u8) void {
-    if (!g_index_catalog_inited or g_disable_catalog) return;
-    if (g_index_catalog_map.getPtr(key)) |st| {
-        st.total_rows += 1;
-        // naive: assume new distinct every 5 inserts
-        if ((st.total_rows % 5) == 0) st.distinct_keys += 1;
-
-        // Update selectivity estimator
-        if (g_selectivity_estimator) |est| {
-            est.updateStats(key, st.total_rows, st.distinct_keys, 0) catch {};
-        }
-    }
-}
-fn indexStatsOnDelete(key: []const u8) void {
-    if (!g_index_catalog_inited or g_disable_catalog) return;
-    if (g_index_catalog_map.getPtr(key)) |st| {
-        if (st.total_rows > 0) st.total_rows -= 1;
-        // naive: distinct unaffected for prototype
-
-        // Update selectivity estimator
-        if (g_selectivity_estimator) |est| {
-            est.updateStats(key, st.total_rows, st.distinct_keys, 0) catch {};
-        }
-    }
-}
+// Removed: Index catalog system now in index_catalog module (M3.1 Phase 3 index management extraction)
+// Original code was at lines 202-307 (~106 lines), now extracted to index_catalog.zig
+// Includes: IndexStats struct, global catalog state, initIndexCatalog(), chooseIndexForPredicate(),
+// indexStatsOnInsert(), indexStatsOnDelete() - all imported above via const aliasing
 
 // Helper returns correct null policy flag pointer.
 inline fn nullsFlag() []const u8 {
