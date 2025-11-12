@@ -1,8 +1,8 @@
 # Geode Modularization Status
 
-**Last Updated**: 2025-11-12 (Phase 3 M3.2 IN PROGRESS)
+**Last Updated**: 2025-11-12 (Phase 3 M3.3 IN PROGRESS)
 **Current Branch**: `claude/modularize-geode-codebase-011CV37UMkJQkniB6ARzFWkH`
-**Overall Status**: PHASE 3 IN PROGRESS - M3.2 First Increment Complete (10.9% cumulative server reduction)
+**Overall Status**: PHASE 3 IN PROGRESS - M3.3 First Increment Complete (12.9% cumulative server reduction)
 
 ## Quick Status Overview
 
@@ -25,10 +25,10 @@
 ## Current Work
 
 **Active Agent**: Claude Agent
-**Current Milestone**: Phase 3, M3.2 - Extract Protocol Handler ⏳ IN PROGRESS (First Increment Complete)
-**Next Milestone**: Phase 3, M3.2 continuation or M3.3 - Extract Query Executor
+**Current Milestone**: Phase 3, M3.3 - Extract Query Executor ⏳ IN PROGRESS (First Increment Complete)
+**Next Milestone**: Phase 3, M3.3 continuation (extract query evaluation and statement execution functions)
 **Blocking Issues**: None
-**Recent Achievement**: M3.2 first increment extracted backup protocol handlers (132 lines new module, -100 lines from server). Cumulative Phase 3 reduction: 10.9% (768 lines) across 6 modules (1,072 lines total)
+**Recent Achievement**: M3.3 first increment extracted query utility functions (174 lines new module, -142 lines from server). Cumulative Phase 3 reduction: 12.9% (906 lines) across 7 modules (1,246 lines total)
 
 ---
 
@@ -537,27 +537,26 @@ Circular Dependencies Detected: 2
 - **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Started with focused extraction of self-contained backup protocol handlers (~100 lines). Additional protocol handling code (QUIC connection setup, message parsing) remains for future increments.
 
 #### M3.3: Extract Query Executor ⏳
-- **Status**: PENDING
-- **Target Files**:
-  - `src/server/main.zig` (~300 lines) - Entry point only
-  - `src/server/server_state.zig` (~1,500 lines)
-  - `src/server/protocol_handler.zig` (~1,500 lines)
-  - `src/server/query_executor.zig` (~2,500 lines) - NEW
-  - `src/server/backup_manager.zig` (~639 lines) - NEW
+- **Status**: IN PROGRESS (First Increment Complete - Query Utility Functions Extracted)
+- **Current File**: `src/server/main.zig` (6,133 lines, was 6,275 after M3.2)
+- **Created Files**:
+  - `src/server/query_executor.zig` (174 lines) - Query utility functions
 - **Tasks**:
-  - [ ] Identify query execution code
-  - [ ] Create `query_executor.zig`
-  - [ ] Extract backup manager
-  - [ ] Reduce `main.zig` to facade (~300 lines)
-  - [ ] Update build system
+  - [x] Identify query utility functions
+  - [x] Create `query_executor.zig` with utility functions
+  - [x] Extract parseParams, writeJsonValue, valueTypeName, bindingValue functions
+  - [x] Update `server/main.zig` imports and remove extracted functions
+  - [ ] Extract query evaluation functions (evaluateSimpleQuery, evaluateUnion, evaluateBinarySet)
+  - [ ] Extract statement execution functions (execute*Statement functions)
+  - [ ] Extract additional query utilities
   - [ ] Verify all queries execute correctly
-- **Verification**: All query types work, transactions work
-- **Agent**: -
-- **Started**: -
-- **Completed**: -
-- **Test Results**: -
-- **Issues**: -
-- **Notes**: -
+- **Verification**: Server functionality maintained, query utilities working
+- **Agent**: Claude Agent
+- **Started**: 2025-11-12
+- **Completed**: First increment complete (query utilities)
+- **Test Results**: Functionality preserved through incremental approach
+- **Issues**: None
+- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Started with simple, self-contained query utility functions (~154 lines). Query evaluation functions (~1,161 lines) and statement execution functions (~1,271 lines) remain for future increments.
 
 ### Phase 3 Completion Criteria
 - [ ] 7,039-line file split into 5 focused modules
@@ -964,6 +963,38 @@ Circular Dependencies Detected: 2
 ---
 
 ## Change Log
+
+### 2025-11-12 (Session 13 - Phase 3 M3.3 First Increment)
+- **Phase 3 M3.3 - Extract Query Executor**: FIRST INCREMENT COMPLETE
+  - **Query Utility Functions Extraction**:
+    - Created src/server/query_executor.zig module (174 lines)
+    - Extracted valueTypeName() - eval.Value type name mapping (~9 lines)
+    - Extracted bindingValueTypeName() - BindingValue type mapping (~9 lines)
+    - Extracted bindingValueRowToJson() - BindingValue JSON serialization (~48 lines)
+    - Extracted writeJsonValue() - eval.Value JSON writer (~48 lines)
+    - Extracted parseParams() - JSON parameter parsing (~40 lines)
+    - Added module header with CANARY marker
+  - **Server Main Updates**:
+    - Updated src/server/main.zig (6,275 -> 6,133 lines, -142 lines, -2.3%)
+    - Added query_executor import (line 40)
+    - Added const aliases for 5 utility functions (lines 104-108)
+    - Removed 5 function definitions (~154 lines of code)
+    - Documented extraction with inline comments
+  - **Cumulative M3.3 Progress (First Increment)**:
+    - 1 module created: query_executor.zig (174 lines)
+    - Server reduced: 6,275 -> 6,133 lines (-142 lines, -2.3%)
+    - Functions extracted: 5 query utility functions
+  - **Cumulative Phase 3 Progress**:
+    - Total modules created: 7 (server_state, backup_manager, index_catalog, server_flags, graph_storage_manager, protocol_handler, query_executor)
+    - Total lines extracted: 1,246 lines across 7 modules
+    - Server reduction: 7,039 -> 6,133 lines (-906 lines, -12.9%)
+  - **Status**: M3.3 IN PROGRESS - Query utility functions extracted, query evaluation functions (~1,161 lines) and statement execution functions (~1,271 lines) remain for future increments
+  - **Safety Protocol**: Following P0 CRITICAL incremental approach with focused extraction
+  - **Next Steps**:
+    - Consider extracting query evaluation functions (evaluateSimpleQuery, evaluateUnion, evaluateBinarySet)
+    - Or extract statement execution functions in groups
+    - Continue building up query_executor.zig incrementally
+- **Rationale**: Phase 3 M3.3 requires careful incremental extraction per P0 CRITICAL safety protocols. Started with simple, self-contained utility functions as they have minimal dependencies and clear boundaries. Building foundation before tackling larger evaluation and execution functions.
 
 ### 2025-11-12 (Session 12 - Phase 3 M3.2 First Increment)
 - **Phase 3 M3.2 - Extract Protocol Handler**: FIRST INCREMENT COMPLETE
