@@ -30,6 +30,8 @@ const backup_manager = @import("backup_manager.zig");
 const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
 // Import index catalog (M3.1 Phase 3 modularization)
 const index_catalog = @import("index_catalog.zig");
+// Import server flags (M3.1 Phase 3 modularization)
+const server_flags = @import("server_flags.zig");
 // Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
@@ -67,6 +69,21 @@ const initIndexCatalog = index_catalog.initIndexCatalog;
 const chooseIndexForPredicate = index_catalog.chooseIndexForPredicate;
 const indexStatsOnInsert = index_catalog.indexStatsOnInsert;
 const indexStatsOnDelete = index_catalog.indexStatsOnDelete;
+// Import server flags (M3.1 Phase 3 flag utilities extraction)
+const F_ILLEGAL = server_flags.F_ILLEGAL;
+const F_PROPERTY_ORDER = server_flags.F_PROPERTY_ORDER;
+const F_NULLS_FIRST = server_flags.F_NULLS_FIRST;
+const F_NULLS_LAST = server_flags.F_NULLS_LAST;
+const F_TIEBREAK = server_flags.F_TIEBREAK;
+const F_DISTINCT_UNORDERED = server_flags.F_DISTINCT_UNORDERED;
+const F_UNION_PHASES = server_flags.F_UNION_PHASES;
+const F_ADAPT_EST = server_flags.F_ADAPT_EST;
+const F_HEUR_INDEX = server_flags.F_HEUR_INDEX;
+const nullsFlag = server_flags.nullsFlag;
+const paginationStreamScaffold = server_flags.paginationStreamScaffold;
+const initImplDefinedFlags = server_flags.initImplDefinedFlags;
+const computeBaseFlags = server_flags.computeBaseFlags;
+const computeFlagsExtended = server_flags.computeFlagsExtended;
 
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
@@ -182,38 +199,17 @@ const DEBUG_PROFILE = false; // default off; enable locally when investigating P
 // Tracking allocator (existing) provides basic net/peak metrics for PROFILE.
 const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 
-// Dynamic flag construction originally used stack slices causing dangling references.
-// Replace with static precomputed combinations (NULLs policy toggled at runtime where needed).
-var g_nulls_last: bool = false; // default NullsFirstPolicy unless overridden by env
-var g_order_keys_expr: bool = true; // enable property-based ordering by default
-// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=IllegalOrderKeyPolicy; STATUS=TESTED; TEST=TestGQL_IllegalOrderKey; OWNER=planner; UPDATED=2025-09-26
-
-// Base flag strings (shared)
-const F_ILLEGAL = "I:IllegalOrderKeyPolicy=ident-only";
-const F_PROPERTY_ORDER = "I:PropertyOrderingEnabled";
-const F_NULLS_FIRST = "U:NullsFirstPolicy";
-const F_NULLS_LAST = "U:NullsLastPolicy";
-const F_TIEBREAK = "U:OrderTiebreak=LexJSON";
-const F_DISTINCT_UNORDERED = "U:DistinctOutputUnordered";
-const F_UNION_PHASES = "U:UnionPhaseTimings";
-const F_ADAPT_EST = "U:AdaptiveEstimatesPlanned"; // groundwork flag (no behavior change yet)
-const F_HEUR_INDEX = "U:HeuristicIndexSelection"; // emitted when NodeIndexScan chosen via heuristic
+// Removed: Flag constants and utilities now in server_flags module (M3.1 Phase 3 flag utilities extraction)
+// Original code was at lines 202-236 (~35 lines), now extracted to server_flags.zig
+// Includes: Flag constants (F_ILLEGAL, F_PROPERTY_ORDER, F_NULLS_FIRST, F_NULLS_LAST, F_TIEBREAK,
+// F_DISTINCT_UNORDERED, F_UNION_PHASES, F_ADAPT_EST, F_HEUR_INDEX), global flag state
+// (flags_buf_base, flags_buf_ext, g_nulls_last, g_order_keys_expr, g_adapt_estimates,
+// g_estimate_adjust_factor), and helper functions (nullsFlag) - all imported above via const aliasing
 
 // Removed: Index catalog system now in index_catalog module (M3.1 Phase 3 index management extraction)
-// Original code was at lines 202-307 (~106 lines), now extracted to index_catalog.zig
+// Original code was ~106 lines, now extracted to index_catalog.zig
 // Includes: IndexStats struct, global catalog state, initIndexCatalog(), chooseIndexForPredicate(),
 // indexStatsOnInsert(), indexStatsOnDelete() - all imported above via const aliasing
-
-// Helper returns correct null policy flag pointer.
-inline fn nullsFlag() []const u8 {
-    return if (g_nulls_last) F_NULLS_LAST else F_NULLS_FIRST;
-}
-
-// Expanded base buffer to accommodate impl-defined findings (e.g., ZeroLengthPathExcluded)
-var flags_buf_base: [12][]const u8 = undefined; // room for adaptive + impl-defined additions
-var flags_buf_ext: [7][]const u8 = undefined; // room for adaptive + union phases + deprecation
-var g_adapt_estimates: bool = false; // env or future CLI toggled
-var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive algorithm enabled
 
 // Global graph storage singleton (temporary - should be persistent)
 var g_graph_storage: ?*graph_exec.GraphStorage = null;
@@ -222,32 +218,11 @@ var g_mvcc_manager: ?*mvcc.MVCCManager = null;
 // Global data directory for persistence
 var g_data_dir: ?[]const u8 = null;
 
-// Implementation-defined flag cache (codes only). Allocated once on first use.
-var g_impl_defined_codes: [][]const u8 = &.{};
-var g_impl_defined_inited: bool = false;
-
-// Pagination streaming scaffold (S-018): introduce a stub to emit incremental pages in future slices.
-// Current implementation writes full result; this stub records an intent and adds CANARY evidence.
-// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-23
-fn paginationStreamScaffold(total_rows: usize, page_size: usize) bool {
-    // Return true if streaming would produce multiple pages (future: drive incremental emission loop)
-    if (page_size == 0) return false;
-    return total_rows > page_size;
-}
-
-fn initImplDefinedFlags(allocator: std.mem.Allocator) void {
-    if (g_impl_defined_inited) return;
-    if (impl_flagger.collect(allocator, .{ .zero_length_paths_excluded = true, .collation_binary_default = true, .null_order_policy_default = true })) |findings| {
-        // Extract codes slice
-        const codes = allocator.alloc([]const u8, findings.len) catch return;
-        var i: usize = 0;
-        while (i < findings.len) : (i += 1) codes[i] = findings[i].code;
-        g_impl_defined_codes = codes;
-        g_impl_defined_inited = true;
-    } else |_| {
-        return; // leave empty on failure
-    }
-}
+// Removed: Implementation-defined flag cache and related functions now in server_flags module
+// Original: g_impl_defined_codes, g_impl_defined_inited variables (~2 lines)
+// Original: paginationStreamScaffold() function (~6 lines)
+// Original: initImplDefinedFlags() function (~14 lines)
+// Total extracted: ~22 lines to server_flags.zig module
 
 fn getOrCreateMVCCManager(allocator: std.mem.Allocator) *mvcc.MVCCManager {
     if (g_mvcc_manager) |mgr| {
@@ -511,28 +486,8 @@ fn initializeSampleGraph(allocator: std.mem.Allocator, graph: *graph_exec.GraphS
     try graph.setEdgeProperty(allocator, e3, "department", .{ .String = "Engineering" });
 }
 
-fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
-    _ = ordered;
-    _ = distinct;
-    // Use appropriate flag based on property ordering setting
-    flags_buf_base[0] = if (g_order_keys_expr) F_PROPERTY_ORDER else F_ILLEGAL;
-    return flags_buf_base[0..1];
-}
-
-fn computeFlagsExtended(ordered: bool, distinct: bool, union_phases: bool) []const []const u8 {
-    const base = computeBaseFlags(ordered, distinct);
-    var i: usize = 0;
-    while (i < base.len) : (i += 1) flags_buf_ext[i] = base[i];
-    var end: usize = base.len;
-    if (union_phases) {
-        flags_buf_ext[end] = F_UNION_PHASES;
-        end += 1;
-    }
-    // Deprecation flag for wal_skip_ratio legacy key always appended (profile context check later could refine)
-    flags_buf_ext[end] = "U:WalSkipRatioDeprecated";
-    end += 1;
-    return flags_buf_ext[0..end];
-}
+// Removed: computeBaseFlags() and computeFlagsExtended() functions now in server_flags module
+// Original code was ~22 lines, now extracted to server_flags.zig and imported above
 
 fn execInsertValue(state: *ServerState, expr_val: eval.Value) !void {
     var tmp: [128]u8 = undefined; // fixed buffer for small literals
