@@ -90,7 +90,7 @@ const RotationState = struct {
 };
 var rotation_state: RotationState = .{
     .current_generation = 1,
-    .last_rotation_time = std.time.milliTimestamp(),
+    .last_rotation_time = 0, // Initialize to 0, will be set on first use
     .rotation_in_progress = false,
     .scheduled_rotation = null,
 };
@@ -98,45 +98,22 @@ var rotation_state: RotationState = .{
 // Phase 6: TDE Core Functions
 
 /// Initialize key hierarchy with master/data/wal keys
-pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !struct {
-    master_key_id: []const u8,
-    data_keys: u32,
-    wal_keys: u32,
-    backup_keys: u32,
-} {
-    return key_manager.initializeKeyHierarchy(allocator);
+pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !key_manager.KeyHierarchyResult {
+    return try key_manager.initializeKeyHierarchy(allocator);
 }
 
 /// Rotate encryption keys with zero-downtime migration
-pub fn rotateKeys(allocator: std.mem.Allocator) !struct {
-    old_key_id: []const u8,
-    new_key_id: []const u8,
-    records_migrated: u64,
-    duration_ms: u64,
-} {
+pub fn rotateKeys(allocator: std.mem.Allocator) !key_manager.RotateKeysResult {
     return key_manager.rotateKeys(allocator, flag().test_override.load(.acquire));
 }
 
 /// Get comprehensive encryption status across all components
-pub fn getEncryptionStatus(allocator: std.mem.Allocator) !struct {
-    enabled: bool,
-    key_loaded: bool,
-    data_encrypted: bool,
-    wal_encrypted: bool,
-    backups_encrypted: bool,
-    algorithm: []const u8,
-    key_length: u32,
-} {
+pub fn getEncryptionStatus(allocator: std.mem.Allocator) !key_manager.EncryptionStatusResult {
     return key_manager.getEncryptionStatus(allocator, enabled(), flag().test_override.load(.acquire));
 }
 
 /// Configure KMS integration for key management
-pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !struct {
-    provider_name: []const u8,
-    configured: bool,
-    endpoint: []const u8,
-    test_result: []const u8,
-} {
+pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !key_manager.ConfigureKMSResult {
     return key_manager.configureKMS(allocator, provider);
 }
 
@@ -392,22 +369,12 @@ pub fn configureKeyProvider(allocator: std.mem.Allocator, provider: []const u8) 
 }
 
 /// Derive data encryption key from master key
-pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !struct {
-    key_id: u32,
-    key_hash: []const u8,
-    key_type: []const u8,
-    derivation_method: []const u8,
-} {
+pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !key_manager.DeriveDataKeyResult {
     return key_manager.deriveDataKey(allocator, key_id);
 }
 
 /// Derive WAL encryption key from master key
-pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !struct {
-    segment_id: u32,
-    key_hash: []const u8,
-    key_strength_bits: u32,
-    rotation_required: bool,
-} {
+pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !key_manager.DeriveWalKeyResult {
     return key_manager.deriveWalKey(allocator, wal_segment);
 }
 
@@ -529,30 +496,17 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
 pub const KeyProvider = key_manager.KeyProvider;
 
 /// Configure key provider
-pub fn configureProvider(allocator: std.mem.Allocator, provider_type: []const u8) !struct {
-    provider_type: []const u8,
-    status: []const u8,
-    key_source: []const u8,
-    mock_endpoint: ?[]const u8,
-} {
+pub fn configureProvider(allocator: std.mem.Allocator, provider_type: []const u8) !key_manager.ConfigureProviderResult {
     return key_manager.configureProvider(allocator, provider_type);
 }
 
 /// Get current rotation state
-pub fn getRotationState(allocator: std.mem.Allocator) !struct {
-    current_generation: i64,
-    last_rotation_time: []const u8,
-    rotation_in_progress: bool,
-    scheduled_rotation: ?i64,
-} {
+pub fn getRotationState(allocator: std.mem.Allocator) !key_manager.GetRotationStateResult {
     return key_manager.getRotationState(allocator);
 }
 
 /// Configure key rotation schedule
-pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !struct {
-    status: []const u8,
-    next_rotation_time: []const u8,
-} {
+pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !key_manager.ConfigureRotationResult {
     return key_manager.configureRotation(allocator, max_age_hours);
 }
 

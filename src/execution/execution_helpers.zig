@@ -79,7 +79,7 @@ pub fn extractNodeId(args: []const *ast.Expr, arg_idx: usize, context: Execution
 pub fn filterYieldColumns(allocator: std.mem.Allocator, result: ExecutionResult, yield_items: []ast.ReturnItem) !ExecutionResult {
     // Build list of requested column names
     var requested_columns = try std.ArrayList([]const u8).initCapacity(allocator, yield_items.len);
-    defer requested_columns.deinit();
+    defer requested_columns.deinit(allocator);
 
     for (yield_items) |item| {
         const col_name = item.alias orelse switch (item.expr) {
@@ -87,17 +87,17 @@ pub fn filterYieldColumns(allocator: std.mem.Allocator, result: ExecutionResult,
             .Member => |member| member.field,
             else => "column",
         };
-        try requested_columns.append(col_name);
+        try requested_columns.append(allocator, col_name);
     }
 
     // Find indices of requested columns in original result
     var col_indices = try std.ArrayList(usize).initCapacity(allocator, requested_columns.items.len);
-    defer col_indices.deinit();
+    defer col_indices.deinit(allocator);
 
     for (requested_columns.items) |req_col| {
         for (result.columns, 0..) |res_col, idx| {
             if (std.mem.eql(u8, req_col, res_col)) {
-                try col_indices.append(idx);
+                try col_indices.append(allocator, idx);
                 break;
             }
         }

@@ -28,6 +28,85 @@ pub const KeyProvider = enum {
     GcpKms,
 };
 
+/// Key hierarchy initialization result
+pub const KeyHierarchyResult = struct {
+    master_key_id: []const u8,
+    data_keys: u32,
+    wal_keys: u32,
+    backup_keys: u32,
+};
+
+/// Key rotation result
+pub const RotateKeysResult = struct {
+    old_key_id: []const u8,
+    new_key_id: []const u8,
+    records_migrated: u64,
+    duration_ms: u64,
+};
+
+/// Encryption status result
+pub const EncryptionStatusResult = struct {
+    enabled: bool,
+    key_loaded: bool,
+    data_encrypted: bool,
+    wal_encrypted: bool,
+    backups_encrypted: bool,
+    algorithm: []const u8,
+    key_length: u32,
+};
+
+/// KMS configuration result
+pub const ConfigureKMSResult = struct {
+    provider_name: []const u8,
+    configured: bool,
+    endpoint: []const u8,
+    test_result: []const u8,
+};
+
+/// Provider configuration result
+pub const ConfigureProviderResult = struct {
+    provider_type: []const u8,
+    status: []const u8,
+    key_source: []const u8,
+    mock_endpoint: ?[]const u8,
+};
+
+/// Rotation state result
+pub const GetRotationStateResult = struct {
+    current_generation: i64,
+    last_rotation_time: []const u8,
+    rotation_in_progress: bool,
+    scheduled_rotation: ?i64,
+};
+
+/// Rotation configuration result
+pub const ConfigureRotationResult = struct {
+    status: []const u8,
+    next_rotation_time: []const u8,
+};
+
+/// Data key derivation result
+pub const DeriveDataKeyResult = struct {
+    key_id: u32,
+    key_hash: []const u8,
+    key_type: []const u8,
+    derivation_method: []const u8,
+};
+
+/// WAL key derivation result
+pub const DeriveWalKeyResult = struct {
+    segment_id: u32,
+    key_hash: []const u8,
+    key_strength_bits: u32,
+    rotation_required: bool,
+};
+
+/// Cleanup result
+pub const CleanupKeyHierarchyResult = struct {
+    keys_zeroized: i64,
+    hierarchy_cleared: bool,
+};
+
 /// Rotation state
 pub const RotationState = struct {
     current_generation: u32 = 1,
@@ -49,19 +128,15 @@ pub fn loadKey(allocator: std.mem.Allocator, enabled: bool) !KeyStatus {
         error.EnvironmentVariableNotFound => return KeyStatus{ .loaded = false },
         else => return e,
     };
-    defer if (key_opt) |k| allocator.free(k);
-    if (key_opt) |k| {
-        if (k.len != 64) return error.InvalidKey; // expecting hex-encoded 32 bytes
-        var ks = KeyStatus{ .loaded = true };
-        // Derive key_id as first 32 bytes of hex (not cryptographically secure placeholder)
-        var i: usize = 0;
-        while (i < 32 and i * 2 + 1 < k.len) : (i += 1) {
-            ks.key_id[i] = k[i * 2];
-        }
-        return ks;
-    } else {
-        return KeyStatus{ .loaded = false };
+    defer allocator.free(key_opt);
+    if (key_opt.len != 64) return error.InvalidKey; // expecting hex-encoded 32 bytes
+    var ks = KeyStatus{ .loaded = true };
+    // Derive key_id as first 32 bytes of hex (not cryptographically secure placeholder)
+    var i: usize = 0;
+    while (i < 32 and i * 2 + 1 < key_opt.len) : (i += 1) {
+        ks.key_id[i] = key_opt[i * 2];
     }
+    return ks;
 }
 
 /// Derive key from hex string
@@ -101,12 +176,7 @@ pub fn loadRawKey(allocator: std.mem.Allocator, test_override_enabled: bool) !?[
 }
 
 /// Initialize key hierarchy with master/data/wal keys
-pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !struct {
-    master_key_id: []const u8,
-    data_keys: u32,
-    wal_keys: u32,
-    backup_keys: u32,
-} {
+pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult {
     // Generate master key
     var master_key: [32]u8 = undefined;
     std.crypto.random.bytes(&master_key);
@@ -170,12 +240,7 @@ pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !struct {
 }
 
 /// Rotate encryption keys with zero-downtime migration
-pub fn rotateKeys(allocator: std.mem.Allocator, test_override_enabled: bool) !struct {
-    old_key_id: []const u8,
-    new_key_id: []const u8,
-    records_migrated: u64,
-    duration_ms: u64,
-} {
+pub fn rotateKeys(allocator: std.mem.Allocator, test_override_enabled: bool) !RotateKeysResult {
     const start_time = std.time.milliTimestamp();
 
     // Load current key
@@ -229,15 +294,7 @@ pub fn rotateKeys(allocator: std.mem.Allocator, test_override_enabled: bool) !st
 }
 
 /// Get comprehensive encryption status across all components
-pub fn getEncryptionStatus(allocator: std.mem.Allocator, enabled: bool, test_override_enabled: bool) !struct {
-    enabled: bool,
-    key_loaded: bool,
-    data_encrypted: bool,
-    wal_encrypted: bool,
-    backups_encrypted: bool,
-    algorithm: []const u8,
-    key_length: u32,
-} {
+pub fn getEncryptionStatus(allocator: std.mem.Allocator, enabled: bool, test_override_enabled: bool) !EncryptionStatusResult {
     const is_enabled = enabled;
     const key_loaded = if (try loadRawKey(allocator, test_override_enabled)) |_| true else false;
 
@@ -259,12 +316,7 @@ pub fn getEncryptionStatus(allocator: std.mem.Allocator, enabled: bool, test_ove
 }
 
 /// Configure KMS integration for key management
-pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !struct {
-    provider_name: []const u8,
-    configured: bool,
-    endpoint: []const u8,
-    test_result: []const u8,
-} {
+pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !ConfigureKMSResult {
     // Configure KMS provider inline (avoiding circular dependency)
     // Create a simulated KMS configuration without importing the kms module
     _ = if (std.mem.eql(u8, provider, "aws"))
@@ -324,12 +376,7 @@ pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !struct 
 }
 
 /// Configure key provider
-pub fn configureProvider(allocator: std.mem.Allocator, provider_type: []const u8) !struct {
-    provider_type: []const u8,
-    status: []const u8,
-    key_source: []const u8,
-    mock_endpoint: ?[]const u8,
-} {
+pub fn configureProvider(allocator: std.mem.Allocator, provider_type: []const u8) !ConfigureProviderResult {
     // Validate and set provider
     if (std.mem.eql(u8, provider_type, "StaticEnv")) {
         current_provider = .StaticEnv;
@@ -361,12 +408,7 @@ pub fn configureProvider(allocator: std.mem.Allocator, provider_type: []const u8
 }
 
 /// Get current rotation state
-pub fn getRotationState(allocator: std.mem.Allocator) !struct {
-    current_generation: i64,
-    last_rotation_time: []const u8,
-    rotation_in_progress: bool,
-    scheduled_rotation: ?i64,
-} {
+pub fn getRotationState(allocator: std.mem.Allocator) !GetRotationStateResult {
     const timestamp_str = try std.fmt.allocPrint(allocator, "{d}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{ 2025, 10, 25, 0, 0, 0 });
 
     return .{
@@ -378,10 +420,7 @@ pub fn getRotationState(allocator: std.mem.Allocator) !struct {
 }
 
 /// Configure key rotation schedule
-pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !struct {
-    status: []const u8,
-    next_rotation_time: []const u8,
-} {
+pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !ConfigureRotationResult {
     // Calculate next rotation time
     const now = std.time.milliTimestamp();
     const next_rotation_ms = now + (@as(i64, max_age_hours) * 3600 * 1000);
@@ -396,12 +435,7 @@ pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !stru
 }
 
 /// Derive data encryption key from master key
-pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !struct {
-    key_id: u32,
-    key_hash: []const u8,
-    key_type: []const u8,
-    derivation_method: []const u8,
-} {
+pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyResult {
     // Generate key material using HKDF
     var ikm: [32]u8 = undefined;
     std.crypto.random.bytes(&ikm);
@@ -419,10 +453,9 @@ pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !struct {
     hasher.final(&derived_key);
 
     // Calculate key hash for identification
-    var key_hash_bytes: [16]u8 = undefined;
-    std.crypto.hash.md5.Md5.hash(&derived_key, &key_hash_bytes, .{});
-    const key_hash = try allocator.alloc(u8, 32);
-    _ = try std.fmt.bufPrint(key_hash, "{x}", .{std.fmt.fmtSliceHexLower(&key_hash_bytes)});
+    var key_hash_bytes: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(&derived_key, &key_hash_bytes, .{});
+    const key_hash = try std.fmt.allocPrint(allocator, "{}", .{std.fmt.fmtSliceHexLower(&key_hash_bytes)});
 
     return .{
         .key_id = key_id,
@@ -433,12 +466,7 @@ pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !struct {
 }
 
 /// Derive WAL encryption key from master key
-pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !struct {
-    segment_id: u32,
-    key_hash: []const u8,
-    key_strength_bits: u32,
-    rotation_required: bool,
-} {
+pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !DeriveWalKeyResult {
     // Generate WAL-specific key material
     var master: [32]u8 = undefined;
     std.crypto.random.bytes(&master);
@@ -454,10 +482,9 @@ pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !struct {
     hasher.final(&wal_key);
 
     // Calculate key hash
-    var hash: [20]u8 = undefined;
-    std.crypto.hash.sha1.Sha1.hash(&wal_key, &hash, .{});
-    const hash_str = try allocator.alloc(u8, 40);
-    _ = try std.fmt.bufPrint(hash_str, "{x}", .{std.fmt.fmtSliceHexLower(&hash)});
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(&wal_key, &hash, .{});
+    const hash_str = try std.fmt.allocPrint(allocator, "{}", .{std.fmt.fmtSliceHexLower(&hash)});
 
     // Check if rotation is needed (every 100 segments)
     const rotation_required = (wal_segment % 100) == 99;
@@ -471,10 +498,7 @@ pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !struct {
 }
 
 /// Cleanup key hierarchy
-pub fn cleanupKeyHierarchy(_: std.mem.Allocator) !struct {
-    keys_zeroized: i64,
-    hierarchy_cleared: bool,
-} {
+pub fn cleanupKeyHierarchy(_: std.mem.Allocator) !CleanupKeyHierarchyResult {
     // Zeroize all keys in hierarchy
     var keys: [5][32]u8 = undefined;
     for (&keys) |*key| {

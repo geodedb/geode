@@ -89,17 +89,17 @@ pub const MemorySink = struct {
     pub fn init(allocator: std.mem.Allocator) MemorySink {
         return MemorySink{
             .allocator = allocator,
-            .events = std.ArrayList(ChangeEvent).init(allocator),
+            .events = std.ArrayList(ChangeEvent){},
         };
     }
 
     pub fn deinit(self: *MemorySink) void {
-        self.events.deinit();
+        self.events.deinit(self.allocator);
     }
 
     pub fn send(self: *MemorySink, events: []const ChangeEvent) !void {
         for (events) |event| {
-            try self.events.append(event);
+            try self.events.append(self.allocator, event);
         }
     }
 
