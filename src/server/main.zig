@@ -120,6 +120,8 @@ const convertEvalValueToBindingValue = query_executor.convertEvalValueToBindingV
 const StageTimings = query_executor.StageTimings;
 const AllocTracker = query_executor.AllocTracker;
 const trackerGet = query_executor.trackerGet;
+const evalExprToPropertyValue = query_executor.evalExprToPropertyValue;
+const propertyValueToIndexKey = query_executor.propertyValueToIndexKey;
 
 const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
@@ -4817,79 +4819,7 @@ fn getOrCreateBackupManager(allocator: std.mem.Allocator, state: *ServerState) !
 }
 
 // Helper function to convert AST expression to property value
-fn evalExprToPropertyValue(allocator: std.mem.Allocator, expr: geode.ast.Expr) !graph_exec.PropertyValue {
-    return switch (expr) {
-        .Null => .{ .Null = {} },
-        .Bool => |b| .{ .Bool = b },
-        .Int => |i| .{ .Int = i },
-        .String => |s| .{ .String = try allocator.dupe(u8, s) }, // Deep copy string to prevent dangling pointers
-        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .Call => |call| blk_call: {
-            // Handle function calls for advanced types (VectorF32, IpAddr, etc.)
-            const function_name = switch (call.callee.*) {
-                .Ident => |ident| ident.orig,
-                else => break :blk_call .{ .Null = {} },
-            };
-
-            // Convert arguments from ast.Expr to eval_extended.ExtValue
-            var args = try allocator.alloc(eval_extended.ExtValue, call.args.len);
-            defer allocator.free(args);
-
-            for (call.args, 0..) |arg, i| {
-                args[i] = switch (arg.*) {
-                    .Null => .{ .Null = {} },
-                    .Bool => |b| .{ .Bool = b },
-                    .Int => |n| .{ .Int = n },
-                    .String => |s| .{ .Str = s },
-                    .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                    .ArrayLit => |arr| blk_arr: {
-                        // Convert array literal to list of ExtValue
-                        var list = try allocator.alloc(eval_extended.ExtValue, arr.len);
-                        for (arr, 0..) |elem, j| {
-                            list[j] = switch (elem.*) {
-                                .Int => |n| .{ .Int = n },
-                                .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                else => .{ .Null = {} },
-                            };
-                        }
-                        break :blk_arr .{ .List = list };
-                    },
-                    else => .{ .Null = {} },
-                };
-            }
-
-            // Initialize function registry and call the function
-            var registry = try eval_extended.initFunctionRegistry(allocator);
-            defer registry.deinit();
-
-            // Convert function name to lowercase for registry lookup
-            const lowercase_name = try std.ascii.allocLowerString(allocator, function_name);
-            defer allocator.free(lowercase_name);
-
-            if (registry.get(lowercase_name)) |func| {
-                const result = func(allocator, args) catch |err| {
-                    std.log.err("Function {s} failed with error: {}", .{ function_name, err });
-                    break :blk_call .{ .Null = {} };
-                };
-
-                // Convert ExtValue result to PropertyValue
-                break :blk_call switch (result) {
-                    .Null => .{ .Null = {} },
-                    .Bool => |b| .{ .Bool = b },
-                    .Int => |i| .{ .Int = i },
-                    .Str => |s| .{ .String = try allocator.dupe(u8, s) },
-                    .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                    .VectorF32 => |v| .{ .VectorF32 = v },
-                    else => .{ .Null = {} },
-                };
-            }
-
-            std.log.err("Function {s} (lowercase: {s}) not found in registry", .{ function_name, lowercase_name });
-            break :blk_call .{ .Null = {} };
-        },
-        else => .{ .Null = {} }, // Default for unsupported expressions
-    };
-}
+// Removed: evalExprToPropertyValue() function (~73 lines) now in query_executor module (M3.3 Phase 3 seventh increment)
 
 // CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-26
 test "TestCANARY_REQ_GQL_004_PaginationStreamingScaffold" {
@@ -4940,16 +4870,7 @@ fn detectVectorDimension(allocator: std.mem.Allocator, label: []const u8, proper
 }
 
 /// Convert a property value to a string key suitable for indexing
-fn propertyValueToIndexKey(allocator: std.mem.Allocator, value: graph_exec.PropertyValue) ![]u8 {
-    switch (value) {
-        .String => |s| return allocator.dupe(u8, s),
-        .Int => |i| return std.fmt.allocPrint(allocator, "{d}", .{i}),
-        .Bool => |b| return allocator.dupe(u8, if (b) "true" else "false"),
-        .Null => return allocator.dupe(u8, "null"),
-        .Decimal => |d| return std.fmt.allocPrint(allocator, "{d}", .{d.coeff}),
-        .VectorF32 => |v| return std.fmt.allocPrint(allocator, "vector:{d}x{d}", .{ v.dim, v.data.len }),
-    }
-}
+// Removed: propertyValueToIndexKey() function (~10 lines) now in query_executor module (M3.3 Phase 3 seventh increment)
 
 fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateIndexStatement) ![]const u8 {
     // Get or create index manager
