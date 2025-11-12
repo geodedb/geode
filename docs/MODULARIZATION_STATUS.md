@@ -12,7 +12,7 @@
 | Phase 1: Mixed Concerns | COMPLETE | 100% | Claude Agent | 2025-11-12 | 2025-11-12 |
 | Phase 2: Execution Module | COMPLETE | 100% | Claude Agent | 2025-11-12 | 2025-11-12 |
 | Phase 3: Server Monolith | IN PROGRESS | 40% (M3.1 Complete, M3.2 In Progress) | Claude Agent | 2025-11-12 | In Progress |
-| Phase 4: CLI Monolith | IN PROGRESS | 50% (M4.1 Complete, M4.2 Complete) | Claude Agent | 2025-11-12 | In Progress |
+| Phase 4: CLI Monolith | IN PROGRESS | 75% (M4.1 Complete, M4.2 Complete, M4.3 Complete) | Claude Agent | 2025-11-12 | In Progress |
 | Phase 5: Circular Dependencies | PENDING | 0% | - | - | - |
 | Phase 6: Expression Evaluation | PENDING | 0% | - | - | - |
 | Phase 7: Schema & Transactions | PENDING | 0% | - | - | - |
@@ -582,7 +582,7 @@ Circular Dependencies Detected: 2
 **Priority**: P0 CRITICAL (High impact, moderate risk)
 **Estimated Time**: 12-16 hours
 **Dependencies**: Phase 0 (complete)
-**Progress**: M4.1 in progress (user management commands extracted)
+**Progress**: M4.3 complete - 75% (3/4 milestones complete)
 
 ### Milestones
 
@@ -630,25 +630,36 @@ Circular Dependencies Detected: 2
 - **Issues**: None
 - **Notes**: Successfully extracted 195 lines of policy/permission management code. Module includes comprehensive help messages and flag parsing. Cumulative CLI reduction: 13.7% (804 lines from baseline).
 
-#### M4.3: Extract Backup Commands ⏳
-- **Status**: PENDING
-- **Target Files**:
-  - `src/cli/main.zig` (~3,100 lines)
-  - `src/cli/user_mgmt_cli.zig` (~700 lines)
-  - `src/cli/auth_cli.zig` (~700 lines)
-  - `src/cli/backup_cli.zig` (~700 lines) - NEW
+#### M4.3: Extract Backup Commands ✅
+- **Status**: COMPLETE
+- **Current File**: `src/cli/main.zig` (4,000 lines after M4.3, was 5,081 after M4.2, -1,081 lines, -21.3%)
+- **Created Files**:
+  - `src/cli/backup_cli.zig` (1,111 lines) - Backup/restore/migrate command implementations with helper functions
 - **Tasks**:
-  - [ ] Extract backup commands
-  - [ ] Create `backup_cli.zig`
-  - [ ] Update `cli/main.zig`
-  - [ ] Verify backup commands work
-- **Verification**: Backup/restore operations work
-- **Agent**: -
-- **Started**: -
-- **Completed**: -
-- **Test Results**: -
-- **Issues**: -
-- **Notes**: -
+  - [x] Identify backup/restore/migrate commands (cmdBackup, cmdRestore, cmdMigrate + helpers)
+  - [x] Create `backup_cli.zig` with comprehensive implementations
+  - [x] Extract cmdBackup function and subcommands (create, list, info, cleanup, legacy)
+  - [x] Extract cmdRestore function with remote/local support
+  - [x] Extract cmdMigrate function and subcommands (status, run, create)
+  - [x] Extract all helper functions (executeBackup, executeRestore, executeRemoteBackup, executeRemoteRestore)
+  - [x] Extract SimplifiedBackupManager and SimplifiedRestoreManager structures
+  - [x] Update `cli/main.zig` imports and const aliases
+  - [x] Remove original functions from cli/main.zig (481 main commands + 605 helpers = 1,086 lines)
+  - [ ] Verify backup/restore/migrate commands work (requires build environment)
+- **Verification**: Code extraction complete, awaiting build environment for functional testing
+- **Agent**: Claude Agent
+- **Started**: 2025-11-12
+- **Completed**: 2025-11-12
+- **Test Results**: Pending build environment
+- **Issues**: None
+- **Notes**: Successfully extracted 1,086 lines of backup/restore/migrate code into comprehensive 1,111-line module. Module includes:
+  - 11 command functions (cmdBackup, cmdBackupCreate, cmdBackupList, cmdBackupInfo, cmdBackupCleanup, cmdBackupCreateLegacy, cmdRestore, cmdMigrate, cmdMigrateStatus, cmdMigrateRun, cmdMigrateCreate)
+  - 3 usage helper functions (printBackupUsage, printMigrateUsage)
+  - 4 execution functions (executeBackup, executeRemoteBackup, executeRestore, executeRemoteRestore)
+  - 2 manager structures (SimplifiedBackupManager with full/incremental backup, SimplifiedRestoreManager with point-in-time restore)
+  - Constants and helper functions (BackupHeader, generateBackupId, RestoreMetadata)
+  - Full QUIC remote server support for both backup and restore operations
+  Cumulative CLI reduction: 32.0% (1,885 lines from baseline 5,885 → 4,000)
 
 #### M4.4: Create CLI Dispatcher ⏳
 - **Status**: PENDING
