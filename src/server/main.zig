@@ -23,6 +23,8 @@ const vendor_quic = @import("vendor_quic");
 
 // Import real logger for proper log level handling
 const logger = @import("../log/logger.zig");
+// Import server state management (M3.1 Phase 3 modularization)
+const server_state = @import("server_state.zig");
 // Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
