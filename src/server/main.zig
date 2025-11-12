@@ -185,26 +185,10 @@ const UnionMetrics = struct { left_in: usize, right_in: usize, out: usize, hash_
 // Focus: RETURN queries, UNION (ALL/DISTINCT), GROUP BY aggregation via exec.runGroupedQuery,
 // ORDER/LIMIT/OFFSET legality (US001), EXPLAIN/PROFILE, pagination, txn demarcation.
 
-const ServerStateInsertedValue = struct { value: []const u8, creator_txn: u64, commit_ts: ?u64 = null, aborted: bool = false };
-
-// Catalog structures for managing schemas and graphs
-const CatalogSchema = struct {
-    name: []const u8,
-    created_at: i64,
-    created_by: []const u8 = "system",
-    description: ?[]const u8 = null,
-};
-
-const CatalogGraph = struct {
-    name: []const u8,
-    schema_name: ?[]const u8 = null,
-    property_graph: bool = true,
-    created_at: i64,
-    created_by: []const u8 = "system",
-    description: ?[]const u8 = null,
-    node_count: u64 = 0,
-    edge_count: u64 = 0,
-};
+// Import server state support types from modularized server_state.zig (M3.1 Phase 3 incremental extraction)
+const ServerStateInsertedValue = server_state.ServerStateInsertedValue;
+const CatalogSchema = server_state.CatalogSchema;
+const CatalogGraph = server_state.CatalogGraph;
 
 // Session configuration management
 const SessionConfiguration = struct {
