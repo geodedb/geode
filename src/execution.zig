@@ -19,6 +19,10 @@ const Value = value_types.Value;
 const Env = value_types.Env;
 
 const eval = @import("eval.zig");
+
+// CANARY: REQ=REQ-M5.3-EXECUTION-CALLBACKS-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksProvider; STATUS=IMPL; OWNER=execution; UPDATED=2025-11-13
+// Phase 5 M5.3: Import evaluator_adapter to provide callbacks to eval module
+const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 const graph_store = @import("graph_store.zig");
 const catalog_mod = @import("execution/catalog.zig");
 const fle_hooks_mod = @import("execution/fle_hooks.zig");
@@ -201,6 +205,25 @@ pub fn getCatalog(_: std.mem.Allocator, context: ExecutionContext) *catalog_mod.
 /// M2: Create a default ExecutionContext with global catalog
 /// Used for legacy code paths that don't have context available
 /// TODO M2: Eliminate by passing context through all execution paths
+
+// CANARY: REQ=REQ-M5.3-EXECUTION-INIT-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksInitialization; STATUS=IMPL; OWNER=execution; UPDATED=2025-11-13
+/// Initialize evaluator with execution callbacks
+/// This must be called once during module initialization to provide eval.zig
+/// with callback functions for executing queries, finding paths, etc.
+/// 
+/// This breaks the circular dependency by using dependency injection:
+/// Instead of eval.zig importing execution.zig, it receives function pointers at runtime.
+pub fn initEvaluator() void {
+    const callbacks = evaluator_adapter.ExecutionCallbacks{
+        .getDefaultContextFn = getDefaultContext,
+        .executeQueryWithContextFn = query_execution.executeQueryWithContext,
+        .findShortestPathFn = graph_algorithms.findShortestPath,
+        .countPatternMatchesFn = graph_algorithms.countPatternMatches,
+        .executePatternComprehensionFn = graph_algorithms.executePatternComprehension,
+    };
+    
+    eval.setExecutionCallbacks(callbacks);
+}
 pub fn getDefaultContext(allocator: std.mem.Allocator) !ExecutionContext {
     const cat = try ensureCatalogInstance(allocator);
     return ExecutionContext{

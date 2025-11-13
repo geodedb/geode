@@ -81,38 +81,29 @@ pub const ExecutionCallbacks = struct {
     }
 };
 
-// CANARY: REQ=REQ-M5.3-TYPE-FORWARD-001; FEATURE="Type Forwarding"; ASPECT=OpaqueTypes; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
-// Forward declarations as opaque types - the actual definitions are in execution.zig
+// CANARY: REQ=REQ-M5.3-TYPE-FORWARD-001; FEATURE="Type Forwarding"; ASPECT=TypeReexport; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
+// Import parent execution module to access ExecutionContext and ExecutionResult types
 //
-// This approach works because:
-// 1. eval.zig only needs to pass these types through callbacks (doesn't access members directly in most cases)
-// 2. When eval needs to access members (like result.rows), it's done after receiving the result
-// 3. The callback functions handle the actual type conversions
+// This creates a parent-child import relationship which is acceptable:
+// - execution.zig (parent) contains evaluator_adapter.zig (child)
+// - Child can import parent types
+// - eval.zig imports adapter (not execution), breaking the circular dependency
 //
-// For cases where eval needs to access ExecutionResult members, we'll need to add
-// helper functions or make ExecutionResult a proper shared type in a future refactor.
-// For now, we use type punning to allow eval.zig to work with the results.
+// Dependency flow (NO CIRCLE):
+//   execution.zig → eval.zig (one-way)
+//   execution.zig → evaluator_adapter.zig (parent → child)
+//   evaluator_adapter.zig → execution.zig (child → parent for types)
+//   eval.zig → evaluator_adapter.zig (one-way)
 
-/// Execution context containing catalog and execution state
-/// Actual definition in execution.zig - treated as opaque by eval.zig
-pub const ExecutionContext = anyopaque;
+const parent_execution = @import("../execution.zig");
 
-/// Execution result containing query results
-/// Actual definition in execution.zig
-/// Note: eval.zig needs to access .rows member, so we provide a minimal definition
-pub const ExecutionResult = struct {
-    columns: [][]const u8,
-    rows: [][]Value,
-    flags: std.ArrayList([]const u8),
-    owns_value_memory: bool = false,
+/// Re-export ExecutionContext from parent execution module
+/// This allows eval.zig to use the real ExecutionContext type without importing execution.zig
+pub const ExecutionContext = parent_execution.ExecutionContext;
 
-    pub fn deinit(self: *ExecutionResult, allocator: std.mem.Allocator) void {
-        // Note: This is a minimal stub. The real deinit is in execution.zig
-        // In practice, the actual ExecutionResult from execution.zig will be used
-        _ = self;
-        _ = allocator;
-    }
-};
+/// Re-export ExecutionResult from parent execution module
+/// This allows eval.zig to use the real ExecutionResult type without importing execution.zig
+pub const ExecutionResult = parent_execution.ExecutionResult;
 
 // CANARY: REQ=REQ-M5.3-EVALUATOR-INTERFACE-001; FEATURE="Evaluator Interface"; ASPECT=EvaluatorAbstraction; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
 /// Evaluator interface that execution.zig uses to call eval.evalExpr

@@ -2,8 +2,11 @@ const std = @import("std");
 const ast = @import("gql/ast.zig");
 const eval_funcs = @import("types/evaluator_functions.zig");
 const heap = @import("storage/heap.zig");
-const execution = @import("execution.zig");
 const fle_integration = @import("fle_integration.zig");
+
+// CANARY: REQ=REQ-M5.3-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=AdapterImport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.3: Import evaluator_adapter instead of execution.zig to break circular dependency
+const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Import shared value types from value_types.zig module
@@ -32,6 +35,27 @@ const toDec = value_types.toDec;
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-006; FEATURE="Circular Dependency Resolution"; ASPECT=EnvTypeReexport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Re-export Env from value_types module for backward compatibility
 pub const Env = value_types.Env;
+
+
+// CANARY: REQ=REQ-M5.3-EVAL-CALLBACKS-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksStorage; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.3: Module-level storage for execution callbacks
+// This allows eval.zig to call execution functions without importing execution.zig
+// The callbacks are set at runtime by execution.zig during initialization
+var execution_callbacks: ?evaluator_adapter.ExecutionCallbacks = null;
+
+/// Set execution callbacks for this module
+/// Called by execution.zig during initialization to provide callback functions
+pub fn setExecutionCallbacks(callbacks: evaluator_adapter.ExecutionCallbacks) void {
+    execution_callbacks = callbacks;
+}
+
+/// Get execution callbacks (internal use only)
+fn getExecutionCallbacks() evaluator_adapter.ExecutionCallbacks {
+    return execution_callbacks orelse {
+        // This should never happen in production - callbacks must be set before eval.evalExpr is called
+        @panic("Execution callbacks not initialized! Call eval.setExecutionCallbacks() first.");
+    };
+}
 
 
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-007; FEATURE="Circular Dependency Resolution"; ASPECT=NullCheck; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
@@ -1481,13 +1505,13 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
             // Execute the subquery
             // M2: Use default context with global catalog for legacy code path
-            const context = execution.getDefaultContext(allocator) catch |err| {
+            const context = getExecutionCallbacks().getDefaultContext(allocator) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
                 };
             };
-            var result = execution.executeQueryWithContext(allocator, isq.subquery.*, context) catch |err| {
+            var result = getExecutionCallbacks().executeQueryWithContext(allocator, isq.subquery.*, context) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
@@ -1528,13 +1552,13 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
             // Execute the subquery
             // M2: Use default context with global catalog for legacy code path
-            const context = execution.getDefaultContext(allocator) catch |err| {
+            const context = getExecutionCallbacks().getDefaultContext(allocator) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
                 };
             };
-            var result = execution.executeQueryWithContext(allocator, nisq.subquery.*, context) catch |err| {
+            var result = getExecutionCallbacks().executeQueryWithContext(allocator, nisq.subquery.*, context) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
@@ -1891,7 +1915,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .ShortestPath => |sp| blk_shortest: {
             // ShortestPath expression: shortestPath((a)-[*]-(b))
             // Call the execution layer to find the shortest path(s)
-            const path_value = execution.findShortestPath(allocator, sp.pattern.*, sp.all, env) catch {
+            const path_value = getExecutionCallbacks().findShortestPath(allocator, sp.pattern.*, sp.all, env) catch {
                 break :blk_shortest Value{ .Null = {} };
             };
             break :blk_shortest path_value;
@@ -1899,7 +1923,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .PatternCount => |pc| blk_count: {
             // Pattern comprehension count: size((pattern))
             // Call the execution layer to count pattern matches
-            const count = execution.countPatternMatches(allocator, pc.*) catch {
+            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.*) catch {
                 break :blk_count Value{ .Int = 0 };
             };
             break :blk_count Value{ .Int = count };
@@ -1962,7 +1986,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Pattern comprehension: [ (pattern) WHERE condition | expression ]
             // Shorthand: [(a)--()]  means  [(a)--(x) | x]
             // Execute the pattern and collect results based on the map expression
-            const result_list = execution.executePatternComprehension(allocator, pc.pattern.*, pc.where, pc.map.*, env) catch {
+            const result_list = getExecutionCallbacks().executePatternComprehension(allocator, pc.pattern.*, pc.where, pc.map.*, env) catch {
                 break :blk_patterncomp Value{ .List = &.{} };
             };
             break :blk_patterncomp result_list;
