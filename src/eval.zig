@@ -68,6 +68,24 @@ const isNull = value_types.isNull;
 const truthy = value_types.truthy;
 
 
+// CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-001; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotionImport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
+const type_promotion = @import("eval/type_promotion.zig");
+
+// CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-002; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotionAliases; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 6 M6.1: Use type promotion functions from type_promotion module
+const scaleTo = type_promotion.scaleTo;
+const expectString = type_promotion.expectString;
+const expectInt = type_promotion.expectInt;
+const valueToExtValue = type_promotion.valueToExtValue;
+const extValueToValue = type_promotion.extValueToValue;
+const evalValueToHeapValue = type_promotion.evalValueToHeapValue;
+const heapValueToEvalValue = type_promotion.heapValueToEvalValue;
+const cmpI128 = type_promotion.cmpI128;
+const cmpToBool = type_promotion.cmpToBool;
+const cmpIntsOp = type_promotion.cmpIntsOp;
+
+
 fn and3(a: Value, b: Value) Value {
     // Three-valued logic for AND: true ∧ x = x; false ∧ x = false; null ∧ true = null; null ∧ false = false; null ∧ null = null
     if (a == .Bool and !a.Bool) return .{ .Bool = false };
@@ -191,17 +209,9 @@ fn regexRec(s: []const u8, p: []const u8, si0: usize, pi0: usize, allow_suffix_e
 const eqVals = value_types.eqVals;
 
 
-fn cmpIntsOp(op: ast.BinOp, a: i64, b: i64) Value {
-    return .{ .Bool = switch (op) {
-        .Eq => a == b,
-        .Ne => a != b,
-        .Lt => a < b,
-        .Le => a <= b,
-        .Gt => a > b,
-        .Ge => a >= b,
-        else => false,
-    } };
-}
+// CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-007; FEATURE="Phase 6 Modularization"; ASPECT=IntComparison; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 6 M6.1: Integer comparison function moved to eval/type_promotion.zig
+// Function: cmpIntsOp
 
 fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
@@ -435,56 +445,17 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
 const pow10 = value_types.pow10;
 
 
-fn cmpI128(a: i128, b: i128) i2 {
-    return if (a < b) -1 else if (a > b) 1 else 0;
-}
+// CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-004; FEATURE="Phase 6 Modularization"; ASPECT=ComparisonHelpers; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 6 M6.1: Comparison helper functions moved to eval/type_promotion.zig
+// Functions: cmpI128, cmpToBool
 
-fn cmpToBool(op: ast.BinOp, ord: i2) bool {
-    return switch (op) {
-        .Eq => ord == 0,
-        .Ne => ord != 0,
-        .Lt => ord < 0,
-        .Le => ord <= 0,
-        .Gt => ord > 0,
-        .Ge => ord >= 0,
-        else => false,
-    };
-}
+// CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-005; FEATURE="Phase 6 Modularization"; ASPECT=DecimalScaling; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 6 M6.1: Decimal scale conversion function moved to eval/type_promotion.zig
+// Function: scaleTo
 
-fn scaleTo(coeff: i128, from: u8, to: u8) EvalError!i128 {
-    if (from == to) return coeff;
-    if (from > to) {
-        // downscale by truncation
-        var i: u8 = 0;
-        var v = coeff;
-        while (i < from - to) : (i += 1) v = @divTrunc(v, 10);
-        return v;
-    }
-    // upscale; check overflow
-    var i: u8 = 0;
-    var v = coeff;
-    while (i < to - from) : (i += 1) {
-        // overflow if v > max/10 or v < min/10
-        if (v > @as(i128, std.math.maxInt(i128)) / 10 or v < @as(i128, std.math.minInt(i128)) / 10) return EvalError.Unsupported;
-        v = v * 10;
-    }
-    return v;
-}
-
-fn expectString(v: Value) EvalError![]const u8 {
-    return switch (v) {
-        .Str => |s| s,
-        .Null => return EvalError.TypeMismatch,
-        else => return EvalError.TypeMismatch,
-    };
-}
-
-fn expectInt(v: Value) EvalError!i64 {
-    return switch (v) {
-        .Int => |n| n,
-        else => return EvalError.TypeMismatch,
-    };
-}
+// CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-006; FEATURE="Phase 6 Modularization"; ASPECT=TypeValidators; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 6 M6.1: Type validator functions moved to eval/type_promotion.zig
+// Functions: expectString, expectInt
 
 fn evalStartsWith(val: Value, pref: Value) EvalError!Value {
     if (isNull(val) or isNull(pref)) return Value{ .Null = {} };
@@ -1996,99 +1967,9 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
     };
 }
 
-fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("eval_extended.zig").ExtValue {
-    return switch (value) {
-        .Null => .{ .Null = {} },
-        .Int => |i| .{ .Int = i },
-        .Bool => |b| .{ .Bool = b },
-        .Str => |s| .{ .Str = s },
-        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .ExtValue => |ext| ext, // Unwrap the ExtValue directly
-        .List => |list| blk: {
-            // Convert Value.List to ExtValue.List recursively
-            var ext_list = try allocator.alloc(@import("eval_extended.zig").ExtValue, list.len);
-            for (list, 0..) |item, i| {
-                ext_list[i] = try valueToExtValue(allocator, item);
-            }
-            break :blk .{ .List = ext_list };
-        },
-        .Node => .{ .Null = {} }, // ExtValue doesn't support graph types
-        .Edge => .{ .Null = {} }, // ExtValue doesn't support graph types
-        .Map => .{ .Null = {} }, // ExtValue doesn't support map types
-        .Path => .{ .Null = {} }, // ExtValue doesn't support path types
-    };
-}
-
-fn extValueToValue(ext_value: @import("eval_extended.zig").ExtValue) Value {
-    return switch (ext_value) {
-        .Null => .{ .Null = {} },
-        .Int => |i| .{ .Int = i },
-        .Bool => |b| .{ .Bool = b },
-        .Str => |s| .{ .Str = s },
-        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        // For advanced types, wrap in Value.ExtValue to preserve type information
-        // This allows nested function calls like ip_family(IpAddr('...')) to work correctly
-        else => .{ .ExtValue = ext_value },
-    };
-}
-
-/// Convert eval.Value to heap.Value for function calls
-fn evalValueToHeapValue(value: Value) heap.Value {
-    return switch (value) {
-        .Null => .{ .Null = {} },
-        .Int => |i| .{ .Int = i },
-        .Bool => |b| .{ .Bool = b },
-        .Str => |s| .{ .Str = s },
-        .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
-        .ExtValue => .{ .Null = {} }, // ExtValue not supported in heap.Value yet
-        .List => .{ .Null = {} }, // TODO: heap.Value needs List support
-        .Node => .{ .Null = {} }, // TODO: heap.Value needs Node support
-        .Edge => .{ .Null = {} }, // TODO: heap.Value needs Edge support
-        .Map => .{ .Null = {} }, // TODO: heap.Value needs Map support
-        .Path => .{ .Null = {} }, // TODO: heap.Value needs Path support
-    };
-}
-
-/// Convert heap.Value to eval.Value for function results
-fn heapValueToEvalValue(value: heap.Value) Value {
-    const eval_ext = @import("eval_extended.zig");
-    return switch (value) {
-        .Null => .{ .Null = {} },
-        .Int => |i| .{ .Int = i },
-        .Bool => |b| .{ .Bool = b },
-        .Str => |s| .{ .Str = s },
-        .Text => |s| .{ .Str = s },
-        .Real => |f| blk: {
-            // Check for overflow when converting to decimal
-            if (!std.math.isFinite(f)) {
-                break :blk .{ .Null = {} }; // Return null for infinite or NaN
-            }
-            if (@abs(f) > 1e20) {
-                // For very large values, reduce precision to avoid overflow
-                const scale_factor = std.math.pow(f32, 10, 3);
-                break :blk .{ .Decimal = .{ .coeff = @intFromFloat(f / scale_factor), .scale = 0 } };
-            }
-            break :blk .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } };
-        },
-        .Double => |d| blk: {
-            // Check for overflow when converting to decimal
-            if (!std.math.isFinite(d)) {
-                break :blk .{ .Null = {} }; // Return null for infinite or NaN
-            }
-            if (@abs(d) > 1e20) {
-                // For very large values, reduce precision to avoid overflow
-                const scale_factor = std.math.pow(f64, 10, 3);
-                break :blk .{ .Decimal = .{ .coeff = @intFromFloat(d / scale_factor), .scale = 0 } };
-            }
-            break :blk .{ .Decimal = .{ .coeff = @intFromFloat(d * 1000000), .scale = 6 } };
-        },
-        .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
-        .Date => |dt| .{ .ExtValue = eval_ext.ExtValue{ .Date = dt } },
-        .Time => |t| .{ .ExtValue = eval_ext.ExtValue{ .Time = t } },
-        .TimestampTZ => |ts| .{ .ExtValue = eval_ext.ExtValue{ .TimestampTZ = ts } },
-        else => .{ .Null = {} }, // Convert unknown types to null
-    };
-}
+// CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-003; FEATURE="Phase 6 Modularization"; ASPECT=ValueConverters; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 6 M6.1: Value converter functions moved to eval/type_promotion.zig
+// Functions: valueToExtValue, extValueToValue, evalValueToHeapValue, heapValueToEvalValue
 
 /// Try to execute basic built-in functions (length, upper, lower, etc.)
 fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, args: []*ast.Expr, env: Env) !?Value {
