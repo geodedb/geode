@@ -1,8 +1,8 @@
 # Geode Modularization Status
 
-**Last Updated**: 2025-11-12 (Phase 3 M3.3 IN PROGRESS)
+**Last Updated**: 2025-11-13 (Phase 5 M5.1 COMPLETE)
 **Current Branch**: `claude/review-modularization-docs-011CV4Yu11yuXdj4oWvkfTHr`
-**Overall Status**: PHASE 3 IN PROGRESS - M3.3 Ninth Increment Complete (50.5% cumulative server reduction - MAJOR MILESTONE)
+**Overall Status**: PHASE 5 IN PROGRESS - M5.1 Complete (Circular Dependency Analysis)
 
 ## Quick Status Overview
 
@@ -13,7 +13,7 @@
 | Phase 2: Execution Module | COMPLETE | 100% | Claude Agent | 2025-11-12 | 2025-11-12 |
 | Phase 3: Server Monolith | IN PROGRESS | 40% (M3.1 Complete, M3.2 In Progress) | Claude Agent | 2025-11-12 | In Progress |
 | Phase 4: CLI Monolith | COMPLETE | 100% (All milestones complete) | Claude Agent | 2025-11-12 | 2025-11-12 |
-| Phase 5: Circular Dependencies | PENDING | 0% | - | - | - |
+| Phase 5: Circular Dependencies | IN PROGRESS | 33% (M5.1 Complete) | Claude Agent | 2025-11-13 | In Progress |
 | Phase 6: Expression Evaluation | PENDING | 0% | - | - | - |
 | Phase 7: Schema & Transactions | PENDING | 0% | - | - | - |
 | Phase 8: Testing & Documentation | PENDING | 0% | - | - | - |
@@ -25,10 +25,10 @@
 ## Current Work
 
 **Active Agent**: Claude Agent
-**Current Milestone**: Phase 3, M3.3 - Extract Query Executor ⏳ IN PROGRESS (Ninth Increment Complete - MAJOR MILESTONE)
-**Next Milestone**: Phase 3, M3.3 verification and potential additional extractions
+**Current Milestone**: Phase 5, M5.1 - Analyze Circular Dependency ✅ COMPLETE
+**Next Milestone**: Phase 5, M5.2 - Extract Value Types
 **Blocking Issues**: None
-**Recent Achievement**: 🎉 M3.3 ninth increment extracted 15 statement execution functions (1,113 lines): CREATE, DELETE, MERGE, CREATE/DROP INDEX, BACKUP/RESTORE, schema/graph management, SESSION SET/RESET. query_executor.zig now 2,942 lines. server/main.zig reduced to 3,484 lines - **OVER 50% REDUCTION FROM BASELINE (7,039 → 3,484 lines, -3,555 lines, -50.5%)**. Cumulative Phase 3 reduction: 50.5% across 7 modules (5,014 lines total extracted)
+**Recent Achievement**: ✅ M5.1 complete - Comprehensive circular dependency analysis between execution.zig ↔ eval.zig documented. Created dependency analysis document (50+ usage patterns mapped) and ADR proposing two-phase solution: (1) Extract shared value types, (2) Create evaluator adapter with dependency injection. 7 call sites identified in eval.zig, 50+ Value type references in execution.zig. Architecture documented, ready for M5.2 implementation.
 
 ---
 
@@ -726,31 +726,45 @@ Circular Dependencies Detected: 2
 
 ## Phase 5: Resolve Circular Dependencies
 
-**Status**: PENDING
-**Agent**: Unassigned
+**Status**: IN PROGRESS
+**Agent**: Claude Agent
 **Priority**: P1 HIGH (Critical architectural issue)
 **Estimated Time**: 8-12 hours
 **Dependencies**: Phase 0, Phase 2
+**Progress**: 33% (M5.1 Complete)
 
 ⚠️ **WARNING**: Requires careful architectural planning
 
 ### Milestones
 
-#### M5.1: Analyze Circular Dependency ⏳
-- **Status**: PENDING
+#### M5.1: Analyze Circular Dependency ✅ COMPLETE
+- **Status**: COMPLETE
 - **Tasks**:
-  - [ ] Map dependencies between `execution.zig` and `eval.zig`
-  - [ ] Create dependency diagram
-  - [ ] Document in ADR
-  - [ ] Propose solution architecture
+  - [x] Map dependencies between `execution.zig` and `eval.zig`
+  - [x] Create dependency diagram
+  - [x] Document in ADR
+  - [x] Propose solution architecture
 - **Deliverables**:
-  - `docs/architecture/execution_eval_dependency_analysis.md`
-  - `docs/architecture/ADR_execution_eval_refactor.md`
-  - Dependency diagrams
-- **Agent**: -
-- **Started**: -
-- **Completed**: -
-- **Notes**: -
+  - ✅ `docs/architecture/execution_eval_dependency_analysis.md` (comprehensive 500+ line analysis)
+  - ✅ `docs/architecture/ADR_execution_eval_refactor.md` (detailed architectural decision record)
+  - ✅ Dependency diagrams and flow analysis
+- **Agent**: Claude Agent
+- **Started**: 2025-11-13
+- **Completed**: 2025-11-13
+- **Analysis Summary**:
+  - **execution.zig → eval.zig**: Uses `eval.Value` (50 refs), `eval.Env` (3 refs), `eval.evalExpr()` (3 calls)
+  - **eval.zig → execution.zig**: Uses 5 execution functions (7 total calls):
+    - `execution.getDefaultContext()` (2 calls) - IN/NOT IN subqueries
+    - `execution.executeQueryWithContext()` (2 calls) - Subquery execution
+    - `execution.findShortestPath()` (1 call) - Shortest path expressions
+    - `execution.countPatternMatches()` (1 call) - Pattern count
+    - `execution.executePatternComprehension()` (1 call) - Pattern comprehensions
+  - **Root Cause**: Layering violation - eval needs to execute subqueries and graph operations
+  - **Proposed Solution**: Two-phase approach:
+    1. M5.2: Extract `value_types.zig` (shared Value, Env types)
+    2. M5.3: Create evaluator adapter with dependency injection (breaks function call cycle)
+  - **Impact**: Low-medium risk, 7-10 hours total, enables isolated testing
+- **Notes**: Analysis complete, architecture documented, ready for implementation
 
 #### M5.2: Create Evaluator Adapter ⏳
 - **Status**: PENDING
