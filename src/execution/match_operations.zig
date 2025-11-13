@@ -56,7 +56,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Exec
     // Track all created entities across all matched rows
     var all_created_nodes = std.StringHashMap(u64).init(allocator);
     defer all_created_nodes.deinit();
-    var all_created_relationships = std.StringHashMap(eval.Value).init(allocator);
+    var all_created_relationships = std.StringHashMap(Value).init(allocator);
     defer all_created_relationships.deinit();
 
     var total_created_count: i64 = 0;
@@ -108,9 +108,9 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Exec
                 var columns = try allocator.alloc([]const u8, 1);
                 columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");
 
-                var rows = try allocator.alloc([]eval.Value, 1);
-                var ret_row = try allocator.alloc(eval.Value, 1);
-                ret_row[0] = eval.Value{ .Int = total_created_count };
+                var rows = try allocator.alloc([]Value, 1);
+                var ret_row = try allocator.alloc(Value, 1);
+                ret_row[0] = Value{ .Int = total_created_count };
                 rows[0] = ret_row;
 
                 return ExecutionResult{
@@ -191,7 +191,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             // Check properties
             var matches_props = true;
             if (props) |properties| {
-                const empty_env = eval.Env{
+                const empty_env = Env{
                     .names = &.{},
                     .values = &.{},
                     .allocator = allocator,
@@ -199,12 +199,12 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
                 for (properties) |prop| {
                     if (node.properties.get(prop.key)) |node_prop_val| {
                         const node_val = switch (node_prop_val) {
-                            .Null => eval.Value{ .Null = {} },
-                            .Bool => |b| eval.Value{ .Bool = b },
-                            .Int => |i| eval.Value{ .Int = i },
-                            .String => |s| eval.Value{ .Str = s },
-                            .Float => eval.Value{ .Null = {} },
-                            .ExtValue => |ext| eval.Value{ .ExtValue = ext },
+                            .Null => Value{ .Null = {} },
+                            .Bool => |b| Value{ .Bool = b },
+                            .Int => |i| Value{ .Int = i },
+                            .String => |s| Value{ .Str = s },
+                            .Float => Value{ .Null = {} },
+                            .ExtValue => |ext| Value{ .ExtValue = ext },
                         };
                         const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
                         if (!valuesEqual(node_val, prop_val)) {
@@ -232,7 +232,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             // No match found for this chain - return empty result
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         }
@@ -271,19 +271,19 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
     // If there's a RETURN clause in the query, apply it to the CALL results
     if (q.ret.items.len > 0 and call_clause.yield_items != null) {
         // Apply RETURN transformations to the CALL results
-        var transformed_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, call_result.rows.len);
+        var transformed_rows = try std.ArrayList([]Value).initCapacity(allocator, call_result.rows.len);
         defer transformed_rows.deinit(allocator);
 
         for (call_result.rows) |call_row| {
             // Create environment from CALL result columns and values
-            const env = eval.Env{
+            const env = Env{
                 .allocator = allocator,
                 .names = call_result.columns,
                 .values = call_row,
             };
 
             // Evaluate each RETURN expression using the CALL result as environment
-            var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+            var return_row = try allocator.alloc(Value, q.ret.items.len);
             for (q.ret.items, 0..) |item, i| {
                 return_row[i] = try eval.evalExpr(allocator, item.expr, env);
             }
@@ -324,7 +324,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
         if (q.offset) |skip_count| {
             if (skip_count < result.rows.len) {
                 // Create new rows array without the skipped rows
-                const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_count);
+                const new_rows = try allocator.alloc([]Value, result.rows.len - skip_count);
                 for (result.rows[skip_count..], 0..) |row, i| {
                     new_rows[i] = row;
                 }
@@ -334,7 +334,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             } else {
                 // Skip all rows
                 allocator.free(result.rows);
-                result.rows = try allocator.alloc([]eval.Value, 0);
+                result.rows = try allocator.alloc([]Value, 0);
             }
         }
 
@@ -342,7 +342,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
         if (q.limit) |limit_count| {
             if (limit_count < result.rows.len) {
                 // Truncate to limit
-                const new_rows = try allocator.alloc([]eval.Value, limit_count);
+                const new_rows = try allocator.alloc([]Value, limit_count);
                 for (result.rows[0..limit_count], 0..) |row, i| {
                     new_rows[i] = row;
                 }
@@ -357,7 +357,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
     return call_result;
 }
 
-pub fn executeMatchQueryWithParams(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
+pub fn executeMatchQueryWithParams(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
     // Call the main executeMatchQuery implementation with parameters stored in a context
     // For now, we'll add the parameters to the environment when evaluating expressions
     return executeMatchQueryImpl(allocator, q, param_names, param_values, inline_let_bindings);
@@ -369,7 +369,7 @@ pub fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionR
 
 // CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSeparatedMatches"; ASPECT=CartesianProduct; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
 // Handle comma-separated node patterns by creating Cartesian product
-pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
+pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
     _ = inline_let_bindings;
     const store = graph_store.getGlobalStore(allocator);
 
@@ -413,7 +413,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Check inline properties
             if (matches_pattern and node_pattern.props != null) {
                 const props = node_pattern.props.?;
-                const prop_env = eval.Env{
+                const prop_env = Env{
                     .names = &.{},
                     .values = &.{},
                     .param_names = param_names,
@@ -424,12 +424,12 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 for (props) |prop| {
                     if (node.properties.get(prop.key)) |node_prop_val| {
                         const node_val = switch (node_prop_val) {
-                            .Null => eval.Value{ .Null = {} },
-                            .Bool => |b| eval.Value{ .Bool = b },
-                            .Int => |i| eval.Value{ .Int = i },
-                            .String => |s| eval.Value{ .Str = s },
-                            .Float => eval.Value{ .Null = {} },
-                            .ExtValue => |ext| eval.Value{ .ExtValue = ext },
+                            .Null => Value{ .Null = {} },
+                            .Bool => |b| Value{ .Bool = b },
+                            .Int => |i| Value{ .Int = i },
+                            .String => |s| Value{ .Str = s },
+                            .Float => Value{ .Null = {} },
+                            .ExtValue => |ext| Value{ .ExtValue = ext },
                         };
                         const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
                         if (!valuesEqual(node_val, expected_val)) {
@@ -484,7 +484,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     }
 
     // Generate Cartesian product of all matching nodes
-    var rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+    var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
     // Recursive function to generate combinations
     const Context = struct {
@@ -492,25 +492,25 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         chain_matches: *std.ArrayList(std.ArrayList(*graph_store.Node)),
         chain_vars: *std.ArrayList(?[]const u8),
         items: []ast.ReturnItem,
-        rows: *std.ArrayList([]eval.Value),
+        rows: *std.ArrayList([]Value),
         q: ast.Query,
         param_names: []const []const u8,
-        param_values: []const eval.Value,
+        param_values: []const Value,
 
         fn generateCombinations(self: @This(), current_combo: *std.ArrayList(*graph_store.Node), chain_idx: usize) !void {
             if (chain_idx >= self.chain_matches.items.len) {
                 // We have a complete combination, evaluate it
                 var env_names = try self.allocator.alloc([]const u8, current_combo.items.len);
                 defer self.allocator.free(env_names);
-                var env_values = try self.allocator.alloc(eval.Value, current_combo.items.len);
+                var env_values = try self.allocator.alloc(Value, current_combo.items.len);
                 defer self.allocator.free(env_values);
 
                 for (self.chain_vars.items, current_combo.items, 0..) |var_name, node, i| {
                     env_names[i] = var_name orelse "";
-                    env_values[i] = eval.Value{ .Node = node };
+                    env_values[i] = Value{ .Node = node };
                 }
 
-                const env = eval.Env{
+                const env = Env{
                     .names = env_names,
                     .values = env_values,
                     .param_names = self.param_names,
@@ -531,16 +531,16 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
 
                 // Evaluate RETURN items or return matched nodes
-                var row: []eval.Value = undefined;
+                var row: []Value = undefined;
                 if (self.items.len == 0) {
                     // No RETURN clause - return matched nodes
-                    row = try self.allocator.alloc(eval.Value, current_combo.items.len);
+                    row = try self.allocator.alloc(Value, current_combo.items.len);
                     for (current_combo.items, 0..) |node, i| {
-                        row[i] = eval.Value{ .Node = node };
+                        row[i] = Value{ .Node = node };
                     }
                 } else {
                     // RETURN clause exists - evaluate expressions
-                    row = try self.allocator.alloc(eval.Value, self.items.len);
+                    row = try self.allocator.alloc(Value, self.items.len);
                     for (self.items, 0..) |item, i| {
                         row[i] = try eval.evalExpr(self.allocator, item.expr, env);
                     }
@@ -581,7 +581,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     };
 }
 
-pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const eval.Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
+pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
 
     // CANARY(memory-safety): Debug output to trace execution
@@ -650,7 +650,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 if (std.mem.eql(u8, chain_name, path_var) and chain.hops.len > 0) {
                     // This is a shortestPath pattern assignment
                     // Build environment from inline_let_bindings (which come from WITH clause)
-                    const env = eval.Env{
+                    const env = Env{
                         .names = param_names,
                         .values = param_values,
                         .allocator = allocator,
@@ -682,7 +682,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // Build environment with path variable
                     var path_env_names = try allocator.alloc([]const u8, param_names.len + 1);
-                    var path_env_values = try allocator.alloc(eval.Value, param_values.len + 1);
+                    var path_env_values = try allocator.alloc(Value, param_values.len + 1);
                     for (param_names, 0..) |name, i| {
                         path_env_names[i] = name;
                         path_env_values[i] = param_values[i];
@@ -690,7 +690,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     path_env_names[param_names.len] = path_var;
                     path_env_values[param_values.len] = path_result;
 
-                    const path_env = eval.Env{
+                    const path_env = Env{
                         .names = path_env_names,
                         .values = path_env_values,
                         .allocator = allocator,
@@ -698,12 +698,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     // Evaluate RETURN expressions with path in environment
-                    var row = try allocator.alloc(eval.Value, q.ret.items.len);
+                    var row = try allocator.alloc(Value, q.ret.items.len);
                     for (q.ret.items, 0..) |item, i| {
                         row[i] = try eval.evalExpr(allocator, item.expr, path_env);
                     }
 
-                    var rows = try allocator.alloc([]eval.Value, 1);
+                    var rows = try allocator.alloc([]Value, 1);
                     rows[0] = row;
 
                     return ExecutionResult{
@@ -790,10 +790,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE=\"ExecutionOptimization\"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
             // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
             var env_names_buf: [][]const u8 = &.{};
-            var env_values_buf: []eval.Value = &.{};
+            var env_values_buf: []Value = &.{};
             if (match_variable) |_| {
                 env_names_buf = try allocator.alloc([]const u8, 1);
-                env_values_buf = try allocator.alloc(eval.Value, 1);
+                env_values_buf = try allocator.alloc(Value, 1);
             }
             defer {
                 if (match_variable != null) {
@@ -828,16 +828,16 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Create environment with matched node for WHERE clause evaluation (reuse arrays)
                 var env_names: [][]const u8 = &.{};
-                var env_values: []eval.Value = &.{};
+                var env_values: []Value = &.{};
 
                 if (match_variable) |var_name| {
                     env_names = env_names_buf;
                     env_values = env_values_buf;
                     env_names[0] = var_name;
-                    env_values[0] = eval.Value{ .Node = node };
+                    env_values[0] = Value{ .Node = node };
                 }
 
-                const env = eval.Env{
+                const env = Env{
                     .names = env_names,
                     .values = env_values,
                     .param_names = param_names,
@@ -916,7 +916,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // Generate rows for each group
-            var rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+            var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
             var group_iter = groups.iterator();
             while (group_iter.next()) |group_entry| {
                 _ = group_entry.key_ptr.*;
@@ -932,7 +932,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 }
 
-                var row = try allocator.alloc(eval.Value, items.len);
+                var row = try allocator.alloc(Value, items.len);
 
                 for (items, 0..) |item, i| {
                     if (isAggregationExpr(item.expr)) {
@@ -943,7 +943,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (group_nodes.items.len > 0) {
                             row[i] = try evaluateNodeExpression(allocator, item.expr, group_nodes.items[0]);
                         } else {
-                            row[i] = eval.Value{ .Null = {} };
+                            row[i] = Value{ .Null = {} };
                         }
                     }
                 }
@@ -978,10 +978,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE=\"ExecutionOptimization\"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
             // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
             var env_names_buf: [][]const u8 = &.{};
-            var env_values_buf: []eval.Value = &.{};
+            var env_values_buf: []Value = &.{};
             if (match_variable) |_| {
                 env_names_buf = try allocator.alloc([]const u8, 1);
-                env_values_buf = try allocator.alloc(eval.Value, 1);
+                env_values_buf = try allocator.alloc(Value, 1);
             }
             defer {
                 if (match_variable != null) {
@@ -1016,16 +1016,16 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Create environment with matched node for WHERE clause evaluation (reuse arrays)
                 var env_names: [][]const u8 = &.{};
-                var env_values: []eval.Value = &.{};
+                var env_values: []Value = &.{};
 
                 if (match_variable) |var_name| {
                     env_names = env_names_buf;
                     env_values = env_values_buf;
                     env_names[0] = var_name;
-                    env_values[0] = eval.Value{ .Node = node };
+                    env_values[0] = Value{ .Node = node };
                 }
 
-                const env = eval.Env{
+                const env = Env{
                     .names = env_names,
                     .values = env_values,
                     .param_names = param_names,
@@ -1106,13 +1106,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // Now compute aggregations over the matched nodes
-            var row = try allocator.alloc(eval.Value, items.len);
+            var row = try allocator.alloc(Value, items.len);
 
             for (items, 0..) |item, i| {
                 row[i] = try evaluateGroupAggregation(allocator, item.expr, matched_nodes.items);
             }
 
-            var rows_slice = try allocator.alloc([]eval.Value, 1);
+            var rows_slice = try allocator.alloc([]Value, 1);
             rows_slice[0] = row;
 
             // CANARY(memory-safety): Don't return early if there's a WITH clause
@@ -1175,12 +1175,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
 
                 // Evaluate RETURN items using WITH result as environment
-                var return_rows = try allocator.alloc([]eval.Value, with_result.rows.len);
+                var return_rows = try allocator.alloc([]Value, with_result.rows.len);
                 for (with_result.rows, 0..) |with_row, row_idx| {
-                    var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+                    var return_row = try allocator.alloc(Value, q.ret.items.len);
 
                     // Create environment from WITH result columns and this row's values
-                    const env = eval.Env{
+                    const env = Env{
                         .names = with_result.columns,
                         .values = with_row,
                         .param_names = param_names,
@@ -1218,7 +1218,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // Non-aggregation query - return one row per matching pattern
         // CANARY: REQ=REQ-GQL-WITH-RETURN; FEATURE="WithReturnExpressions"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-12
 
-        var rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+        var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
         if (has_relationship) {
             // Handle relationship patterns
@@ -1281,25 +1281,25 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (chain_path_var != null) env_count += 1;
 
                         const env_names = try allocator.alloc([]const u8, env_count);
-                        const env_values = try allocator.alloc(eval.Value, env_count);
+                        const env_values = try allocator.alloc(Value, env_count);
 
                         var env_idx: usize = 0;
                         if (left_node_var) |var_name| {
                             env_names[env_idx] = var_name;
-                            env_values[env_idx] = eval.Value{ .Node = left_node };
+                            env_values[env_idx] = Value{ .Node = left_node };
                             env_idx += 1;
                         }
                         if (right_node_var) |var_name| {
                             env_names[env_idx] = var_name;
-                            env_values[env_idx] = eval.Value{ .Node = right_node_ptr };
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
                             env_idx += 1;
                         }
                         if (rel_var) |var_name| {
                             env_names[env_idx] = var_name;
                             if (edge_ptr) |ep| {
-                                env_values[env_idx] = eval.Value{ .Edge = ep };
+                                env_values[env_idx] = Value{ .Edge = ep };
                             } else {
-                                env_values[env_idx] = eval.Value{ .Null = {} };
+                                env_values[env_idx] = Value{ .Null = {} };
                             }
                             env_idx += 1;
                         }
@@ -1316,14 +1316,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             }
 
                             env_names[env_idx] = var_name;
-                            env_values[env_idx] = eval.Value{ .Path = .{
+                            env_values[env_idx] = Value{ .Path = .{
                                 .nodes = path_nodes,
                                 .edges = path_edges,
                             } };
                             env_idx += 1;
                         }
 
-                        const env = eval.Env{
+                        const env = Env{
                             .names = env_names,
                             .values = env_values,
                             .param_names = param_names,
@@ -1367,7 +1367,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // Evaluate return items
-                        var row = try allocator.alloc(eval.Value, items.len);
+                        var row = try allocator.alloc(Value, items.len);
                         for (items, 0..) |item, i| {
                             row[i] = try eval.evalExpr(allocator, item.expr, env);
                         }
@@ -1399,32 +1399,32 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_var != null) env_count += 1;
 
                         const env_names = try allocator.alloc([]const u8, env_count);
-                        const env_values = try allocator.alloc(eval.Value, env_count);
+                        const env_values = try allocator.alloc(Value, env_count);
 
                         var env_idx: usize = 0;
                         if (left_node_var) |var_name| {
                             env_names[env_idx] = var_name;
-                            env_values[env_idx] = eval.Value{ .Node = left_node };
+                            env_values[env_idx] = Value{ .Node = left_node };
                             env_idx += 1;
                         }
                         if (right_node_var) |var_name| {
                             env_names[env_idx] = var_name;
-                            env_values[env_idx] = eval.Value{ .Node = right_node_ptr };
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
                             env_idx += 1;
                         }
                         if (rel_var) |var_name| {
                             env_names[env_idx] = var_name;
                             // Store edge as an Edge value for type() function
                             const edge_ptr = store.edges.getPtr(edge.id) orelse {
-                                env_values[env_idx] = eval.Value{ .Null = {} };
+                                env_values[env_idx] = Value{ .Null = {} };
                                 env_idx += 1;
                                 continue;
                             };
-                            env_values[env_idx] = eval.Value{ .Edge = edge_ptr };
+                            env_values[env_idx] = Value{ .Edge = edge_ptr };
                             env_idx += 1;
                         }
 
-                        const env = eval.Env{
+                        const env = Env{
                             .names = env_names,
                             .values = env_values,
                             .param_names = param_names,
@@ -1561,7 +1561,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // Evaluate return items
-                        var row = try allocator.alloc(eval.Value, items.len);
+                        var row = try allocator.alloc(Value, items.len);
                         for (items, 0..) |item, i| {
                             row[i] = try eval.evalExpr(allocator, item.expr, env);
                         }
@@ -1602,7 +1602,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 if (match_props) |props| {
                     var props_match = true;
                     // Create environment with parameters for evaluating property expressions
-                    const prop_env = eval.Env{
+                    const prop_env = Env{
                         .names = &.{},
                         .values = &.{},
                         .param_names = param_names,
@@ -1612,14 +1612,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     for (props) |prop| {
                         if (node.properties.get(prop.key)) |node_prop_val| {
-                            // Convert PropertyValue to eval.Value for comparison
+                            // Convert PropertyValue to Value for comparison
                             const node_val = switch (node_prop_val) {
-                                .Null => eval.Value{ .Null = {} },
-                                .Bool => |b| eval.Value{ .Bool = b },
-                                .Int => |i| eval.Value{ .Int = i },
-                                .String => |s| eval.Value{ .Str = s },
-                                .Float => eval.Value{ .Null = {} }, // Float not directly supported
-                                .ExtValue => |ext| eval.Value{ .ExtValue = ext },
+                                .Null => Value{ .Null = {} },
+                                .Bool => |b| Value{ .Bool = b },
+                                .Int => |i| Value{ .Int = i },
+                                .String => |s| Value{ .Str = s },
+                                .Float => Value{ .Null = {} }, // Float not directly supported
+                                .ExtValue => |ext| Value{ .ExtValue = ext },
                             };
                             // Evaluate expected value from pattern (with access to parameters)
                             const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
@@ -1639,16 +1639,16 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Create environment with matched node bound to variable
                 var env_names: [][]const u8 = &.{};
-                var env_values: []eval.Value = &.{};
+                var env_values: []Value = &.{};
 
                 if (match_variable) |var_name| {
                     env_names = try allocator.alloc([]const u8, 1);
-                    env_values = try allocator.alloc(eval.Value, 1);
+                    env_values = try allocator.alloc(Value, 1);
                     env_names[0] = var_name;
-                    env_values[0] = eval.Value{ .Node = node };
+                    env_values[0] = Value{ .Node = node };
                 }
 
-                const env = eval.Env{
+                const env = Env{
                     .names = env_names,
                     .values = env_values,
                     .param_names = param_names,
@@ -1708,7 +1708,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .Property => |prop| {
                             if (std.mem.eql(u8, prop.target.object, match_variable orelse "")) {
                                 const value = try eval.evalExpr(allocator, prop.value, env);
-                                // Convert eval.Value to PropertyValue
+                                // Convert Value to PropertyValue
                                 const prop_value = switch (value) {
                                     .Str => |s| blk: {
                                         // Encrypt if needed before storing
@@ -1798,7 +1798,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Evaluate inline LET bindings and extend environment
                 var extended_env = env;
                 var inline_let_names = std.ArrayList([]const u8).initCapacity(allocator, inline_let_bindings.len) catch unreachable;
-                var inline_let_values = std.ArrayList(eval.Value).initCapacity(allocator, inline_let_bindings.len) catch unreachable;
+                var inline_let_values = std.ArrayList(Value).initCapacity(allocator, inline_let_bindings.len) catch unreachable;
                 defer inline_let_names.deinit(allocator);
                 defer inline_let_values.deinit(allocator);
 
@@ -1811,7 +1811,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Create extended environment with both matched variables and inline LET bindings
                 if (inline_let_bindings.len > 0) {
                     var all_names = try allocator.alloc([]const u8, env_names.len + inline_let_names.items.len);
-                    var all_values = try allocator.alloc(eval.Value, env_values.len + inline_let_values.items.len);
+                    var all_values = try allocator.alloc(Value, env_values.len + inline_let_values.items.len);
 
                     // Copy original env
                     for (env_names, 0..) |name, idx| {
@@ -1829,7 +1829,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         all_values[env_values.len + idx] = value;
                     }
 
-                    extended_env = eval.Env{
+                    extended_env = Env{
                         .names = all_names,
                         .values = all_values,
                         .param_names = param_names,
@@ -1842,17 +1842,17 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Note: env is still valid here since we only free on continue
                 // If WITH clause exists, build rows with matched variables (not RETURN expressions)
                 // Otherwise, evaluate RETURN expressions directly
-                var row: []eval.Value = undefined;
+                var row: []Value = undefined;
 
                 if (q.with_clause != null) {
                     // Build row with matched variables for WITH clause processing
-                    row = try allocator.alloc(eval.Value, extended_env.values.len);
+                    row = try allocator.alloc(Value, extended_env.values.len);
                     for (extended_env.values, 0..) |val, i| {
                         row[i] = val;
                     }
                 } else {
                     // No WITH clause - evaluate RETURN expressions directly
-                    row = try allocator.alloc(eval.Value, items.len);
+                    row = try allocator.alloc(Value, items.len);
                     for (items, 0..) |item, i| {
                         // Evaluate expression with node and inline LET bindings in environment
                         row[i] = try eval.evalExpr(allocator, item.expr, extended_env);
@@ -1881,9 +1881,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
         // For OPTIONAL MATCH, if no rows were matched, return a single row with NULL values
         if (q.optional_match and rows.items.len == 0) {
-            var null_row = try allocator.alloc(eval.Value, items.len);
+            var null_row = try allocator.alloc(Value, items.len);
             for (items, 0..) |_, i| {
-                null_row[i] = eval.Value{ .Null = {} };
+                null_row[i] = Value{ .Null = {} };
             }
             try rows.append(allocator, null_row);
         }
@@ -1973,12 +1973,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // Evaluate RETURN items using WITH result as environment
-            var return_rows = try allocator.alloc([]eval.Value, with_result.rows.len);
+            var return_rows = try allocator.alloc([]Value, with_result.rows.len);
             for (with_result.rows, 0..) |with_row, row_idx| {
-                var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+                var return_row = try allocator.alloc(Value, q.ret.items.len);
 
                 // Create environment from WITH result columns and this row's values
-                const env = eval.Env{
+                const env = Env{
                     .allocator = allocator,
                     .names = with_result.columns,
                     .values = with_row,

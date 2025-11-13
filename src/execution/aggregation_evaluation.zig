@@ -20,7 +20,7 @@ pub fn getExpressionNameFromAst(expr: ast.Expr) []const u8 {
     };
 }
 
-pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes: []*graph_store.Node) !eval.Value {
+pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes: []*graph_store.Node) !Value {
     switch (expr) {
         .Call => |call| {
             if (call.callee.* == .Ident) {
@@ -32,7 +32,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                         std.mem.eql(u8, call.args[0].Ident.orig, "*"))
                     {
                         // COUNT(*) - count all nodes in group
-                        return eval.Value{ .Int = @intCast(nodes.len) };
+                        return Value{ .Int = @intCast(nodes.len) };
                     }
                     // For COUNT(expr), count non-null values
                     if (call.args.len == 1) {
@@ -47,7 +47,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     }
                                 }
                             }
-                            return eval.Value{ .Int = count };
+                            return Value{ .Int = count };
                         } else if (call.args[0].* == .Member) {
                             const member = call.args[0].Member;
                             var count: i64 = 0;
@@ -58,13 +58,13 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     }
                                 }
                             }
-                            return eval.Value{ .Int = count };
+                            return Value{ .Int = count };
                         } else if (call.args[0].* == .Ident) {
                             // COUNT(n) - count all non-null nodes
-                            return eval.Value{ .Int = @intCast(nodes.len) };
+                            return Value{ .Int = @intCast(nodes.len) };
                         }
                     }
-                    return eval.Value{ .Int = @intCast(nodes.len) };
+                    return Value{ .Int = @intCast(nodes.len) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
                     // COUNT(DISTINCT expr) - count distinct non-null values
                     if (call.args.len == 1) {
@@ -94,9 +94,9 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             }
                         }
 
-                        return eval.Value{ .Int = @intCast(unique_values.count()) };
+                        return Value{ .Int = @intCast(unique_values.count()) };
                     }
-                    return eval.Value{ .Int = 0 };
+                    return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation over group
                     if (call.args.len == 1) {
@@ -116,10 +116,10 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     }
                                 }
                             }
-                            return eval.Value{ .Int = sum };
+                            return Value{ .Int = sum };
                         }
                     }
-                    return eval.Value{ .Int = 0 };
+                    return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
                     // AVG aggregation over group
                     if (call.args.len == 1) {
@@ -143,12 +143,12 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             }
                             if (count > 0) {
                                 const avg = sum / count;
-                                return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1 } };
+                                return Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1 } };
                             }
-                            return eval.Value{ .Null = {} };
+                            return Value{ .Null = {} };
                         }
                     }
-                    return eval.Value{ .Null = {} };
+                    return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
                     // MIN aggregation over group
                     if (call.args.len == 1) {
@@ -171,12 +171,12 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 }
                             }
                             if (min_val) |v| {
-                                return eval.Value{ .Int = v };
+                                return Value{ .Int = v };
                             }
-                            return eval.Value{ .Null = {} };
+                            return Value{ .Null = {} };
                         }
                     }
-                    return eval.Value{ .Null = {} };
+                    return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
                     // MAX aggregation over group
                     if (call.args.len == 1) {
@@ -199,12 +199,12 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 }
                             }
                             if (max_val) |v| {
-                                return eval.Value{ .Int = v };
+                                return Value{ .Int = v };
                             }
-                            return eval.Value{ .Null = {} };
+                            return Value{ .Null = {} };
                         }
                     }
-                    return eval.Value{ .Null = {} };
+                    return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "stddev")) {
                     // CANARY: REQ=REQ-MATH-STATS-001; FEATURE="StatisticalFunctions"; ASPECT=STDDEV; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
                     // STDDEV aggregation - population standard deviation
@@ -257,12 +257,12 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 const stddev = @sqrt(variance);
 
                                 // Return as Decimal with 6 decimal places
-                                return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(stddev * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                                return Value{ .Decimal = .{ .coeff = @intFromFloat(stddev * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
                             }
-                            return eval.Value{ .Null = {} };
+                            return Value{ .Null = {} };
                         }
                     }
-                    return eval.Value{ .Null = {} };
+                    return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "variance")) {
                     // CANARY: REQ=REQ-MATH-STATS-002; FEATURE="StatisticalFunctions"; ASPECT=VARIANCE; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
                     // VARIANCE aggregation - population variance
@@ -314,62 +314,62 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 const variance = sum_squared_dev / count;
 
                                 // Return as Decimal with 6 decimal places
-                                return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(variance * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                                return Value{ .Decimal = .{ .coeff = @intFromFloat(variance * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
                             }
-                            return eval.Value{ .Null = {} };
+                            return Value{ .Null = {} };
                         }
                     }
-                    return eval.Value{ .Null = {} };
+                    return Value{ .Null = {} };
                 }
             }
         },
         else => {},
     }
 
-    return eval.Value{ .Null = {} };
+    return Value{ .Null = {} };
 }
 
-pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node: *const graph_store.Node) !eval.Value {
+pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node: *const graph_store.Node) !Value {
     switch (expr) {
         .Member => |member| {
             // Handle property access like n.label
             // Access property on the current node
             if (node.properties.get(member.field)) |val| {
                 switch (val) {
-                    .String => |s| return eval.Value{ .Str = s },
-                    .Int => |n| return eval.Value{ .Int = n },
-                    .Float => |f| return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
-                    .Bool => |b| return eval.Value{ .Bool = b },
-                    .Null => return eval.Value{ .Null = {} },
-                    .ExtValue => |ext| return eval.Value{ .ExtValue = ext },
+                    .String => |s| return Value{ .Str = s },
+                    .Int => |n| return Value{ .Int = n },
+                    .Float => |f| return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                    .Bool => |b| return Value{ .Bool = b },
+                    .Null => return Value{ .Null = {} },
+                    .ExtValue => |ext| return Value{ .ExtValue = ext },
                 }
             }
-            return eval.Value{ .Null = {} };
+            return Value{ .Null = {} };
         },
         .PropertyAccess => |prop_access| {
             // Legacy property access (if still used)
             // Access property on the current node
             if (node.properties.get(prop_access.property)) |val| {
                 switch (val) {
-                    .String => |s| return eval.Value{ .Str = s },
-                    .Int => |n| return eval.Value{ .Int = n },
-                    .Float => |f| return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
-                    .Bool => |b| return eval.Value{ .Bool = b },
-                    .Null => return eval.Value{ .Null = {} },
-                    .ExtValue => |ext| return eval.Value{ .ExtValue = ext },
+                    .String => |s| return Value{ .Str = s },
+                    .Int => |n| return Value{ .Int = n },
+                    .Float => |f| return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                    .Bool => |b| return Value{ .Bool = b },
+                    .Null => return Value{ .Null = {} },
+                    .ExtValue => |ext| return Value{ .ExtValue = ext },
                 }
             }
-            return eval.Value{ .Null = {} };
+            return Value{ .Null = {} };
         },
         .Ident => |ident| {
             // Handle node identifier (like 'n' in MATCH (n))
             _ = ident;
             // For now, return null
-            return eval.Value{ .Null = {} };
+            return Value{ .Null = {} };
         },
         else => {
             // For other expressions, evaluate normally
-            const env = eval.Env{
+            const env = Env{
                 .names = &.{},
                 .values = &.{},
                 .allocator = allocator,
@@ -379,7 +379,7 @@ pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node
     }
 }
 
-pub fn evaluateAggregationWithLabels(allocator: std.mem.Allocator, expr: ast.Expr, store: *graph_store.GraphStore, match_labels: [][]const u8) !eval.Value {
+pub fn evaluateAggregationWithLabels(allocator: std.mem.Allocator, expr: ast.Expr, store: *graph_store.GraphStore, match_labels: [][]const u8) !Value {
     switch (expr) {
         .Call => |call| {
             if (call.callee.* == .Ident) {
@@ -417,7 +417,7 @@ pub fn evaluateAggregationWithLabels(allocator: std.mem.Allocator, expr: ast.Exp
 
                             count += 1;
                         }
-                        return eval.Value{ .Int = count };
+                        return Value{ .Int = count };
                     }
                     // For other count expressions, use original evaluateAggregation
                     return evaluateAggregation(allocator, expr, store);
@@ -431,7 +431,7 @@ pub fn evaluateAggregationWithLabels(allocator: std.mem.Allocator, expr: ast.Exp
     return evaluateAggregation(allocator, expr, store);
 }
 
-pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *graph_store.GraphStore) !eval.Value {
+pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: *graph_store.GraphStore) !Value {
     switch (expr) {
         .Call => |call| {
             if (call.callee.* == .Ident) {
@@ -443,7 +443,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                         std.mem.eql(u8, call.args[0].Ident.orig, "*"))
                     {
                         // COUNT(*) - count all nodes
-                        return eval.Value{ .Int = @intCast(store.getNodeCount()) };
+                        return Value{ .Int = @intCast(store.getNodeCount()) };
                     } else if (call.args.len == 1) {
                         // Check if it's a DISTINCT count
                         const is_distinct = std.mem.eql(u8, func_name, "countDistinct");
@@ -478,7 +478,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                 }
                             }
 
-                            return eval.Value{ .Int = @intCast(unique_values.count()) };
+                            return Value{ .Int = @intCast(unique_values.count()) };
                         }
 
                         // COUNT(n.v) - count nodes with non-null v property
@@ -495,7 +495,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                     }
                                 }
                             }
-                            return eval.Value{ .Int = count };
+                            return Value{ .Int = count };
                         } else if (call.args[0].* == .Member) {
                             const member = call.args[0].Member;
                             var count: i64 = 0;
@@ -509,14 +509,14 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                     }
                                 }
                             }
-                            return eval.Value{ .Int = count };
+                            return Value{ .Int = count };
                         }
 
                         // COUNT() with no args might be interpreted as COUNT(*)
-                        return eval.Value{ .Int = @intCast(store.getNodeCount()) };
+                        return Value{ .Int = @intCast(store.getNodeCount()) };
                     }
                     // Default COUNT
-                    return eval.Value{ .Int = 0 };
+                    return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation
                     if (call.args.len == 1) {
@@ -538,10 +538,10 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                     }
                                 }
                             }
-                            return eval.Value{ .Int = sum };
+                            return Value{ .Int = sum };
                         }
                     }
-                    return eval.Value{ .Int = 0 };
+                    return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
                     // AVG aggregation
                     if (call.args.len == 1) {
@@ -568,12 +568,12 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                             if (count > 0) {
                                 // Return as decimal with 1 decimal place for test
                                 const avg = sum / count;
-                                return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1 } };
+                                return Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1 } };
                             }
-                            return eval.Value{ .Null = {} };
+                            return Value{ .Null = {} };
                         }
                     }
-                    return eval.Value{ .Null = {} };
+                    return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
                     // MIN aggregation
                     if (call.args.len == 1) {
@@ -598,12 +598,12 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                 }
                             }
                             if (min_val) |v| {
-                                return eval.Value{ .Int = v };
+                                return Value{ .Int = v };
                             }
-                            return eval.Value{ .Null = {} };
+                            return Value{ .Null = {} };
                         }
                     }
-                    return eval.Value{ .Null = {} };
+                    return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
                     // MAX aggregation
                     if (call.args.len == 1) {
@@ -628,12 +628,12 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                 }
                             }
                             if (max_val) |v| {
-                                return eval.Value{ .Int = v };
+                                return Value{ .Int = v };
                             }
-                            return eval.Value{ .Null = {} };
+                            return Value{ .Null = {} };
                         }
                     }
-                    return eval.Value{ .Null = {} };
+                    return Value{ .Null = {} };
                 }
             }
         },
@@ -643,19 +643,19 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
             if (iter.next()) |node| {
                 if (node.properties.get(prop_access.property)) |val| {
                     switch (val) {
-                        .String => |s| return eval.Value{ .Str = s },
-                        .Int => |n| return eval.Value{ .Int = n },
-                        .Float => |f| return eval.Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
-                        .Bool => |b| return eval.Value{ .Bool = b },
-                        .Null => return eval.Value{ .Null = {} },
-                        .ExtValue => |ext| return eval.Value{ .ExtValue = ext },
+                        .String => |s| return Value{ .Str = s },
+                        .Int => |n| return Value{ .Int = n },
+                        .Float => |f| return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                        .Bool => |b| return Value{ .Bool = b },
+                        .Null => return Value{ .Null = {} },
+                        .ExtValue => |ext| return Value{ .ExtValue = ext },
                     }
                 }
             }
-            return eval.Value{ .Null = {} };
+            return Value{ .Null = {} };
         },
-        else => return eval.Value{ .Null = {} },
+        else => return Value{ .Null = {} },
     }
 
-    return eval.Value{ .Null = {} };
+    return Value{ .Null = {} };
 }

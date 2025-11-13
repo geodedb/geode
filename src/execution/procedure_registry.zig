@@ -272,12 +272,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "settings");
         columns[3] = try allocator.dupe(u8, "timestamp");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, status) };
-        row[1] = eval.Value{ .Str = try allocator.dupe(u8, config_path) };
-        row[2] = eval.Value{ .Str = try allocator.dupe(u8, config_json) };
-        row[3] = eval.Value{ .Int = std.time.milliTimestamp() };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Str = try allocator.dupe(u8, status) };
+        row[1] = Value{ .Str = try allocator.dupe(u8, config_path) };
+        row[2] = Value{ .Str = try allocator.dupe(u8, config_json) };
+        row[3] = Value{ .Int = std.time.milliTimestamp() };
         rows[0] = row;
 
         return ExecutionResult{
@@ -350,11 +350,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "logged");
 
         // Create result row
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = @intCast(event_id) };
-        row[1] = eval.Value{ .Int = @intCast(timestamp) };
-        row[2] = eval.Value{ .Bool = logged };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = @intCast(event_id) };
+        row[1] = Value{ .Int = @intCast(timestamp) };
+        row[2] = Value{ .Bool = logged };
         rows[0] = row;
 
         return ExecutionResult{
@@ -381,11 +381,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "timestamp");
         columns[2] = try allocator.dupe(u8, "logged");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = @intCast(event_id) };
-        row[1] = eval.Value{ .Int = timestamp };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = @intCast(event_id) };
+        row[1] = Value{ .Int = timestamp };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         _ = event_type;
@@ -414,7 +414,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[4] = try allocator.dupe(u8, "outcome");
 
         // Return empty result set for now (would read from audit log file)
-        const rows = try allocator.alloc([]eval.Value, 0);
+        const rows = try allocator.alloc([]Value, 0);
         _ = limit;
 
         return ExecutionResult{
@@ -468,11 +468,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "events_checked");
         columns[2] = try allocator.dupe(u8, "issues_found");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = valid };
-        row[1] = eval.Value{ .Int = events_checked };
-        row[2] = eval.Value{ .Int = issues_found };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = valid };
+        row[1] = Value{ .Int = events_checked };
+        row[2] = Value{ .Int = issues_found };
         rows[0] = row;
 
         return ExecutionResult{
@@ -498,11 +498,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             columns[1] = try allocator.dupe(u8, "signatures_checked");
             columns[2] = try allocator.dupe(u8, "failures");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 3);
-            row[0] = eval.Value{ .Bool = false };
-            row[1] = eval.Value{ .Int = 0 };
-            row[2] = eval.Value{ .Int = 1 };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 3);
+            row[0] = Value{ .Bool = false };
+            row[1] = Value{ .Int = 0 };
+            row[2] = Value{ .Int = 1 };
             rows[0] = row;
 
             return ExecutionResult{
@@ -551,11 +551,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "signatures_checked");
         columns[2] = try allocator.dupe(u8, "failures");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = verified };
-        row[1] = eval.Value{ .Int = signatures_checked };
-        row[2] = eval.Value{ .Int = failures };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = verified };
+        row[1] = Value{ .Int = signatures_checked };
+        row[2] = Value{ .Int = failures };
         rows[0] = row;
 
         return ExecutionResult{
@@ -648,11 +648,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "leaf_count");
         columns[2] = try allocator.dupe(u8, "tree_height");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, &hex_buf) };
-        row[1] = eval.Value{ .Int = @intCast(leaf_count) };
-        row[2] = eval.Value{ .Int = tree_height };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try allocator.dupe(u8, &hex_buf) };
+        row[1] = Value{ .Int = @intCast(leaf_count) };
+        row[2] = Value{ .Int = tree_height };
         rows[0] = row;
 
         return ExecutionResult{
@@ -668,11 +668,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "checks_performed");
         columns[2] = try allocator.dupe(u8, "issues_found");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "passed") };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "passed") };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -749,11 +749,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "file_path");
         columns[2] = try allocator.dupe(u8, "events_written");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = success };
-        row[1] = eval.Value{ .Str = try allocator.dupe(u8, test_file_path) };
-        row[2] = eval.Value{ .Int = events_written };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = success };
+        row[1] = Value{ .Str = try allocator.dupe(u8, test_file_path) };
+        row[2] = Value{ .Int = events_written };
         rows[0] = row;
 
         return ExecutionResult{
@@ -793,7 +793,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         }
 
         // Create result rows for multiple categories
-        const rows = try allocator.alloc([]eval.Value, auth_categories.len);
+        const rows = try allocator.alloc([]Value, auth_categories.len);
 
         for (auth_categories, 0..) |cat, i| {
             var events_logged: i64 = 0;
@@ -819,10 +819,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
                 success = true;
             }
 
-            const row = try allocator.alloc(eval.Value, 3);
-            row[0] = eval.Value{ .Str = try allocator.dupe(u8, cat.category) };
-            row[1] = eval.Value{ .Int = events_logged };
-            row[2] = eval.Value{ .Bool = success };
+            const row = try allocator.alloc(Value, 3);
+            row[0] = Value{ .Str = try allocator.dupe(u8, cat.category) };
+            row[1] = Value{ .Int = events_logged };
+            row[2] = Value{ .Bool = success };
             rows[i] = row;
         }
 
@@ -844,11 +844,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "events_logged");
         columns[2] = try allocator.dupe(u8, "success");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "command_execution") };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "command_execution") };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -880,15 +880,15 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "success");
 
         // Return multiple rows showing each category tested
-        const rows = try allocator.alloc([]eval.Value, categories.len);
+        const rows = try allocator.alloc([]Value, categories.len);
         for (categories, test_resources, 0..) |category, resource, i| {
             // Log real events for each category
             try global_audit_logger.?.logDataAccessEvent(category, resource, 1001);
 
-            const row = try allocator.alloc(eval.Value, 3);
-            row[0] = eval.Value{ .Str = try allocator.dupe(u8, category) };
-            row[1] = eval.Value{ .Int = 1 };
-            row[2] = eval.Value{ .Bool = true };
+            const row = try allocator.alloc(Value, 3);
+            row[0] = Value{ .Str = try allocator.dupe(u8, category) };
+            row[1] = Value{ .Int = 1 };
+            row[2] = Value{ .Bool = true };
             rows[i] = row;
         }
 
@@ -925,11 +925,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "rotation_policy");
         columns[2] = try allocator.dupe(u8, "max_size_mb");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = try allocator.dupe(u8, "size_based") };
-        row[2] = eval.Value{ .Int = @intCast(rotation_size_mb) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = try allocator.dupe(u8, "size_based") };
+        row[2] = Value{ .Int = @intCast(rotation_size_mb) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -959,11 +959,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "events_written");
         columns[2] = try allocator.dupe(u8, "log_name");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = @intCast(events_written) };
-        row[2] = eval.Value{ .Str = try allocator.dupe(u8, "Application") };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = @intCast(events_written) };
+        row[2] = Value{ .Str = try allocator.dupe(u8, "Application") };
         rows[0] = row;
 
         return ExecutionResult{
@@ -993,11 +993,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "events_sent");
         columns[2] = try allocator.dupe(u8, "facility");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = @intCast(events_sent) };
-        row[2] = eval.Value{ .Str = try allocator.dupe(u8, "local0") };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = @intCast(events_sent) };
+        row[2] = Value{ .Str = try allocator.dupe(u8, "local0") };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1028,11 +1028,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "outputs_tested");
         columns[2] = try allocator.dupe(u8, "all_functional");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = @intCast(outputs_tested) };
-        row[2] = eval.Value{ .Bool = all_functional };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = @intCast(outputs_tested) };
+        row[2] = Value{ .Bool = all_functional };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1062,11 +1062,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "events_correlated");
         columns[2] = try allocator.dupe(u8, "correlation_rules_tested");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.alert_generated };
-        row[1] = eval.Value{ .Int = @intCast(result.correlated_count) };
-        row[2] = eval.Value{ .Int = 6 }; // Number of event patterns tested
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.alert_generated };
+        row[1] = Value{ .Int = @intCast(result.correlated_count) };
+        row[2] = Value{ .Int = 6 }; // Number of event patterns tested
         rows[0] = row;
 
         // Free the correlation_id string
@@ -1099,11 +1099,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "alerts_generated");
         columns[2] = try allocator.dupe(u8, "alert_types_tested");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.alerts_generated > 0 };
-        row[1] = eval.Value{ .Int = @intCast(result.alerts_generated) };
-        row[2] = eval.Value{ .Int = 5 }; // Number of alert rule types tested
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.alerts_generated > 0 };
+        row[1] = Value{ .Int = @intCast(result.alerts_generated) };
+        row[2] = Value{ .Int = 5 }; // Number of alert rule types tested
         rows[0] = row;
 
         // Free the destinations string
@@ -1122,11 +1122,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "report_path");
         columns[2] = try allocator.dupe(u8, "events_included");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "/tmp/compliance_report.json" };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "/tmp/compliance_report.json" };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1142,11 +1142,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "scripts_tested");
         columns[2] = try allocator.dupe(u8, "all_compatible");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1189,11 +1189,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "rotations_tested");
         columns[2] = try allocator.dupe(u8, "continuity_maintained");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = continuity_maintained };
-        row[1] = eval.Value{ .Int = rotations_tested };
-        row[2] = eval.Value{ .Bool = continuity_maintained };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = continuity_maintained };
+        row[1] = Value{ .Int = rotations_tested };
+        row[2] = Value{ .Bool = continuity_maintained };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1225,11 +1225,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "retention_days");
         columns[2] = try allocator.dupe(u8, "policy_enabled");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "success") };
-        row[1] = eval.Value{ .Int = @intCast(retention_days) };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "success") };
+        row[1] = Value{ .Int = @intCast(retention_days) };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1260,11 +1260,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "files_deleted");
         columns[2] = try allocator.dupe(u8, "space_freed_bytes");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = @intCast(cleanup_result.files_deleted) };
-        row[2] = eval.Value{ .Int = @intCast(cleanup_result.bytes_freed) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = @intCast(cleanup_result.files_deleted) };
+        row[2] = Value{ .Int = @intCast(cleanup_result.bytes_freed) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1294,11 +1294,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "anomalies_detected");
         columns[2] = try allocator.dupe(u8, "severity_levels");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.anomalies_detected > 0 };
-        row[1] = eval.Value{ .Int = @intCast(result.anomalies_detected) };
-        row[2] = eval.Value{ .Int = @intFromFloat(result.risk_score) }; // Convert risk score to severity level
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.anomalies_detected > 0 };
+        row[1] = Value{ .Int = @intCast(result.anomalies_detected) };
+        row[2] = Value{ .Int = @intFromFloat(result.risk_score) }; // Convert risk score to severity level
         rows[0] = row;
 
         // Free the patterns string
@@ -1331,14 +1331,14 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "indicators_found");
         columns[2] = try allocator.dupe(u8, "threat_level");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.ioc_count > 0 };
-        row[1] = eval.Value{ .Int = @intCast(result.ioc_count) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.ioc_count > 0 };
+        row[1] = Value{ .Int = @intCast(result.ioc_count) };
 
         // Determine threat level based on confidence
         const threat_level = if (result.confidence >= 80.0) "HIGH" else if (result.confidence >= 50.0) "MEDIUM" else "LOW";
-        row[2] = eval.Value{ .Str = threat_level };
+        row[2] = Value{ .Str = threat_level };
         rows[0] = row;
 
         // Free the threat_types string
@@ -1371,11 +1371,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "escalations_detected");
         columns[2] = try allocator.dupe(u8, "users_affected");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.escalation_attempts > 0 };
-        row[1] = eval.Value{ .Int = @intCast(result.escalation_attempts) };
-        row[2] = eval.Value{ .Int = @intCast(result.blocked) }; // Users affected approximated by blocked attempts
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.escalation_attempts > 0 };
+        row[1] = Value{ .Int = @intCast(result.escalation_attempts) };
+        row[2] = Value{ .Int = @intCast(result.blocked) }; // Users affected approximated by blocked attempts
         rows[0] = row;
 
         // Note: risk_level is a string literal, no need to free
@@ -1406,13 +1406,13 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "max_latency_ms");
         columns[3] = try allocator.dupe(u8, "memory_used_mb");
         columns[4] = try allocator.dupe(u8, "cpu_percent");
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 5);
-        row[0] = eval.Value{ .Int = @intCast(result.events_per_second) };
-        row[1] = eval.Value{ .Int = @intFromFloat(result.avg_latency_ms) };
-        row[2] = eval.Value{ .Int = @intFromFloat(result.max_latency_ms) };
-        row[3] = eval.Value{ .Int = @intFromFloat(result.memory_used_mb) };
-        row[4] = eval.Value{ .Int = @intFromFloat(result.cpu_percent) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 5);
+        row[0] = Value{ .Int = @intCast(result.events_per_second) };
+        row[1] = Value{ .Int = @intFromFloat(result.avg_latency_ms) };
+        row[2] = Value{ .Int = @intFromFloat(result.max_latency_ms) };
+        row[3] = Value{ .Int = @intFromFloat(result.memory_used_mb) };
+        row[4] = Value{ .Int = @intFromFloat(result.cpu_percent) };
         rows[0] = row;
         return ExecutionResult{
             .columns = columns,
@@ -1439,12 +1439,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "peak_mb");
         columns[2] = try allocator.dupe(u8, "current_mb");
         columns[3] = try allocator.dupe(u8, "leak_detected");
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = @intFromFloat(result.baseline_mb) };
-        row[1] = eval.Value{ .Int = @intFromFloat(result.peak_mb) };
-        row[2] = eval.Value{ .Int = @intFromFloat(result.current_mb) };
-        row[3] = eval.Value{ .Bool = result.leak_detected };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = @intFromFloat(result.baseline_mb) };
+        row[1] = Value{ .Int = @intFromFloat(result.peak_mb) };
+        row[2] = Value{ .Int = @intFromFloat(result.current_mb) };
+        row[3] = Value{ .Bool = result.leak_detected };
         rows[0] = row;
         return ExecutionResult{
             .columns = columns,
@@ -1471,12 +1471,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "race_conditions");
         columns[2] = try allocator.dupe(u8, "deadlocks");
         columns[3] = try allocator.dupe(u8, "successful_ops");
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = @intCast(result.threads_tested) };
-        row[1] = eval.Value{ .Int = @intCast(result.race_conditions) };
-        row[2] = eval.Value{ .Int = @intCast(result.deadlocks) };
-        row[3] = eval.Value{ .Int = @intCast(result.successful_ops) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = @intCast(result.threads_tested) };
+        row[1] = Value{ .Int = @intCast(result.race_conditions) };
+        row[2] = Value{ .Int = @intCast(result.deadlocks) };
+        row[3] = Value{ .Int = @intCast(result.successful_ops) };
         rows[0] = row;
         return ExecutionResult{
             .columns = columns,
@@ -1503,12 +1503,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "fallback_used");
         columns[2] = try allocator.dupe(u8, "events_dropped");
         columns[3] = try allocator.dupe(u8, "compression_enabled");
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Bool = result.disk_full_handled };
-        row[1] = eval.Value{ .Bool = result.fallback_used };
-        row[2] = eval.Value{ .Int = @intCast(result.events_dropped) };
-        row[3] = eval.Value{ .Bool = result.compression_enabled };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Bool = result.disk_full_handled };
+        row[1] = Value{ .Bool = result.fallback_used };
+        row[2] = Value{ .Int = @intCast(result.events_dropped) };
+        row[3] = Value{ .Bool = result.compression_enabled };
         rows[0] = row;
         return ExecutionResult{
             .columns = columns,
@@ -1534,13 +1534,13 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "corruption_detected");
         columns[1] = try allocator.dupe(u8, "recovery_attempted");
         columns[2] = try allocator.dupe(u8, "data_salvaged");
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.corruption_detected };
-        row[1] = eval.Value{ .Bool = result.recovery_attempted };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.corruption_detected };
+        row[1] = Value{ .Bool = result.recovery_attempted };
         // data_salvaged = number of valid lines recovered (total - data_loss)
         const data_salvaged = if (result.data_loss > 0) 9 - result.data_loss else 9;
-        row[2] = eval.Value{ .Int = @intCast(data_salvaged) };
+        row[2] = Value{ .Int = @intCast(data_salvaged) };
         rows[0] = row;
         return ExecutionResult{
             .columns = columns,
@@ -1567,12 +1567,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "errors_found");
         columns[2] = try allocator.dupe(u8, "warnings_found");
         columns[3] = try allocator.dupe(u8, "auto_fixed");
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Bool = result.config_validated };
-        row[1] = eval.Value{ .Int = @intCast(result.errors_found) };
-        row[2] = eval.Value{ .Int = @intCast(result.warnings_found) };
-        row[3] = eval.Value{ .Int = @intCast(result.auto_fixed) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Bool = result.config_validated };
+        row[1] = Value{ .Int = @intCast(result.errors_found) };
+        row[2] = Value{ .Int = @intCast(result.warnings_found) };
+        row[3] = Value{ .Int = @intCast(result.auto_fixed) };
         rows[0] = row;
         return ExecutionResult{
             .columns = columns,
@@ -1587,11 +1587,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "export_path");
         columns[2] = try allocator.dupe(u8, "events_exported");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "/tmp/audit_export.json" };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "/tmp/audit_export.json" };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1607,11 +1607,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "package_path");
         columns[2] = try allocator.dupe(u8, "integrity_verified");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "/tmp/forensic_package.tar.gz" };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "/tmp/forensic_package.tar.gz" };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1627,11 +1627,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "compliance_level");
         columns[2] = try allocator.dupe(u8, "violations_found");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "compliant" };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "compliant" };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1665,11 +1665,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "logs_archived");
         columns[2] = try allocator.dupe(u8, "test_data_removed");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = files_cleaned };
-        row[1] = eval.Value{ .Bool = true }; // logs_archived
-        row[2] = eval.Value{ .Bool = true }; // test_data_removed
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = files_cleaned };
+        row[1] = Value{ .Bool = true }; // logs_archived
+        row[2] = Value{ .Bool = true }; // test_data_removed
         rows[0] = row;
 
         return ExecutionResult{
@@ -1685,11 +1685,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "master_key_id");
         columns[2] = try allocator.dupe(u8, "dek_count");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "mk-00000001" };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "mk-00000001" };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1705,11 +1705,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "keys_rotated");
         columns[2] = try allocator.dupe(u8, "new_master_key_id");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Str = "mk-00000002" };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Str = "mk-00000002" };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1725,11 +1725,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "encrypted_tables");
         columns[2] = try allocator.dupe(u8, "encryption_algorithm");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Str = "AES-256-GCM" };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Str = "AES-256-GCM" };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1745,11 +1745,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "kms_provider");
         columns[2] = try allocator.dupe(u8, "kms_configured");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "local" };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "local" };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1801,11 +1801,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "bytes_encrypted");
         columns[2] = try allocator.dupe(u8, "encryption_time_ms");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = success };
-        row[1] = eval.Value{ .Int = bytes_encrypted };
-        row[2] = eval.Value{ .Int = encryption_time_ms };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = success };
+        row[1] = Value{ .Int = bytes_encrypted };
+        row[2] = Value{ .Int = encryption_time_ms };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1856,11 +1856,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "bytes_decrypted");
         columns[2] = try allocator.dupe(u8, "decryption_time_ms");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = success };
-        row[1] = eval.Value{ .Int = bytes_decrypted };
-        row[2] = eval.Value{ .Int = decryption_time_ms };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = success };
+        row[1] = Value{ .Int = bytes_decrypted };
+        row[2] = Value{ .Int = decryption_time_ms };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1876,11 +1876,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "all_encrypted");
         columns[2] = try allocator.dupe(u8, "tables_checked");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Bool = true };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Bool = true };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1896,11 +1896,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "throughput_mbps");
         columns[2] = try allocator.dupe(u8, "avg_latency_us");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 500 };
-        row[2] = eval.Value{ .Int = 100 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 500 };
+        row[2] = Value{ .Int = 100 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1973,11 +1973,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "rotation_successful");
         columns[2] = try allocator.dupe(u8, "data_integrity_verified");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = success };
-        row[1] = eval.Value{ .Bool = rotation_successful };
-        row[2] = eval.Value{ .Bool = data_integrity_verified };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = success };
+        row[1] = Value{ .Bool = rotation_successful };
+        row[2] = Value{ .Bool = data_integrity_verified };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1993,11 +1993,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "backup_path");
         columns[2] = try allocator.dupe(u8, "backup_encrypted");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "/tmp/backup_encrypted.tde" };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "/tmp/backup_encrypted.tde" };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2042,12 +2042,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             columns[1] = try allocator.dupe(u8, "provider_type");
             columns[2] = try allocator.dupe(u8, "status");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 3);
-            row[0] = eval.Value{ .Bool = false };
-            row[1] = eval.Value{ .Str = try allocator.dupe(u8, provider_type) };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 3);
+            row[0] = Value{ .Bool = false };
+            row[1] = Value{ .Str = try allocator.dupe(u8, provider_type) };
             const err_msg = try std.fmt.allocPrint(allocator, "connection_failed: {any}", .{err});
-            row[2] = eval.Value{ .Str = err_msg };
+            row[2] = Value{ .Str = err_msg };
             rows[0] = row;
 
             return ExecutionResult{
@@ -2065,12 +2065,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             columns[1] = try allocator.dupe(u8, "provider_type");
             columns[2] = try allocator.dupe(u8, "status");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 3);
-            row[0] = eval.Value{ .Bool = false };
-            row[1] = eval.Value{ .Str = try allocator.dupe(u8, provider_type) };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 3);
+            row[0] = Value{ .Bool = false };
+            row[1] = Value{ .Str = try allocator.dupe(u8, provider_type) };
             const err_msg = try std.fmt.allocPrint(allocator, "wrap_failed: {any}", .{err});
-            row[2] = eval.Value{ .Str = err_msg };
+            row[2] = Value{ .Str = err_msg };
             rows[0] = row;
 
             return ExecutionResult{
@@ -2086,12 +2086,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "provider_type");
         columns[2] = try allocator.dupe(u8, "status");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = try allocator.dupe(u8, provider_type) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = try allocator.dupe(u8, provider_type) };
         const status_msg = try std.fmt.allocPrint(allocator, "configured_key_{s}", .{master_key});
-        row[2] = eval.Value{ .Str = status_msg };
+        row[2] = Value{ .Str = status_msg };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2210,12 +2210,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             columns[2] = try allocator.dupe(u8, "endpoint");
             columns[3] = try allocator.dupe(u8, "keys_available");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 4);
-            row[0] = eval.Value{ .Bool = false };
-            row[1] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "{any}", .{err}) };
-            row[2] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "mock://localhost:{d}", .{port}) };
-            row[3] = eval.Value{ .Int = 0 };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 4);
+            row[0] = Value{ .Bool = false };
+            row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "{any}", .{err}) };
+            row[2] = Value{ .Str = try std.fmt.allocPrint(allocator, "mock://localhost:{d}", .{port}) };
+            row[3] = Value{ .Int = 0 };
             rows[0] = row;
 
             return ExecutionResult{
@@ -2236,12 +2236,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             columns[2] = try allocator.dupe(u8, "endpoint");
             columns[3] = try allocator.dupe(u8, "keys_available");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 4);
-            row[0] = eval.Value{ .Bool = false };
-            row[1] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "unwrap_failed: {any}", .{err}) };
-            row[2] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "mock://localhost:{d}", .{port}) };
-            row[3] = eval.Value{ .Int = @intCast(generated_keys.items.len) };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 4);
+            row[0] = Value{ .Bool = false };
+            row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "unwrap_failed: {any}", .{err}) };
+            row[2] = Value{ .Str = try std.fmt.allocPrint(allocator, "mock://localhost:{d}", .{port}) };
+            row[3] = Value{ .Int = @intCast(generated_keys.items.len) };
             rows[0] = row;
 
             return ExecutionResult{
@@ -2286,13 +2286,13 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[3] = try allocator.dupe(u8, "config");
         columns[4] = try allocator.dupe(u8, "test_status");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 5);
-        row[0] = eval.Value{ .Bool = success };
-        row[1] = eval.Value{ .Str = try std.fmt.allocPrint(allocator, "mock://localhost:{d}", .{port}) };
-        row[2] = eval.Value{ .Int = @intCast(generated_keys.items.len) };
-        row[3] = eval.Value{ .Str = try allocator.dupe(u8, config_json) };
-        row[4] = eval.Value{ .Str = if (success) try allocator.dupe(u8, "wrap_unwrap_verified") else try allocator.dupe(u8, "wrap_unwrap_failed") };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 5);
+        row[0] = Value{ .Bool = success };
+        row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "mock://localhost:{d}", .{port}) };
+        row[2] = Value{ .Int = @intCast(generated_keys.items.len) };
+        row[3] = Value{ .Str = try allocator.dupe(u8, config_json) };
+        row[4] = Value{ .Str = if (success) try allocator.dupe(u8, "wrap_unwrap_verified") else try allocator.dupe(u8, "wrap_unwrap_failed") };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2307,11 +2307,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "key_id");
         columns[2] = try allocator.dupe(u8, "algorithm");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "dek-00000001" };
-        row[2] = eval.Value{ .Str = "AES-256-GCM" };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "dek-00000001" };
+        row[2] = Value{ .Str = "AES-256-GCM" };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2326,11 +2326,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "key_id");
         columns[2] = try allocator.dupe(u8, "algorithm");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "wal-key-00000001" };
-        row[2] = eval.Value{ .Str = "AES-256-GCM" };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "wal-key-00000001" };
+        row[2] = Value{ .Str = "AES-256-GCM" };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2349,12 +2349,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "shares_created");
         columns[3] = try allocator.dupe(u8, "threshold");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Bool = result.escrow_successful };
-        row[1] = eval.Value{ .Bool = result.recovery_tested };
-        row[2] = eval.Value{ .Int = @intCast(result.shares_created) };
-        row[3] = eval.Value{ .Int = @intCast(result.threshold) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Bool = result.escrow_successful };
+        row[1] = Value{ .Bool = result.recovery_tested };
+        row[2] = Value{ .Int = @intCast(result.shares_created) };
+        row[3] = Value{ .Int = @intCast(result.threshold) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2373,14 +2373,14 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "performance_impact_pct");
         columns[3] = try allocator.dupe(u8, "errors_encountered");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = @intCast(result.types_tested) };
-        row[1] = eval.Value{ .Bool = result.all_transparent };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = @intCast(result.types_tested) };
+        row[1] = Value{ .Bool = result.all_transparent };
         // Convert float to decimal (performance_impact_pct is a percentage like 15.5)
         const pct_int: i128 = @intFromFloat(result.performance_impact_pct * 100);
-        row[2] = eval.Value{ .Decimal = .{ .coeff = pct_int, .scale = 2 } };
-        row[3] = eval.Value{ .Int = @intCast(result.errors_encountered) };
+        row[2] = Value{ .Decimal = .{ .coeff = pct_int, .scale = 2 } };
+        row[3] = Value{ .Int = @intCast(result.errors_encountered) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2395,11 +2395,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "page_id");
         columns[2] = try allocator.dupe(u8, "encrypted_size");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2414,11 +2414,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "wal_segment");
         columns[2] = try allocator.dupe(u8, "encrypted_size");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2433,11 +2433,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "iterations");
         columns[2] = try allocator.dupe(u8, "failures");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2452,11 +2452,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "keys_cleared");
         columns[2] = try allocator.dupe(u8, "memory_wiped");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2471,11 +2471,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "pages_scanned");
         columns[2] = try allocator.dupe(u8, "violations");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2490,11 +2490,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "tests_run");
         columns[2] = try allocator.dupe(u8, "passed");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2509,11 +2509,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "schedule_type");
         columns[2] = try allocator.dupe(u8, "interval_days");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "age-based" };
-        row[2] = eval.Value{ .Int = 90 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "age-based" };
+        row[2] = Value{ .Int = 90 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2528,11 +2528,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "state_persisted");
         columns[2] = try allocator.dupe(u8, "rotation_count");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Bool = true };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Bool = true };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2547,11 +2547,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "adaptive_enabled");
         columns[2] = try allocator.dupe(u8, "threshold_operations");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Bool = true };
-        row[2] = eval.Value{ .Int = 1000000 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Bool = true };
+        row[2] = Value{ .Int = 1000000 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2566,11 +2566,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "backup_path");
         columns[2] = try allocator.dupe(u8, "encryption_confirmed");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "/tmp/backup_encrypted.tde" };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "/tmp/backup_encrypted.tde" };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2585,11 +2585,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "manifest_path");
         columns[2] = try allocator.dupe(u8, "keys_included");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Str = "/tmp/key_manifest.json" };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Str = "/tmp/key_manifest.json" };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2604,11 +2604,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "keys_restored");
         columns[2] = try allocator.dupe(u8, "data_verified");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2623,11 +2623,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "overhead_percent");
         columns[2] = try allocator.dupe(u8, "within_threshold");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2642,11 +2642,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "ops_per_second");
         columns[2] = try allocator.dupe(u8, "avg_latency_ns");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2661,11 +2661,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "transactions_completed");
         columns[2] = try allocator.dupe(u8, "avg_tps");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Int = 0 };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2680,11 +2680,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "fallback_triggered");
         columns[2] = try allocator.dupe(u8, "error_handled");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Bool = true };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Bool = true };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2699,11 +2699,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "corruption_detected");
         columns[2] = try allocator.dupe(u8, "recovery_attempted");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Bool = true };
-        row[2] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Bool = true };
+        row[2] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2727,12 +2727,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "wal_keys");
         columns[3] = try allocator.dupe(u8, "backup_keys");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Str = result.master_key_id };
-        row[1] = eval.Value{ .Int = @intCast(result.data_keys) };
-        row[2] = eval.Value{ .Int = @intCast(result.wal_keys) };
-        row[3] = eval.Value{ .Int = @intCast(result.backup_keys) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Str = result.master_key_id };
+        row[1] = Value{ .Int = @intCast(result.data_keys) };
+        row[2] = Value{ .Int = @intCast(result.wal_keys) };
+        row[3] = Value{ .Int = @intCast(result.backup_keys) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2755,12 +2755,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "records_migrated");
         columns[3] = try allocator.dupe(u8, "duration_ms");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Str = result.old_key_id };
-        row[1] = eval.Value{ .Str = result.new_key_id };
-        row[2] = eval.Value{ .Int = @intCast(result.records_migrated) };
-        row[3] = eval.Value{ .Int = @intCast(result.duration_ms) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Str = result.old_key_id };
+        row[1] = Value{ .Str = result.new_key_id };
+        row[2] = Value{ .Int = @intCast(result.records_migrated) };
+        row[3] = Value{ .Int = @intCast(result.duration_ms) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2782,15 +2782,15 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[5] = try allocator.dupe(u8, "algorithm");
         columns[6] = try allocator.dupe(u8, "key_length");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 7);
-        row[0] = eval.Value{ .Bool = result.enabled };
-        row[1] = eval.Value{ .Bool = result.key_loaded };
-        row[2] = eval.Value{ .Bool = result.data_encrypted };
-        row[3] = eval.Value{ .Bool = result.wal_encrypted };
-        row[4] = eval.Value{ .Bool = result.backups_encrypted };
-        row[5] = eval.Value{ .Str = result.algorithm };
-        row[6] = eval.Value{ .Int = @intCast(result.key_length) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 7);
+        row[0] = Value{ .Bool = result.enabled };
+        row[1] = Value{ .Bool = result.key_loaded };
+        row[2] = Value{ .Bool = result.data_encrypted };
+        row[3] = Value{ .Bool = result.wal_encrypted };
+        row[4] = Value{ .Bool = result.backups_encrypted };
+        row[5] = Value{ .Str = result.algorithm };
+        row[6] = Value{ .Int = @intCast(result.key_length) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2813,12 +2813,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "endpoint");
         columns[3] = try allocator.dupe(u8, "test_result");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Str = result.provider_name };
-        row[1] = eval.Value{ .Bool = result.configured };
-        row[2] = eval.Value{ .Str = result.endpoint };
-        row[3] = eval.Value{ .Str = result.test_result };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Str = result.provider_name };
+        row[1] = Value{ .Bool = result.configured };
+        row[2] = Value{ .Str = result.endpoint };
+        row[3] = Value{ .Str = result.test_result };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2838,13 +2838,13 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[3] = try allocator.dupe(u8, "unencrypted_files");
         columns[4] = try allocator.dupe(u8, "verification_time_ms");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 5);
-        row[0] = eval.Value{ .Bool = result.all_encrypted };
-        row[1] = eval.Value{ .Int = @intCast(result.data_files_checked) };
-        row[2] = eval.Value{ .Int = @intCast(result.wal_files_checked) };
-        row[3] = eval.Value{ .Int = @intCast(result.unencrypted_files) };
-        row[4] = eval.Value{ .Int = @intCast(result.verification_time_ms) };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 5);
+        row[0] = Value{ .Bool = result.all_encrypted };
+        row[1] = Value{ .Int = @intCast(result.data_files_checked) };
+        row[2] = Value{ .Int = @intCast(result.wal_files_checked) };
+        row[3] = Value{ .Int = @intCast(result.unencrypted_files) };
+        row[4] = Value{ .Int = @intCast(result.verification_time_ms) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2868,9 +2868,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const provider_type = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Str => |s| s,
@@ -2887,12 +2887,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "key_source");
         columns[3] = try allocator.dupe(u8, "mock_endpoint");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Str = result.provider_type };
-        row[1] = eval.Value{ .Str = result.status };
-        row[2] = eval.Value{ .Str = result.key_source };
-        row[3] = if (result.mock_endpoint) |ep| eval.Value{ .Str = ep } else eval.Value{ .Null = {} };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Str = result.provider_type };
+        row[1] = Value{ .Str = result.status };
+        row[2] = Value{ .Str = result.key_source };
+        row[3] = if (result.mock_endpoint) |ep| Value{ .Str = ep } else Value{ .Null = {} };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2913,12 +2913,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "rotation_in_progress");
         columns[3] = try allocator.dupe(u8, "scheduled_rotation");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = result.current_generation };
-        row[1] = eval.Value{ .Str = result.last_rotation_time };
-        row[2] = eval.Value{ .Bool = result.rotation_in_progress };
-        row[3] = if (result.scheduled_rotation) |sr| eval.Value{ .Int = sr } else eval.Value{ .Null = {} };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = result.current_generation };
+        row[1] = Value{ .Str = result.last_rotation_time };
+        row[2] = Value{ .Bool = result.rotation_in_progress };
+        row[3] = if (result.scheduled_rotation) |sr| Value{ .Int = sr } else Value{ .Null = {} };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2938,9 +2938,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const max_age_hours: u32 = if (args.len > 1) blk: {
             const arg_val = switch (args[1].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Int => |i| @intCast(i),
@@ -2955,10 +2955,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "next_rotation_time");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = result.status };
-        row[1] = eval.Value{ .Str = result.next_rotation_time };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = result.status };
+        row[1] = Value{ .Str = result.next_rotation_time };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2979,12 +2979,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "page_size_encrypted");
         columns[3] = try allocator.dupe(u8, "integrity_check");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = result.page_id };
-        row[1] = eval.Value{ .Str = result.encryption_status };
-        row[2] = eval.Value{ .Int = result.page_size_encrypted };
-        row[3] = eval.Value{ .Bool = result.integrity_check };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = result.page_id };
+        row[1] = Value{ .Str = result.encryption_status };
+        row[2] = Value{ .Int = result.page_size_encrypted };
+        row[3] = Value{ .Bool = result.integrity_check };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3005,12 +3005,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "segment_size");
         columns[3] = try allocator.dupe(u8, "integrity_verified");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = result.segment_id };
-        row[1] = eval.Value{ .Str = result.encryption_status };
-        row[2] = eval.Value{ .Int = result.segment_size };
-        row[3] = eval.Value{ .Bool = result.integrity_verified };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = result.segment_id };
+        row[1] = Value{ .Str = result.encryption_status };
+        row[2] = Value{ .Int = result.segment_size };
+        row[3] = Value{ .Bool = result.integrity_verified };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3030,9 +3030,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const test_data = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Str => |s| s,
@@ -3048,11 +3048,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "decrypted_data");
         columns[2] = try allocator.dupe(u8, "roundtrip_success");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = result.original_data };
-        row[1] = eval.Value{ .Str = result.decrypted_data };
-        row[2] = eval.Value{ .Bool = result.roundtrip_success };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = result.original_data };
+        row[1] = Value{ .Str = result.decrypted_data };
+        row[2] = Value{ .Bool = result.roundtrip_success };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3072,9 +3072,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const backup_path = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Str => |s| s,
@@ -3091,12 +3091,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "backup_size");
         columns[3] = try allocator.dupe(u8, "integrity_hash");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Str = result.backup_path };
-        row[1] = eval.Value{ .Str = result.encryption_key_id };
-        row[2] = eval.Value{ .Int = result.backup_size };
-        row[3] = eval.Value{ .Str = result.integrity_hash };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Str = result.backup_path };
+        row[1] = Value{ .Str = result.encryption_key_id };
+        row[2] = Value{ .Int = result.backup_size };
+        row[3] = Value{ .Str = result.integrity_hash };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3116,9 +3116,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const backup_path = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Str => |s| s,
@@ -3128,9 +3128,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const manifest_path = if (args.len > 1) blk: {
             const arg_val = switch (args[1].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Str => |s| s,
@@ -3146,11 +3146,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "records_restored");
         columns[2] = try allocator.dupe(u8, "keys_verified");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = result.restore_status };
-        row[1] = eval.Value{ .Int = result.records_restored };
-        row[2] = eval.Value{ .Bool = result.keys_verified };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = result.restore_status };
+        row[1] = Value{ .Int = result.records_restored };
+        row[2] = Value{ .Bool = result.keys_verified };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3171,12 +3171,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "overhead_percentage");
         columns[3] = try allocator.dupe(u8, "passes_threshold");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = result.baseline_ops_per_sec };
-        row[1] = eval.Value{ .Int = result.encrypted_ops_per_sec };
-        row[2] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(result.overhead_percentage * 100.0), .scale = 2 } };
-        row[3] = eval.Value{ .Bool = result.passes_threshold };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = result.baseline_ops_per_sec };
+        row[1] = Value{ .Int = result.encrypted_ops_per_sec };
+        row[2] = Value{ .Decimal = .{ .coeff = @intFromFloat(result.overhead_percentage * 100.0), .scale = 2 } };
+        row[3] = Value{ .Bool = result.passes_threshold };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3196,9 +3196,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const duration_seconds = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Int => |i| @as(u32, @intCast(i)),
@@ -3208,9 +3208,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const concurrent_transactions = if (args.len > 1) blk: {
             const arg_val = switch (args[1].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Int => |i| @as(u32, @intCast(i)),
@@ -3227,12 +3227,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "tps_without_encryption");
         columns[3] = try allocator.dupe(u8, "degradation_percentage");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(result.avg_transaction_time_ms * 100.0), .scale = 2 } };
-        row[1] = eval.Value{ .Int = result.tps_with_encryption };
-        row[2] = eval.Value{ .Int = result.tps_without_encryption };
-        row[3] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(result.degradation_percentage * 100.0), .scale = 2 } };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Decimal = .{ .coeff = @intFromFloat(result.avg_transaction_time_ms * 100.0), .scale = 2 } };
+        row[1] = Value{ .Int = result.tps_with_encryption };
+        row[2] = Value{ .Int = result.tps_without_encryption };
+        row[3] = Value{ .Decimal = .{ .coeff = @intFromFloat(result.degradation_percentage * 100.0), .scale = 2 } };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3252,11 +3252,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "memory_cleared");
         columns[2] = try allocator.dupe(u8, "secure_cleanup_verified");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = result.keys_zeroized };
-        row[1] = eval.Value{ .Bool = result.memory_cleared };
-        row[2] = eval.Value{ .Bool = result.secure_cleanup_verified };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = result.keys_zeroized };
+        row[1] = Value{ .Bool = result.memory_cleared };
+        row[2] = Value{ .Bool = result.secure_cleanup_verified };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3276,11 +3276,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "encrypted_keys_count");
         columns[2] = try allocator.dupe(u8, "security_violation");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = result.plaintext_keys_found };
-        row[1] = eval.Value{ .Int = result.encrypted_keys_count };
-        row[2] = eval.Value{ .Bool = result.security_violation };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = result.plaintext_keys_found };
+        row[1] = Value{ .Int = result.encrypted_keys_count };
+        row[2] = Value{ .Bool = result.security_violation };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3300,11 +3300,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "unauthorized_attempts");
         columns[2] = try allocator.dupe(u8, "access_denied_count");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = result.authorized_access };
-        row[1] = eval.Value{ .Int = result.unauthorized_attempts };
-        row[2] = eval.Value{ .Int = result.access_denied_count };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = result.authorized_access };
+        row[1] = Value{ .Int = result.unauthorized_attempts };
+        row[2] = Value{ .Int = result.access_denied_count };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3324,9 +3324,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const endpoint = if (args.len > 0) blk: {
             const arg_val = switch (args[0].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Str => |s| s,
@@ -3336,9 +3336,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const region = if (args.len > 1) blk: {
             const arg_val = switch (args[1].*) {
-                .String => |s| eval.Value{ .Str = s },
-                .Int => |i| eval.Value{ .Int = i },
-                else => eval.Value{ .Null = {} },
+                .String => |s| Value{ .Str = s },
+                .Int => |i| Value{ .Int = i },
+                else => Value{ .Null = {} },
             };
             break :blk switch (arg_val) {
                 .Str => |s| s,
@@ -3354,11 +3354,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "endpoint");
         columns[2] = try allocator.dupe(u8, "connection_verified");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = result.status };
-        row[1] = eval.Value{ .Str = result.endpoint };
-        row[2] = eval.Value{ .Bool = result.connection_verified };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = result.status };
+        row[1] = Value{ .Str = result.endpoint };
+        row[2] = Value{ .Bool = result.connection_verified };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3378,12 +3378,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "roundtrip_verified");
         columns[3] = try allocator.dupe(u8, "latency_ms");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Bool = result.wrap_success };
-        row[1] = eval.Value{ .Bool = result.unwrap_success };
-        row[2] = eval.Value{ .Bool = result.roundtrip_verified };
-        row[3] = eval.Value{ .Int = result.latency_ms };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Bool = result.wrap_success };
+        row[1] = Value{ .Bool = result.unwrap_success };
+        row[2] = Value{ .Bool = result.roundtrip_verified };
+        row[3] = Value{ .Int = result.latency_ms };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3403,12 +3403,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "ed25519_verification");
         columns[3] = try allocator.dupe(u8, "tamper_detected");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Bool = result.attestation_valid };
-        row[1] = eval.Value{ .Bool = result.signature_verified };
-        row[2] = eval.Value{ .Bool = result.ed25519_verification };
-        row[3] = eval.Value{ .Bool = result.tamper_detected };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Bool = result.attestation_valid };
+        row[1] = Value{ .Bool = result.signature_verified };
+        row[2] = Value{ .Bool = result.ed25519_verification };
+        row[3] = Value{ .Bool = result.tamper_detected };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3427,11 +3427,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "unwrap_successful");
         columns[2] = try allocator.dupe(u8, "audit_logged");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.privileged_access_granted };
-        row[1] = eval.Value{ .Bool = result.unwrap_successful };
-        row[2] = eval.Value{ .Bool = result.audit_logged };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.privileged_access_granted };
+        row[1] = Value{ .Bool = result.unwrap_successful };
+        row[2] = Value{ .Bool = result.audit_logged };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3450,11 +3450,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "master_key_recovered");
         columns[2] = try allocator.dupe(u8, "data_accessible");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.recovery_initiated };
-        row[1] = eval.Value{ .Bool = result.master_key_recovered };
-        row[2] = eval.Value{ .Bool = result.data_accessible };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.recovery_initiated };
+        row[1] = Value{ .Bool = result.master_key_recovered };
+        row[2] = Value{ .Bool = result.data_accessible };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3474,12 +3474,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "rotation_reason");
         columns[3] = try allocator.dupe(u8, "age_hours");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Bool = result.should_rotate };
-        row[1] = eval.Value{ .Str = result.next_check_time };
-        row[2] = if (result.rotation_reason) |reason| eval.Value{ .Str = reason } else eval.Value{ .Null = {} };
-        row[3] = eval.Value{ .Int = result.age_hours };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Bool = result.should_rotate };
+        row[1] = Value{ .Str = result.next_check_time };
+        row[2] = if (result.rotation_reason) |reason| Value{ .Str = reason } else Value{ .Null = {} };
+        row[3] = Value{ .Int = result.age_hours };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3498,11 +3498,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "fallback_activated");
         columns[2] = try allocator.dupe(u8, "service_degraded");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.error_handled };
-        row[1] = eval.Value{ .Bool = result.fallback_activated };
-        row[2] = eval.Value{ .Bool = result.service_degraded };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.error_handled };
+        row[1] = Value{ .Bool = result.fallback_activated };
+        row[2] = Value{ .Bool = result.service_degraded };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3521,11 +3521,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "recovery_attempted");
         columns[2] = try allocator.dupe(u8, "data_recoverable");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = result.corruption_detected };
-        row[1] = eval.Value{ .Bool = result.recovery_attempted };
-        row[2] = eval.Value{ .Bool = result.data_recoverable };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = result.corruption_detected };
+        row[1] = Value{ .Bool = result.recovery_attempted };
+        row[2] = Value{ .Bool = result.data_recoverable };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3540,10 +3540,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "keys_zeroized");
         columns[1] = try allocator.dupe(u8, "hierarchy_cleared");
 
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = 5 };
-        row[1] = eval.Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = 5 };
+        row[1] = Value{ .Bool = true };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3671,9 +3671,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
-        const row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Str = status_str };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = status_str };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.disable")) {
@@ -3694,10 +3694,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "final_statistics");
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = status_str };
-        row[1] = eval.Value{ .Str = "CDC disabled successfully" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = status_str };
+        row[1] = Value{ .Str = "CDC disabled successfully" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.status")) {
@@ -3723,12 +3723,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "streaming");
         columns[2] = try allocator.dupe(u8, "event_count");
         columns[3] = try allocator.dupe(u8, "last_checkpoint");
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Bool = enabled };
-        row[1] = eval.Value{ .Bool = streaming };
-        row[2] = eval.Value{ .Int = event_count };
-        row[3] = eval.Value{ .Int = last_checkpoint };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Bool = enabled };
+        row[1] = Value{ .Bool = streaming };
+        row[2] = Value{ .Int = event_count };
+        row[3] = Value{ .Int = last_checkpoint };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.export_diagnostics")) {
@@ -3750,11 +3750,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "event_count");
         columns[1] = try allocator.dupe(u8, "malformed_count");
         columns[2] = try allocator.dupe(u8, "last_seq_id");
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = event_count };
-        row[1] = eval.Value{ .Int = malformed_count };
-        row[2] = eval.Value{ .Int = last_seq_id };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = event_count };
+        row[1] = Value{ .Int = malformed_count };
+        row[2] = Value{ .Int = last_seq_id };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_events")) {
@@ -3770,7 +3770,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             columns[2] = try allocator.dupe(u8, "operation");
             columns[3] = try allocator.dupe(u8, "timestamp");
             columns[4] = try allocator.dupe(u8, "payload");
-            const rows = try allocator.alloc([]eval.Value, 0);
+            const rows = try allocator.alloc([]Value, 0);
             return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
         }
 
@@ -3781,31 +3781,31 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[2] = try allocator.dupe(u8, "operation");
         columns[3] = try allocator.dupe(u8, "timestamp");
         columns[4] = try allocator.dupe(u8, "payload");
-        const row = try allocator.alloc(eval.Value, 5);
-        row[0] = eval.Value{ .Int = 1 };
-        row[1] = eval.Value{ .Str = "data_change" };
-        row[2] = eval.Value{ .Str = "insert" };
-        row[3] = eval.Value{ .Str = "2025-10-25T00:00:00Z" };
-        row[4] = eval.Value{ .Str = "{}" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 5);
+        row[0] = Value{ .Int = 1 };
+        row[1] = Value{ .Str = "data_change" };
+        row[2] = Value{ .Str = "insert" };
+        row[3] = Value{ .Str = "2025-10-25T00:00:00Z" };
+        row[4] = Value{ .Str = "{}" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.pause")) {
         // CANARY: REQ=REQ-CDC-PROC-006; FEATURE="CDCProcedures"; ASPECT=Pause; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
-        const row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Str = "paused" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = "paused" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.resume")) {
         // CANARY: REQ=REQ-CDC-PROC-007; FEATURE="CDCProcedures"; ASPECT=Resume; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
-        const row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Str = "resumed" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = "resumed" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.set_guardrail")) {
@@ -3853,9 +3853,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
-        const row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Str = "guardrail_configured" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = "guardrail_configured" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_guardrail_status")) {
@@ -3876,12 +3876,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "warn_threshold");
         columns[2] = try allocator.dupe(u8, "abort_threshold");
         columns[3] = try allocator.dupe(u8, "pending_events");
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = current_epoch };
-        row[1] = eval.Value{ .Int = 1000 };
-        row[2] = eval.Value{ .Int = 10000 };
-        row[3] = eval.Value{ .Int = pending_events };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = current_epoch };
+        row[1] = Value{ .Int = 1000 };
+        row[2] = Value{ .Int = 10000 };
+        row[3] = Value{ .Int = pending_events };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.reset_guardrails")) {
@@ -3899,10 +3899,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "new_epoch");
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = "reset_complete" };
-        row[1] = eval.Value{ .Int = new_epoch };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = "reset_complete" };
+        row[1] = Value{ .Int = new_epoch };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_watermark")) {
@@ -3922,11 +3922,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "current_watermark");
         columns[1] = try allocator.dupe(u8, "pending_bytes");
         columns[2] = try allocator.dupe(u8, "flow_control_active");
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = current_watermark };
-        row[1] = eval.Value{ .Int = pending_bytes };
-        row[2] = eval.Value{ .Bool = false };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = current_watermark };
+        row[1] = Value{ .Int = pending_bytes };
+        row[2] = Value{ .Bool = false };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_pending_events")) {
@@ -3946,20 +3946,20 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "count");
         columns[1] = try allocator.dupe(u8, "oldest_timestamp");
         columns[2] = try allocator.dupe(u8, "memory_usage");
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = count };
-        row[1] = eval.Value{ .Str = "2025-10-25T00:00:00Z" };
-        row[2] = eval.Value{ .Int = memory_usage };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = count };
+        row[1] = Value{ .Str = "2025-10-25T00:00:00Z" };
+        row[2] = Value{ .Int = memory_usage };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.configure_adaptive_flush")) {
         // CANARY: REQ=REQ-CDC-PROC-013; FEATURE="CDCProcedures"; ASPECT=ConfigureAdaptiveFlush; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
-        const row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Str = "configured" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = "configured" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_flush_metrics")) {
@@ -3980,12 +3980,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "avg_latency_ms");
         columns[2] = try allocator.dupe(u8, "total_flushes");
         columns[3] = try allocator.dupe(u8, "adaptive_adjustments");
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = current_batch_size };
-        row[1] = eval.Value{ .Int = 10 };
-        row[2] = eval.Value{ .Int = 0 };
-        row[3] = eval.Value{ .Int = adaptive_adjustments };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = current_batch_size };
+        row[1] = Value{ .Int = 10 };
+        row[2] = Value{ .Int = 0 };
+        row[3] = Value{ .Int = adaptive_adjustments };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_malformed_records")) {
@@ -4003,11 +4003,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "record_count");
         columns[1] = try allocator.dupe(u8, "corruption_types");
         columns[2] = try allocator.dupe(u8, "recovery_attempts");
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = record_count };
-        row[1] = eval.Value{ .Str = "none" };
-        row[2] = eval.Value{ .Int = 0 };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = record_count };
+        row[1] = Value{ .Str = "none" };
+        row[2] = Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_corruption_analysis")) {
@@ -4016,11 +4016,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "prefix_retained");
         columns[1] = try allocator.dupe(u8, "hash_validation");
         columns[2] = try allocator.dupe(u8, "repair_suggestions");
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Bool = true };
-        row[1] = eval.Value{ .Bool = true };
-        row[2] = eval.Value{ .Str = "no_corruption_detected" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = true };
+        row[1] = Value{ .Bool = true };
+        row[2] = Value{ .Str = "no_corruption_detected" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_ordered_events")) {
@@ -4029,11 +4029,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "seq_id");
         columns[1] = try allocator.dupe(u8, "timestamp");
         columns[2] = try allocator.dupe(u8, "operation_order");
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = 1 };
-        row[1] = eval.Value{ .Str = "2025-10-25T00:00:00Z" };
-        row[2] = eval.Value{ .Int = 1 };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = 1 };
+        row[1] = Value{ .Str = "2025-10-25T00:00:00Z" };
+        row[2] = Value{ .Int = 1 };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.check_duplicates")) {
@@ -4051,11 +4051,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "duplicate_count");
         columns[1] = try allocator.dupe(u8, "dedup_strategy");
         columns[2] = try allocator.dupe(u8, "unique_events");
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = 0 };
-        row[1] = eval.Value{ .Str = "hash_based" };
-        row[2] = eval.Value{ .Int = unique_events };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = 0 };
+        row[1] = Value{ .Str = "hash_based" };
+        row[2] = Value{ .Int = unique_events };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_wal_status")) {
@@ -4074,12 +4074,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "ingest_lag_ms");
         columns[2] = try allocator.dupe(u8, "processed_bytes");
         columns[3] = try allocator.dupe(u8, "pending_wal_segments");
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = wal_position };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Int = 0 };
-        row[3] = eval.Value{ .Int = 0 };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = wal_position };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Int = 0 };
+        row[3] = Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.configure_wal_tail")) {
@@ -4087,19 +4087,19 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "tail_position");
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = "configured" };
-        row[1] = eval.Value{ .Int = 0 };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = "configured" };
+        row[1] = Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.set_retention_policy")) {
         // CANARY: REQ=REQ-CDC-PROC-021; FEATURE="CDCProcedures"; ASPECT=SetRetentionPolicy; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
-        const row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Str = "retention_policy_set" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = "retention_policy_set" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.cleanup_expired_events")) {
@@ -4108,11 +4108,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "cleaned_events");
         columns[1] = try allocator.dupe(u8, "bytes_freed");
         columns[2] = try allocator.dupe(u8, "oldest_remaining_event");
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Int = 0 };
-        row[1] = eval.Value{ .Int = 0 };
-        row[2] = eval.Value{ .Str = "2025-10-25T00:00:00Z" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Int = 0 };
+        row[1] = Value{ .Int = 0 };
+        row[2] = Value{ .Str = "2025-10-25T00:00:00Z" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_telemetry_metrics")) {
@@ -4132,12 +4132,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "avg_processing_latency_ms");
         columns[2] = try allocator.dupe(u8, "memory_usage_bytes");
         columns[3] = try allocator.dupe(u8, "error_rate");
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Int = events_per_second };
-        row[1] = eval.Value{ .Int = 5 };
-        row[2] = eval.Value{ .Int = memory_usage_bytes };
-        row[3] = eval.Value{ .Int = 0 };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Int = events_per_second };
+        row[1] = Value{ .Int = 5 };
+        row[2] = Value{ .Int = memory_usage_bytes };
+        row[3] = Value{ .Int = 0 };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_performance_alerts")) {
@@ -4147,12 +4147,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "threshold_exceeded");
         columns[2] = try allocator.dupe(u8, "current_value");
         columns[3] = try allocator.dupe(u8, "recommended_action");
-        const row = try allocator.alloc(eval.Value, 4);
-        row[0] = eval.Value{ .Str = "none" };
-        row[1] = eval.Value{ .Bool = false };
-        row[2] = eval.Value{ .Str = "0" };
-        row[3] = eval.Value{ .Str = "no_action_required" };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Str = "none" };
+        row[1] = Value{ .Bool = false };
+        row[2] = Value{ .Str = "0" };
+        row[3] = Value{ .Str = "no_action_required" };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.stop")) {
@@ -4170,10 +4170,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "final_event_count");
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = "stopped" };
-        row[1] = eval.Value{ .Int = final_event_count };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = "stopped" };
+        row[1] = Value{ .Int = final_event_count };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.start")) {
@@ -4192,11 +4192,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "recovered_event_count");
         columns[2] = try allocator.dupe(u8, "checkpoint_restored");
-        const row = try allocator.alloc(eval.Value, 3);
-        row[0] = eval.Value{ .Str = "started" };
-        row[1] = eval.Value{ .Int = recovered_event_count };
-        row[2] = eval.Value{ .Bool = true };
-        const rows = try allocator.alloc([]eval.Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = "started" };
+        row[1] = Value{ .Int = recovered_event_count };
+        row[2] = Value{ .Bool = true };
+        const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else {

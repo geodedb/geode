@@ -36,7 +36,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
     }
 
     // Build rows based on show type
-    var rows_list = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+    var rows_list = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
     // Phase 3: Shared lock for SHOW (read-only, allows concurrent access)
     cat.rwlock.lockShared();
@@ -48,10 +48,10 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             var iter = cat.indexes.iterator();
             while (iter.next()) |entry| {
                 const info = entry.value_ptr.*;
-                var row = try allocator.alloc(eval.Value, 4);
-                row[0] = eval.Value{ .Str = try allocator.dupe(u8, info.name) };
-                row[1] = eval.Value{ .Str = try allocator.dupe(u8, info.index_type) };
-                row[2] = eval.Value{ .Str = try allocator.dupe(u8, info.table_name) };
+                var row = try allocator.alloc(Value, 4);
+                row[0] = Value{ .Str = try allocator.dupe(u8, info.name) };
+                row[1] = Value{ .Str = try allocator.dupe(u8, info.index_type) };
+                row[2] = Value{ .Str = try allocator.dupe(u8, info.table_name) };
 
                 // Join columns with comma
                 var columns_str = try std.ArrayList(u8).initCapacity(allocator, 0);
@@ -59,7 +59,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                     if (i > 0) try columns_str.appendSlice(allocator, ", ");
                     try columns_str.appendSlice(allocator, col);
                 }
-                row[3] = eval.Value{ .Str = try columns_str.toOwnedSlice(allocator) };
+                row[3] = Value{ .Str = try columns_str.toOwnedSlice(allocator) };
 
                 try rows_list.append(allocator, row);
             }
@@ -68,8 +68,8 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // Return graph names from catalog
             var iter = cat.graphs.iterator();
             while (iter.next()) |entry| {
-                var row = try allocator.alloc(eval.Value, 1);
-                row[0] = eval.Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
+                var row = try allocator.alloc(Value, 1);
+                row[0] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
                 try rows_list.append(allocator, row);
             }
         },
@@ -92,13 +92,13 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     if (with_result.rows.len == 0) {
         return ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
-            .rows = try allocator.alloc([]eval.Value, 0),
+            .rows = try allocator.alloc([]Value, 0),
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     }
 
     // Create environment from WITH results
-    const env = eval.Env{
+    const env = Env{
         .names = with_result.columns,
         .values = with_result.rows[0], // Use first row
         .allocator = allocator,
@@ -107,7 +107,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     const collection_value = try eval.evalExpr(allocator, for_stmt.collection, env);
 
     // Extract list items from the collection
-    var items = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+    var items = try std.ArrayList(Value).initCapacity(allocator, 0);
 
     switch (collection_value) {
         .List => |list| {
@@ -122,11 +122,11 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     }
 
     // Build result rows by iterating over collection
-    var result_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+    var result_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
     // Build arrays for iteration environment
     var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+    var env_values_list = try std.ArrayList(Value).initCapacity(allocator, 0);
 
     for (items.items, 0..) |item, idx| {
         // Clear environment for this iteration
@@ -146,24 +146,24 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
         // Bind ordinality variable if present (1-based)
         if (for_stmt.ordinality_var) |ord_var| {
             try env_names_list.append(allocator, ord_var);
-            try env_values_list.append(allocator, eval.Value{ .Int = @intCast(idx + 1) });
+            try env_values_list.append(allocator, Value{ .Int = @intCast(idx + 1) });
         }
 
         // Bind offset variable if present (0-based)
         if (for_stmt.offset_var) |off_var| {
             try env_names_list.append(allocator, off_var);
-            try env_values_list.append(allocator, eval.Value{ .Int = @intCast(idx) });
+            try env_values_list.append(allocator, Value{ .Int = @intCast(idx) });
         }
 
         // Create environment for this iteration
-        const iteration_env = eval.Env{
+        const iteration_env = Env{
             .names = env_names_list.items,
             .values = env_values_list.items,
             .allocator = allocator,
         };
 
         // Evaluate RETURN items for this iteration
-        var row = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+        var row = try std.ArrayList(Value).initCapacity(allocator, 0);
 
         for (for_stmt.return_clause.items) |ret_item| {
             const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
@@ -230,7 +230,7 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
     _ = context;
 
     // Evaluate the collection expression with an empty environment
-    const empty_env = eval.Env{
+    const empty_env = Env{
         .allocator = allocator,
         .names = &.{},
         .values = &.{},
@@ -239,7 +239,7 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
     const collection_value = try eval.evalExpr(allocator, for_stmt.collection, empty_env);
 
     // Extract list items from the collection
-    var items = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+    var items = try std.ArrayList(Value).initCapacity(allocator, 0);
 
     switch (collection_value) {
         .List => |list| {
@@ -254,13 +254,13 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
     }
 
     // Build result rows by iterating over collection (pre-sized to collection length)
-    var result_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, items.items.len);
+    var result_rows = try std.ArrayList([]Value).initCapacity(allocator, items.items.len);
 
     // Build arrays for iteration environment (pre-sized for variable + optionals)
     const env_capacity = 1 + (if (for_stmt.ordinality_var != null) @as(usize, 1) else 0) +
         (if (for_stmt.offset_var != null) @as(usize, 1) else 0);
     var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, env_capacity);
-    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, env_capacity);
+    var env_values_list = try std.ArrayList(Value).initCapacity(allocator, env_capacity);
 
     for (items.items, 0..) |item, idx| {
         // Clear environment for this iteration
@@ -274,24 +274,24 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
         // Bind ordinality variable if present (1-based)
         if (for_stmt.ordinality_var) |ord_var| {
             try env_names_list.append(allocator, ord_var);
-            try env_values_list.append(allocator, eval.Value{ .Int = @intCast(idx + 1) });
+            try env_values_list.append(allocator, Value{ .Int = @intCast(idx + 1) });
         }
 
         // Bind offset variable if present (0-based)
         if (for_stmt.offset_var) |off_var| {
             try env_names_list.append(allocator, off_var);
-            try env_values_list.append(allocator, eval.Value{ .Int = @intCast(idx) });
+            try env_values_list.append(allocator, Value{ .Int = @intCast(idx) });
         }
 
         // Create environment for this iteration
-        const iteration_env = eval.Env{
+        const iteration_env = Env{
             .names = env_names_list.items,
             .values = env_values_list.items,
             .allocator = allocator,
         };
 
         // Evaluate RETURN items for this iteration (pre-sized to return clause length)
-        var row = try std.ArrayList(eval.Value).initCapacity(allocator, for_stmt.return_clause.items.len);
+        var row = try std.ArrayList(Value).initCapacity(allocator, for_stmt.return_clause.items.len);
 
         for (for_stmt.return_clause.items) |ret_item| {
             const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
@@ -329,18 +329,18 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
     _ = context;
 
     // Evaluate all row expressions with empty environment
-    const empty_env = eval.Env{
+    const empty_env = Env{
         .allocator = allocator,
         .names = &.{},
         .values = &.{},
     };
 
     // Prepare result rows
-    var result_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, values_stmt.rows.len);
+    var result_rows = try std.ArrayList([]Value).initCapacity(allocator, values_stmt.rows.len);
 
     // Evaluate each row
     for (values_stmt.rows) |row_exprs| {
-        var row_values = try allocator.alloc(eval.Value, row_exprs.len);
+        var row_values = try allocator.alloc(Value, row_exprs.len);
         for (row_exprs, 0..) |expr, i| {
             row_values[i] = try eval.evalExpr(allocator, expr, empty_env);
         }
@@ -354,7 +354,7 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                 // Check if query has MATCH clause - if so, execute full query with parameters
                 if (query.match.chains.len > 0) {
                     // VALUES ... MATCH pattern: execute MATCH for each VALUES row and collect results
-                    var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, result_rows.items.len * 4); // Estimate
+                    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, result_rows.items.len * 4); // Estimate
                     var final_columns: ?[]const []const u8 = null;
 
                     // CANARY: PERF_PHASE5_PARAM_ALLOC - Allocate parameter arrays once instead of per-iteration
@@ -362,7 +362,7 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                     // Phase 5.1.2: Pre-allocate parameter arrays before loop (reduces N allocations to 1)
                     var param_names = try allocator.alloc([]const u8, values_stmt.column_names.len);
                     defer allocator.free(param_names);
-                    var param_values = try allocator.alloc(eval.Value, values_stmt.column_names.len);
+                    var param_values = try allocator.alloc(Value, values_stmt.column_names.len);
                     defer allocator.free(param_values);
 
                     // For each VALUES row, execute the full MATCH query with bindings as parameters
@@ -405,11 +405,11 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                     };
                 } else {
                     // VALUES ... RETURN pattern (no MATCH): evaluate RETURN for each VALUES row
-                    var final_rows = try std.ArrayList([]eval.Value).initCapacity(allocator, result_rows.items.len);
+                    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, result_rows.items.len);
 
                     // Build arrays for environment (pre-sized)
                     var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, values_stmt.column_names.len);
-                    var env_values_list = try std.ArrayList(eval.Value).initCapacity(allocator, values_stmt.column_names.len);
+                    var env_values_list = try std.ArrayList(Value).initCapacity(allocator, values_stmt.column_names.len);
 
                     // For each VALUES row, create environment and evaluate RETURN
                     for (result_rows.items) |row_values| {
@@ -425,14 +425,14 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                         }
 
                         // Create environment for this row
-                        const row_env = eval.Env{
+                        const row_env = Env{
                             .allocator = allocator,
                             .names = env_names_list.items,
                             .values = env_values_list.items,
                         };
 
                         // Evaluate RETURN items for this row (pre-sized)
-                        var result_row = try std.ArrayList(eval.Value).initCapacity(allocator, query.ret.items.len);
+                        var result_row = try std.ArrayList(Value).initCapacity(allocator, query.ret.items.len);
 
                         for (query.ret.items) |ret_item| {
                             const value = try eval.evalExpr(allocator, ret_item.expr, row_env);
@@ -624,23 +624,23 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
     columns[0] = try allocator.dupe(u8, "plan");
 
     // Create rows with operation descriptions and add total cost at the end
-    const rows = try allocator.alloc([]eval.Value, plan_steps.items.len + 2);
+    const rows = try allocator.alloc([]Value, plan_steps.items.len + 2);
 
     // Add header row
-    const header_row = try allocator.alloc(eval.Value, 1);
-    header_row[0] = eval.Value{ .Str = try allocator.dupe(u8, "EXPLAIN") };
+    const header_row = try allocator.alloc(Value, 1);
+    header_row[0] = Value{ .Str = try allocator.dupe(u8, "EXPLAIN") };
     rows[0] = header_row;
 
     // Add operation rows
     for (plan_steps.items, 0..) |step, i| {
-        const row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Str = try formatPlanOp(allocator, "  {s}", .{step.op}) };
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try formatPlanOp(allocator, "  {s}", .{step.op}) };
         rows[i + 1] = row;
     }
 
     // Add total cost row
-    const total_row = try allocator.alloc(eval.Value, 1);
-    total_row[0] = eval.Value{ .Str = try formatPlanOp(allocator, "Total cost: {}", .{total_cost}) };
+    const total_row = try allocator.alloc(Value, 1);
+    total_row[0] = Value{ .Str = try formatPlanOp(allocator, "Total cost: {}", .{total_cost}) };
     rows[plan_steps.items.len + 1] = total_row;
 
     return ExecutionResult{
@@ -664,38 +664,38 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
     columns[1] = try allocator.dupe(u8, "value");
 
     // Create statistics rows
-    var stats = try std.ArrayList([]eval.Value).initCapacity(allocator, 0);
+    var stats = try std.ArrayList([]Value).initCapacity(allocator, 0);
     defer stats.deinit(allocator);
 
     // Profile type indicator
     {
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "profile") };
-        row[1] = eval.Value{ .Str = try allocator.dupe(u8, "query_profile") };
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "profile") };
+        row[1] = Value{ .Str = try allocator.dupe(u8, "query_profile") };
         try stats.append(allocator, row);
     }
 
     // Row count
     {
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "rows") };
-        row[1] = eval.Value{ .Int = @intCast(query_result.rows.len) };
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "rows") };
+        row[1] = Value{ .Int = @intCast(query_result.rows.len) };
         try stats.append(allocator, row);
     }
 
     // Column count
     {
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "columns") };
-        row[1] = eval.Value{ .Int = @intCast(query_result.columns.len) };
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "columns") };
+        row[1] = Value{ .Int = @intCast(query_result.columns.len) };
         try stats.append(allocator, row);
     }
 
     // Execution time (placeholder - would need real timing)
     {
-        const row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Str = try allocator.dupe(u8, "time") };
-        row[1] = eval.Value{ .Int = 1 }; // Placeholder
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "time") };
+        row[1] = Value{ .Int = 1 }; // Placeholder
         try stats.append(allocator, row);
     }
 

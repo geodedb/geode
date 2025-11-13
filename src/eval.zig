@@ -5,152 +5,44 @@ const heap = @import("storage/heap.zig");
 const execution = @import("execution.zig");
 const fle_integration = @import("fle_integration.zig");
 
-pub const EvalError = error{
-    TypeMismatch,
-    DivisionByZero,
-    IntegerOverflow,
-    Unsupported,
-    RegexCompile,
-    CharLengthExceeded,
-    HexFormatError,
-    JsonInvalid,
-    XmlNotWellFormed,
-    SearchNotPermitted,
-    UrlParseError,
-    DomainSyntaxError,
-    UuidParseError,
-    EnumTypeError,
-    EnumValueError,
-    IndexOutOfBounds,
-    BitParseError,
-    RangeBoundsError,
-    FloatNaN,
-    TimeParse,
-    DecimalOverflow,
-    DecimalDivZero,
-    IdnaError,
-    InvalidIpAddress,
-    InvalidSubnet,
-    InvalidMac,
-    InvalidArgs,
-    OutOfMemory,
-};
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Import shared value types from value_types.zig module
+const value_types = @import("value_types.zig");
 
-pub const Value = union(enum) {
-    Null,
-    Int: i64,
-    Bool: bool,
-    Str: []const u8,
-    Node: *const @import("graph_store.zig").Node,
-    Edge: *const @import("graph_store.zig").Edge,
-    // Fixed-point decimal: coeff * 10^-scale. Preserve original scale & literal for round-trip fidelity.
-    Decimal: struct {
-        coeff: i128,
-        scale: u8,
-        // Original scale digits count (post decimal point) before any canonical trimming; may exceed scale if trailing zeros trimmed.
-        orig_scale: u8 = 0,
-        // Original literal bytes (without surrounding quotes) if preservation required; optional to avoid extra alloc for computed decimals.
-        orig_repr: ?[]const u8 = null,
-    },
-    List: []Value,
-    Map: std.StringHashMap(Value),
-    // Extended types (advanced types like IpAddr, Subnet, etc.) wrapped to preserve type information
-    ExtValue: @import("eval_extended.zig").ExtValue,
-    // Path type: sequence of alternating nodes and edges
-    Path: struct {
-        nodes: []const *const @import("graph_store.zig").Node,
-        edges: []const *const @import("graph_store.zig").Edge,
-    },
-};
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-002; FEATURE="Circular Dependency Resolution"; ASPECT=ErrorTypeReexport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Re-export EvalError from value_types module for backward compatibility
+pub const EvalError = value_types.EvalError;
 
-const Dec = struct { coeff: i128, scale: u8 };
 
-fn toDec(v: Value) Dec {
-    return switch (v) {
-        .Decimal => |d| .{ .coeff = d.coeff, .scale = d.scale },
-        .Int => |iv| .{ .coeff = @as(i128, iv), .scale = 0 },
-        else => unreachable,
-    };
-}
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-003; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypeReexport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Re-export Value from value_types module for backward compatibility
+pub const Value = value_types.Value;
+
+
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-004; FEATURE="Circular Dependency Resolution"; ASPECT=DecTypeReexport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Re-export Dec from value_types module for backward compatibility
+const Dec = value_types.Dec;
+
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-005; FEATURE="Circular Dependency Resolution"; ASPECT=FunctionAlias; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Use toDec from value_types module
+const toDec = value_types.toDec;
+
 
 // CANARY: REQ=REQ-MEM-FIX-004; FEATURE="MemorySafety"; ASPECT=EnvOwnership; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-25
-pub const Env = struct {
-    // Simple linear env for tests/demos
-    names: []const []const u8,
-    values: []const Value,
-    // Optional parameter bindings: parallel arrays
-    param_names: []const []const u8 = &.{},
-    param_values: []const Value = &.{},
-    // Allocator for memory management (C4 fix)
-    allocator: std.mem.Allocator,
-    // Track whether this Env owns its arrays and should free them
-    owned: bool = false,
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-006; FEATURE="Circular Dependency Resolution"; ASPECT=EnvTypeReexport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Re-export Env from value_types module for backward compatibility
+pub const Env = value_types.Env;
 
-    pub fn get(self: Env, name: []const u8) ?Value {
-        // First check regular environment variables
-        var i: usize = 0;
-        while (i < self.names.len) : (i += 1) if (std.mem.eql(u8, self.names[i], name)) return self.values[i];
 
-        // Fall back to checking parameters (for VALUES bindings and other parameter contexts)
-        // This allows identifiers to reference parameters without the $ prefix
-        i = 0;
-        while (i < self.param_names.len) : (i += 1) if (std.mem.eql(u8, self.param_names[i], name)) return self.param_values[i];
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-007; FEATURE="Circular Dependency Resolution"; ASPECT=NullCheck; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Use isNull from value_types module
+const isNull = value_types.isNull;
 
-        return null;
-    }
-    pub fn getParam(self: Env, name: []const u8) ?Value {
-        var i: usize = 0;
-        while (i < self.param_names.len) : (i += 1) if (std.mem.eql(u8, self.param_names[i], name)) return self.param_values[i];
-        return null;
-    }
 
-    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Environment; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-10-17
-    // CANARY: REQ=REQ-C4-001; FEATURE="MemoryLeakFix"; ASPECT=Environment; STATUS=IMPLEMENTED; OWNER=core; UPDATED=2025-10-17;
-    //         EVIDENCE="Free old arrays in withBinding() to prevent memory leaks"
-    // Create a new environment with an additional binding (for list comprehension variable scopes)
-    pub fn withBinding(self: Env, allocator: std.mem.Allocator, name: []const u8, value: Value) !Env {
-        var new_names = try allocator.alloc([]const u8, self.names.len + 1);
-        errdefer allocator.free(new_names);
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-008; FEATURE="Circular Dependency Resolution"; ASPECT=Truthy; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Use truthy from value_types module
+const truthy = value_types.truthy;
 
-        var new_values = try allocator.alloc(Value, self.values.len + 1);
-        errdefer allocator.free(new_values);
-
-        @memcpy(new_names[0..self.names.len], self.names);
-        @memcpy(new_values[0..self.values.len], self.values);
-
-        new_names[self.names.len] = name;
-        new_values[self.values.len] = value;
-
-        // Free old arrays to prevent memory leak (C4 fix)
-        // Only free if this Env owns its arrays AND they were allocated
-        // CANARY: REQ=REQ-MEM-FIX-005; FEATURE="MemorySafety"; ASPECT=OwnershipRespect; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-25
-        if (self.owned and self.names.len > 0) {
-            self.allocator.free(self.names);
-            self.allocator.free(self.values);
-        }
-
-        return Env{
-            .names = new_names,
-            .values = new_values,
-            .param_names = self.param_names,
-            .param_values = self.param_values,
-            .allocator = allocator,
-            .owned = true, // New Env owns its newly allocated arrays
-        };
-    }
-};
-
-fn isNull(v: Value) bool {
-    return v == .Null;
-}
-
-fn truthy(v: Value) bool {
-    return switch (v) {
-        .Bool => |b| b,
-        .Null => false,
-        else => false,
-    };
-}
 
 fn and3(a: Value, b: Value) Value {
     // Three-valued logic for AND: true ∧ x = x; false ∧ x = false; null ∧ true = null; null ∧ false = false; null ∧ null = null
@@ -270,40 +162,10 @@ fn regexRec(s: []const u8, p: []const u8, si0: usize, pi0: usize, allow_suffix_e
     }
     return allow_suffix_end or si == s.len;
 }
-fn eqVals(a: Value, b: Value) bool {
-    return switch (a) {
-        .Null => b == .Null,
-        .Int => |ai| b == .Int and ai == b.Int,
-        .Bool => |ab| b == .Bool and ab == b.Bool,
-        .Str => |as| b == .Str and std.mem.eql(u8, as, b.Str),
-        .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
-        .Node => |an| b == .Node and an == b.Node, // Compare node pointers
-        .Edge => |ae| b == .Edge and ae == b.Edge, // Compare edge pointers
-        .List => |al| blk: {
-            if (b != .List) break :blk false;
-            const bl = b.List;
-            if (al.len != bl.len) break :blk false;
-            for (al, bl) |av, bv| {
-                if (!eqVals(av, bv)) break :blk false;
-            }
-            break :blk true;
-        },
-        .Map => false, // Map equality comparison not implemented
-        .ExtValue => false, // ExtValue equality comparison not implemented
-        .Path => |ap| blk: {
-            if (b != .Path) break :blk false;
-            const bp = b.Path;
-            if (ap.nodes.len != bp.nodes.len or ap.edges.len != bp.edges.len) break :blk false;
-            for (ap.nodes, bp.nodes) |an, bn| {
-                if (an != bn) break :blk false;
-            }
-            for (ap.edges, bp.edges) |ae, be| {
-                if (ae != be) break :blk false;
-            }
-            break :blk true;
-        },
-    };
-}
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-009; FEATURE="Circular Dependency Resolution"; ASPECT=ValueEquality; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Use eqVals from value_types module
+const eqVals = value_types.eqVals;
+
 
 fn cmpIntsOp(op: ast.BinOp, a: i64, b: i64) Value {
     return .{ .Bool = switch (op) {
@@ -544,12 +406,10 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
     };
 }
 
-fn pow10(scale: u8) i128 {
-    var p: i128 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) p *= 10;
-    return p;
-}
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-010; FEATURE="Circular Dependency Resolution"; ASPECT=Pow10; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Use pow10 from value_types module
+const pow10 = value_types.pow10;
+
 
 fn cmpI128(a: i128, b: i128) i2 {
     return if (a < b) -1 else if (a > b) 1 else 0;
@@ -724,50 +584,10 @@ fn transformPlusQuantifier(pattern: []const u8, buf: *[256]u8) ![]const u8 {
     return buf[0..write_idx];
 }
 
-fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
-    return switch (v) {
-        .Str => |s| s,
-        .Int => |n| blk: {
-            const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported;
-            break :blk s;
-        },
-        .Bool => |b| if (b) "true" else "false",
-        .Null => "null",
-        .Decimal => |d| blk2: {
-            // render with scale decimal point
-            const abs = if (d.coeff < 0) -d.coeff else d.coeff;
-            const scale_p = pow10(d.scale);
-            const whole = @divTrunc(abs, scale_p);
-            const frac = @mod(abs, scale_p);
-            var tmp: [64]u8 = undefined;
-            const w = std.fmt.bufPrint(&tmp, "{d}", .{whole}) catch return EvalError.Unsupported;
-            if (d.scale == 0) {
-                const s = if (d.coeff < 0) std.fmt.bufPrint(buf[0..], "-{s}", .{w}) catch return EvalError.Unsupported else std.fmt.bufPrint(buf[0..], "{s}", .{w}) catch return EvalError.Unsupported;
-                break :blk2 s;
-            }
-            // format fractional part with leading zeros to scale width
-            var frac_buf: [32]u8 = undefined;
-            const fb = std.fmt.bufPrint(&frac_buf, "{d}", .{frac}) catch return EvalError.Unsupported;
-            // pad leading zeros
-            if (fb.len < d.scale) {
-                const pad = d.scale - @as(u8, @intCast(fb.len));
-                var padbuf: [32]u8 = undefined;
-                @memset(padbuf[0..pad], '0');
-                const s = if (d.coeff < 0)
-                    std.fmt.bufPrint(buf[0..], "-{s}.{s}{s}", .{ w, padbuf[0..pad], fb }) catch return EvalError.Unsupported
-                else
-                    std.fmt.bufPrint(buf[0..], "{s}.{s}{s}", .{ w, padbuf[0..pad], fb }) catch return EvalError.Unsupported;
-                break :blk2 s;
-            }
-            const s = if (d.coeff < 0)
-                std.fmt.bufPrint(buf[0..], "-{s}.{s}", .{ w, fb }) catch return EvalError.Unsupported
-            else
-                std.fmt.bufPrint(buf[0..], "{s}.{s}", .{ w, fb }) catch return EvalError.Unsupported;
-            break :blk2 s;
-        },
-        else => return EvalError.TypeMismatch,
-    };
-}
+// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-011; FEATURE="Circular Dependency Resolution"; ASPECT=Stringify; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// Phase 5 M5.2: Use stringify from value_types module
+const stringify = value_types.stringify;
+
 
 pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value {
     return switch (e) {

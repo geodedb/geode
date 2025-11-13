@@ -15,7 +15,7 @@ const sortRows = execution.sortRows;
 // Extracted set operation functions from execution.zig for better modularity (M1 Phase 2)
 
 /// Compare two rows for equality
-pub fn rowsEqual(a: []eval.Value, b: []eval.Value) bool {
+pub fn rowsEqual(a: []Value, b: []Value) bool {
     if (a.len != b.len) return false;
 
     for (a, b) |val_a, val_b| {
@@ -44,7 +44,7 @@ pub fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.Binar
         return error.UnionColumnCountMismatch;
     }
 
-    var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+    var new_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
     if (intersect_query.all) {
         // INTERSECT ALL - keep minimum occurrence count for each row
@@ -67,7 +67,7 @@ pub fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.Binar
             }
 
             if (added_count < min_count) {
-                const new_row = try allocator.alloc(eval.Value, row.len);
+                const new_row = try allocator.alloc(Value, row.len);
                 for (row, 0..) |val, j| {
                     new_row[j] = val;
                 }
@@ -95,7 +95,7 @@ pub fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.Binar
                 }
 
                 if (!already_added) {
-                    const new_row = try allocator.alloc(eval.Value, row.len);
+                    const new_row = try allocator.alloc(Value, row.len);
                     for (row, 0..) |val, j| {
                         new_row[j] = val;
                     }
@@ -130,7 +130,7 @@ pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet) 
         return error.UnionColumnCountMismatch;
     }
 
-    var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+    var new_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
     if (except_query.all) {
         // EXCEPT ALL - remove one occurrence for each match in right
@@ -151,7 +151,7 @@ pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet) 
             }
 
             if (count_in_new < count_in_left - count_in_right) {
-                const new_row = try allocator.alloc(eval.Value, row.len);
+                const new_row = try allocator.alloc(Value, row.len);
                 for (row, 0..) |val, j| {
                     new_row[j] = val;
                 }
@@ -179,7 +179,7 @@ pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet) 
                 }
 
                 if (!already_added) {
-                    const new_row = try allocator.alloc(eval.Value, row.len);
+                    const new_row = try allocator.alloc(Value, row.len);
                     for (row, 0..) |val, j| {
                         new_row[j] = val;
                     }
@@ -232,7 +232,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
 
                 // Append rows to result
                 const old_rows = result.rows;
-                result.rows = try allocator.alloc([]eval.Value, old_rows.len + part_result.rows.len);
+                result.rows = try allocator.alloc([]Value, old_rows.len + part_result.rows.len);
 
                 // Copy old rows (transfer ownership)
                 for (old_rows, 0..) |row, i| {
@@ -242,7 +242,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 // Copy new rows (need to duplicate since part_result will be freed)
                 for (part_result.rows, 0..) |row, i| {
                     // Need to duplicate the row data
-                    const new_row = try allocator.alloc(eval.Value, row.len);
+                    const new_row = try allocator.alloc(Value, row.len);
                     for (row, 0..) |val, j| {
                         new_row[j] = val;
                     }
@@ -265,7 +265,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 }
 
                 // Build a combined result with deduplication
-                var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+                var new_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
                 // Add existing rows
                 for (result.rows) |row| {
@@ -281,7 +281,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
 
                     if (!is_duplicate) {
                         // Duplicate the row since we're building a new array
-                        const new_row = try allocator.alloc(eval.Value, row.len);
+                        const new_row = try allocator.alloc(Value, row.len);
                         for (row, 0..) |val, j| {
                             new_row[j] = val;
                         }
@@ -303,7 +303,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
 
                     if (!is_duplicate) {
                         // Duplicate the row since part_result will be freed
-                        const new_row = try allocator.alloc(eval.Value, row.len);
+                        const new_row = try allocator.alloc(Value, row.len);
                         for (row, 0..) |val, j| {
                             new_row[j] = val;
                         }
@@ -333,7 +333,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 return error.UnionColumnCountMismatch;
             }
 
-            var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+            var new_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
             if (part.all) {
                 // INTERSECT ALL - keep minimum occurrence count for each row
@@ -358,7 +358,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                     }
 
                     if (added_count < min_count) {
-                        const new_row = try allocator.alloc(eval.Value, row.len);
+                        const new_row = try allocator.alloc(Value, row.len);
                         for (row, 0..) |val, j| {
                             new_row[j] = val;
                         }
@@ -387,7 +387,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                         }
 
                         if (!already_added) {
-                            const new_row = try allocator.alloc(eval.Value, row.len);
+                            const new_row = try allocator.alloc(Value, row.len);
                             for (row, 0..) |val, j| {
                                 new_row[j] = val;
                             }
@@ -418,7 +418,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 return error.UnionColumnCountMismatch;
             }
 
-            var new_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+            var new_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
             if (part.all) {
                 // EXCEPT ALL - remove one occurrence for each match in right
@@ -440,7 +440,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                     }
 
                     if (count_in_new < count_in_result - count_in_part) {
-                        const new_row = try allocator.alloc(eval.Value, row.len);
+                        const new_row = try allocator.alloc(Value, row.len);
                         for (row, 0..) |val, j| {
                             new_row[j] = val;
                         }
@@ -469,7 +469,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                         }
 
                         if (!already_added) {
-                            const new_row = try allocator.alloc(eval.Value, row.len);
+                            const new_row = try allocator.alloc(Value, row.len);
                             for (row, 0..) |val, j| {
                                 new_row[j] = val;
                             }
@@ -508,7 +508,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
         else
             @as(usize, @intCast(skip_count));
         if (skip_usize < result.rows.len) {
-            const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_usize);
+            const new_rows = try allocator.alloc([]Value, result.rows.len - skip_usize);
             // Free the skipped rows
             for (result.rows[0..skip_usize]) |row| {
                 allocator.free(row);
@@ -525,7 +525,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 allocator.free(row);
             }
             allocator.free(result.rows);
-            result.rows = try allocator.alloc([]eval.Value, 0);
+            result.rows = try allocator.alloc([]Value, 0);
         }
     }
 
@@ -579,7 +579,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
         }
 
         if (limit_count < result.rows.len) {
-            const new_rows = try allocator.alloc([]eval.Value, limit_count);
+            const new_rows = try allocator.alloc([]Value, limit_count);
             // Transfer ownership of kept rows
             for (result.rows[0..limit_count], 0..) |row, i| {
                 new_rows[i] = row;

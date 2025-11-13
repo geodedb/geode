@@ -44,7 +44,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
 
     // Now execute the next query with the current result as bindings
     // For each row in current_result, execute next_query with those bindings
-    var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+    var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
     var final_columns: [][]const u8 = &.{};
     var final_flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
 
@@ -79,7 +79,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         // Use try instead of catch unreachable to handle allocation errors gracefully
         var param_names = try std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len);
         defer param_names.deinit(allocator);
-        var param_values = try std.ArrayList(eval.Value).initCapacity(allocator, current_result.columns.len);
+        var param_values = try std.ArrayList(Value).initCapacity(allocator, current_result.columns.len);
         defer param_values.deinit(allocator);
 
         for (current_result.columns, current_row) |col_name, col_value| {
@@ -102,7 +102,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         // Add all rows from next_result
         for (next_result.rows) |row| {
             // Duplicate the row to avoid ownership issues
-            const row_copy = try allocator.alloc(eval.Value, row.len);
+            const row_copy = try allocator.alloc(Value, row.len);
             for (row, 0..) |val, i| {
                 row_copy[i] = val;
             }
@@ -145,7 +145,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
 }
 
 // Helper function to execute a query with pre-existing bindings from a previous query
-fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext, binding_names: []const []const u8, binding_values: []const eval.Value) anyerror!ExecutionResult {
+fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext, binding_names: []const []const u8, binding_values: []const Value) anyerror!ExecutionResult {
     // Check if this query also has a next_query (multi-level chaining)
     if (q.next_query) |next_query_ptr| {
         // Execute current query with bindings, then chain to next
@@ -163,7 +163,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         }
 
         // Chain to next query using the result as bindings
-        var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+        var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
         var final_columns: [][]const u8 = &.{};
         var final_flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
 
@@ -176,7 +176,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
 
             var param_names = std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len) catch unreachable;
             defer param_names.deinit(allocator);
-            var param_values = std.ArrayList(eval.Value).initCapacity(allocator, current_result.columns.len) catch unreachable;
+            var param_values = std.ArrayList(Value).initCapacity(allocator, current_result.columns.len) catch unreachable;
             defer param_values.deinit(allocator);
 
             for (current_result.columns, current_row) |col_name, col_value| {
@@ -194,7 +194,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
             }
 
             for (next_result.rows) |row| {
-                const row_copy = try allocator.alloc(eval.Value, row.len);
+                const row_copy = try allocator.alloc(Value, row.len);
                 for (row, 0..) |val, i| {
                     row_copy[i] = val;
                 }
@@ -238,7 +238,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
 }
 
 // Execute a query with pre-existing bindings available as parameters
-pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, _: ExecutionContext, binding_names: []const []const u8, binding_values: []const eval.Value) anyerror!ExecutionResult {
+pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, _: ExecutionContext, binding_names: []const []const u8, binding_values: []const Value) anyerror!ExecutionResult {
     // For simple MATCH patterns with bound variables, we can shortcut the matching
     // and just use the bound values directly in the RETURN clause
 
@@ -246,7 +246,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     var all_vars_bound = true;
     var bound_var_env_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
     defer bound_var_env_names.deinit(allocator);
-    var bound_var_env_values = std.ArrayList(eval.Value).initCapacity(allocator, 0) catch unreachable;
+    var bound_var_env_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
     defer bound_var_env_values.deinit(allocator);
 
     if (q.match.chains.len > 0) {
@@ -293,9 +293,9 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         }
 
         // Create a single row by evaluating RETURN expressions with bindings
-        var row = try allocator.alloc(eval.Value, items.len);
+        var row = try allocator.alloc(Value, items.len);
 
-        const env = eval.Env{
+        const env = Env{
             .allocator = allocator,
             .names = binding_names,
             .values = binding_values,
@@ -305,7 +305,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
             row[i] = try eval.evalExpr(allocator, item.expr, env);
         }
 
-        var rows = try allocator.alloc([]eval.Value, 1);
+        var rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
 
         return ExecutionResult{
@@ -332,9 +332,9 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         }
 
         // Create a single row by evaluating RETURN expressions with bound variables
-        var row = try allocator.alloc(eval.Value, items.len);
+        var row = try allocator.alloc(Value, items.len);
 
-        const env = eval.Env{
+        const env = Env{
             .allocator = allocator,
             .names = bound_var_env_names.items,
             .values = bound_var_env_values.items,
@@ -346,7 +346,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
             row[i] = try eval.evalExpr(allocator, item.expr, env);
         }
 
-        var rows = try allocator.alloc([]eval.Value, 1);
+        var rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
 
         return ExecutionResult{
@@ -377,11 +377,11 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // Evaluate LET bindings first and add them to parameter environment
     var param_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
     defer param_names.deinit(allocator);
-    var param_values = std.ArrayList(eval.Value).initCapacity(allocator, 0) catch unreachable;
+    var param_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
     defer param_values.deinit(allocator);
 
     // Empty environment for evaluating LET binding expressions
-    const let_env = eval.Env{
+    const let_env = Env{
         .names = &.{},
         .values = &.{},
         .allocator = allocator,
@@ -427,10 +427,10 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
             // Apply WHERE filter if present
             const filtered_result = if (q.where_clause) |where_expr| blk: {
-                var filtered_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+                var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
                 for (with_result.rows) |row| {
-                    const env = eval.Env{
+                    const env = Env{
                         .names = with_result.columns,
                         .values = row,
                         .param_names = param_names.items,
@@ -458,12 +458,12 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             } else with_result;
 
             // Apply RETURN clause to transform results
-            var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+            var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
             for (filtered_result.rows) |row| {
-                var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+                var return_row = try allocator.alloc(Value, q.ret.items.len);
 
-                const env = eval.Env{
+                const env = Env{
                     .names = filtered_result.columns,
                     .values = row,
                     .param_names = param_names.items,
@@ -514,11 +514,11 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             return result;
         } else {
             // No WITH clause, just apply WHERE/RETURN to CALL results
-            var filtered_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+            var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
             if (q.where_clause) |where_expr| {
                 for (call_result.rows) |row| {
-                    const env = eval.Env{
+                    const env = Env{
                         .names = call_result.columns,
                         .values = row,
                         .param_names = param_names.items,
@@ -545,12 +545,12 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             }
 
             // Apply RETURN clause
-            var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+            var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
             for (filtered_rows.items) |row| {
-                var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+                var return_row = try allocator.alloc(Value, q.ret.items.len);
 
-                const env = eval.Env{
+                const env = Env{
                     .names = call_result.columns,
                     .values = row,
                     .param_names = param_names.items,
@@ -607,10 +607,10 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         // Create initial empty result with one row
         var initial_result = ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
-            .rows = try allocator.alloc([]eval.Value, 1),
+            .rows = try allocator.alloc([]Value, 1),
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
-        initial_result.rows[0] = try allocator.alloc(eval.Value, 0);
+        initial_result.rows[0] = try allocator.alloc(Value, 0);
 
         // Apply WITH clause to transform the empty row into WITH variables
         const with_result = try executeWithClause(allocator, initial_result, with_clause);
@@ -621,13 +621,13 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         }
 
         // Now evaluate RETURN using the WITH results as environment
-        var final_rows = std.ArrayList([]eval.Value).initCapacity(allocator, 0) catch unreachable;
+        var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
         for (with_result.rows) |with_row| {
-            var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+            var return_row = try allocator.alloc(Value, q.ret.items.len);
 
             // Create environment from WITH results + LET binding parameters
-            const env = eval.Env{
+            const env = Env{
                 .names = with_result.columns,
                 .values = with_row,
                 .param_names = param_names.items,

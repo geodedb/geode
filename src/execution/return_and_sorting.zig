@@ -39,8 +39,8 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
             for (order.keys) |key| {
                 // CANARY: REQ=REQ-GQL-101; FEATURE="ORDER BY Expression Evaluation"; ASPECT=Execution; STATUS=FIXED; TEST=gql_conformance.T3; OWNER=execution; UPDATED=2025-10-14
                 // Handle ordinal references (ORDER BY 2 means second column)
-                var val1: eval.Value = undefined;
-                var val2: eval.Value = undefined;
+                var val1: Value = undefined;
+                var val2: Value = undefined;
 
                 if (key.expr == .Int) {
                     // Ordinal reference - use 1-based indexing
@@ -74,12 +74,12 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
                 } else {
                     // Complex expression - need to evaluate it for each row
                     // Create environment from row values
-                    const env1 = eval.Env{
+                    const env1 = Env{
                         .names = result.columns,
                         .values = result.rows[i],
                         .allocator = allocator,
                     };
-                    const env2 = eval.Env{
+                    const env2 = Env{
                         .names = result.columns,
                         .values = result.rows[i + 1],
                         .allocator = allocator,
@@ -111,11 +111,11 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
     }
 }
 
-fn compareValues(a: eval.Value, b: eval.Value) i8 {
+fn compareValues(a: Value, b: Value) i8 {
     return compareValuesWithNullsPolicy(a, b, .default);
 }
 
-fn compareValuesWithNullsPolicy(a: eval.Value, b: eval.Value, nulls: ast.OrderBy.NullsPolicy) i8 {
+fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.NullsPolicy) i8 {
     // Compare values for sorting
     // Returns: -1 if a < b, 0 if a == b, 1 if a > b
 
@@ -163,7 +163,7 @@ fn compareValuesWithNullsPolicy(a: eval.Value, b: eval.Value, nulls: ast.OrderBy
     return 0;
 }
 
-fn getTypeOrder(v: eval.Value) u8 {
+fn getTypeOrder(v: Value) u8 {
     return switch (v) {
         .Null => 0,
         .Bool => 1,
@@ -219,7 +219,7 @@ pub fn isNonConstantExpr(expr: ast.Expr) bool {
     }
 }
 
-pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnClause, env: eval.Env) !ExecutionResult {
+pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnClause, env: Env) !ExecutionResult {
     const items = ret.items;
 
     // Handle RETURN * - expand to all bound variables
@@ -227,7 +227,7 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
         // Return all variables from the environment
         const total_vars = env.names.len + env.param_names.len;
         var columns = try allocator.alloc([]const u8, total_vars);
-        var row = try allocator.alloc(eval.Value, total_vars);
+        var row = try allocator.alloc(Value, total_vars);
 
         var idx: usize = 0;
         // Add regular environment variables
@@ -243,7 +243,7 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
             idx += 1;
         }
 
-        var rows = try allocator.alloc([]eval.Value, 1);
+        var rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
 
         return ExecutionResult{
@@ -278,12 +278,12 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
     }
 
     // Evaluate expressions with provided environment
-    var row = try allocator.alloc(eval.Value, items.len);
+    var row = try allocator.alloc(Value, items.len);
     for (items, 0..) |item, i| {
         row[i] = try eval.evalExpr(allocator, item.expr, env);
     }
 
-    var rows = try allocator.alloc([]eval.Value, 1);
+    var rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
 
     return ExecutionResult{
@@ -304,20 +304,20 @@ fn executeReturnClauseWithContext(allocator: std.mem.Allocator, ret: ast.ReturnC
     return executeReturnClauseWithParams(allocator, ret, context, &.{}, &.{});
 }
 
-pub fn executeReturnClauseWithParams(allocator: std.mem.Allocator, ret: ast.ReturnClause, context: ExecutionContext, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
+pub fn executeReturnClauseWithParams(allocator: std.mem.Allocator, ret: ast.ReturnClause, context: ExecutionContext, param_names: []const []const u8, param_values: []const Value) !ExecutionResult {
     // Build environment with authentication context
     var names_list = std.ArrayList([]const u8){};
     defer names_list.deinit(allocator);
-    var values_list = std.ArrayList(eval.Value){};
+    var values_list = std.ArrayList(Value){};
     defer values_list.deinit(allocator);
 
     // Add token user to environment if authenticated
     if (context.token != null) {
         try names_list.append(allocator, "__token_user__");
-        try values_list.append(allocator, eval.Value{ .Str = context.user orelse "authenticated_user" });
+        try values_list.append(allocator, Value{ .Str = context.user orelse "authenticated_user" });
     }
 
-    const env = eval.Env{
+    const env = Env{
         .names = names_list.items,
         .values = values_list.items,
         .param_names = param_names,
@@ -334,7 +334,7 @@ fn executeSessionSet(allocator: std.mem.Allocator, ss: ast.SessionSetStatement) 
     // Return empty result indicating success
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
-        .rows = try allocator.alloc([]eval.Value, 0),
+        .rows = try allocator.alloc([]Value, 0),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
 }

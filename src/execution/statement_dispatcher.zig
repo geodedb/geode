@@ -58,7 +58,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             if (q.offset) |skip_count| {
                 if (skip_count < result.rows.len) {
                     // Create new rows array without the skipped rows
-                    const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_count);
+                    const new_rows = try allocator.alloc([]Value, result.rows.len - skip_count);
                     for (result.rows[skip_count..], 0..) |row, i| {
                         new_rows[i] = row;
                     }
@@ -68,7 +68,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 } else {
                     // Skip all rows
                     allocator.free(result.rows);
-                    result.rows = try allocator.alloc([]eval.Value, 0);
+                    result.rows = try allocator.alloc([]Value, 0);
                 }
             }
 
@@ -76,7 +76,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             if (q.limit) |limit_count| {
                 if (limit_count < result.rows.len) {
                     // Truncate to limit
-                    const new_rows = try allocator.alloc([]eval.Value, limit_count);
+                    const new_rows = try allocator.alloc([]Value, limit_count);
                     for (result.rows[0..limit_count], 0..) |row, i| {
                         new_rows[i] = row;
                     }
@@ -166,9 +166,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = "transaction started" };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = "transaction started" };
             rows[0] = row;
 
             return ExecutionResult{
@@ -193,9 +193,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = status_message };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = status_message };
             rows[0] = row;
 
             return ExecutionResult{
@@ -220,9 +220,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = status_message };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = status_message };
             rows[0] = row;
 
             return ExecutionResult{
@@ -307,9 +307,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = "session updated" };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = "session updated" };
             rows[0] = row;
 
             return ExecutionResult{
@@ -414,7 +414,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = blk: {
                     const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                     break :blk list;
@@ -430,7 +430,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             _ = cc;
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = blk: {
                     const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                     break :blk list;
@@ -485,7 +485,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = blk: {
                     const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                     break :blk list;
@@ -497,7 +497,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             _ = dc;
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = blk: {
                     const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                     break :blk list;
@@ -519,7 +519,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     // Apply OFFSET if present
                     if (proc.offset) |skip_count| {
                         if (skip_count < result.rows.len) {
-                            const new_rows = try allocator.alloc([]eval.Value, result.rows.len - skip_count);
+                            const new_rows = try allocator.alloc([]Value, result.rows.len - skip_count);
                             for (result.rows[skip_count..], 0..) |row, i| {
                                 new_rows[i] = row;
                             }
@@ -531,7 +531,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     // Apply LIMIT if present
                     if (proc.limit) |limit_count| {
                         if (limit_count < result.rows.len) {
-                            const new_rows = try allocator.alloc([]eval.Value, limit_count);
+                            const new_rows = try allocator.alloc([]Value, limit_count);
                             for (result.rows[0..limit_count], 0..) |row, i| {
                                 new_rows[i] = row;
                             }
@@ -580,7 +580,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         std.log.debug("IF NOT EXISTS specified, returning success", .{});
                         return ExecutionResult{
                             .columns = try allocator.alloc([]const u8, 0),
-                            .rows = try allocator.alloc([]eval.Value, 0),
+                            .rows = try allocator.alloc([]Value, 0),
                             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
                         };
                     }
@@ -599,7 +599,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
@@ -654,7 +654,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
@@ -680,7 +680,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
@@ -689,7 +689,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             _ = dgt;
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
@@ -722,7 +722,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
@@ -748,7 +748,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
@@ -757,7 +757,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             _ = ug;
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]eval.Value, 0),
+                .rows = try allocator.alloc([]Value, 0),
                 .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
@@ -819,9 +819,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = "session reset" };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = "session reset" };
             rows[0] = row;
 
             return ExecutionResult{
@@ -840,9 +840,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
 
-            const rows = try allocator.alloc([]eval.Value, 1);
-            const row = try allocator.alloc(eval.Value, 1);
-            row[0] = eval.Value{ .Str = "session closed" };
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = "session closed" };
             rows[0] = row;
 
             return ExecutionResult{

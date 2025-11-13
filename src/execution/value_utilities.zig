@@ -24,9 +24,9 @@ pub fn duplicateResult(allocator: std.mem.Allocator, original: ExecutionResult) 
     }
 
     // Duplicate rows
-    const rows = try allocator.alloc([]eval.Value, original.rows.len);
+    const rows = try allocator.alloc([]Value, original.rows.len);
     for (original.rows, 0..) |row, i| {
-        const new_row = try allocator.alloc(eval.Value, row.len);
+        const new_row = try allocator.alloc(Value, row.len);
         for (row, 0..) |val, j| {
             new_row[j] = try duplicateValue(allocator, val);
         }
@@ -48,12 +48,12 @@ pub fn duplicateResult(allocator: std.mem.Allocator, original: ExecutionResult) 
 }
 
 /// Helper function to duplicate a Value
-pub fn duplicateValue(allocator: std.mem.Allocator, value: eval.Value) !eval.Value {
+pub fn duplicateValue(allocator: std.mem.Allocator, value: Value) !Value {
     return switch (value) {
         .Null, .Int, .Bool, .Decimal => value, // These are copy-by-value
         .Str => |s| .{ .Str = try allocator.dupe(u8, s) },
         .List => |list| blk: {
-            const new_list = try allocator.alloc(eval.Value, list.len);
+            const new_list = try allocator.alloc(Value, list.len);
             for (list, 0..) |item, i| {
                 new_list[i] = try duplicateValue(allocator, item);
             }
@@ -65,7 +65,7 @@ pub fn duplicateValue(allocator: std.mem.Allocator, value: eval.Value) !eval.Val
 }
 
 /// Helper function to free a Value's allocated memory
-pub fn freeValue(allocator: std.mem.Allocator, value: eval.Value) void {
+pub fn freeValue(allocator: std.mem.Allocator, value: Value) void {
     switch (value) {
         .Str => |s| allocator.free(s),
         .List => |list| {
@@ -79,7 +79,7 @@ pub fn freeValue(allocator: std.mem.Allocator, value: eval.Value) void {
 }
 
 /// P2-3: Now accepts allocator parameter for temporary allocations
-pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: eval.Value) !void {
+pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !void {
     switch (value) {
         .Null => try writer.writeAll("null"),
         .Int => |n| try writer.print("{d}", .{n}),

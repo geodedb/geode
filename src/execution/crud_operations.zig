@@ -59,7 +59,7 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .names = &.{},
                     .values = &.{},
                     .allocator = allocator,
@@ -142,7 +142,7 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
 
             // Set relationship properties if present
             if (hop.rel.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
@@ -181,7 +181,7 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
 const CreateBatchResult = struct {
     created_count: i64,
     created_nodes: std.StringHashMap(u64),
-    created_relationships: std.StringHashMap(eval.Value),
+    created_relationships: std.StringHashMap(Value),
 };
 
 // Enhanced version of executeCreateForBatch that returns created entities for RETURN clause evaluation
@@ -194,7 +194,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     errdefer created_nodes.deinit();
 
     // Track created relationships by variable name for RETURN clauses
-    var created_relationships = std.StringHashMap(eval.Value).init(allocator);
+    var created_relationships = std.StringHashMap(Value).init(allocator);
     errdefer created_relationships.deinit();
 
     // Copy matched bindings to created_nodes
@@ -225,7 +225,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .names = &.{},
                     .values = &.{},
                     .allocator = allocator,
@@ -295,7 +295,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
             // Set relationship properties if present
             if (hop.rel.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
@@ -328,7 +328,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             // Track created relationship by variable name
             if (hop.rel.name) |rel_var_name| {
                 const edge_ptr = store.edges.getPtr(edge_id) orelse return error.EdgeNotFound;
-                const edge_value = eval.Value{ .Edge = edge_ptr };
+                const edge_value = Value{ .Edge = edge_ptr };
                 try created_relationships.put(rel_var_name, edge_value);
             }
         }
@@ -358,7 +358,7 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
     }
 
     // Track created relationships by variable name for RETURN clauses
-    var created_relationships = std.StringHashMap(eval.Value).init(allocator);
+    var created_relationships = std.StringHashMap(Value).init(allocator);
     defer created_relationships.deinit();
 
     // Create nodes from pattern
@@ -383,7 +383,7 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .names = &.{},
                     .values = &.{},
                     .allocator = allocator,
@@ -448,7 +448,7 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
 
             // Set properties for left node (only if newly created or has props to set)
             if (hop.left.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .names = &.{},
                     .values = &.{},
                     .allocator = allocator,
@@ -480,7 +480,7 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
 
             // Set properties for right node (only if newly created or has props to set)
             if (hop.right.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .names = &.{},
                     .values = &.{},
                     .allocator = allocator,
@@ -516,7 +516,7 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
 
             // Set relationship properties
             if (hop.rel.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .names = &.{},
                     .values = &.{},
                     .allocator = allocator,
@@ -549,7 +549,7 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                 const edge_ptr = store.edges.getPtr(edge_id) orelse return error.EdgeNotFound;
 
                 // Create Edge value for the relationship
-                const edge_value = eval.Value{ .Edge = edge_ptr };
+                const edge_value = Value{ .Edge = edge_ptr };
                 try created_relationships.put(rel_var_name, edge_value);
             }
         }
@@ -559,8 +559,8 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
     var result: ExecutionResult = undefined;
     if (q.with_clause) |with_clause| {
         // Create result from created nodes and apply WITH transformation
-        var rows = try allocator.alloc([]eval.Value, 1);
-        var row = try allocator.alloc(eval.Value, with_clause.items.len);
+        var rows = try allocator.alloc([]Value, 1);
+        var row = try allocator.alloc(Value, with_clause.items.len);
 
         for (with_clause.items, 0..) |item, i| {
             // Evaluate expression based on created nodes
@@ -568,24 +568,24 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                 const var_name = item.expr.Ident.orig;
                 if (created_nodes.get(var_name)) |node_id| {
                     const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
-                    row[i] = eval.Value{ .Node = node };
+                    row[i] = Value{ .Node = node };
                 } else {
-                    row[i] = eval.Value{ .Null = {} };
+                    row[i] = Value{ .Null = {} };
                 }
             } else {
                 // Create environment with created nodes
                 var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+                var values = try std.ArrayList(Value).initCapacity(allocator, 0);
 
                 var iter = created_nodes.iterator();
                 while (iter.next()) |entry| {
                     try names.append(allocator, entry.key_ptr.*);
                     const entry_node_id = entry.value_ptr.*;
                     const entry_node = store.nodes.getPtr(entry_node_id) orelse return error.NodeNotFound;
-                    try values.append(allocator, eval.Value{ .Node = entry_node });
+                    try values.append(allocator, Value{ .Node = entry_node });
                 }
 
-                const env = eval.Env{
+                const env = Env{
                     .names = names.items,
                     .values = values.items,
                     .allocator = allocator,
@@ -613,7 +613,7 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
         // No WITH clause - created nodes are ready for SET/RETURN
         result = ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
-            .rows = try allocator.alloc([]eval.Value, 0),
+            .rows = try allocator.alloc([]Value, 0),
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     }
@@ -626,7 +626,7 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                 if (created_nodes.get(prop.target.object)) |node_id| {
                     // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
                     var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                    var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+                    var values = try std.ArrayList(Value).initCapacity(allocator, 0);
 
                     if (q.with_clause != null) {
                         // Use WITH result columns and first row as environment
@@ -641,11 +641,11 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                             try names.append(allocator, entry.key_ptr.*);
                             const entry_node_id = entry.value_ptr.*;
                             const entry_node = store.nodes.getPtr(entry_node_id) orelse return error.NodeNotFound;
-                            try values.append(allocator, eval.Value{ .Node = entry_node });
+                            try values.append(allocator, Value{ .Node = entry_node });
                         }
                     }
 
-                    const env = eval.Env{
+                    const env = Env{
                         .names = names.items,
                         .values = values.items,
                         .allocator = allocator,
@@ -686,7 +686,7 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                 if (created_nodes.get(all_props.node)) |node_id| {
                     // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
                     var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                    var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+                    var values = try std.ArrayList(Value).initCapacity(allocator, 0);
 
                     if (q.with_clause != null) {
                         // Use WITH result columns and first row as environment
@@ -701,11 +701,11 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                             try names.append(allocator, entry.key_ptr.*);
                             const entry_node_id = entry.value_ptr.*;
                             const entry_node = store.nodes.getPtr(entry_node_id) orelse return error.NodeNotFound;
-                            try values.append(allocator, eval.Value{ .Node = entry_node });
+                            try values.append(allocator, Value{ .Node = entry_node });
                         }
                     }
 
-                    const env = eval.Env{
+                    const env = Env{
                         .names = names.items,
                         .values = values.items,
                         .allocator = allocator,
@@ -785,12 +785,12 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
         }
 
         // Evaluate RETURN items using the WITH result as environment
-        var return_rows = try allocator.alloc([]eval.Value, result.rows.len);
+        var return_rows = try allocator.alloc([]Value, result.rows.len);
         for (result.rows, 0..) |with_row, row_idx| {
-            var return_row = try allocator.alloc(eval.Value, q.ret.items.len);
+            var return_row = try allocator.alloc(Value, q.ret.items.len);
 
             // Create environment from WITH result columns and this row's values
-            const env = eval.Env{
+            const env = Env{
                 .allocator = allocator,
                 .names = result.columns,
                 .values = with_row,
@@ -846,17 +846,17 @@ pub fn executeReturnClauseWithNodes(
     allocator: std.mem.Allocator,
     ret: ast.ReturnClause,
     nodes: std.StringHashMap(u64),
-    relationships: std.StringHashMap(eval.Value),
+    relationships: std.StringHashMap(Value),
 ) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     const items = ret.items;
     var columns = try allocator.alloc([]const u8, items.len);
-    var rows = try allocator.alloc([]eval.Value, 1);
-    var row = try allocator.alloc(eval.Value, items.len);
+    var rows = try allocator.alloc([]Value, 1);
+    var row = try allocator.alloc(Value, items.len);
 
     // Create environment with the nodes and relationships
     var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    var values = try std.ArrayList(eval.Value).initCapacity(allocator, 0);
+    var values = try std.ArrayList(Value).initCapacity(allocator, 0);
 
     // Add nodes to environment
     var node_iter = nodes.iterator();
@@ -864,7 +864,7 @@ pub fn executeReturnClauseWithNodes(
         try names.append(allocator, entry.key_ptr.*);
         const node_id = entry.value_ptr.*;
         const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
-        try values.append(allocator, eval.Value{ .Node = node });
+        try values.append(allocator, Value{ .Node = node });
     }
 
     // Add relationships to environment
@@ -874,7 +874,7 @@ pub fn executeReturnClauseWithNodes(
         try values.append(allocator, entry.value_ptr.*);
     }
 
-    const env = eval.Env{
+    const env = Env{
         .allocator = allocator,
         .names = names.items,
         .values = values.items,
@@ -908,7 +908,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
     defer created_nodes.deinit();
 
     // Track created relationships by variable name for RETURN clauses
-    var created_relationships = std.StringHashMap(eval.Value).init(allocator);
+    var created_relationships = std.StringHashMap(Value).init(allocator);
     defer created_relationships.deinit();
 
     // Create nodes from pattern
@@ -919,7 +919,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .names = &.{},
                     .values = &.{},
                     .allocator = allocator,
@@ -973,7 +973,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
 
             // Set properties on left node if present and not already set
             if (hop.left.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
@@ -1019,7 +1019,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
 
             // Set properties on right node if present and not already set
             if (hop.right.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
@@ -1060,7 +1060,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
 
             // Set edge properties if present
             if (hop.rel.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
@@ -1094,7 +1094,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
             // Track created relationship by variable name
             if (hop.rel.name) |rel_var_name| {
                 const edge_ptr = store.edges.getPtr(edge_id) orelse return error.EdgeNotFound;
-                const edge_value = eval.Value{ .Edge = edge_ptr };
+                const edge_value = Value{ .Edge = edge_ptr };
                 try created_relationships.put(rel_var_name, edge_value);
             }
         }
@@ -1105,7 +1105,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
         // Build environment with created nodes and relationships
         const total_count = created_nodes.count() + created_relationships.count();
         var names = try allocator.alloc([]const u8, total_count);
-        var values = try allocator.alloc(eval.Value, total_count);
+        var values = try allocator.alloc(Value, total_count);
         defer allocator.free(names);
         defer allocator.free(values);
 
@@ -1118,7 +1118,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
             // Look up node by ID from store
             const node_id = entry.value_ptr.*;
             const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
-            values[idx] = eval.Value{ .Node = node };
+            values[idx] = Value{ .Node = node };
             idx += 1;
         }
 
@@ -1130,7 +1130,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
             idx += 1;
         }
 
-        const env = eval.Env{
+        const env = Env{
             .allocator = allocator,
             .names = names,
             .values = values,
@@ -1142,7 +1142,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
 
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
-        .rows = try allocator.alloc([]eval.Value, 0),
+        .rows = try allocator.alloc([]Value, 0),
         .flags = blk: {
             const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
             break :blk list;
@@ -1165,7 +1165,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .names = &.{},
                     .values = &.{},
                     .allocator = allocator,
@@ -1219,7 +1219,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
 
             // Set properties on left node if present and not already set
             if (hop.left.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
@@ -1265,7 +1265,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
 
             // Set properties on right node if present and not already set
             if (hop.right.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
@@ -1306,7 +1306,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
 
             // Set edge properties if present
             if (hop.rel.props) |props| {
-                const env = eval.Env{
+                const env = Env{
                     .allocator = allocator,
                     .names = &.{},
                     .values = &.{},
@@ -1343,7 +1343,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
     if (ins.return_clause) |ret| {
         // Build environment with created nodes
         var names = try allocator.alloc([]const u8, created_nodes.count());
-        var values = try allocator.alloc(eval.Value, created_nodes.count());
+        var values = try allocator.alloc(Value, created_nodes.count());
         defer allocator.free(names);
         defer allocator.free(values);
 
@@ -1354,11 +1354,11 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
             // Look up node by ID from store
             const node_id = entry.value_ptr.*;
             const node = store.nodes.getPtr(node_id) orelse return error.NodeNotFound;
-            values[idx] = eval.Value{ .Node = node };
+            values[idx] = Value{ .Node = node };
             idx += 1;
         }
 
-        const env = eval.Env{
+        const env = Env{
             .allocator = allocator,
             .names = names,
             .values = values,
@@ -1370,7 +1370,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
 
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
-        .rows = try allocator.alloc([]eval.Value, 0),
+        .rows = try allocator.alloc([]Value, 0),
         .flags = blk: {
             const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
             break :blk list;
@@ -1457,7 +1457,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !Execut
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
                                 // Evaluate the property expression
-                                const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                                const value = try eval.evalExpr(allocator, prop.value, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
                                 const prop_value = switch (value) {
                                     .Str => |s| blk: {
                                         // Get node to determine its labels for encryption
@@ -1499,7 +1499,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !Execut
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, all_props.node, var_name)) {
                                 // Evaluate the properties expression (should be a map literal)
-                                const props_value = try eval.evalExpr(allocator, all_props.properties, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
 
                                 // Clear all existing properties by getting node and manually clearing
                                 if (store.nodes.getPtr(node_id)) |node_ptr| {
@@ -1544,7 +1544,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !Execut
             // Set properties from pattern
             if (node_pattern.props) |props| {
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                    const value = try eval.evalExpr(allocator, prop.value.*, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
                     const prop_value = switch (value) {
                         .Str => |s| graph_store.PropertyValue{ .String = s },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
@@ -1563,7 +1563,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !Execut
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
                                 // Evaluate the property expression
-                                const value = try eval.evalExpr(allocator, prop.value, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                                const value = try eval.evalExpr(allocator, prop.value, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
                                 const prop_value = switch (value) {
                                     .Str => |s| blk: {
                                         // Get node to determine its labels for encryption
@@ -1605,7 +1605,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !Execut
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, all_props.node, var_name)) {
                                 // Evaluate the properties expression (should be a map literal)
-                                const props_value = try eval.evalExpr(allocator, all_props.properties, eval.Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
 
                                 // Clear all existing properties by getting node and manually clearing
                                 if (store.nodes.getPtr(node_id)) |node_ptr| {
@@ -1666,32 +1666,32 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !Execut
                 columns[i] = try allocator.dupe(u8, column_name);
             }
 
-            var rows = try allocator.alloc([]eval.Value, 1);
-            var row = try allocator.alloc(eval.Value, ret.items.len);
+            var rows = try allocator.alloc([]Value, 1);
+            var row = try allocator.alloc(Value, ret.items.len);
 
             // Create environment with the merged node and 'created' flag
             const node = store.nodes.getPtr(node_id).?;
             var env_names: [][]const u8 = &.{};
-            var env_values: []eval.Value = &.{};
+            var env_values: []Value = &.{};
 
             // Always include the 'created' variable
             const base_vars: usize = 1; // for 'created' variable
             const total_vars: usize = if (node_pattern.name != null) base_vars + 1 else base_vars;
 
             env_names = try allocator.alloc([]const u8, total_vars);
-            env_values = try allocator.alloc(eval.Value, total_vars);
+            env_values = try allocator.alloc(Value, total_vars);
 
             // Add 'created' variable
             env_names[0] = "created";
-            env_values[0] = eval.Value{ .Bool = created };
+            env_values[0] = Value{ .Bool = created };
 
             // Add node variable if named
             if (node_pattern.name) |var_name| {
                 env_names[1] = var_name;
-                env_values[1] = eval.Value{ .Node = node };
+                env_values[1] = Value{ .Node = node };
             }
 
-            const env = eval.Env{
+            const env = Env{
                 .allocator = allocator,
                 .names = env_names,
                 .values = env_values,
@@ -1721,7 +1721,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !Execut
     // Return empty result if no RETURN clause
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
-        .rows = try allocator.alloc([]eval.Value, 0),
+        .rows = try allocator.alloc([]Value, 0),
         .flags = blk: {
             const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
             break :blk list;
@@ -1847,9 +1847,9 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !Exec
         var columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "deleted_count");
 
-        var rows = try allocator.alloc([]eval.Value, 1);
-        var row = try allocator.alloc(eval.Value, 1);
-        row[0] = eval.Value{ .Int = @intCast(deleted_count) };
+        var rows = try allocator.alloc([]Value, 1);
+        var row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Int = @intCast(deleted_count) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -1865,7 +1865,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !Exec
     // Return empty result if no RETURN clause
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
-        .rows = try allocator.alloc([]eval.Value, 0),
+        .rows = try allocator.alloc([]Value, 0),
         .flags = blk: {
             const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
             break :blk list;

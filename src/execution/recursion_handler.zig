@@ -108,15 +108,15 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     }
 
     // Convert paths to result rows
-    const rows = try allocator.alloc([]eval.Value, paths.items.len);
+    const rows = try allocator.alloc([]Value, paths.items.len);
     for (paths.items, 0..) |path, i| {
-        const row = try allocator.alloc(eval.Value, 1);
+        const row = try allocator.alloc(Value, 1);
         // Convert path to list of node IDs
-        const path_values = try allocator.alloc(eval.Value, path.len);
+        const path_values = try allocator.alloc(Value, path.len);
         for (path, 0..) |node_id, j| {
-            path_values[j] = eval.Value{ .Int = @intCast(node_id) };
+            path_values[j] = Value{ .Int = @intCast(node_id) };
         }
-        row[0] = eval.Value{ .List = path_values };
+        row[0] = Value{ .List = path_values };
         rows[i] = row;
     }
 
@@ -195,15 +195,15 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     }
 
     // Convert paths to result rows
-    const rows = try allocator.alloc([]eval.Value, paths.items.len);
+    const rows = try allocator.alloc([]Value, paths.items.len);
     for (paths.items, 0..) |path, i| {
-        const row = try allocator.alloc(eval.Value, 1);
+        const row = try allocator.alloc(Value, 1);
         // Convert path to list of node IDs
-        const path_values = try allocator.alloc(eval.Value, path.len);
+        const path_values = try allocator.alloc(Value, path.len);
         for (path, 0..) |node_id, j| {
-            path_values[j] = eval.Value{ .Int = @intCast(node_id) };
+            path_values[j] = Value{ .Int = @intCast(node_id) };
         }
-        row[0] = eval.Value{ .List = path_values };
+        row[0] = Value{ .List = path_values };
         rows[i] = row;
     }
 
@@ -349,19 +349,19 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
 
     // Build result
     if (result_path) |path| {
-        const rows = try allocator.alloc([]eval.Value, 1);
-        const row = try allocator.alloc(eval.Value, 2);
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 2);
 
         // Path column
-        const path_values = try allocator.alloc(eval.Value, path.len);
+        const path_values = try allocator.alloc(Value, path.len);
         for (path, 0..) |node_id, i| {
-            path_values[i] = eval.Value{ .Int = @intCast(node_id) };
+            path_values[i] = Value{ .Int = @intCast(node_id) };
         }
-        row[0] = eval.Value{ .List = path_values };
+        row[0] = Value{ .List = path_values };
 
         // Distance column - convert to Decimal
         const distance_int: i128 = @intFromFloat(result_distance * 100.0);
-        row[1] = eval.Value{ .Decimal = .{ .coeff = distance_int, .scale = 2 } };
+        row[1] = Value{ .Decimal = .{ .coeff = distance_int, .scale = 2 } };
 
         rows[0] = row;
 
@@ -376,7 +376,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         // No path found
         return ExecutionResult{
             .columns = columns,
-            .rows = try allocator.alloc([]eval.Value, 0),
+            .rows = try allocator.alloc([]Value, 0),
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     }

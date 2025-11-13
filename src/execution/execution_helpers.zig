@@ -110,9 +110,9 @@ pub fn filterYieldColumns(allocator: std.mem.Allocator, result: ExecutionResult,
     }
 
     // Create new filtered rows
-    const new_rows = try allocator.alloc([]eval.Value, result.rows.len);
+    const new_rows = try allocator.alloc([]Value, result.rows.len);
     for (result.rows, 0..) |row, row_idx| {
-        const new_row = try allocator.alloc(eval.Value, col_indices.items.len);
+        const new_row = try allocator.alloc(Value, col_indices.items.len);
         for (col_indices.items, 0..) |col_idx, i| {
             new_row[i] = row[col_idx];
         }

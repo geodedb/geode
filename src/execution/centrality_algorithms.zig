@@ -34,7 +34,7 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
         try node_list.append(allocator, entry.key_ptr.*);
     }
 
-    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
         var degree: u64 = 0;
         var edge_iter = store.edges.iterator();
@@ -44,9 +44,9 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
             }
         }
 
-        var row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = @intCast(node_id) };
-        row[1] = eval.Value{ .Int = @intCast(degree) };
+        var row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(node_id) };
+        row[1] = Value{ .Int = @intCast(degree) };
         rows[i] = row;
     }
 
@@ -149,12 +149,12 @@ pub fn executeBetweennessCentrality(allocator: std.mem.Allocator, store: *graph_
         }
     }
 
-    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
-        var row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = @intCast(node_id) };
+        var row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(node_id) };
         const score = centrality.get(node_id).?;
-        row[1] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(score * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+        row[1] = Value{ .Decimal = .{ .coeff = @intFromFloat(score * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
         rows[i] = row;
     }
 
@@ -175,7 +175,7 @@ pub fn executeClosenessCentrality(allocator: std.mem.Allocator, store: *graph_st
         try node_list.append(allocator, entry.key_ptr.*);
     }
 
-    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
         var distances = std.AutoHashMap(u64, u32).init(allocator);
         defer distances.deinit();
@@ -214,9 +214,9 @@ pub fn executeClosenessCentrality(allocator: std.mem.Allocator, store: *graph_st
 
         const closeness = if (total_distance > 0) @as(f64, @floatFromInt(reachable)) / total_distance else 0.0;
 
-        var row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = @intCast(node_id) };
-        row[1] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(closeness * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+        var row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(node_id) };
+        row[1] = Value{ .Decimal = .{ .coeff = @intFromFloat(closeness * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
         rows[i] = row;
     }
 
@@ -240,7 +240,7 @@ pub fn executeEigenvectorCentrality(allocator: std.mem.Allocator, store: *graph_
     if (node_list.items.len == 0) {
         return ExecutionResult{
             .columns = columns,
-            .rows = try allocator.alloc([]eval.Value, 0),
+            .rows = try allocator.alloc([]Value, 0),
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     }
@@ -291,12 +291,12 @@ pub fn executeEigenvectorCentrality(allocator: std.mem.Allocator, store: *graph_
         if (max_diff < tolerance) break;
     }
 
-    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
-        var row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = @intCast(node_id) };
+        var row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(node_id) };
         const score = centrality.get(node_id).?;
-        row[1] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(score * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+        row[1] = Value{ .Decimal = .{ .coeff = @intFromFloat(score * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
         rows[i] = row;
     }
 
@@ -320,7 +320,7 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
     if (node_list.items.len == 0) {
         return ExecutionResult{
             .columns = columns,
-            .rows = try allocator.alloc([]eval.Value, 0),
+            .rows = try allocator.alloc([]Value, 0),
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     }
@@ -397,12 +397,12 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         if (max_diff < tolerance) break;
     }
 
-    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
-        var row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = @intCast(node_id) };
+        var row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(node_id) };
         const score = pagerank.get(node_id).?;
-        row[1] = eval.Value{ .Decimal = .{ .coeff = @intFromFloat(score * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+        row[1] = Value{ .Decimal = .{ .coeff = @intFromFloat(score * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
         rows[i] = row;
     }
 
@@ -442,11 +442,11 @@ pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_sto
         }
     }
 
-    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
-        var row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = @intCast(node_id) };
-        row[1] = eval.Value{ .Int = @intCast(communities.get(node_id).?) };
+        var row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(node_id) };
+        row[1] = Value{ .Int = @intCast(communities.get(node_id).?) };
         rows[i] = row;
     }
 
@@ -514,11 +514,11 @@ pub fn executeLabelPropagation(allocator: std.mem.Allocator, store: *graph_store
         }
     }
 
-    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
-        var row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = @intCast(node_id) };
-        row[1] = eval.Value{ .Int = @intCast(labels.get(node_id).?) };
+        var row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(node_id) };
+        row[1] = Value{ .Int = @intCast(labels.get(node_id).?) };
         rows[i] = row;
     }
 
@@ -596,11 +596,11 @@ pub fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphS
         }
     }
 
-    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
-        var row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = @intCast(node_id) };
-        row[1] = eval.Value{ .Int = @intCast(components.get(node_id).?) };
+        var row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(node_id) };
+        row[1] = Value{ .Int = @intCast(components.get(node_id).?) };
         rows[i] = row;
     }
 
@@ -658,11 +658,11 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
         comp_id += 1;
     }
 
-    var rows = try allocator.alloc([]eval.Value, node_list.items.len);
+    var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
-        var row = try allocator.alloc(eval.Value, 2);
-        row[0] = eval.Value{ .Int = @intCast(node_id) };
-        row[1] = eval.Value{ .Int = @intCast(component.get(node_id).?) };
+        var row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Int = @intCast(node_id) };
+        row[1] = Value{ .Int = @intCast(component.get(node_id).?) };
         rows[i] = row;
     }
 
