@@ -27,7 +27,7 @@
 **Active Agent**: Claude Agent
 **Current Phase**: Phase 3 - Server Monolith Decomposition (IN PROGRESS - 40%)
 **Current Milestone**: M3.2 (Protocol Handler), M3.3 (Query Executor) - Both in progress
-**Current File**: `src/server/main.zig` (3,097 lines, was 7,039 baseline - **56.0% REDUCTION**)
+**Current File**: `src/server/main.zig` (3,004 lines, was 7,039 baseline - **57.3% REDUCTION**)
 **Analysis**: main.zig structure analyzed:
   - Lines 1-891: Imports and helpers (~891 lines, includes handleQuicConnection ~448 lines)
   - Lines 892-3178: main() function (2,286 lines)
@@ -50,14 +50,15 @@
     - Graceful shutdown: 20 lines
   - Lines 3181-3215: executeSessionParameterSet helper (~35 lines)
 **Blocking Issues**: None
-**Next Target**: Extract remaining message handlers and RUN_GQL (~1,698 lines remaining)
+**Next Target**: Extract RUN_GQL statement handler (~1,698 lines, largest remaining target)
 **Recent Achievements**:
 - ✅ Phase 8 COMPLETE (Testing & Documentation infrastructure)
 - ✅ Phase 3 M3.2 ServerState extraction complete (resolves M3.1 blocking issue)
 - ✅ Phase 3 M3.2 CLI argument parsing extracted (cli_args.zig, 173 lines)
 - ✅ Phase 3 M3.2 Server initialization extracted (server_init.zig, 211 lines)
 - ✅ Phase 3 M3.2 Transaction handlers extracted (transaction_handlers.zig, 160 lines)
-- ✅ Server reduction: 7,039 → 3,097 lines (56.0%, need 2,797 more lines to reach ~300 line target)
+- ✅ Phase 3 M3.2 Message handlers extracted (message_handlers.zig, 148 lines - CDC, PULL)
+- ✅ Server reduction: 7,039 → 3,004 lines (57.3%, need 2,704 more lines to reach ~300 line target)
 - ✅ Query executor module: 2,942 lines extracted through 9 incremental commits
 
 ---
@@ -547,14 +548,15 @@ Circular Dependencies Detected: 2
 - **Notes**: Followed P0 CRITICAL safety protocols with 7 incremental commits. Achieved 9.5% server reduction while maintaining 100% functionality. ServerState struct extraction deferred pending dependency resolution.
 
 #### M3.2: Extract Protocol Handler ⏳
-- **Status**: IN PROGRESS (Fifth Increment Complete - Transaction Handlers Extracted)
-- **Current File**: `src/server/main.zig` (3,097 lines, was 3,215 before txn extraction, was 7,039 baseline - **56.0% REDUCTION**)
+- **Status**: IN PROGRESS (Sixth Increment Complete - Message Handlers Extracted)
+- **Current File**: `src/server/main.zig` (3,004 lines, was 3,097 before message handlers extraction, was 7,039 baseline - **57.3% REDUCTION**)
 - **Created Files**:
   - `src/server/protocol_handler.zig` (132 lines) - Backup protocol handlers
   - `src/server/server_state.zig` (ENHANCED, +107 lines) - ServerState struct added
   - `src/server/cli_args.zig` (173 lines) - CLI argument parsing module
   - `src/server/server_init.zig` (211 lines) - Server initialization module
   - `src/server/transaction_handlers.zig` (160 lines) - Transaction message handlers (BEGIN, COMMIT, ROLLBACK)
+  - `src/server/message_handlers.zig` (148 lines) - CDC and PULL message handlers
 - **Tasks**:
   - [x] Identify protocol handling code (backup handlers: handleBackupRequest, handleRestoreRequest, handleUploadBackupRequest)
   - [x] Create `protocol_handler.zig` with backup protocol handlers
@@ -563,20 +565,21 @@ Circular Dependencies Detected: 2
   - [x] Extract CLI argument parsing to cli_args.zig module
   - [x] Extract server initialization to server_init.zig module (WAL, env vars, catalog, storage)
   - [x] Extract transaction message handlers to transaction_handlers.zig module (BEGIN, COMMIT, ROLLBACK)
+  - [x] Extract CDC and PULL message handlers to message_handlers.zig module
   - [ ] Extract additional protocol handling code (QUIC connection setup, message parsing wrapper)
   - [ ] Add protocol tests
   - [ ] Verify QUIC communication works
-- **Verification**: Server functionality maintained through all five increments, all components successfully modularized
+- **Verification**: Server functionality maintained through all six increments, all components successfully modularized
 - **Agent**: Claude Agent
 - **Started**: 2025-11-12
-- **Completed**: Fifth increment complete (transaction handlers extraction - 118 lines removed from main.zig)
+- **Completed**: Sixth increment complete (message handlers extraction - 93 lines removed from main.zig)
 - **Test Results**: Functionality preserved through incremental approach
 - **Issues**: None
-- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Fifth increment extracted transaction message handlers (BEGIN, COMMIT, ROLLBACK) to transaction_handlers.zig. Created handler functions that return JSON responses for cleaner separation. Reduced main.zig by 118 lines (3,215 → 3,097 lines, -3.7%). Cumulative M3.2 reduction: 284 lines across 5 increments. Next: Extract remaining message handlers and RUN_GQL statement handler (~1,698 lines).
+- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Sixth increment extracted CDC and PULL message handlers to message_handlers.zig. handleCdcDiagnostics() handles CDC_DIAGNOSTICS, handleCdcControl() handles CDC_CONTROL, handlePull() handles PULL message with pagination and PROFILE support. Reduced main.zig by 93 lines (3,097 → 3,004 lines, -3.0%). Cumulative M3.2 reduction: 377 lines across 6 increments. Next: Extract RUN_GQL statement handler (~1,698 lines, largest remaining target).
 
 #### M3.3: Extract Query Executor ⏳
-- **Status**: IN PROGRESS (Ninth Increment Complete - Statement Execution Functions Extracted - MAJOR MILESTONE: 56%+ Server Reduction)
-- **Current File**: `src/server/main.zig` (3,097 lines after M3.2 fifth increment, was 7,039 baseline - **56.0% REDUCTION**)
+- **Status**: IN PROGRESS (Ninth Increment Complete - Statement Execution Functions Extracted - MAJOR MILESTONE: 57%+ Server Reduction)
+- **Current File**: `src/server/main.zig` (3,004 lines after M3.2 sixth increment, was 7,039 baseline - **57.3% REDUCTION**)
 - **Created Files**:
   - `src/server/query_executor.zig` (2,942 lines) - Complete query execution module with utilities, diagnostics, AST analysis, formatting, conversion, profiling types, graph property utilities, query evaluation functions, and statement execution functions
 - **Tasks**:

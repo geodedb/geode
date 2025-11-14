@@ -50,6 +50,8 @@ const executeDeleteStatement = query_executor.executeDeleteStatement;
 const executeMergeStatement = query_executor.executeMergeStatement;
 // Import transaction handlers (M3.2 Phase 3 transaction handlers extraction)
 const transaction_handlers = @import("transaction_handlers.zig");
+// Import message handlers (M3.2 Phase 3 message handlers extraction)
+const message_handlers = @import("message_handlers.zig");
 const executeCreateIndexStatement = query_executor.executeCreateIndexStatement;
 const executeDropIndexStatement = query_executor.executeDropIndexStatement;
 const executeBackupStatement = query_executor.executeBackupStatement;
@@ -333,19 +335,7 @@ var g_match_max_frontier_override: ?usize = null;
 // Centralized CDC_CONTROL handler to eliminate duplicated logic between processMessage
 // (network path) and stdio loop. Returns a newly allocated response line or null slice on OOM.
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC_CONTROL"; ASPECT=Refactor; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=server; UPDATED=2025-09-20
-fn handleCdcControl(gpa: std.mem.Allocator, state: *ServerState, action: []const u8) ?[]u8 {
-    if (state.cdc_engine) |eng| {
-        if (std.ascii.eqlIgnoreCase(action, "RESET_GUARDRAILS")) {
-            eng.resetGuardrailState();
-            return protocol.buildCdcControlLine(gpa, action, "OK", eng.guardrail_epoch) catch null;
-        } else {
-            return protocol.buildCdcControlLine(gpa, action, "UNSUPPORTED", eng.guardrail_epoch) catch null;
-        }
-    } else {
-        return protocol.buildCdcControlLine(gpa, action, "NO_ENGINE", 0) catch null;
-    }
-}
-
+// Removed: handleCdcControl() function (~12 lines) now in message_handlers module (M3.2 Phase 3 message handlers extraction)
 
 fn handleQuicConnection(
     gpa: std.mem.Allocator,
@@ -1175,29 +1165,14 @@ pub fn main() !void {
                 continue;
             },
             .CDC_DIAGNOSTICS => |_| {
-                if (state.cdc_engine) |eng| {
-                    if (eng.exportDiagnostics(gpa)) |payload| {
-                        defer gpa.free(payload);
-                        if (protocol.buildCdcDiagnosticsLine(gpa, payload)) |line| {
-                            defer gpa.free(line);
-                            _ = stdout_file.write(line) catch {};
-                        } else |_| {}
-                    } else |_| {
-                        if (protocol.buildCdcDiagnosticsLine(gpa, "{\"cdc_error\":\"export_failed\"}")) |line| {
-                            defer gpa.free(line);
-                            _ = stdout_file.write(line) catch {};
-                        } else |_| {}
-                    }
-                } else {
-                    if (protocol.buildCdcDiagnosticsLine(gpa, "{\"cdc\":{\"enabled\":false}}")) |line| {
-                        defer gpa.free(line);
-                        _ = stdout_file.write(line) catch {};
-                    } else |_| {}
+                if (message_handlers.handleCdcDiagnostics(gpa, &state)) |line| {
+                    defer gpa.free(line);
+                    _ = stdout_file.write(line) catch {};
                 }
                 continue;
             },
             .CDC_CONTROL => |cc| {
-                if (handleCdcControl(gpa, &state, cc.action)) |out_line| {
+                if (message_handlers.handleCdcControl(gpa, &state, cc.action)) |out_line| {
                     defer gpa.free(out_line);
                     _ = stdout_file.write(out_line) catch {};
                 }
@@ -2940,76 +2915,8 @@ pub fn main() !void {
                 }
             },
             .PULL => |pl| {
-                if (!state.active_result and state.profile_json == null) {
-                    const nrline = protocol.buildErrorLine(gpa, "NoResult", "no active result set", "") catch null;
-                    if (nrline) |l| {
-                        defer gpa.free(l);
-                        _ = stdout_file.write(l) catch {};
-                    }
-                    continue;
-                }
-                // If PROFILE staged, emit PROFILE frame and clear profile_json; no rows to paginate.
-                if (state.profile_json) |pj| {
-                    const dup_pj = gpa.dupe(u8, pj) catch pj;
-
-                    if (result_format_txt) {
-                        // Text format output for PROFILE
-                        var formatter = TextFormatter.init(gpa);
-                        const txt = formatter.formatProfile(dup_pj) catch dup_pj;
-                        defer if (txt.ptr != dup_pj.ptr) gpa.free(txt);
-                        _ = stdout_file.write(txt) catch {};
-                        _ = stdout_file.write("\n") catch {};
-                    } else {
-                        // JSON format output
-                        const pline = protocol.buildProfileLine(gpa, dup_pj, state.profile_flags) catch null;
-                        if (pline) |plj| {
-                            defer gpa.free(plj);
-                            _ = stdout_file.write(plj) catch {};
-                        }
-                        // silent on failure to build profile line
-                    }
-
-                    // PROFILE complete; clear state and mark no active result
-                    state.allocator.free(pj);
-                    state.profile_json = null;
-                    state.profile_flags = &.{};
-                    state.active_result = false;
-                    continue;
-                }
-                const page_size = if (pl.page_size == 0) 1000 else pl.page_size;
-                const start = state.page_index;
-                const end = @min(state.page_index + page_size, state.page_items.len);
-                var arr_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
-                const w = arr_buf.writer(gpa);
-                w.writeAll("[") catch {};
-                var i: usize = start;
-                var first = true;
-                while (i < end) : (i += 1) {
-                    if (!first) w.writeAll(",") catch {};
-                    first = false;
-                    w.writeAll(state.page_items[i]) catch {};
-                }
-                w.writeAll("]") catch {};
-                const json_rows = arr_buf.toOwnedSlice(gpa) catch "[]";
-                state.page_index = end;
-                const is_final = end >= state.page_items.len;
-                if (is_final) state.active_result = false;
-                const include_final = (state.page_items.len > 1) or (page_size < state.page_items.len);
-                if (state.telemetry_paging) {
-                    // Emit telemetry JSON log line on stderr via logger
-                    var ps_buf: [32]u8 = undefined;
-                    const ps_str = std.fmt.bufPrint(&ps_buf, "{d}", .{page_size}) catch "0";
-                    var rows_buf: [32]u8 = undefined;
-                    const rows_str = std.fmt.bufPrint(&rows_buf, "{d}", .{end - start}) catch "0";
-                    log.info("telemetry", .{
-                        .{ .key = "type", .value = "TELEMETRY" },
-                        .{ .key = "event", .value = "PULL_PAGE" },
-                        .{ .key = "page_size", .value = ps_str },
-                        .{ .key = "rows_emitted", .value = rows_str },
-                        .{ .key = "final", .value = if (is_final) "true" else "false" },
-                    });
-                }
-                writeBindingsAdaptive(stdout_file, state.last_ordered, state.last_order_keys, json_rows, is_final, include_final, computeBaseFlags(state.last_ordered, state.last_distinct));
+                const should_continue = message_handlers.handlePull(gpa, &state, pl.page_size, result_format_txt, stdout_file) catch continue;
+                if (!should_continue) continue;
             },
             .BACKUP => |backup_req| {
                 const response = handleBackupRequest(gpa, &state, backup_req) catch {
