@@ -1,0 +1,276 @@
+// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-001; FEATURE="Phase 7 Modularization"; ASPECT=SchemaManager; STATUS=IMPL; OWNER=schema; UPDATED=2025-11-13
+// Phase 7 M7.1: Unified schema management interface
+//
+// This module provides a centralized interface for all schema-related operations,
+// consolidating access to:
+// - Database metadata catalog (schemas, graphs, indexes)
+// - FLE (Field-Level Encryption) schema catalog
+// - Type annotations
+// - Constraint management
+//
+// By providing a single entry point, this module improves:
+// - Code organization and discoverability
+// - Maintainability through clear boundaries
+// - Testability via unified interface
+
+const std = @import("std");
+const catalog = @import("catalog.zig");
+const fle_catalog = @import("fle_catalog.zig");
+const annotations = @import("annotations.zig");
+const constraint_manager = @import("constraint_manager.zig");
+
+// ============================================================================
+// Re-export core types for convenience
+// ============================================================================
+
+/// Database metadata catalog (schemas, graphs, indexes)
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-002; FEATURE="Catalog Re-export"; STATUS=IMPL
+pub const Catalog = catalog.Catalog;
+pub const IndexInfo = catalog.IndexInfo;
+
+/// FLE schema catalog for encryption metadata
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-003; FEATURE="FLE Catalog Re-export"; STATUS=IMPL
+pub const SchemaCatalog = fle_catalog.SchemaCatalog;
+
+/// Type metadata and annotations
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-004; FEATURE="Annotations Re-export"; STATUS=IMPL
+pub const TypeMetadata = annotations.TypeMetadata;
+pub const FieldMetadata = annotations.FieldMetadata;
+pub const EncryptionAlgorithm = annotations.EncryptionAlgorithm;
+
+/// Constraint management
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-005; FEATURE="Constraints Re-export"; STATUS=IMPL
+pub const ConstraintManager = constraint_manager.ConstraintManager;
+pub const Constraint = constraint_manager.Constraint;
+
+// ============================================================================
+// Unified Schema Manager
+// ============================================================================
+
+/// SchemaManager provides a unified interface for all schema operations
+/// Coordinates between database catalog, FLE catalog, annotations, and constraints
+///
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-006; FEATURE="Unified Schema Manager"; STATUS=IMPL
+pub const SchemaManager = struct {
+    allocator: std.mem.Allocator,
+    db_catalog: *Catalog,
+    fle_catalog: SchemaCatalog,
+    constraint_mgr: *ConstraintManager,
+
+    /// Initialize schema manager with all components
+    ///
+    /// Parameters:
+    /// - allocator: Memory allocator for schema operations
+    /// - data_dir: Directory for persisting catalog data
+    ///
+    /// Returns: Initialized SchemaManager or error
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-007; FEATURE="Schema Manager Init"; STATUS=IMPL
+    pub fn init(allocator: std.mem.Allocator, data_dir: []const u8) !SchemaManager {
+        const db_catalog_inst = try Catalog.init(allocator, data_dir);
+        errdefer db_catalog_inst.deinit();
+        errdefer allocator.destroy(db_catalog_inst);
+
+        const fle_catalog_inst = SchemaCatalog.init(allocator);
+
+        const constraint_mgr_inst = try allocator.create(ConstraintManager);
+        errdefer allocator.destroy(constraint_mgr_inst);
+        constraint_mgr_inst.* = ConstraintManager.init(allocator);
+
+        return .{
+            .allocator = allocator,
+            .db_catalog = db_catalog_inst,
+            .fle_catalog = fle_catalog_inst,
+            .constraint_mgr = constraint_mgr_inst,
+        };
+    }
+
+    /// Clean up schema manager resources
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-008; FEATURE="Schema Manager Cleanup"; STATUS=IMPL
+    pub fn deinit(self: *SchemaManager) void {
+        self.db_catalog.deinit();
+        self.allocator.destroy(self.db_catalog);
+
+        self.fle_catalog.deinit();
+
+        self.constraint_mgr.deinit();
+        self.allocator.destroy(self.constraint_mgr);
+    }
+
+    // ========================================================================
+    // Database Catalog Operations
+    // ========================================================================
+
+    /// Create a new schema
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-009; FEATURE="Schema Creation"; STATUS=IMPL
+    pub fn createSchema(self: *SchemaManager, schema_name: []const u8) !void {
+        self.db_catalog.rwlock.lock();
+        defer self.db_catalog.rwlock.unlock();
+
+        try self.db_catalog.addSchema(schema_name);
+        try self.db_catalog.save();
+    }
+
+    /// Check if schema exists
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-010; FEATURE="Schema Existence Check"; STATUS=IMPL
+    pub fn schemaExists(self: *SchemaManager, schema_name: []const u8) bool {
+        self.db_catalog.rwlock.lockShared();
+        defer self.db_catalog.rwlock.unlockShared();
+
+        return self.db_catalog.hasSchema(schema_name);
+    }
+
+    /// Create a new graph
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-011; FEATURE="Graph Creation"; STATUS=IMPL
+    pub fn createGraph(self: *SchemaManager, graph_name: []const u8) !void {
+        self.db_catalog.rwlock.lock();
+        defer self.db_catalog.rwlock.unlock();
+
+        try self.db_catalog.addGraph(graph_name);
+        try self.db_catalog.save();
+    }
+
+    /// Check if graph exists
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-012; FEATURE="Graph Existence Check"; STATUS=IMPL
+    pub fn graphExists(self: *SchemaManager, graph_name: []const u8) bool {
+        self.db_catalog.rwlock.lockShared();
+        defer self.db_catalog.rwlock.unlockShared();
+
+        return self.db_catalog.hasGraph(graph_name);
+    }
+
+    /// Create an index
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-013; FEATURE="Index Creation"; STATUS=IMPL
+    pub fn createIndex(self: *SchemaManager, index_info: IndexInfo) !void {
+        self.db_catalog.rwlock.lock();
+        defer self.db_catalog.rwlock.unlock();
+
+        try self.db_catalog.addIndex(index_info);
+        try self.db_catalog.save();
+    }
+
+    /// Get index information
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-014; FEATURE="Index Retrieval"; STATUS=IMPL
+    pub fn getIndex(self: *SchemaManager, label: []const u8, index_name: []const u8) !?IndexInfo {
+        self.db_catalog.rwlock.lockShared();
+        defer self.db_catalog.rwlock.unlockShared();
+
+        return self.db_catalog.getIndex(label, index_name);
+    }
+
+    // ========================================================================
+    // FLE Catalog Operations
+    // ========================================================================
+
+    /// Register a type with encryption metadata
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-015; FEATURE="FLE Type Registration"; STATUS=IMPL
+    pub fn registerEncryptedType(
+        self: *SchemaManager,
+        type_name: []const u8,
+        type_meta: TypeMetadata,
+    ) !void {
+        try self.fle_catalog.registerType(type_name, type_meta);
+    }
+
+    /// Get encryption metadata for a type
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-016; FEATURE="FLE Metadata Retrieval"; STATUS=IMPL
+    pub fn getEncryptionMetadata(self: *SchemaManager, type_name: []const u8) ?*const TypeMetadata {
+        return self.fle_catalog.getType(type_name);
+    }
+
+    // ========================================================================
+    // Constraint Operations
+    // ========================================================================
+
+    /// Add a constraint
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-017; FEATURE="Constraint Addition"; STATUS=IMPL
+    pub fn addConstraint(self: *SchemaManager, constraint: Constraint) !void {
+        try self.constraint_mgr.addConstraint(constraint);
+    }
+
+    /// Get constraints for a label
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-018; FEATURE="Constraint Retrieval"; STATUS=IMPL
+    pub fn getConstraintsForLabel(self: *SchemaManager, label: []const u8) []const Constraint {
+        return self.constraint_mgr.getConstraintsForLabel(label);
+    }
+
+    /// Validate data against constraints
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-019; FEATURE="Constraint Validation"; STATUS=IMPL
+    pub fn validateConstraints(
+        self: *SchemaManager,
+        label: []const u8,
+        properties: anytype,
+    ) !void {
+        try self.constraint_mgr.validateConstraints(label, properties);
+    }
+
+    // ========================================================================
+    // Utility Functions
+    // ========================================================================
+
+    /// Get scoped index key (label:index_name)
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-020; FEATURE="Scoped Index Key"; STATUS=IMPL
+    pub fn getScopedIndexKey(
+        self: *SchemaManager,
+        label: []const u8,
+        index_name: []const u8,
+    ) ![]const u8 {
+        return catalog.getScopedIndexKey(self.allocator, label, index_name);
+    }
+
+    /// Persist all schema state to disk
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-021; FEATURE="Schema Persistence"; STATUS=IMPL
+    pub fn saveAll(self: *SchemaManager) !void {
+        self.db_catalog.rwlock.lock();
+        defer self.db_catalog.rwlock.unlock();
+
+        try self.db_catalog.save();
+        // Note: FLE catalog and constraints are typically in-memory only
+        // Add persistence if needed in the future
+    }
+
+    /// Reload schema state from disk
+    ///
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-022; FEATURE="Schema Reload"; STATUS=IMPL
+    pub fn reload(self: *SchemaManager) !void {
+        self.db_catalog.rwlock.lock();
+        defer self.db_catalog.rwlock.unlock();
+
+        try self.db_catalog.load();
+    }
+};
+
+// ============================================================================
+// Convenience Functions
+// ============================================================================
+
+/// Create a new SchemaManager instance
+///
+/// This is the recommended way to initialize schema management for the database.
+///
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-023; FEATURE="Schema Manager Factory"; STATUS=IMPL
+pub fn createSchemaManager(allocator: std.mem.Allocator, data_dir: []const u8) !SchemaManager {
+    return SchemaManager.init(allocator, data_dir);
+}
+
+// ============================================================================
+// Re-export utility functions
+// ============================================================================
+
+/// Generate scoped index key (utility function)
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-024; FEATURE="Utility Re-export"; STATUS=IMPL
+pub const getScopedIndexKey = catalog.getScopedIndexKey;

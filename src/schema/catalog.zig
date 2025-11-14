@@ -1,298 +1,374 @@
 const std = @import("std");
-const annotations = @import("annotations.zig");
 
-// CANARY: FLE_SCHEMA_CATALOG - Global Schema Metadata Catalog
-// CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=SCHEMA; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: PERF_PHASE3_RWLOCK - RwLock for concurrent catalog access
+// CANARY: REQ=REQ-PERF-PHASE3-001; FEATURE="ConcurrencyOptimization"; ASPECT=CATALOG_LOCK; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-17
+// CANARY: REQ=REQ-ARCH-M2-FIX; FEATURE="DependencyInjection"; ASPECT=CATALOG; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// Phase 3 optimization: RwLock allows concurrent reads (2-3x concurrent query throughput)
+// M2 Fix: Refactored from global mutable state to dependency injection pattern
 
-/// Thread-safe global schema catalog for field-level encryption metadata
-pub const SchemaCatalog = struct {
-    mutex: std.Thread.Mutex = .{},
+// IndexInfo stores metadata about an index
+// CANARY: REQ=REQ-INDEX-001; FEATURE="IndexManagement"; ASPECT=Catalog; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
+pub const IndexInfo = struct {
+    name: []const u8, // Index name (user-provided)
+    index_type: []const u8, // btree, hash, fulltext, etc.
+    table_name: []const u8, // Label/table name
+    columns: [][]const u8, // Property names
+};
+
+/// Generate a scoped index key for catalog storage
+/// Format: "label:index_name" to allow same index name on different labels
+/// This follows database best practices where indexes are scoped per table/label
+pub fn getScopedIndexKey(allocator: std.mem.Allocator, label: []const u8, index_name: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}:{s}", .{ label, index_name });
+}
+
+/// Catalog manages database metadata (schemas, graphs, indexes)
+/// Thread-safe via RwLock for concurrent access
+pub const Catalog = struct {
     allocator: std.mem.Allocator,
-    schemas: std.StringHashMap(*annotations.TypeMetadata),
+    rwlock: std.Thread.RwLock,
+    schemas: std.StringHashMap(void),
+    graphs: std.StringHashMap(void),
+    indexes: std.StringHashMap(IndexInfo),
+    data_dir: []const u8,
 
-    /// Initialize a new schema catalog
-    pub fn init(allocator: std.mem.Allocator) SchemaCatalog {
-        return .{
+    /// Initialize a new catalog with dependency injection
+    /// Takes ownership of data_dir string
+    pub fn init(allocator: std.mem.Allocator, data_dir: []const u8) !*Catalog {
+        var self = try allocator.create(Catalog);
+        errdefer allocator.destroy(self);
+
+        self.* = .{
             .allocator = allocator,
-            .schemas = std.StringHashMap(*annotations.TypeMetadata).init(allocator),
+            .rwlock = .{},
+            .schemas = std.StringHashMap(void).init(allocator),
+            .graphs = std.StringHashMap(void).init(allocator),
+            .indexes = std.StringHashMap(IndexInfo).init(allocator),
+            .data_dir = try allocator.dupe(u8, data_dir),
         };
+
+        // Load persisted catalog if it exists
+        self.load() catch |err| {
+            std.log.warn("Failed to load catalog from disk: {any}", .{err});
+        };
+
+        return self;
     }
 
     /// Clean up catalog resources
-    pub fn deinit(self: *SchemaCatalog) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+    /// NOTE: Should only be called when no other threads are accessing the catalog
+    pub fn deinit(self: *Catalog) void {
+        // No locking needed - this should only be called during cleanup when no other threads access catalog
 
-        var it = self.schemas.iterator();
-        while (it.next()) |entry| {
-            // Free the key (stored type name)
-            self.allocator.free(entry.key_ptr.*);
-            // Free the value (TypeMetadata)
-            var type_meta = entry.value_ptr.*;
-            type_meta.deinit();
-            self.allocator.destroy(type_meta);
-        }
-        self.schemas.deinit();
-    }
+        // Free all allocated memory properly
+        // Note: In tests, this must be called with the same allocator that created the catalog
 
-    /// Register a new type with its field metadata
-    /// Takes ownership of the TypeMetadata
-    /// Thread-safe operation
-    pub fn registerType(
-        self: *SchemaCatalog,
-        type_name: []const u8,
-        type_meta: annotations.TypeMetadata,
-    ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        // Check if type already exists
-        if (self.schemas.contains(type_name)) {
-            return error.TypeAlreadyExists;
-        }
-
-        // Duplicate the type name for storage
-        const stored_name = try self.allocator.dupe(u8, type_name);
-        errdefer self.allocator.free(stored_name);
-
-        // Allocate and store pointer
-        const type_meta_ptr = try self.allocator.create(annotations.TypeMetadata);
-        type_meta_ptr.* = type_meta;
-
-        try self.schemas.put(stored_name, type_meta_ptr);
-    }
-
-    /// Get type metadata by name
-    /// Returns pointer to type metadata, null if type not found
-    /// Thread-safe read operation
-    /// Note: Caller must not modify the returned pointer
-    pub fn getType(self: *SchemaCatalog, type_name: []const u8) ?*const annotations.TypeMetadata {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.schemas.get(type_name)) |type_meta_ptr| {
-            return type_meta_ptr;
-        }
-        return null;
-    }
-
-    /// Check if a field in a type is encrypted
-    /// Thread-safe operation
-    pub fn isFieldEncrypted(
-        self: *SchemaCatalog,
-        type_name: []const u8,
-        field_name: []const u8,
-    ) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.schemas.get(type_name)) |type_meta_ptr| {
-            return type_meta_ptr.isFieldEncrypted(field_name);
-        }
-        return false;
-    }
-
-    /// Check if a field in a type is searchable (has blind index)
-    /// Thread-safe operation
-    pub fn isFieldSearchable(
-        self: *SchemaCatalog,
-        type_name: []const u8,
-        field_name: []const u8,
-    ) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.schemas.get(type_name)) |type_meta_ptr| {
-            return type_meta_ptr.isFieldSearchable(field_name);
-        }
-        return false;
-    }
-
-    /// Get field metadata for a specific field
-    /// Thread-safe operation
-    pub fn getFieldMetadata(
-        self: *SchemaCatalog,
-        type_name: []const u8,
-        field_name: []const u8,
-    ) ?annotations.FieldMetadata {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.schemas.get(type_name)) |type_meta_ptr| {
-            return type_meta_ptr.getField(field_name);
-        }
-        return null;
-    }
-
-    /// Remove a type from the catalog
-    /// Thread-safe operation
-    pub fn removeType(self: *SchemaCatalog, type_name: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.schemas.fetchRemove(type_name)) |kv| {
-            self.allocator.free(kv.key);
-            var type_meta_ptr = kv.value;
-            type_meta_ptr.deinit();
-            self.allocator.destroy(type_meta_ptr);
-        } else {
-            return error.TypeNotFound;
-        }
-    }
-
-    /// Grant READ_PLAINTEXT privilege to a role for a specific field
-    /// Thread-safe operation
-    pub fn grantPlaintextAccess(
-        self: *SchemaCatalog,
-        type_name: []const u8,
-        field_name: []const u8,
-        role: []const u8,
-    ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        // Get the type metadata (mutable)
-        const type_meta_ptr = self.schemas.getPtr(type_name) orelse return error.TypeNotFound;
-        const type_meta = type_meta_ptr.*;
-
-        // Get the field metadata
-        const field_meta_ptr = type_meta.fields.getPtr(field_name) orelse return error.FieldNotFound;
-
-        // Check if role already exists
-        for (field_meta_ptr.visibility.to_roles) |existing_role| {
-            if (std.mem.eql(u8, existing_role, role)) {
-                return; // Role already has access
+        // Free HashMap keys and values
+        {
+            var iter = self.schemas.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
             }
+            self.schemas.deinit();
         }
 
-        // Add the role to the visibility list
-        const new_roles = try self.allocator.alloc([]const u8, field_meta_ptr.visibility.to_roles.len + 1);
-        if (field_meta_ptr.visibility.to_roles.len > 0) {
-            @memcpy(new_roles[0..field_meta_ptr.visibility.to_roles.len], field_meta_ptr.visibility.to_roles);
-            // Free old roles array if it was allocated
-            if (field_meta_ptr.visibility.to_roles.len > 0) {
-                self.allocator.free(field_meta_ptr.visibility.to_roles);
+        {
+            var iter = self.graphs.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
             }
-        }
-        new_roles[field_meta_ptr.visibility.to_roles.len] = try self.allocator.dupe(u8, role);
-
-        field_meta_ptr.visibility.to_roles = new_roles;
-
-        // Save catalog after grant
-        saveCatalog(self) catch |err| {
-            std.log.err("CRITICAL: Failed to persist catalog after plaintext access grant (security config lost on restart): {any}", .{err});
-        };
-    }
-
-    /// Revoke READ_PLAINTEXT privilege from a role for a specific field
-    /// Thread-safe operation
-    pub fn revokePlaintextAccess(
-        self: *SchemaCatalog,
-        type_name: []const u8,
-        field_name: []const u8,
-        role: []const u8,
-    ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        // Get the type metadata (mutable)
-        const type_meta_ptr = self.schemas.getPtr(type_name) orelse return error.TypeNotFound;
-        const type_meta = type_meta_ptr.*;
-
-        // Get the field metadata
-        const field_meta_ptr = type_meta.fields.getPtr(field_name) orelse return error.FieldNotFound;
-
-        // Find and remove the role
-        var found_index: ?usize = null;
-        for (field_meta_ptr.visibility.to_roles, 0..) |existing_role, i| {
-            if (std.mem.eql(u8, existing_role, role)) {
-                found_index = i;
-                break;
-            }
+            self.graphs.deinit();
         }
 
-        if (found_index == null) {
-            return; // Role doesn't have access, nothing to revoke
-        }
-
-        // Create new roles array without the removed role
-        if (field_meta_ptr.visibility.to_roles.len == 1) {
-            // Last role being removed
-            self.allocator.free(field_meta_ptr.visibility.to_roles[0]);
-            self.allocator.free(field_meta_ptr.visibility.to_roles);
-            field_meta_ptr.visibility.to_roles = &.{};
-        } else {
-            const new_roles = try self.allocator.alloc([]const u8, field_meta_ptr.visibility.to_roles.len - 1);
-            var new_idx: usize = 0;
-            for (field_meta_ptr.visibility.to_roles, 0..) |existing_role, i| {
-                if (i != found_index.?) {
-                    new_roles[new_idx] = existing_role;
-                    new_idx += 1;
-                } else {
-                    self.allocator.free(existing_role);
+        {
+            var iter = self.indexes.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                const info = entry.value_ptr.*;
+                self.allocator.free(info.name);
+                self.allocator.free(info.index_type);
+                self.allocator.free(info.table_name);
+                for (info.columns) |col| {
+                    self.allocator.free(col);
                 }
+                self.allocator.free(info.columns);
             }
-            self.allocator.free(field_meta_ptr.visibility.to_roles);
-            field_meta_ptr.visibility.to_roles = new_roles;
+            self.indexes.deinit();
         }
 
-        // Save catalog after revoke
-        saveCatalog(self) catch |err| {
-            std.log.err("CRITICAL: Failed to persist catalog after plaintext access revoke (security config lost on restart): {any}", .{err});
-        };
+        self.allocator.free(self.data_dir);
+        // Caller is responsible for destroying the Catalog struct itself
     }
 
-    /// Get count of registered types
-    pub fn count(self: *SchemaCatalog) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+    /// Save catalog to disk
+    /// NOTE: Caller must hold rwlock (either shared or exclusive) before calling
+    pub fn save(self: *Catalog) !void {
+        // No locking - caller must hold rwlock
+        // This is necessary because save() is typically called while holding a write lock
 
-        return self.schemas.count();
+        const catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/geode_catalog.dat", .{self.data_dir});
+        defer self.allocator.free(catalog_path);
+
+        const file = try std.fs.cwd().createFile(catalog_path, .{});
+        defer file.close();
+
+        // Write header: schema_count, graph_count, index_count
+        var header: [12]u8 = undefined;
+        std.mem.writeInt(u32, header[0..4], @intCast(self.schemas.count()), .little);
+        std.mem.writeInt(u32, header[4..8], @intCast(self.graphs.count()), .little);
+        std.mem.writeInt(u32, header[8..12], @intCast(self.indexes.count()), .little);
+        _ = try file.write(&header);
+
+        // Write schemas (just names)
+        var schema_iter = self.schemas.iterator();
+        while (schema_iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            var len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
+            _ = try file.write(&len_buf);
+            _ = try file.write(name);
+        }
+
+        // Write graphs (just names)
+        var graph_iter = self.graphs.iterator();
+        while (graph_iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            var len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
+            _ = try file.write(&len_buf);
+            _ = try file.write(name);
+        }
+
+        // Write indexes
+        var index_iter = self.indexes.iterator();
+        while (index_iter.next()) |entry| {
+            const index_info = entry.value_ptr.*;
+
+            // Write index name
+            var name_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &name_len_buf, @intCast(index_info.name.len), .little);
+            _ = try file.write(&name_len_buf);
+            _ = try file.write(index_info.name);
+
+            // Write index type
+            var type_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &type_len_buf, @intCast(index_info.index_type.len), .little);
+            _ = try file.write(&type_len_buf);
+            _ = try file.write(index_info.index_type);
+
+            // Write table name
+            var table_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &table_len_buf, @intCast(index_info.table_name.len), .little);
+            _ = try file.write(&table_len_buf);
+            _ = try file.write(index_info.table_name);
+
+            // Write column count and columns
+            var col_count_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &col_count_buf, @intCast(index_info.columns.len), .little);
+            _ = try file.write(&col_count_buf);
+
+            for (index_info.columns) |col| {
+                var col_len_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &col_len_buf, @intCast(col.len), .little);
+                _ = try file.write(&col_len_buf);
+                _ = try file.write(col);
+            }
+        }
+    }
+
+    /// Load catalog from disk
+    pub fn load(self: *Catalog) !void {
+        const catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/geode_catalog.dat", .{self.data_dir});
+        defer self.allocator.free(catalog_path);
+
+        const file = std.fs.cwd().openFile(catalog_path, .{}) catch |err| {
+            if (err == error.FileNotFound) return;
+            return err;
+        };
+        defer file.close();
+
+        // Lock for modifying catalog state
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        // Read header
+        var header: [12]u8 = undefined;
+        const bytes_read = try file.read(&header);
+        if (bytes_read < 12) return error.InvalidCatalogFile;
+
+        const schema_count = std.mem.readInt(u32, header[0..4], .little);
+        const graph_count = std.mem.readInt(u32, header[4..8], .little);
+        const index_count = std.mem.readInt(u32, header[8..12], .little);
+
+        // Read schemas
+        var i: u32 = 0;
+        while (i < schema_count) : (i += 1) {
+            var len_buf: [4]u8 = undefined;
+            if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
+            const name_len = std.mem.readInt(u32, &len_buf, .little);
+
+            const name = try self.allocator.alloc(u8, name_len);
+            errdefer self.allocator.free(name);
+            if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+
+            try self.schemas.put(name, {});
+        }
+
+        // Read graphs
+        i = 0;
+        while (i < graph_count) : (i += 1) {
+            var len_buf: [4]u8 = undefined;
+            if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
+            const name_len = std.mem.readInt(u32, &len_buf, .little);
+
+            const name = try self.allocator.alloc(u8, name_len);
+            errdefer self.allocator.free(name);
+            if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+
+            try self.graphs.put(name, {});
+        }
+
+        // Read indexes
+        i = 0;
+        while (i < index_count) : (i += 1) {
+            // Read index name
+            var name_len_buf: [4]u8 = undefined;
+            if ((try file.read(&name_len_buf)) < 4) return error.InvalidCatalogFile;
+            const name_len = std.mem.readInt(u32, &name_len_buf, .little);
+            const name = try self.allocator.alloc(u8, name_len);
+            errdefer self.allocator.free(name);
+            if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+
+            // Read index type
+            var type_len_buf: [4]u8 = undefined;
+            if ((try file.read(&type_len_buf)) < 4) return error.InvalidCatalogFile;
+            const type_len = std.mem.readInt(u32, &type_len_buf, .little);
+            const index_type = try self.allocator.alloc(u8, type_len);
+            errdefer self.allocator.free(index_type);
+            if ((try file.read(index_type)) < type_len) return error.InvalidCatalogFile;
+
+            // Read table name
+            var table_len_buf: [4]u8 = undefined;
+            if ((try file.read(&table_len_buf)) < 4) return error.InvalidCatalogFile;
+            const table_len = std.mem.readInt(u32, &table_len_buf, .little);
+            const table_name = try self.allocator.alloc(u8, table_len);
+            errdefer self.allocator.free(table_name);
+            if ((try file.read(table_name)) < table_len) return error.InvalidCatalogFile;
+
+            // Read column count
+            var col_count_buf: [4]u8 = undefined;
+            if ((try file.read(&col_count_buf)) < 4) return error.InvalidCatalogFile;
+            const col_count = std.mem.readInt(u32, &col_count_buf, .little);
+
+            // Read columns
+            const columns = try self.allocator.alloc([]const u8, col_count);
+            errdefer self.allocator.free(columns);
+            var col_idx: u32 = 0;
+            while (col_idx < col_count) : (col_idx += 1) {
+                var col_len_buf: [4]u8 = undefined;
+                if ((try file.read(&col_len_buf)) < 4) return error.InvalidCatalogFile;
+                const col_len = std.mem.readInt(u32, &col_len_buf, .little);
+                const col = try self.allocator.alloc(u8, col_len);
+                errdefer self.allocator.free(col);
+                if ((try file.read(col)) < col_len) return error.InvalidCatalogFile;
+                columns[col_idx] = col;
+            }
+
+            const index_info = IndexInfo{
+                .name = name,
+                .index_type = index_type,
+                .table_name = table_name,
+                .columns = columns,
+            };
+
+            // Reconstruct scoped key: "label:index_name"
+            // This ensures compatibility with new scoped key format
+            const scoped_key = try getScopedIndexKey(self.allocator, table_name, name);
+            try self.indexes.put(scoped_key, index_info);
+        }
     }
 };
 
-/// Global singleton schema catalog instance
-var global_catalog: ?*SchemaCatalog = null;
-var global_catalog_mutex: std.Thread.Mutex = .{};
+// Backward compatibility: Keep old function signatures that use global state
+// These will be removed in Phase 3 of refactoring
 
-/// Get or create the global schema catalog
-/// Thread-safe singleton access
-pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
-    global_catalog_mutex.lock();
-    defer global_catalog_mutex.unlock();
+// DEPRECATED: Global catalog for backward compatibility
+// TODO: Remove in Phase 3 after all callers updated
+pub var catalog_rwlock = std.Thread.RwLock{};
+pub var catalog_initialized = false;
+pub var last_catalog_data_dir: ?[]u8 = null;
 
-    if (global_catalog == null) {
-        const catalog = try allocator.create(SchemaCatalog);
-        catalog.* = SchemaCatalog.init(allocator);
+/// P2-3: Global allocator for catalog operations (better than page_allocator)
+var catalog_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var catalog_allocator_init = false;
+
+pub var catalog: struct {
+    schemas: std.StringHashMap(void),
+    graphs: std.StringHashMap(void),
+    indexes: std.StringHashMap(IndexInfo),
+} = undefined;
+
+pub fn initCatalog() void {
+    // P2-3: Initialize global allocator on first use
+    if (!catalog_allocator_init) {
+        catalog_allocator_init = true;
+    }
+    const allocator = catalog_gpa.allocator();
+
+    // Check if GEODE_DATA_DIR has changed
+    const current_data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
+        if (err == error.EnvironmentVariableNotFound) {
+            break :blk allocator.dupe(u8, "/tmp") catch "/tmp";
+        }
+        break :blk "/tmp";
+    };
+
+    // Phase 3: Write lock for catalog initialization/modification
+    catalog_rwlock.lock();
+    defer catalog_rwlock.unlock();
+
+    // Check if we need to reinitialize due to data dir change
+    var needs_reinit = !catalog_initialized;
+    if (last_catalog_data_dir) |last_dir| {
+        if (!std.mem.eql(u8, current_data_dir, last_dir)) {
+            needs_reinit = true;
+            // Clean up old catalog
+            if (catalog_initialized) {
+                catalog.schemas.deinit();
+                catalog.graphs.deinit();
+                catalog.indexes.deinit();
+                catalog_initialized = false;
+            }
+            allocator.free(last_dir);
+        }
+    } else {
+        needs_reinit = true;
+    }
+
+    if (needs_reinit) {
+        catalog.schemas = std.StringHashMap(void).init(allocator);
+        catalog.graphs = std.StringHashMap(void).init(allocator);
+        catalog.indexes = std.StringHashMap(IndexInfo).init(allocator);
+        catalog_initialized = true;
+
+        // Update last data dir
+        if (last_catalog_data_dir) |last_dir| {
+            allocator.free(last_dir);
+        }
+        last_catalog_data_dir = allocator.dupe(u8, current_data_dir) catch null;
 
         // Load persisted catalog if it exists
-        loadCatalog(catalog) catch |err| {
-            std.log.warn("Failed to load persisted catalog (starting with empty catalog): {any}", .{err});
+        loadCatalog() catch |err| {
+            std.log.warn("Failed to load catalog from disk: {any}", .{err});
         };
-
-        global_catalog = catalog;
-    }
-
-    return global_catalog.?;
-}
-
-/// Reset global catalog (for testing)
-pub fn resetGlobalCatalog(allocator: std.mem.Allocator) void {
-    _ = allocator; // Unused, kept for API compatibility
-    global_catalog_mutex.lock();
-    defer global_catalog_mutex.unlock();
-
-    if (global_catalog) |catalog| {
-        const catalog_allocator = catalog.allocator;
-        catalog.deinit();
-        catalog_allocator.destroy(catalog);
-        global_catalog = null;
+    } else {
+        allocator.free(current_data_dir);
     }
 }
 
-/// Save catalog to disk
-pub fn saveCatalog(catalog: *SchemaCatalog) !void {
-    const allocator = catalog.allocator;
+pub fn saveCatalog() !void {
+    // P2-3: Use catalog global allocator instead of page_allocator
+    const allocator = catalog_gpa.allocator();
 
     // Get catalog path from GEODE_DATA_DIR or use default
     const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
@@ -303,77 +379,79 @@ pub fn saveCatalog(catalog: *SchemaCatalog) !void {
     };
     defer allocator.free(data_dir);
 
-    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_fle_catalog.dat", .{data_dir});
+    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_catalog.dat", .{data_dir});
     defer allocator.free(catalog_path);
 
     const file = try std.fs.cwd().createFile(catalog_path, .{});
     defer file.close();
 
-    // Write type count
-    var type_count_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &type_count_buf, @intCast(catalog.schemas.count()), .little);
-    _ = try file.write(&type_count_buf);
+    // Write header: schema_count, graph_count, index_count
+    var header: [12]u8 = undefined;
+    std.mem.writeInt(u32, header[0..4], @intCast(catalog.schemas.count()), .little);
+    std.mem.writeInt(u32, header[4..8], @intCast(catalog.graphs.count()), .little);
+    std.mem.writeInt(u32, header[8..12], @intCast(catalog.indexes.count()), .little);
+    _ = try file.write(&header);
 
-    // Write each type
-    var type_iter = catalog.schemas.iterator();
-    while (type_iter.next()) |entry| {
-        const type_name = entry.key_ptr.*;
-        const type_meta = entry.value_ptr.*;
+    // Write schemas (just names)
+    var schema_iter = catalog.schemas.iterator();
+    while (schema_iter.next()) |entry| {
+        const name = entry.key_ptr.*;
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
+        _ = try file.write(&len_buf);
+        _ = try file.write(name);
+    }
 
-        // Write type name
-        var type_name_len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &type_name_len_buf, @intCast(type_name.len), .little);
-        _ = try file.write(&type_name_len_buf);
-        _ = try file.write(type_name);
+    // Write graphs (just names)
+    var graph_iter = catalog.graphs.iterator();
+    while (graph_iter.next()) |entry| {
+        const name = entry.key_ptr.*;
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
+        _ = try file.write(&len_buf);
+        _ = try file.write(name);
+    }
 
-        // Write field count
-        var field_count_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &field_count_buf, @intCast(type_meta.fields.count()), .little);
-        _ = try file.write(&field_count_buf);
+    // Write indexes
+    var index_iter = catalog.indexes.iterator();
+    while (index_iter.next()) |entry| {
+        const index_info = entry.value_ptr.*;
 
-        // Write each field
-        var field_iter = type_meta.fields.iterator();
-        while (field_iter.next()) |field_entry| {
-            const field_name = field_entry.key_ptr.*;
-            const field_meta = field_entry.value_ptr.*;
+        // Write index name
+        var name_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &name_len_buf, @intCast(index_info.name.len), .little);
+        _ = try file.write(&name_len_buf);
+        _ = try file.write(index_info.name);
 
-            // Write field name
-            var field_name_len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &field_name_len_buf, @intCast(field_name.len), .little);
-            _ = try file.write(&field_name_len_buf);
-            _ = try file.write(field_name);
+        // Write index type
+        var type_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &type_len_buf, @intCast(index_info.index_type.len), .little);
+        _ = try file.write(&type_len_buf);
+        _ = try file.write(index_info.index_type);
 
-            // Write encryption config
-            _ = try file.write(&[_]u8{@intFromBool(field_meta.encryption.enabled)});
-            if (field_meta.encryption.enabled) {
-                _ = try file.write(&[_]u8{@intFromEnum(field_meta.encryption.algorithm)});
-                _ = try file.write(&[_]u8{@intFromEnum(field_meta.encryption.key_scope)});
-            }
+        // Write table name
+        var table_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &table_len_buf, @intCast(index_info.table_name.len), .little);
+        _ = try file.write(&table_len_buf);
+        _ = try file.write(index_info.table_name);
 
-            // Write search config
-            _ = try file.write(&[_]u8{@intFromBool(field_meta.search.enabled)});
-            if (field_meta.search.enabled) {
-                _ = try file.write(&[_]u8{@intFromEnum(field_meta.search.index_type)});
-            }
+        // Write column count and columns
+        var col_count_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &col_count_buf, @intCast(index_info.columns.len), .little);
+        _ = try file.write(&col_count_buf);
 
-            // Write visibility config (role count and roles)
-            var role_count_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &role_count_buf, @intCast(field_meta.visibility.to_roles.len), .little);
-            _ = try file.write(&role_count_buf);
-
-            for (field_meta.visibility.to_roles) |role| {
-                var role_len_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &role_len_buf, @intCast(role.len), .little);
-                _ = try file.write(&role_len_buf);
-                _ = try file.write(role);
-            }
+        for (index_info.columns) |col| {
+            var col_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &col_len_buf, @intCast(col.len), .little);
+            _ = try file.write(&col_len_buf);
+            _ = try file.write(col);
         }
     }
 }
 
-/// Load catalog from disk
-pub fn loadCatalog(catalog: *SchemaCatalog) !void {
-    const allocator = catalog.allocator;
+pub fn loadCatalog() !void {
+    // P2-3: Use catalog global allocator instead of page_allocator
+    const allocator = catalog_gpa.allocator();
 
     // Get catalog path from GEODE_DATA_DIR or use default
     const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
@@ -384,185 +462,101 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
     };
     defer allocator.free(data_dir);
 
-    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_fle_catalog.dat", .{data_dir});
+    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_catalog.dat", .{data_dir});
     defer allocator.free(catalog_path);
 
     const file = std.fs.cwd().openFile(catalog_path, .{}) catch |err| {
-        if (err == error.FileNotFound) return; // No catalog file yet
+        if (err == error.FileNotFound) return;
         return err;
     };
     defer file.close();
 
-    // Read type count
-    var type_count_buf: [4]u8 = undefined;
-    const bytes_read = try file.readAll(&type_count_buf);
-    if (bytes_read != 4) return error.CorruptedCatalog;
-    const type_count = std.mem.readInt(u32, &type_count_buf, .little);
-    if (type_count > 10000) return error.CorruptedCatalog; // Sanity check
+    // Read header
+    var header: [12]u8 = undefined;
+    const bytes_read = try file.read(&header);
+    if (bytes_read < 12) return error.InvalidCatalogFile;
 
-    // Read each type
-    var i: usize = 0;
-    while (i < type_count) : (i += 1) {
-        // Read type name
-        var type_name_len_buf: [4]u8 = undefined;
-        const name_len_bytes = try file.readAll(&type_name_len_buf);
-        if (name_len_bytes != 4) return error.CorruptedCatalog;
-        const type_name_len = std.mem.readInt(u32, &type_name_len_buf, .little);
-        if (type_name_len > 1024) return error.CorruptedCatalog; // Sanity check
+    const schema_count = std.mem.readInt(u32, header[0..4], .little);
+    const graph_count = std.mem.readInt(u32, header[4..8], .little);
+    const index_count = std.mem.readInt(u32, header[8..12], .little);
 
-        const type_name = try allocator.alloc(u8, type_name_len);
-        const name_bytes = try file.readAll(type_name);
-        if (name_bytes != type_name_len) return error.CorruptedCatalog;
+    // Read schemas
+    var i: u32 = 0;
+    while (i < schema_count) : (i += 1) {
+        var len_buf: [4]u8 = undefined;
+        if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
+        const name_len = std.mem.readInt(u32, &len_buf, .little);
 
-        // Create type metadata
-        var type_meta = annotations.TypeMetadata.init(allocator, type_name);
+        const name = try allocator.alloc(u8, name_len);
+        if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
 
-        // Read field count
-        var field_count_buf: [4]u8 = undefined;
-        const field_count_bytes = try file.readAll(&field_count_buf);
-        if (field_count_bytes != 4) return error.CorruptedCatalog;
-        const field_count = std.mem.readInt(u32, &field_count_buf, .little);
-        if (field_count > 1000) return error.CorruptedCatalog; // Sanity check
+        try catalog.schemas.put(name, {});
+    }
 
-        // Read each field
-        var j: usize = 0;
-        while (j < field_count) : (j += 1) {
-            // Read field name
-            var field_name_len_buf: [4]u8 = undefined;
-            const fname_len_bytes = try file.readAll(&field_name_len_buf);
-            if (fname_len_bytes != 4) return error.CorruptedCatalog;
-            const field_name_len = std.mem.readInt(u32, &field_name_len_buf, .little);
-            if (field_name_len > 1024) return error.CorruptedCatalog; // Sanity check
+    // Read graphs
+    i = 0;
+    while (i < graph_count) : (i += 1) {
+        var len_buf: [4]u8 = undefined;
+        if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
+        const name_len = std.mem.readInt(u32, &len_buf, .little);
 
-            const field_name = try allocator.alloc(u8, field_name_len);
-            const fname_bytes = try file.readAll(field_name);
-            if (fname_bytes != field_name_len) return error.CorruptedCatalog;
+        const name = try allocator.alloc(u8, name_len);
+        if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
 
-            var field_meta = annotations.FieldMetadata{
-                .field_name = field_name,
-            };
+        try catalog.graphs.put(name, {});
+    }
 
-            // Read encryption config
-            var enc_enabled_buf: [1]u8 = undefined;
-            _ = try file.readAll(&enc_enabled_buf);
-            field_meta.encryption.enabled = enc_enabled_buf[0] != 0;
+    // Read indexes
+    i = 0;
+    while (i < index_count) : (i += 1) {
+        // Read index name
+        var name_len_buf: [4]u8 = undefined;
+        if ((try file.read(&name_len_buf)) < 4) return error.InvalidCatalogFile;
+        const name_len = std.mem.readInt(u32, &name_len_buf, .little);
+        const name = try allocator.alloc(u8, name_len);
+        if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
 
-            if (field_meta.encryption.enabled) {
-                var alg_buf: [1]u8 = undefined;
-                _ = try file.readAll(&alg_buf);
-                field_meta.encryption.algorithm = @enumFromInt(alg_buf[0]);
+        // Read index type
+        var type_len_buf: [4]u8 = undefined;
+        if ((try file.read(&type_len_buf)) < 4) return error.InvalidCatalogFile;
+        const type_len = std.mem.readInt(u32, &type_len_buf, .little);
+        const index_type = try allocator.alloc(u8, type_len);
+        if ((try file.read(index_type)) < type_len) return error.InvalidCatalogFile;
 
-                var scope_buf: [1]u8 = undefined;
-                _ = try file.readAll(&scope_buf);
-                field_meta.encryption.key_scope = @enumFromInt(scope_buf[0]);
-            }
+        // Read table name
+        var table_len_buf: [4]u8 = undefined;
+        if ((try file.read(&table_len_buf)) < 4) return error.InvalidCatalogFile;
+        const table_len = std.mem.readInt(u32, &table_len_buf, .little);
+        const table_name = try allocator.alloc(u8, table_len);
+        if ((try file.read(table_name)) < table_len) return error.InvalidCatalogFile;
 
-            // Read search config
-            var search_enabled_buf: [1]u8 = undefined;
-            _ = try file.readAll(&search_enabled_buf);
-            field_meta.search.enabled = search_enabled_buf[0] != 0;
+        // Read column count
+        var col_count_buf: [4]u8 = undefined;
+        if ((try file.read(&col_count_buf)) < 4) return error.InvalidCatalogFile;
+        const col_count = std.mem.readInt(u32, &col_count_buf, .little);
 
-            if (field_meta.search.enabled) {
-                var idx_type_buf: [1]u8 = undefined;
-                _ = try file.readAll(&idx_type_buf);
-                field_meta.search.index_type = @enumFromInt(idx_type_buf[0]);
-            }
-
-            // Read visibility config
-            var role_count_buf: [4]u8 = undefined;
-            const role_count_bytes = try file.readAll(&role_count_buf);
-            if (role_count_bytes != 4) return error.CorruptedCatalog;
-            const role_count = std.mem.readInt(u32, &role_count_buf, .little);
-            if (role_count > 100) return error.CorruptedCatalog; // Sanity check
-
-            if (role_count > 0) {
-                const roles = try allocator.alloc([]const u8, role_count);
-                var k: usize = 0;
-                while (k < role_count) : (k += 1) {
-                    var role_len_buf: [4]u8 = undefined;
-                    const rlen_bytes = try file.readAll(&role_len_buf);
-                    if (rlen_bytes != 4) return error.CorruptedCatalog;
-                    const role_len = std.mem.readInt(u32, &role_len_buf, .little);
-                    if (role_len > 256) return error.CorruptedCatalog; // Sanity check
-
-                    const role = try allocator.alloc(u8, role_len);
-                    const role_bytes = try file.readAll(role);
-                    if (role_bytes != role_len) return error.CorruptedCatalog;
-                    roles[k] = role;
-                }
-                field_meta.visibility.to_roles = roles;
-            }
-
-            try type_meta.fields.put(field_name, field_meta);
+        // Read columns
+        const columns = try allocator.alloc([]const u8, col_count);
+        var col_idx: u32 = 0;
+        while (col_idx < col_count) : (col_idx += 1) {
+            var col_len_buf: [4]u8 = undefined;
+            if ((try file.read(&col_len_buf)) < 4) return error.InvalidCatalogFile;
+            const col_len = std.mem.readInt(u32, &col_len_buf, .little);
+            const col = try allocator.alloc(u8, col_len);
+            if ((try file.read(col)) < col_len) return error.InvalidCatalogFile;
+            columns[col_idx] = col;
         }
 
-        // Register the type
-        const type_name_dup = try allocator.dupe(u8, type_name);
-        const type_meta_ptr = try allocator.create(annotations.TypeMetadata);
-        type_meta_ptr.* = type_meta;
-        try catalog.schemas.put(type_name_dup, type_meta_ptr);
+        const index_info = IndexInfo{
+            .name = name,
+            .index_type = index_type,
+            .table_name = table_name,
+            .columns = columns,
+        };
 
-        allocator.free(type_name);
+        // Reconstruct scoped key: "label:index_name"
+        // This ensures compatibility with new scoped key format
+        const scoped_key = try getScopedIndexKey(allocator, table_name, name);
+        try catalog.indexes.put(scoped_key, index_info);
     }
-}
-
-test "Schema catalog basic operations" {
-    const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var catalog = SchemaCatalog.init(allocator);
-    defer catalog.deinit();
-
-    // Create type metadata
-    var type_meta = annotations.TypeMetadata.init(allocator, "Person");
-    // Note: don't defer type_meta.deinit() because catalog takes ownership
-
-    // Add encrypted field
-    try annotations.applyAnnotations(
-        allocator,
-        &type_meta,
-        "ssn",
-        "@encrypted(alg:\"AES-256-GCM\")",
-    );
-
-    // Register type (catalog takes ownership)
-    try catalog.registerType("Person", type_meta);
-
-    // Verify registration
-    try testing.expect(catalog.isFieldEncrypted("Person", "ssn"));
-    try testing.expect(!catalog.isFieldEncrypted("Person", "name"));
-    try testing.expectEqual(@as(usize, 1), catalog.count());
-}
-
-test "Schema catalog thread safety" {
-    const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var catalog = SchemaCatalog.init(allocator);
-    defer catalog.deinit();
-
-    // Multiple concurrent reads should work
-    const is_encrypted_1 = catalog.isFieldEncrypted("Person", "ssn");
-    const is_encrypted_2 = catalog.isFieldEncrypted("Person", "email");
-
-    try testing.expect(!is_encrypted_1); // Not registered yet
-    try testing.expect(!is_encrypted_2);
-}
-
-test "Schema catalog global singleton" {
-    const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    defer resetGlobalCatalog(allocator);
-
-    const catalog1 = try globalCatalog(allocator);
-    const catalog2 = try globalCatalog(allocator);
-
-    // Should be the same instance
-    try testing.expectEqual(catalog1, catalog2);
 }
