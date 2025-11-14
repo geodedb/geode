@@ -191,12 +191,125 @@ pub const UnionMetrics = struct {
     hash_size: ?usize,
 };
 
-// NOTE: ServerState struct extraction deferred due to complex dependency issues discovered:
-// 1. ServerState references mvcc.MVCCManager but mvcc import is commented out in main.zig (line 20)
-// 2. ServerState references query_plan_cache.QueryOptimizer but import is commented out (line 22)
-// 3. ServerState uses late-bound imports like @import("cdc_enhanced") at field level
-// 4. ServerState depends on SessionConfiguration (now extracted above)
-//
-// These issues require careful resolution before safe extraction.
-// Following "incremental approach mandatory" - extracting simple types and session management first.
+// Additional imports needed for ServerState
+const protocol = @import("../lib.zig").protocol;
+const mvcc = @import("txn/mvcc.zig");
+const query_plan_cache = @import("query_plan_cache.zig");
+const geode = @import("../lib.zig");
+const txn_mgr = @import("txn");
+
+/// Main server state structure managing all server-side state
+/// Extracted from main.zig in Phase 3 M3.2 to enable better modularization
+pub const ServerState = struct {
+    // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
+    query_mem_limit_bytes: usize = 0,
+    last_columns: []const protocol.SchemaCol = &.{},
+    last_ordered: bool = false,
+    last_order_keys: []const []const u8 = &.{},
+    last_distinct: bool = false,
+    page_items: [][]const u8 = &.{}, // each: JSON row fragment {..}
+    page_index: usize = 0,
+    active_result: bool = false,
+    // Advisory diagnostic flags for current active result set (cleared after first page emission)
+    guard_trip: bool = false, // set when ExecutionGuardTrip occurred during evaluation
+    // Transaction session state: single active txn baseline
+    in_txn: bool = false,
+    txn_id: u64 = 0,
+    allocator: std.mem.Allocator,
+    // PROFILE mode staging: we emit SCHEMA immediately and defer PROFILE frame until first PULL.
+    profile_json: ?[]const u8 = null,
+    profile_flags: []const []const u8 = &.{},
+    // Simulated spill counters (future: real spill logic). Populated from env vars GEODE_FORCE_*.
+    spill_sort: usize = 0,
+    spill_distinct: usize = 0,
+    spill_union: usize = 0,
+    spill_hashagg: usize = 0,
+
+    // WAL integration (phase: skip ratio exposure) — optional pointer injected during server bootstrap.
+    wal_ptr: ?*anyopaque = null,
+    // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
+    storage_checksum_error: bool = false,
+    // Original GQL text (used heuristically for NodeIndexScan selection in PROFILE).
+    query_text: ?[]const u8 = null,
+    txn_manager: txn_mgr.Manager = undefined,
+    active_txn: ?txn_mgr.Txn = null,
+    // MVCC-aware heap of inserted values. commit_ts null => uncommitted.
+    inserted_values: std.ArrayList(ServerStateInsertedValue) = undefined,
+    global_commit_ts: u64 = 0, // monotonically increasing commit timestamp
+    session_snapshot_ts: u64 = 0, // snapshot timestamp captured at BEGIN
+    // MVCC manager for conflict detection
+    mvcc_manager: ?*mvcc.MVCCManager = null,
+    current_mvcc_txn: ?*mvcc.Transaction = null,
+    // Aggregation memory metrics (non-PROFILE path instrumentation)
+    agg_build_bytes_last: usize = 0,
+    agg_emit_bytes_last: usize = 0,
+
+    // Telemetry toggles (env-driven). When enabled, server emits JSON log lines on paging events.
+    telemetry_paging: bool = false,
+
+    // Optional CDC engine pointer for diagnostics protocol frame
+    // NOTE: relative import because build.zig does not register a module alias for streaming/cdc_enhanced
+    cdc_engine: ?*@import("../streaming/cdc_enhanced.zig").CDCEngine = null,
+
+    // Session management state
+    session_config: ?SessionConfiguration = null,
+
+    // Index manager for managing database indexes
+    index_manager_ptr: ?*anyopaque = null,
+
+    // Index optimizer for query planning
+    index_optimizer_ptr: ?*anyopaque = null,
+
+    // Index statistics manager for cost estimation
+    index_stats_manager: ?*anyopaque = null,
+
+    // Backup manager for backup/restore operations
+    backup_manager: ?*anyopaque = null,
+
+    // Graph state for tracking nodes and edges
+    graph_state: ?*struct {
+        node_count: u64,
+        edge_count: u64,
+    } = null,
+
+    // Distributed query planner for federation-aware optimization
+    distributed_query_planner: ?*anyopaque = null,
+
+    // Query plan cache and optimizer for performance optimization
+    query_optimizer: ?*query_plan_cache.QueryOptimizer = null,
+
+    // Distributed query planner for federation-aware optimization
+    distributed_planner: ?*geode.distributed.query_planner.DistributedQueryPlanner = null,
+    federation_manager: ?*geode.distributed.query_planner.FederationManager = null,
+
+    // Catalog management for schemas and graphs
+    catalog_schemas: std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
+    catalog_graphs: std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
+
+    // Security management for RBAC/ABAC - comment out for now to avoid import issues
+    // security_manager: ?*SecurityManager = null,
+    // current_user_id: ?UserId = null,
+
+    pub fn resetResult(self: *ServerState) void {
+        // Free row fragments
+        var i: usize = 0;
+        while (i < self.page_items.len) : (i += 1) self.allocator.free(self.page_items[i]);
+        self.page_items = &.{};
+        self.page_index = 0;
+        self.active_result = false;
+        self.last_columns = &.{};
+        self.last_order_keys = &.{};
+        self.last_ordered = false;
+        self.last_distinct = false;
+        if (self.profile_json) |pj| self.allocator.free(pj);
+        self.profile_json = null;
+        self.profile_flags = &.{};
+        if (self.query_text) |qt| self.allocator.free(qt);
+        self.query_text = null;
+    }
+};
+
+// CANARY: REQ=REQ-SERVER-REFACTOR-001B; FEATURE="ServerRefactoring"; ASPECT=SERVER_STATE_STRUCT; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
+// Phase 3 M3.2 - ServerState struct extraction from main.zig
+// Extracted complete ServerState struct with all dependencies resolved
 
