@@ -77,6 +77,7 @@
             pkgs.tcpdump
             pkgs.file
             pkgs.openssl
+            pkgs.libmsquic
             pkgs.pkg-config
             pkgs.docker
             pkgs.docker-compose
