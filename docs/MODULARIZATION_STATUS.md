@@ -28,9 +28,29 @@
 **Current Phase**: Phase 3 - Server Monolith Decomposition (IN PROGRESS - 40%)
 **Current Milestone**: M3.2 (Protocol Handler), M3.3 (Query Executor) - Both in progress
 **Current File**: `src/server/main.zig` (3,215 lines, was 7,039 baseline - **54.3% REDUCTION**)
-**Analysis**: main.zig structure: ~850 lines (imports/helpers/protocol functions) + ~2,365 lines (main() function remaining, primarily server loops)
+**Analysis**: main.zig structure analyzed:
+  - Lines 1-891: Imports and helpers (~891 lines, includes handleQuicConnection ~448 lines)
+  - Lines 892-3178: main() function (2,286 lines)
+    - Setup: 70 lines
+    - QUIC server loop: 86 lines (963-1049)
+    - stdio setup: 65 lines
+    - stdio server loop: 2,041 lines (1116-3157) - **PRIMARY TARGET**
+      - HELLO handler: ~3 lines
+      - CDC_DIAGNOSTICS: ~22 lines
+      - CDC_CONTROL: ~7 lines
+      - BEGIN: ~31 lines
+      - ROLLBACK_TO: ~12 lines
+      - COMMIT: ~84 lines
+      - ROLLBACK: ~31 lines
+      - **RUN_GQL: ~1,698 lines (LARGEST - 52% of stdio loop)**
+      - PULL: ~72 lines
+      - BACKUP: ~7 lines
+      - RESTORE: ~7 lines
+      - UPLOAD_BACKUP: ~7 lines
+    - Graceful shutdown: 20 lines
+  - Lines 3181-3215: executeSessionParameterSet helper (~35 lines)
 **Blocking Issues**: None
-**Next Target**: Extract main() function server loops (QUIC ~150 lines, stdio ~2,000 lines)
+**Next Target**: Extract RUN_GQL message handler (~1,698 lines, 52% of stdio loop) - incremental extraction approach recommended
 **Recent Achievements**:
 - ✅ Phase 8 COMPLETE (Testing & Documentation infrastructure)
 - ✅ Phase 3 M3.2 ServerState extraction complete (resolves M3.1 blocking issue)
