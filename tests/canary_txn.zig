@@ -1,5 +1,5 @@
 const std = @import("std");
-const txn = @import("../src/txn/manager.zig");
+const txn = @import("../src/transactions/manager.zig");
 
 // TestCANARY_REQ_GQL_013_TxnCommit - canonical MVCC commit evidence (supersedes legacy TestCANARY_REQ_GQL_030_TxnCommit)
 // Verifies that commit transitions state and assigns commit timestamp > start.

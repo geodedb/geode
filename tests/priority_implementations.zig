@@ -1,6 +1,6 @@
 const std = @import("std");
 const memory_governor = @import("../src/util/memory_governor.zig");
-const txn_manager = @import("../src/txn/manager.zig");
+const txn_manager = @import("../src/transactions/manager.zig");
 const wal = @import("../src/wal/wal.zig");
 const selectivity = @import("../src/index/selectivity.zig");
 const text_formatter = @import("../src/util/text_formatter.zig");

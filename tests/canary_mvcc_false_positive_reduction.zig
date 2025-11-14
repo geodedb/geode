@@ -1,5 +1,5 @@
 const std = @import("std");
-const mvcc_adv = @import("../src/txn/mvcc_adv/early_detect.zig");
+const mvcc_adv = @import("../src/transactions/mvcc_adv/early_detect.zig");
 // TestCANARY_REQ_GQL_073_FalsePositiveReduction
 // Validates that overlapping pure reads do NOT produce a conflict but adding a write does.
 

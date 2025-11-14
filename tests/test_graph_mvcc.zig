@@ -1,7 +1,7 @@
 const std = @import("std");
 const geode = @import("../src/lib.zig");
 const graph_exec = @import("../src/graph/exec.zig");
-const mvcc = @import("../src/txn/mvcc.zig");
+const mvcc = @import("../src/server/txn/mvcc.zig");
 
 test "MATCH pattern execution - basic node scan" {
     const allocator = std.testing.allocator;

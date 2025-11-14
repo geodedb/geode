@@ -1,5 +1,5 @@
 const std = @import("std");
-const mvcc_adv = @import("txn/mvcc_adv/mod.zig");
+const mvcc_adv = @import("transactions/mvcc_adv/mod.zig");
 
 // BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter
 test "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter" {

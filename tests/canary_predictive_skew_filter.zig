@@ -1,5 +1,5 @@
 const std = @import("std");
-const txn = @import("txn/manager.zig");
+const txn = @import("transactions/manager.zig");
 
 // TestCANARY_REQ_GQL_073_PredictiveSkewFilter
 test "TestCANARY_REQ_GQL_073_PredictiveSkewFilter" {

@@ -1,5 +1,5 @@
 const std = @import("std");
-const fle_catalog = @import("schema/catalog.zig");
+const fle_catalog = @import("schema/fle_catalog.zig");
 const fle_annotations = @import("schema/annotations.zig");
 const fle_aead = @import("crypto/aead.zig");
 const key_manager_mod = @import("keys/manager.zig");

@@ -1,6 +1,6 @@
 const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
-const fle_catalog = @import("schema/catalog.zig");
+const fle_catalog = @import("schema/fle_catalog.zig");
 const fle_annotations = @import("schema/annotations.zig");
 
 // CANARY: FLE_EXECUTION_INTEGRATION - Field-Level Encryption Execution Hooks
@@ -24,7 +24,7 @@ const eval = @import("eval.zig");
 // Phase 5 M5.3: Import evaluator_adapter to provide callbacks to eval module
 const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 const graph_store = @import("graph_store.zig");
-const catalog_mod = @import("execution/catalog.zig");
+const catalog_mod = @import("schema/catalog.zig");
 const fle_hooks_mod = @import("execution/fle_hooks.zig");
 const graph_algorithms = @import("execution/graph_algorithms.zig");
 const set_operations = @import("execution/set_operations.zig");

@@ -1,6 +1,6 @@
 const std = @import("std");
 const protocol = @import("../src/protocol.zig");
-const txn = @import("../src/txn/manager.zig");
+const txn = @import("../src/transactions/manager.zig");
 
 // Minimal helper to simulate a HELLO round trip.
 fn simulateHello() !void {
