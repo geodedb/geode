@@ -48,6 +48,8 @@ const evaluateBinarySet = query_executor.evaluateBinarySet;
 const executeCreateStatement = query_executor.executeCreateStatement;
 const executeDeleteStatement = query_executor.executeDeleteStatement;
 const executeMergeStatement = query_executor.executeMergeStatement;
+// Import transaction handlers (M3.2 Phase 3 transaction handlers extraction)
+const transaction_handlers = @import("transaction_handlers.zig");
 const executeCreateIndexStatement = query_executor.executeCreateIndexStatement;
 const executeDropIndexStatement = query_executor.executeDropIndexStatement;
 const executeBackupStatement = query_executor.executeBackupStatement;
@@ -1202,29 +1204,10 @@ pub fn main() !void {
                 continue;
             },
             .BEGIN => |_| {
-                if (state.active_txn != null) {
-                    // Return proper transaction state error with status_class 25000
-                    const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"Transaction already active\",\"additional_statuses\":[{{\"code\":\"TxnState\",\"message\":\"Cannot BEGIN when transaction is already active\"}}]}}\n", .{});
-                    defer gpa.free(err_json);
-                    _ = stdout_file.write(err_json) catch {};
-                } else {
-                    const t = state.txn_manager.begin();
-                    state.active_txn = t;
-                    state.in_txn = true;
-                    state.txn_id = t.id;
-                    // Capture snapshot timestamp (current global commit ts)
-                    state.session_snapshot_ts = state.global_commit_ts;
-
-                    // Initialize MVCC transaction for conflict detection
-                    if (state.mvcc_manager == null) {
-                        state.mvcc_manager = getOrCreateMVCCManager(gpa);
-                    }
-                    state.current_mvcc_txn = state.mvcc_manager.?.beginTransaction(.SnapshotIsolation) catch null;
-
-                    // Return success with status_class 00000
-                    const success_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_BEGIN\",\"txn_id\":{}}}}}\n", .{t.id});
-                    defer gpa.free(success_json);
-                    _ = stdout_file.write(success_json) catch {};
+                const response = transaction_handlers.handleBegin(gpa, &state) catch continue;
+                if (response) |resp| {
+                    defer gpa.free(resp);
+                    _ = stdout_file.write(resp) catch {};
                 }
             },
             .SAVEPOINT => |sp| {
@@ -1245,118 +1228,17 @@ pub fn main() !void {
                 } else |_| {}
             },
             .COMMIT => |_| {
-                if (state.active_txn == null) {
-                    // Return proper transaction state error with status_class 25000
-                    const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"No active transaction\",\"additional_statuses\":[{{\"code\":\"TxnState\",\"message\":\"Cannot COMMIT without active transaction\"}}]}}\n", .{});
-                    defer gpa.free(err_json);
-                    _ = stdout_file.write(err_json) catch {};
-                } else {
-                    var tx = state.active_txn.?;
-
-                    // Try to commit MVCC transaction first for conflict detection
-                    var mvcc_commit_success = true;
-                    if (state.current_mvcc_txn) |mvcc_txn| {
-                        state.mvcc_manager.?.commitTransaction(mvcc_txn) catch |err| {
-                            mvcc_commit_success = false;
-                            // Handle serialization failure
-                            const err_msg = switch (err) {
-                                error.SerializationFailure => "Write-write conflict detected",
-                                else => "Transaction commit failed",
-                            };
-                            const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"40001\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction rolled back due to concurrent update\"}}]}}\n", .{err_msg});
-                            defer gpa.free(err_json);
-                            _ = stdout_file.write(err_json) catch {};
-
-                            // Clean up transaction state
-                            state.current_mvcc_txn = null;
-                            state.active_txn = null;
-                            state.in_txn = false;
-                            return;
-                        };
-                        state.current_mvcc_txn = null;
-                    }
-
-                    if (!mvcc_commit_success) {
-                        return;
-                    }
-
-                    state.txn_manager.commit(&tx) catch |err| {
-                        // Handle commit failure (e.g., serialization failure)
-                        const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction commit failed due to conflicts\"}}]}}\n", .{@errorName(err)});
-                        defer gpa.free(err_json);
-                        _ = stdout_file.write(err_json) catch {};
-                        return;
-                    };
-                    // Assign commit timestamp to newly committed records from this txn
-                    state.global_commit_ts += 1;
-                    const cts = state.global_commit_ts;
-                    var i_mvcc: usize = 0;
-                    while (i_mvcc < state.inserted_values.items.len) : (i_mvcc += 1) {
-                        if (state.inserted_values.items[i_mvcc].creator_txn == tx.id and state.inserted_values.items[i_mvcc].commit_ts == null) {
-                            state.inserted_values.items[i_mvcc].commit_ts = cts;
-                        }
-                    }
-                    // Append WAL commit record (empty payload) if WAL configured.
-                    if (state.wal_ptr) |wp| {
-                        const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
-                        // best-effort: ignore errors in prototype
-                        // Append commit record; ignore returned LSN (best-effort prototype)
-                        _ = wptr.append(tx.id, .Commit, &.{}, 0) catch {};
-                        wptr.fsync() catch {};
-                    }
-                    // Periodic WAL checkpoint + compaction after commit
-                    const do_checkpoint = if (env_wal_compact_interval > 0)
-                        (state.global_commit_ts % env_wal_compact_interval) == 0
-                    else
-                        false; // 0 disables automatic compaction
-                    state.active_txn = null;
-                    state.in_txn = false;
-                    // Return success with status_class 00000
-                    const success_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_COMMIT\",\"txn_id\":{}}}}}\n", .{tx.id});
-                    defer gpa.free(success_json);
-                    _ = stdout_file.write(success_json) catch {};
-                    if (do_checkpoint) {
-                        if (state.wal_ptr) |wp_ck| {
-                            const wck: *wal_mod.Wal = @ptrCast(@alignCast(wp_ck));
-                            _ = wck.writeCheckpoint() catch {};
-                            // Use next_lsn as conservative durable horizon for compaction.
-                            const durable = wck.next_lsn;
-                            wck.compact(durable) catch {};
-                            // Log compaction for observability
-                            std.log.info("WAL compaction triggered after {} commits, durable LSN: {}", .{ env_wal_compact_interval, durable });
-                        }
-                    }
+                const response = transaction_handlers.handleCommit(gpa, &state, env_wal_compact_interval) catch continue;
+                if (response) |resp| {
+                    defer gpa.free(resp);
+                    _ = stdout_file.write(resp) catch {};
                 }
             },
             .ROLLBACK => |_| {
-                if (state.active_txn == null) {
-                    // Return proper transaction state error with status_class 25000
-                    const err_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"No active transaction\",\"additional_statuses\":[{{\"code\":\"TxnState\",\"message\":\"Cannot ROLLBACK without active transaction\"}}]}}\n", .{});
-                    defer gpa.free(err_json);
-                    _ = stdout_file.write(err_json) catch {};
-                } else {
-                    var tx2 = state.active_txn.?;
-
-                    // Abort MVCC transaction
-                    if (state.current_mvcc_txn) |mvcc_txn| {
-                        state.mvcc_manager.?.abortTransaction(mvcc_txn) catch {};
-                        state.current_mvcc_txn = null;
-                    }
-
-                    // Mark uncommitted inserts for this txn as aborted
-                    var ia: usize = 0;
-                    while (ia < state.inserted_values.items.len) : (ia += 1) {
-                        if (state.inserted_values.items[ia].creator_txn == tx2.id and state.inserted_values.items[ia].commit_ts == null) {
-                            state.inserted_values.items[ia].aborted = true;
-                        }
-                    }
-                    state.txn_manager.rollback(&tx2);
-                    state.active_txn = null;
-                    state.in_txn = false;
-                    // Return success with status_class 00000
-                    const success_json = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_ROLLBACK\",\"txn_id\":{}}}}}\n", .{tx2.id});
-                    defer gpa.free(success_json);
-                    _ = stdout_file.write(success_json) catch {};
+                const response = transaction_handlers.handleRollback(gpa, &state) catch continue;
+                if (response) |resp| {
+                    defer gpa.free(resp);
+                    _ = stdout_file.write(resp) catch {};
                 }
             },
             .RUN_GQL => |rq| {
