@@ -38,6 +38,8 @@ const graph_storage_mgr = @import("graph_storage_manager.zig");
 const protocol_handler = @import("protocol_handler.zig");
 // Import CLI argument parsing (M3.2 Phase 3 CLI extraction)
 const cli_args = @import("cli_args.zig");
+// Import server initialization (M3.2 Phase 3 initialization extraction)
+const server_init = @import("server_init.zig");
 // Import query executor (M3.3 Phase 3 modularization)
 const query_executor = @import("query_executor.zig");
 const evaluateSimpleQuery = query_executor.evaluateSimpleQuery;
@@ -414,7 +416,7 @@ fn handleQuicConnection(
     state.inserted_values = .{};
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.wal_ptr = @ptrCast(&wal);
+    state.wal_ptr = @ptrCast(wal);
     state.spill_sort = env_spill_sort;
     state.spill_distinct = env_spill_distinct;
     state.spill_union = env_spill_union;
@@ -936,101 +938,26 @@ pub fn main() !void {
             try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
         };
     }
-    // Initialize WAL (test / prototype). For now use a temp path under /tmp; future: data_dir option.
-    var wal = wal_mod.Wal.init(gpa);
-    defer wal.deinit();
-    wal.openFile("/tmp/geode_ephemeral_wal") catch {};
-    if (test_wal_skip_ratio) |ov| {
-        wal.test_skip_ratio_override = ov;
-    }
-    // Initialize synthetic index catalog (idempotent) before serving.
-    initIndexCatalog(gpa);
 
-    // Prepare environment-derived flags once
-    var env_spill_sort: usize = 0;
-    var env_spill_distinct: usize = 0;
-    var env_spill_union: usize = 0;
-    var env_spill_threshold: usize = 0;
-    var env_storage_checksum_error = false;
-    var env_wal_compact_interval: usize = 5; // Default: compact every 5 commits
-    if (std.process.getEnvMap(gpa)) |*env_ptr| {
-        var env = env_ptr.*;
-        defer env.deinit();
-        if (env.get("GEODE_FORCE_SORT_SPILL")) |_| env_spill_sort = 1;
-        if (env.get("GEODE_FORCE_DISTINCT_SPILL")) |_| env_spill_distinct = 1;
-        if (env.get("GEODE_FORCE_UNION_SPILL")) |_| env_spill_union = 1;
-        if (env.get("GEODE_QUERY_MEM_LIMIT_BYTES")) |th| {
-            env_spill_threshold = std.fmt.parseInt(usize, th, 10) catch env_spill_threshold;
-        } else if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
-            env_spill_threshold = std.fmt.parseInt(usize, th, 10) catch env_spill_threshold;
-        }
-        if (env.get("GEODE_WAL_COMPACT_INTERVAL")) |ci| {
-            env_wal_compact_interval = std.fmt.parseInt(usize, ci, 10) catch 5;
-        }
-        if (env.get("GEODE_NULLS_LAST")) |_| g_nulls_last = true;
-        if (env.get("GEODE_PROFILE_MEMCURVE")) |_| memcurve_profile = true;
-        if (env.get("GEODE_ADAPT_ESTIMATES")) |_| g_adapt_estimates = true;
-        if (env.get("GEODE_DISABLE_INDEX_CATALOG")) |_| g_disable_catalog = true;
-        if (env.get("GEODE_CHECKSUM_TEST_PATH")) |p| {
-            var pm = storage_pm.PageManager.initPersistent(gpa, 4096, p);
-            defer pm.deinit();
-            pm.loadPage(p, 0) catch |e| switch (e) {
-                error.PageChecksumMismatch => {
-                    env_storage_checksum_error = true;
-                    // Log the corruption for diagnostics
-                    std.log.err("Storage page checksum mismatch detected during startup in path: {s}", .{p});
-                },
-                else => {},
-            };
-        }
-    } else |_| {}
+    // Initialize server components using modularized server_init (M3.2 Phase 3 initialization extraction)
+    var init_ctx = try server_init.initialize(
+        gpa,
+        order_keys_mode_expr,
+        data_dir,
+        catalog_create_name,
+        test_wal_skip_ratio,
+        &memcurve_profile,
+    );
+    defer init_ctx.deinit();
 
-    // Apply ORDER BY key policy based on CLI flag
-    server_flags.setOrderKeysExpr(order_keys_mode_expr);
-    graph_storage_mgr.setDataDir(data_dir);
-
-    // Initialize persistent page manager if data_dir provided and wire StorageCatalog
-    var pm_persist_active = false;
-    var pm_persist: storage_pm.PageManager = undefined;
-    var catalog_inited = false;
-    var catalog = storage_catalog.StorageCatalog{ .allocator = gpa, .page_manager = undefined, .tables = undefined, .indexes = undefined, .sequences = undefined, .catalog_page_id = null, .graph_metadata = null };
-    if (data_dir) |dd| {
-        std.fs.cwd().makePath(dd) catch {};
-        pm_persist = storage_pm.PageManager.initPersistent(gpa, 4096, dd);
-        pm_persist_active = true;
-        pm_persist.loadPage(dd, 0) catch {};
-        catalog = storage_catalog.StorageCatalog.init(gpa, &pm_persist);
-        catalog.load() catch {};
-        catalog_inited = true;
-        if (catalog_create_name) |tname| {
-            catalog.createTable(tname, &.{}) catch {};
-        }
-
-        // Try to load graph from catalog
-        if (graph_storage_mgr.getCurrentGraphStorage() == null) {
-            // For now, just use JSONL files
-            const loaded = tryLoadGraphFromDir(gpa, dd) catch null;
-            if (loaded) |lg| {
-                // Graph storage manager will handle storage internally
-                _ = lg; // Graph is loaded via tryLoadGraphFromDir which is now aliased
-                // Update catalog metadata
-                if (catalog.graph_metadata == null) {
-                    catalog.initGraphMetadata() catch {};
-                }
-                if (graph_storage_mgr.getCurrentGraphStorage()) |gs| {
-                    catalog.saveGraphMetadata(@intCast(gs.nodes.count()), @intCast(gs.edges.items.len), 0, // max_node_id - would need to calculate
-                        if (gs.edges.items.len > 0) gs.edges.items.len - 1 else 0) catch {};
-                }
-            }
-        }
-    }
-    defer {
-        if (catalog_inited) {
-            catalog.save() catch {};
-            catalog.deinit();
-        }
-        if (pm_persist_active) pm_persist.deinit();
-    }
+    // Extract initialization values for compatibility with existing code
+    const wal = &init_ctx.wal;
+    const env_spill_sort = init_ctx.env_config.spill_sort;
+    const env_spill_distinct = init_ctx.env_config.spill_distinct;
+    const env_spill_union = init_ctx.env_config.spill_union;
+    const env_spill_threshold = init_ctx.env_config.spill_threshold;
+    const env_storage_checksum_error = init_ctx.env_config.storage_checksum_error;
+    const env_wal_compact_interval = init_ctx.env_config.wal_compact_interval;
 
     // QUIC mode: preferred over TCP
     if (listen_quic) |addr_str| {
@@ -1153,7 +1080,7 @@ pub fn main() !void {
     state.inserted_values = .{};
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.wal_ptr = @ptrCast(&wal);
+    state.wal_ptr = @ptrCast(wal);
     state.spill_sort = env_spill_sort;
     state.spill_distinct = env_spill_distinct;
     state.spill_union = env_spill_union;

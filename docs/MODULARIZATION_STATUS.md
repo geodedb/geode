@@ -27,15 +27,16 @@
 **Active Agent**: Claude Agent
 **Current Phase**: Phase 3 - Server Monolith Decomposition (IN PROGRESS - 40%)
 **Current Milestone**: M3.2 (Protocol Handler), M3.3 (Query Executor) - Both in progress
-**Current File**: `src/server/main.zig` (3,288 lines, was 7,039 baseline - **53.3% REDUCTION**)
-**Analysis**: main.zig structure: ~850 lines (imports/helpers/protocol functions) + ~2,400 lines (main() function remaining)
+**Current File**: `src/server/main.zig` (3,215 lines, was 7,039 baseline - **54.3% REDUCTION**)
+**Analysis**: main.zig structure: ~850 lines (imports/helpers/protocol functions) + ~2,365 lines (main() function remaining, primarily server loops)
 **Blocking Issues**: None
-**Next Target**: Extract main() function initialization code (~300 lines) and server loops (~2,000 lines)
+**Next Target**: Extract main() function server loops (QUIC ~150 lines, stdio ~2,000 lines)
 **Recent Achievements**:
 - ✅ Phase 8 COMPLETE (Testing & Documentation infrastructure)
 - ✅ Phase 3 M3.2 ServerState extraction complete (resolves M3.1 blocking issue)
 - ✅ Phase 3 M3.2 CLI argument parsing extracted (cli_args.zig, 173 lines)
-- ✅ Server reduction: 7,039 → 3,288 lines (53.3%, need 2,988 more lines to reach ~300 line target)
+- ✅ Phase 3 M3.2 Server initialization extracted (server_init.zig, 211 lines)
+- ✅ Server reduction: 7,039 → 3,215 lines (54.3%, need 2,915 more lines to reach ~300 line target)
 - ✅ Query executor module: 2,942 lines extracted through 9 incremental commits
 
 ---
@@ -525,32 +526,34 @@ Circular Dependencies Detected: 2
 - **Notes**: Followed P0 CRITICAL safety protocols with 7 incremental commits. Achieved 9.5% server reduction while maintaining 100% functionality. ServerState struct extraction deferred pending dependency resolution.
 
 #### M3.2: Extract Protocol Handler ⏳
-- **Status**: IN PROGRESS (Third Increment Complete - CLI Argument Parsing Extracted)
-- **Current File**: `src/server/main.zig` (3,288 lines, was 3,381 before CLI extraction, was 7,039 baseline - **53.3% REDUCTION**)
+- **Status**: IN PROGRESS (Fourth Increment Complete - Server Initialization Extracted)
+- **Current File**: `src/server/main.zig` (3,215 lines, was 3,288 before init extraction, was 7,039 baseline - **54.3% REDUCTION**)
 - **Created Files**:
   - `src/server/protocol_handler.zig` (132 lines) - Backup protocol handlers
   - `src/server/server_state.zig` (ENHANCED, +107 lines) - ServerState struct added
   - `src/server/cli_args.zig` (173 lines) - CLI argument parsing module
+  - `src/server/server_init.zig` (211 lines) - Server initialization module
 - **Tasks**:
   - [x] Identify protocol handling code (backup handlers: handleBackupRequest, handleRestoreRequest, handleUploadBackupRequest)
   - [x] Create `protocol_handler.zig` with backup protocol handlers
   - [x] Update `server/main.zig` imports and remove extracted functions
   - [x] Extract ServerState struct to server_state.zig (resolves M3.1 deferred dependency issue)
   - [x] Extract CLI argument parsing to cli_args.zig module
+  - [x] Extract server initialization to server_init.zig module (WAL, env vars, catalog, storage)
   - [ ] Extract additional protocol handling code (QUIC connection setup, message parsing wrapper)
   - [ ] Add protocol tests
   - [ ] Verify QUIC communication works
-- **Verification**: Server functionality maintained, backup protocol handlers working, ServerState successfully modularized, CLI parsing modularized
+- **Verification**: Server functionality maintained through all four increments, all components successfully modularized
 - **Agent**: Claude Agent
 - **Started**: 2025-11-12
-- **Completed**: Third increment complete (CLI extraction - 93 lines removed from main.zig)
+- **Completed**: Fourth increment complete (initialization extraction - 73 lines removed from main.zig)
 - **Test Results**: Functionality preserved through incremental approach
 - **Issues**: None
-- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Second increment extracted ServerState struct (107 lines) from main.zig to server_state.zig, resolving the dependency blocking issue from M3.1. Added proper imports (mvcc, query_plan_cache, protocol, geode, txn_mgr) to server_state.zig. ServerState can now be shared across server modules, enabling future protocol handler extractions. Main.zig reduced by 107 lines (3,484 → 3,377 lines, -3.1%). Next: Extract protocol handling functions (writeErrorWithFlags, handleCdcControl, handleQuicConnection, processMessage).
+- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Fourth increment extracted server initialization logic (WAL init, environment variable processing, catalog initialization, storage setup) to server_init.zig. Created InitContext struct for managing initialization lifecycle with proper deinit. Reduced main.zig by 73 lines (3,288 → 3,215 lines, -2.2%). Cumulative M3.2 reduction: 166 lines across 4 increments. Next: Extract server loops (QUIC and stdio handlers ~2,000 lines).
 
 #### M3.3: Extract Query Executor ⏳
 - **Status**: IN PROGRESS (Ninth Increment Complete - Statement Execution Functions Extracted - MAJOR MILESTONE: 50%+ Server Reduction)
-- **Current File**: `src/server/main.zig` (3,288 lines after M3.2 CLI extraction, was 3,377, was 7,039 baseline - **53.3% REDUCTION**)
+- **Current File**: `src/server/main.zig` (3,215 lines after M3.2 fourth increment, was 7,039 baseline - **54.3% REDUCTION**)
 - **Created Files**:
   - `src/server/query_executor.zig` (2,942 lines) - Complete query execution module with utilities, diagnostics, AST analysis, formatting, conversion, profiling types, graph property utilities, query evaluation functions, and statement execution functions
 - **Tasks**:
