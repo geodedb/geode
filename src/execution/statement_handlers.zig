@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const value_types = @import("../value_types.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -12,6 +13,10 @@ const ExecutionContext = execution.ExecutionContext;
 const getCatalog = execution.getCatalog;
 const executeMatchQueryWithParams = execution.executeMatchQueryWithParams;
 const executeStatementWithContext = execution.executeStatementWithContext;
+
+// Local type aliases
+const Value = value_types.Value;
+const Env = value_types.Env;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-007; FEATURE="ExecutionRefactoring"; ASPECT=STATEMENT_HANDLERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted statement handlers (SHOW, FOR, VALUES, EXPLAIN, PROFILE) from execution.zig for better modularity (M1 Phase 7)

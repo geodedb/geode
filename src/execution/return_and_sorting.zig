@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const value_types = @import("../value_types.zig");
 
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -9,6 +10,10 @@ const ExecutionContext = execution.ExecutionContext;
 
 // Import helper functions used by return and sorting
 const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
+
+// Local type aliases
+const Value = value_types.Value;
+const Env = value_types.Env;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-009; FEATURE="FileModularization"; ASPECT=ReturnAndSorting; STATUS=IMPL; OWNER=refactoring; UPDATED=2025-10-17
 pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.OrderBy) !void {

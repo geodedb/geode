@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const value_types = @import("../value_types.zig");
 
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -28,6 +29,9 @@ const executeCreate = execution.executeCreate;
 const executeInsert = execution.executeInsert;
 const executeMerge = execution.executeMerge;
 const executeDelete = execution.executeDelete;
+
+// Local type aliases
+const Value = value_types.Value;
 const executeMatchQuery = execution.executeMatchQuery;
 const executeMatchCreateQuery = execution.executeMatchCreateQuery;
 const executeMatchCallQuery = execution.executeMatchCallQuery;

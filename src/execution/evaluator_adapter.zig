@@ -156,55 +156,55 @@ pub fn createEvaluator(
 }
 
 // CANARY: REQ=REQ-M5.3-ADAPTER-DOC-001; FEATURE="Documentation"; ASPECT=UsageExamples; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
-/// Example usage pattern for the adapter
-///
-/// This is a conceptual example showing how the adapter breaks the circular dependency:
-///
-/// ```zig
-/// // In execution.zig:
-/// const callbacks = ExecutionCallbacks{
-///     .getDefaultContextFn = getDefaultContext,
-///     .executeQueryWithContextFn = executeQueryWithContext,
-///     .findShortestPathFn = findShortestPath,
-///     .countPatternMatchesFn = countPatternMatches,
-///     .executePatternComprehensionFn = executePatternComprehension,
-/// };
-///
-/// const evaluator = createEvaluator(eval.evalExprWithCallbacks, callbacks);
-///
-/// // Now execution.zig can call evalExpr without directly importing eval.zig:
-/// const result = try evaluator.evalExpr(allocator, expr, env);
-///
-/// // In eval.zig:
-/// pub fn evalExprWithCallbacks(
-///     allocator: std.mem.Allocator,
-///     expr: ast.Expr,
-///     env: Env,
-///     callbacks: ExecutionCallbacks,
-/// ) EvalError!Value {
-///     // When eval needs to execute a subquery:
-///     const context = try callbacks.getDefaultContext(allocator);
-///     const result = try callbacks.executeQueryWithContext(allocator, query, context);
-///     // No direct import of execution.zig needed!
-/// }
-/// ```
-///
-/// Dependency Flow (Before):
-/// ```
-/// execution.zig ──imports──> eval.zig
-///       ↑                         │
-///       │                         │
-///       └─────────imports─────────┘
-///       (CIRCULAR DEPENDENCY)
-/// ```
-///
-/// Dependency Flow (After):
-/// ```
-/// execution.zig ──imports──> evaluator_adapter.zig <──imports── eval.zig
-///       │                                                           │
-///       └────provides callbacks at runtime───────────────────────>┘
-///       (NO CIRCULAR DEPENDENCY - runtime dependency injection)
-/// ```
+// Example usage pattern for the adapter
+//
+// This is a conceptual example showing how the adapter breaks the circular dependency:
+//
+// ```zig
+// // In execution.zig:
+// const callbacks = ExecutionCallbacks{
+//     .getDefaultContextFn = getDefaultContext,
+//     .executeQueryWithContextFn = executeQueryWithContext,
+//     .findShortestPathFn = findShortestPath,
+//     .countPatternMatchesFn = countPatternMatches,
+//     .executePatternComprehensionFn = executePatternComprehension,
+// };
+//
+// const evaluator = createEvaluator(eval.evalExprWithCallbacks, callbacks);
+//
+// // Now execution.zig can call evalExpr without directly importing eval.zig:
+// const result = try evaluator.evalExpr(allocator, expr, env);
+//
+// // In eval.zig:
+// pub fn evalExprWithCallbacks(
+//     allocator: std.mem.Allocator,
+//     expr: ast.Expr,
+//     env: Env,
+//     callbacks: ExecutionCallbacks,
+// ) EvalError!Value {
+//     // When eval needs to execute a subquery:
+//     const context = try callbacks.getDefaultContext(allocator);
+//     const result = try callbacks.executeQueryWithContext(allocator, query, context);
+//     // No direct import of execution.zig needed!
+// }
+// ```
+//
+// Dependency Flow (Before):
+// ```
+// execution.zig ──imports──> eval.zig
+//       ↑                         │
+//       │                         │
+//       └─────────imports─────────┘
+//       (CIRCULAR DEPENDENCY)
+// ```
+//
+// Dependency Flow (After):
+// ```
+// execution.zig ──imports──> evaluator_adapter.zig <──imports── eval.zig
+//       │                                                           │
+//       └────provides callbacks at runtime───────────────────────>┘
+//       (NO CIRCULAR DEPENDENCY - runtime dependency injection)
+// ```
 
 // ============================================================================
 // Module Tests

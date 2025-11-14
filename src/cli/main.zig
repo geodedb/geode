@@ -39,11 +39,28 @@ const cmdMigrate = backup_cli.cmdMigrate;
 // Phase 4 M4.4: Import CLI dispatcher module for command routing
 const cli_dispatcher = @import("cli_dispatcher.zig");
 
+// Import shared types and functions from cli_dispatcher
+const ExitCode = cli_dispatcher.ExitCode;
+const getEnvVar = cli_dispatcher.getEnvVar;
+const logAuditEvent = cli_dispatcher.logAuditEvent;
+const windows = if (builtin.os.tag == .windows) std.os.windows else struct {};
+
 // Import QUIC modules for real transport implementation
 const quic = @import("transport/quic");
 const vendor_quic = @import("vendor_quic");
 
 const VERSION = "0.18.0";
+
+// CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=STUB; TEST=test_quic_transport; OWNER=repl; UPDATED=2025-11-14
+// TODO: Implement QUIC transport for REPL - currently using placeholder
+const repl_dispatch = geode.repl.repl_dispatch;
+const quic_transport = repl_dispatch.Transport{
+    .connectFn = struct {
+        fn connect(_: std.mem.Allocator, _: []const u8) anyerror!*repl_dispatch.TransportConnection {
+            return error.NotImplemented;
+        }
+    }.connect,
+};
 
 // Cross-platform file handle helpers
 // On Windows, file handles are HANDLE (*anyopaque), not integers
@@ -68,9 +85,8 @@ fn getStderrHandle() std.fs.File.Handle {
     if (builtin.os.tag == .windows) {
         return windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch unreachable;
     } else {
-        "\n" ++
-        "Use 'geode <subcommand> --help' for more information on a specific command.\n" ++
-        "\n", .{});
+        return std.posix.STDERR_FILENO;
+    }
 }
 
 fn printServeUsage() void {

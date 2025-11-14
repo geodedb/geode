@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const value_types = @import("../value_types.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -23,6 +24,10 @@ const encryptPropertyIfNeeded = execution.encryptPropertyIfNeeded;
 const encryptEdgePropertyIfNeeded = execution.encryptEdgePropertyIfNeeded;
 const executeWithClause = execution.executeWithClause;
 const expandVariableLengthPaths = execution.expandVariableLengthPaths;
+
+// Local type aliases
+const Value = value_types.Value;
+const Env = value_types.Env;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=MATCH_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted MATCH operations from execution.zig for better modularity (M1 Phase 6)

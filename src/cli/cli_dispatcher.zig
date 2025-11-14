@@ -340,7 +340,7 @@ pub fn cmdQueryImplicit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx:
 // ============================================================================
 
 /// Cross-platform environment variable helper
-fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
+pub fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
     return std.process.getEnvVarOwned(allocator, key) catch null;
 }
 

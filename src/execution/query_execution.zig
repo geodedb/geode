@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const value_types = @import("../value_types.zig");
 
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -25,6 +26,10 @@ const sortRows = execution.sortRows;
 const isAggregationExpr = execution.isAggregationExpr;
 const evaluateAggregation = execution.evaluateAggregation;
 const allocateColumnStrings = execution.allocateColumnStrings;
+
+// Local type aliases
+const Value = value_types.Value;
+const Env = value_types.Env;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=IMPL; OWNER=refactoring; UPDATED=2025-10-17
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {

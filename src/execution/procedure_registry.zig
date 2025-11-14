@@ -11,6 +11,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const value_types = @import("../value_types.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -27,6 +28,9 @@ const ExecutionError = execution.ExecutionError;
 
 // Import recursion handler for member path building
 const recursion_handler = @import("recursion_handler.zig");
+
+// Local type aliases
+const Value = value_types.Value;
 
 // Import security modules for real implementation
 const audit_mod = @import("../security/audit.zig");

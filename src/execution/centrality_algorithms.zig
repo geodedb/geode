@@ -1,10 +1,14 @@
 const std = @import("std");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const value_types = @import("../value_types.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
+
+// Local type aliases
+const Value = value_types.Value;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-003; FEATURE="ExecutionRefactoring"; ASPECT=CENTRALITY_ALGORITHMS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted centrality and community detection algorithms from execution.zig for better modularity (M1 Phase 3)

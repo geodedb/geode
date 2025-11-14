@@ -70,58 +70,20 @@ pub fn rotateKey(allocator: std.mem.Allocator, args: KeyRotationArgs) !void {
 
 /// Grant plaintext read permission for a field
 pub fn grantPlaintext(allocator: std.mem.Allocator, args: PolicyArgs) !void {
-    // 1. Get global catalog
-    const catalog = try fle_catalog.globalCatalog(allocator);
-
-    // 2. Grant access using catalog API
-    catalog.grantPlaintextAccess(
-        args.schema_name,
-        args.field_name,
-        args.role,
-    ) catch |err| {
-        if (err == error.TypeNotFound) {
-            std.debug.print("Error: Schema '{s}' not found in catalog\n", .{args.schema_name});
-            return err;
-        }
-        if (err == error.FieldNotFound) {
-            std.debug.print("Error: Field '{s}' not found in schema '{s}'\n", .{ args.field_name, args.schema_name });
-            return err;
-        }
-        return err;
-    };
-
-    std.debug.print("✓ Granted READ_PLAINTEXT permission:\n", .{});
-    std.debug.print("  Schema: {s}\n", .{args.schema_name});
-    std.debug.print("  Field: {s}\n", .{args.field_name});
-    std.debug.print("  Role: {s}\n", .{args.role});
+    // TODO: Implement globalCatalog when available
+    std.debug.print("FLE commands require globalCatalog implementation\n", .{});
+    _ = allocator;
+    _ = args;
+    return error.NotImplemented;
 }
 
 /// Revoke plaintext read permission for a field
 pub fn revokePlaintext(allocator: std.mem.Allocator, args: PolicyArgs) !void {
-    // 1. Get global catalog
-    const catalog = try fle_catalog.globalCatalog(allocator);
-
-    // 2. Revoke access using catalog API
-    catalog.revokePlaintextAccess(
-        args.schema_name,
-        args.field_name,
-        args.role,
-    ) catch |err| {
-        if (err == error.TypeNotFound) {
-            std.debug.print("Error: Schema '{s}' not found in catalog\n", .{args.schema_name});
-            return err;
-        }
-        if (err == error.FieldNotFound) {
-            std.debug.print("Error: Field '{s}' not found in schema '{s}'\n", .{ args.field_name, args.schema_name });
-            return err;
-        }
-        return err;
-    };
-
-    std.debug.print("✓ Revoked READ_PLAINTEXT permission:\n", .{});
-    std.debug.print("  Schema: {s}\n", .{args.schema_name});
-    std.debug.print("  Field: {s}\n", .{args.field_name});
-    std.debug.print("  Role: {s}\n", .{args.role});
+    // TODO: Implement globalCatalog when available
+    std.debug.print("FLE commands require globalCatalog implementation\n", .{});
+    _ = allocator;
+    _ = args;
+    return error.NotImplemented;
 }
 
 /// Migrate field from plaintext to encrypted
@@ -148,123 +110,21 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
 
 /// Show key rotation status
 pub fn showRotationStatus(allocator: std.mem.Allocator, tenant_id: []const u8) !void {
-    // 1. Get global catalog
-    const catalog = try fle_catalog.globalCatalog(allocator);
-
-    std.debug.print("FLE Key Rotation Status for tenant: {s}\n", .{tenant_id});
-    std.debug.print("═════════════════════════════════════════════════════════════\n", .{});
-
-    // 2. Iterate through all schemas and show encryption key info
-    var type_count: usize = 0;
-    var encrypted_field_count: usize = 0;
-
-    var schema_iter = catalog.schemas.iterator();
-    while (schema_iter.next()) |entry| {
-        const schema_name = entry.key_ptr.*;
-        const type_meta = entry.value_ptr.*;
-        type_count += 1;
-
-        var has_encrypted_fields = false;
-
-        var field_iter = type_meta.fields.iterator();
-        while (field_iter.next()) |field_entry| {
-            const field_name = field_entry.key_ptr.*;
-            const field_meta = field_entry.value_ptr.*;
-
-            if (field_meta.isEncrypted()) {
-                if (!has_encrypted_fields) {
-                    std.debug.print("\nSchema: {s}\n", .{schema_name});
-                    has_encrypted_fields = true;
-                }
-
-                encrypted_field_count += 1;
-                const alg_name = switch (field_meta.encryption.algorithm) {
-                    .aes256_gcm => "AES-256-GCM",
-                    .chacha20_poly1305 => "ChaCha20-Poly1305",
-                };
-
-                std.debug.print("  Field: {s}\n", .{field_name});
-                std.debug.print("    Algorithm: {s}\n", .{alg_name});
-                std.debug.print("    Key Version: 1 (active)\n", .{});
-                std.debug.print("    Last Rotated: Never\n", .{});
-                std.debug.print("    Rotation Status: No rotation scheduled\n", .{});
-
-                if (field_meta.isSearchable()) {
-                    std.debug.print("    Blind Index Key: Active (version 1)\n", .{});
-                }
-            }
-        }
-    }
-
-    std.debug.print("\n═════════════════════════════════════════════════════════════\n", .{});
-    std.debug.print("Summary: {d} schemas, {d} encrypted fields\n", .{ type_count, encrypted_field_count });
-    std.debug.print("Note: Key rotation not yet implemented - all keys are version 1\n", .{});
+    // TODO: Implement globalCatalog when available
+    std.debug.print("FLE commands require globalCatalog implementation\n", .{});
+    _ = allocator;
+    _ = tenant_id;
+    return error.NotImplemented;
 }
 
 /// Show policy status for encrypted fields
 pub fn showPolicyStatus(allocator: std.mem.Allocator, schema_name: []const u8) !void {
-    // 1. Get global catalog
-    const catalog = try fle_catalog.globalCatalog(allocator);
-
-    // 2. Get type metadata for schema
-    const type_meta = catalog.getType(schema_name) orelse {
-        std.debug.print("Error: Schema '{s}' not found in catalog\n", .{schema_name});
-        return error.TypeNotFound;
-    };
-
-    std.debug.print("FLE Policy Status for schema: {s}\n", .{schema_name});
-    std.debug.print("═════════════════════════════════════════════════════════════\n", .{});
-
-    // 3. Iterate through all fields
-    var field_count: usize = 0;
-    var encrypted_count: usize = 0;
-
-    var field_iter = type_meta.fields.iterator();
-    while (field_iter.next()) |entry| {
-        field_count += 1;
-        const field_name = entry.key_ptr.*;
-        const field_meta = entry.value_ptr.*;
-
-        const is_encrypted = field_meta.isEncrypted();
-        if (is_encrypted) {
-            encrypted_count += 1;
-        }
-
-        std.debug.print("\nField: {s}\n", .{field_name});
-        std.debug.print("  Encrypted: {s}\n", .{if (is_encrypted) "Yes" else "No"});
-
-        if (is_encrypted) {
-            const alg_name = switch (field_meta.encryption.algorithm) {
-                .aes256_gcm => "AES-256-GCM",
-                .chacha20_poly1305 => "ChaCha20-Poly1305",
-            };
-            std.debug.print("  Algorithm: {s}\n", .{alg_name});
-            std.debug.print("  Searchable: {s}\n", .{if (field_meta.isSearchable()) "Yes (blind-hmac-sha256)" else "No"});
-
-            // Show roles with plaintext access
-            if (field_meta.visibility.to_roles.len > 0) {
-                std.debug.print("  Plaintext Access Roles:\n", .{});
-                for (field_meta.visibility.to_roles) |role| {
-                    std.debug.print("    - {s}\n", .{role});
-                }
-            } else {
-                std.debug.print("  Plaintext Access Roles: (none)\n", .{});
-            }
-
-            // Show classification tags
-            if (field_meta.classification.tags.len > 0) {
-                std.debug.print("  Classification Tags:\n", .{});
-                for (field_meta.classification.tags) |tag| {
-                    std.debug.print("    - {s}\n", .{tag});
-                }
-            }
-        }
-    }
-
-    std.debug.print("\n═════════════════════════════════════════════════════════════\n", .{});
-    std.debug.print("Summary: {d} total fields, {d} encrypted\n", .{ field_count, encrypted_count });
+    // TODO: Implement globalCatalog when available
+    std.debug.print("FLE commands require globalCatalog implementation\n", .{});
+    _ = allocator;
+    _ = schema_name;
+    return error.NotImplemented;
 }
-
 /// Parse and execute FLE command from CLI arguments
 pub fn executeCommand(allocator: std.mem.Allocator, args: []const []const u8) !void {
     if (args.len < 2) {

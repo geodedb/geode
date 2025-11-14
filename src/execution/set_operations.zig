@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
+const value_types = @import("../value_types.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -10,6 +11,10 @@ const valuesEqual = execution.valuesEqual;
 const executeQueryNoLimit = execution.executeQueryNoLimit;
 const executeQueryWithBindings = execution.executeQueryWithBindings;
 const sortRows = execution.sortRows;
+
+// Local type aliases
+const Value = value_types.Value;
+const Env = value_types.Env;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-002; FEATURE="ExecutionRefactoring"; ASPECT=SET_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted set operation functions from execution.zig for better modularity (M1 Phase 2)

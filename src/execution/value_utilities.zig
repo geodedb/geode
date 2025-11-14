@@ -11,9 +11,11 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig");
 const execution = @import("../execution.zig");
+const value_types = @import("../value_types.zig");
 
 // Type aliases
 const ExecutionResult = execution.ExecutionResult;
+const Value = value_types.Value;
 
 /// Duplicate an ExecutionResult, allocating new memory for all fields
 pub fn duplicateResult(allocator: std.mem.Allocator, original: ExecutionResult) !ExecutionResult {

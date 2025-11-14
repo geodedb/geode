@@ -13,7 +13,7 @@
 const std = @import("std");
 const value_types = @import("../value_types.zig");
 const ast = @import("../gql/ast.zig");
-const heap = @import("../types/heap_value.zig");
+const heap = @import("../storage/heap.zig");
 
 pub const Value = value_types.Value;
 pub const EvalError = value_types.EvalError;
@@ -81,7 +81,7 @@ pub fn expectInt(v: Value) EvalError!i64 {
 /// Graph types (Node, Edge, Map, Path) convert to Null as ExtValue doesn't support them
 ///
 /// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-005; FEATURE="Value Converters"; STATUS=IMPL
-pub fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("../types/eval_extended.zig").ExtValue {
+pub fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("../eval_extended.zig").ExtValue {
     return switch (value) {
         .Null => .{ .Null = {} },
         .Int => |i| .{ .Int = i },
@@ -91,7 +91,7 @@ pub fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("../
         .ExtValue => |ext| ext, // Unwrap the ExtValue directly
         .List => |list| blk: {
             // Convert Value.List to ExtValue.List recursively
-            var ext_list = try allocator.alloc(@import("../types/eval_extended.zig").ExtValue, list.len);
+            var ext_list = try allocator.alloc(@import("../eval_extended.zig").ExtValue, list.len);
             for (list, 0..) |item, i| {
                 ext_list[i] = try valueToExtValue(allocator, item);
             }
@@ -108,7 +108,7 @@ pub fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("../
 /// Wraps advanced types in Value.ExtValue to preserve type information
 ///
 /// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-006; FEATURE="Value Converters"; STATUS=IMPL
-pub fn extValueToValue(ext_value: @import("../types/eval_extended.zig").ExtValue) Value {
+pub fn extValueToValue(ext_value: @import("../eval_extended.zig").ExtValue) Value {
     return switch (ext_value) {
         .Null => .{ .Null = {} },
         .Int => |i| .{ .Int = i },
@@ -147,7 +147,7 @@ pub fn evalValueToHeapValue(value: Value) heap.Value {
 ///
 /// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-008; FEATURE="Value Converters"; STATUS=IMPL
 pub fn heapValueToEvalValue(value: heap.Value) Value {
-    const eval_ext = @import("../types/eval_extended.zig");
+    const eval_ext = @import("../eval_extended.zig");
     return switch (value) {
         .Null => .{ .Null = {} },
         .Int => |i| .{ .Int = i },

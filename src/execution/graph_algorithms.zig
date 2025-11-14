@@ -2,10 +2,15 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const value_types = @import("../value_types.zig");
 
 // Import valuesEqual from parent execution module
 const execution = @import("../execution.zig");
 const valuesEqual = execution.valuesEqual;
+
+// Local type aliases
+const Value = value_types.Value;
+const Env = value_types.Env;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-001; FEATURE="ExecutionRefactoring"; ASPECT=GRAPH_ALGORITHMS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted graph algorithm functions from execution.zig for better modularity (M1 Phase 1)

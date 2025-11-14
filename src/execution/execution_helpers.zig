@@ -1,11 +1,15 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
+const value_types = @import("../value_types.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
+
+// Local type aliases
+const Value = value_types.Value;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=EXECUTION_HELPERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
 // Extracted helper/utility functions from path_and_call_operations.zig for better modularity (M2.3 Phase 2)

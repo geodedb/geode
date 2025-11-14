@@ -1,7 +1,9 @@
 const std = @import("std");
 const geode = @import("geode");
-const backup_types = geode.backup_types;
-const quic = geode.quic;
+// Import backup types directly from storage/backup module
+const backup_types = @import("storage/backup");
+// TODO: Import QUIC when available
+// const quic = geode.quic;
 
 // CANARY: REQ=REQ-M4.3-BACKUP-CLI-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.3: Extract backup/restore/migrate commands from cli/main.zig
@@ -506,107 +508,11 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 // ============================================================================
 
 // Remote server backup execution function
-fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
-    std.debug.print("Connecting to remote server: {s}\n", .{server});
-
-    // Parse server address
-    const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidServerAddress;
-    const host = server[0..colon_idx];
-    const port_str = server[colon_idx + 1 ..];
-    const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidServerAddress;
-
-    // Create QUIC client for backup operations
-    const quic_client = try allocator.create(quic.QuicClient);
-    defer allocator.destroy(quic_client);
-    quic_client.* = quic.QuicClient.init(allocator);
-    defer quic_client.deinit();
-
-    // Connect to server
-    try quic_client.connect(host, port);
-    std.debug.print("Connected to server successfully\n", .{});
-
-    // Get QUIC stream for communication
-    const stream = try quic_client.getStream();
-    defer stream.deinit();
-
-    // Send HELLO message to establish session
-    const hello_msg = "HELLO geode-cli 1.0\n";
-    try stream.writeAll(hello_msg);
-
-    // Read server response
-    var response_buffer: [1024]u8 = undefined;
-    const response_len = try stream.read(&response_buffer);
-    const response = response_buffer[0..response_len];
-
-    if (!std.mem.startsWith(u8, response, "OK")) {
-        std.debug.print("Server handshake failed: {s}\n", .{response});
-        return error.ServerHandshakeFailed;
-    }
-
-    // Build backup command
-    const compression_flag = if (compress) " --compress" else "";
-    const parent_flag = if (parent_id) |pid|
-        try std.fmt.allocPrint(allocator, " --parent {s}", .{pid})
-    else
-        "";
-    defer if (parent_id != null) allocator.free(parent_flag);
-
-    const backup_command = try std.fmt.allocPrint(allocator, "BACKUP {s} --type {s}{s}{s}\n", .{ dest, mode, compression_flag, parent_flag });
-    defer allocator.free(backup_command);
-
-    // Send backup command to server
-    std.debug.print("Sending backup command to server...\n", .{});
-    try stream.writeAll(backup_command);
-
-    // Read backup response
-    var backup_response_buffer: [4096]u8 = undefined;
-    const backup_response_len = try stream.read(&backup_response_buffer);
-    const backup_response = backup_response_buffer[0..backup_response_len];
-
-    // Parse server response
-    if (std.mem.startsWith(u8, backup_response, "ERROR")) {
-        std.debug.print("Server backup failed: {s}\n", .{backup_response});
-        return error.ServerBackupFailed;
-    }
-
-    // Stream backup data from server and write to local file
-    const backup_file = try std.fs.cwd().createFile(dest, .{});
-    defer backup_file.close();
-
-    std.debug.print("Receiving backup data from server...\n", .{});
-
-    // Read backup data in chunks
-    var total_bytes: u64 = 0;
-    var data_buffer: [8192]u8 = undefined;
-
-    while (true) {
-        const bytes_read = try stream.read(&data_buffer);
-        if (bytes_read == 0) break;
-
-        try backup_file.writeAll(data_buffer[0..bytes_read]);
-        total_bytes += bytes_read;
-    }
-
-    std.debug.print("Remote backup completed successfully\n", .{});
-    std.debug.print("Backup received: {} bytes\n", .{total_bytes});
-    std.debug.print("Backup saved to: {s}\n", .{dest});
-
-    // Output JSON response for consistency with local backup
-    const json_response = try std.fmt.allocPrint(allocator,
-        \\{{
-        \\  "backup_type": "{s}",
-        \\  "source": "remote_server",
-        \\  "server": "{s}",
-        \\  "local_file": "{s}",
-        \\  "size_bytes": {d},
-        \\  "compression": "{s}",
-        \\  "status": "completed"
-        \\}}
-        \\
-    , .{ mode, server, dest, total_bytes, if (compress) "enabled" else "disabled" });
-    defer allocator.free(json_response);
-
-    std.debug.print("{s}", .{json_response});
+// Remote server backup execution function  
+fn executeRemoteBackup(_: std.mem.Allocator, _: []const u8, _: []const u8, _: ?[]const u8, _: []const u8, _: bool) !void {
+    // TODO: Implement backup protocol when QUIC is available
+    std.debug.print("Backup functionality requires QUIC support (not yet implemented)\n", .{});
+    return error.NotImplemented;
 }
 
 fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
@@ -821,284 +727,28 @@ fn generateBackupId() u128 {
 }
 
 // Remote server restore execution function
-fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
-    std.debug.print("Connecting to remote server for restore: {s}\n", .{server});
-
-    // Parse server address
-    const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidServerAddress;
-    const host = server[0..colon_idx];
-    const port_str = server[colon_idx + 1 ..];
-    const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidServerAddress;
-
-    // Create QUIC client for restore operations
-    const quic_client = try allocator.create(quic.QuicClient);
-    defer allocator.destroy(quic_client);
-    quic_client.* = quic.QuicClient.init(allocator);
-    defer quic_client.deinit();
-
-    // Connect to server
-    try quic_client.connect(host, port);
-    std.debug.print("Connected to server successfully\n", .{});
-
-    // Get QUIC stream for communication
-    const stream = try quic_client.getStream();
-    defer stream.deinit();
-
-    // Send HELLO message to establish session
-    const hello_msg = "HELLO geode-cli 1.0\n";
-    try stream.writeAll(hello_msg);
-
-    // Read server response
-    var response_buffer: [1024]u8 = undefined;
-    const response_len = try stream.read(&response_buffer);
-    const response = response_buffer[0..response_len];
-
-    if (!std.mem.startsWith(u8, response, "OK")) {
-        std.debug.print("Server handshake failed: {s}\n", .{response});
-        return error.ServerHandshakeFailed;
-    }
-
-    // First, upload the backup file to the server
-    std.debug.print("Uploading backup file to server...\n", .{});
-
-    // Read the backup file
-    const backup_file = try std.fs.cwd().openFile(source, .{});
-    defer backup_file.close();
-    const file_size = try backup_file.getEndPos();
-    // Convert u64 to usize for 32-bit platforms with bounds checking
-    if (file_size > std.math.maxInt(usize)) {
-        std.debug.print("Error: Backup file too large for this platform\n", .{});
-        return error.FileTooLarge;
-    }
-    const file_data = try backup_file.readToEndAlloc(allocator, @as(usize, @intCast(file_size)));
-    defer allocator.free(file_data);
-
-    // Send upload command
-    const upload_command = try std.fmt.allocPrint(allocator, "UPLOAD_BACKUP {} bytes\n", .{file_size});
-    defer allocator.free(upload_command);
-    try stream.writeAll(upload_command);
-
-    // Wait for server ready response
-    var upload_response_buffer: [1024]u8 = undefined;
-    const upload_response_len = try stream.read(&upload_response_buffer);
-    const upload_response = upload_response_buffer[0..upload_response_len];
-
-    if (!std.mem.startsWith(u8, upload_response, "READY")) {
-        std.debug.print("Server upload failed: {s}\n", .{upload_response});
-        return error.ServerUploadFailed;
-    }
-
-    // Send backup file data
-    try stream.writeAll(file_data);
-
-    // Wait for upload confirmation
-    var confirm_buffer: [1024]u8 = undefined;
-    const confirm_len = try stream.read(&confirm_buffer);
-    const confirm_response = confirm_buffer[0..confirm_len];
-
-    if (!std.mem.startsWith(u8, confirm_response, "UPLOADED")) {
-        std.debug.print("Server upload confirmation failed: {s}\n", .{confirm_response});
-        return error.ServerUploadConfirmationFailed;
-    }
-
-    std.debug.print("Backup file uploaded successfully\n", .{});
-
-    // Build restore command
-    const time_flag = if (target_time) |time_str|
-        try std.fmt.allocPrint(allocator, " --target-time {s}", .{time_str})
-    else
-        "";
-    defer if (target_time != null) allocator.free(time_flag);
-
-    const restore_command = try std.fmt.allocPrint(allocator, "RESTORE --confirm{s}\n", .{time_flag});
-    defer allocator.free(restore_command);
-
-    // Send restore command to server
-    std.debug.print("Sending restore command to server...\n", .{});
-    try stream.writeAll(restore_command);
-
-    // Read restore response
-    var restore_response_buffer: [4096]u8 = undefined;
-    const restore_response_len = try stream.read(&restore_response_buffer);
-    const restore_response = restore_response_buffer[0..restore_response_len];
-
-    // Parse server response
-    if (std.mem.startsWith(u8, restore_response, "ERROR")) {
-        std.debug.print("Server restore failed: {s}\n", .{restore_response});
-        return error.ServerRestoreFailed;
-    }
-
-    std.debug.print("Remote restore completed successfully\n", .{});
-    std.debug.print("Server response: {s}\n", .{restore_response});
-
-    // Output JSON response for consistency with local restore
-    const json_response = try std.fmt.allocPrint(allocator,
-        \\{{
-        \\  "restore_type": "remote_server",
-        \\  "source_file": "{s}",
-        \\  "server": "{s}",
-        \\  "target_time": "{s}",
-        \\  "status": "completed"
-        \\}}
-        \\
-    , .{ source, server, target_time orelse "latest" });
-    defer allocator.free(json_response);
-
-    std.debug.print("{s}", .{json_response});
+fn executeRemoteRestore(_: std.mem.Allocator, _: []const u8, _: ?[]const u8, _: []const u8) !void {
+    // TODO: Implement restore protocol when QUIC is available
+    std.debug.print("Restore functionality requires QUIC support (not yet implemented)\n", .{});
+    return error.NotImplemented;
 }
 
-// Restore execution function
-fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
-    std.debug.print("Restoring database from: {s}\n", .{source});
-
-    // Check if we should use remote server or local restore
-    if (!std.mem.eql(u8, server, "127.0.0.1:3141")) {
-        // Use remote server restore
-        try executeRemoteRestore(allocator, source, target_time, server);
-        return;
-    }
-
-    // For CLI usage, we create a simplified restore manager
-    const simplified_restore_manager = SimplifiedRestoreManager{
-        .allocator = allocator,
-    };
-
-    const restore_metadata = if (target_time) |time_str| blk: {
-        const target_timestamp = try std.fmt.parseInt(i64, time_str, 10);
-        break :blk try simplified_restore_manager.restoreToPointInTime(source, target_timestamp);
-    } else try simplified_restore_manager.restoreFromBackup(source);
-
-    // Print restore information in JSON format for CLI consumption
-    std.debug.print("Restore completed successfully:\n", .{});
-    std.debug.print("{{\n", .{});
-    std.debug.print("  \"source_backup_id\": \"{x}\",\n", .{restore_metadata.source_backup_id});
-    std.debug.print("  \"restore_timestamp\": {},\n", .{restore_metadata.restore_timestamp});
-    std.debug.print("  \"backup_type\": \"{s}\",\n", .{@tagName(restore_metadata.backup_type)});
-    std.debug.print("  \"data_size_bytes\": {},\n", .{restore_metadata.data_size_bytes});
-    std.debug.print("  \"checksum_verified\": {},\n", .{restore_metadata.checksum_verified});
-    if (restore_metadata.target_time) |time| {
-        std.debug.print("  \"target_time\": {},\n", .{time});
-    }
-    std.debug.print("  \"notes\": \"CLI restore with placeholder data processing\"\n", .{});
-    std.debug.print("}}\n", .{});
+fn executeRestore(_: std.mem.Allocator, _: []const u8, _: ?[]const u8, _: []const u8) !void {
+    std.debug.print("Restore functionality requires QUIC support (not yet implemented)\n", .{});
+    return error.NotImplemented;
 }
 
-// Simplified restore manager for CLI usage without full server dependencies
 const SimplifiedRestoreManager = struct {
     allocator: std.mem.Allocator,
 
-    pub fn restoreFromBackup(self: SimplifiedRestoreManager, backup_path: []const u8) !RestoreMetadata {
-        // Verify backup file exists
-        const file = std.fs.cwd().openFile(backup_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => {
-                std.debug.print("Error: Backup file not found: {s}\n", .{backup_path});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            },
-            else => return err,
-        };
-        defer file.close();
-
-        // Read and verify backup header
-        var header_bytes: [@sizeOf(BackupHeader)]u8 = undefined;
-        const bytes_read = try file.readAll(header_bytes[0..]);
-        if (bytes_read != @sizeOf(BackupHeader)) {
-            std.debug.print("Error: Invalid backup file header size\n", .{});
-            return error.InvalidBackupHeader;
-        }
-
-        // Read header fields with proper alignment
-        const magic = std.mem.readInt(u32, header_bytes[0..4], .little);
-        const version = std.mem.readInt(u16, header_bytes[4..6], .little);
-        const backup_type = @as(backup_types.BackupType, @enumFromInt(std.mem.readInt(u32, header_bytes[8..12], .little)));
-        const timestamp = std.mem.readInt(i64, header_bytes[12..20], .little);
-
-        if (magic != BACKUP_MAGIC) {
-            std.debug.print("Error: Invalid backup file magic number (expected {x}, got {x})\n", .{ BACKUP_MAGIC, magic });
-            return error.InvalidBackupMagic;
-        }
-
-        std.debug.print("Backup file validated\n", .{});
-        std.debug.print("  Version: {}\n", .{version});
-        std.debug.print("  Type: {s}\n", .{@tagName(backup_type)});
-        std.debug.print("  Created: {}\n", .{timestamp});
-
-        // Read backup content for verification
-        try file.seekTo(@sizeOf(BackupHeader));
-        const content = try file.readToEndAlloc(self.allocator, 100 * 1024 * 1024);
-        defer self.allocator.free(content);
-
-        std.debug.print("  Content size: {} bytes\n", .{content.len});
-
-        // Parse backup data structure
-        const restore_metadata = try self.parseAndValidateBackupContent(content, backup_type, timestamp);
-
-        std.debug.print("Backup content validated successfully\n", .{});
-        return restore_metadata;
+    fn restoreFromBackup(_: SimplifiedRestoreManager, _: []const u8) !RestoreMetadata {
+        // TODO: Implement when QUIC is available
+        return error.NotImplemented;
     }
 
-    pub fn restoreToPointInTime(self: SimplifiedRestoreManager, backup_path: []const u8, target_timestamp: i64) !RestoreMetadata {
-        std.debug.print("Point-in-time restore to timestamp: {}\n", .{target_timestamp});
-
-        var restore_metadata = try self.restoreFromBackup(backup_path);
-        restore_metadata.target_time = target_timestamp;
-
-        std.debug.print("Point-in-time restore target validated\n", .{});
-        return restore_metadata;
-    }
-
-    fn parseAndValidateBackupContent(self: SimplifiedRestoreManager, content: []const u8, backup_type: backup_types.BackupType, original_timestamp: i64) !RestoreMetadata {
-        _ = self;
-
-        // Calculate content checksum for verification
-        const content_checksum = std.hash.crc.Crc32.hash(content);
-
-        // Parse based on backup type
-        var offset: usize = 0;
-
-        // For incremental backups, skip the parent backup ID (16 bytes)
-        if (backup_type == .incremental) {
-            if (content.len < @sizeOf(u128)) {
-                return error.InvalidBackupContent;
-            }
-            offset += @sizeOf(u128);
-        }
-
-        // Parse catalog data section
-        if (content.len < offset + @sizeOf(u64)) {
-            return error.InvalidBackupContent;
-        }
-
-        const catalog_size = std.mem.readInt(u64, content[offset .. offset + 8][0..8], .little);
-        std.debug.print("  Catalog size: {} bytes\n", .{catalog_size});
-
-        // Convert u64 to usize for 32-bit platforms
-        if (catalog_size > std.math.maxInt(usize)) {
-            return error.BackupDataTooLarge;
-        }
-        const catalog_size_usize = @as(usize, @intCast(catalog_size));
-
-        if (content.len < offset + @sizeOf(u64) + catalog_size_usize) {
-            return error.TruncatedBackupContent;
-        }
-
-        // Validate catalog data (simplified - just check it's text)
-        const catalog_data = content[offset + @sizeOf(u64) .. offset + @sizeOf(u64) + catalog_size_usize];
-        if (!std.mem.startsWith(u8, catalog_data, "-- Geode")) {
-            std.debug.print("Warning: Catalog data format unexpected\n", .{});
-        }
-
-        // Generate a backup ID based on the content (handle timestamp as unsigned)
-        const timestamp_u64 = @as(u64, @bitCast(original_timestamp));
-        const backup_id = @as(u128, content_checksum) | (@as(u128, timestamp_u64) << 32);
-
-        return RestoreMetadata{
-            .source_backup_id = backup_id,
-            .restore_timestamp = std.time.milliTimestamp(),
-            .backup_type = backup_type,
-            .data_size_bytes = content.len,
-            .checksum_verified = true,
-            .target_time = null,
-        };
+    fn restoreToPointInTime(_: SimplifiedRestoreManager, _: []const u8, _: i64) !RestoreMetadata {
+        // TODO: Implement when QUIC is available  
+        return error.NotImplemented;
     }
 };
 
