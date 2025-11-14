@@ -15,8 +15,8 @@ const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic.zig");
 const vendor_quic = @import("vendor_quic");
-// const cert_gen = @import("tools/cert_gen.zig");
-// Note: Some imports commented out to avoid missing dependency issues for CLI integration
+const cert_gen = @import("../tools/cert_gen.zig");
+// Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
 // const mvcc = @import("server/txn/mvcc.zig");
 // const logger = @import("log/logger.zig");
 // const query_plan_cache = @import("query_plan_cache.zig");
@@ -36,6 +36,8 @@ const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 // Import protocol handler (M3.2 Phase 3 modularization)
 const protocol_handler = @import("protocol_handler.zig");
+// Import CLI argument parsing (M3.2 Phase 3 CLI extraction)
+const cli_args = @import("cli_args.zig");
 // Import query executor (M3.3 Phase 3 modularization)
 const query_executor = @import("query_executor.zig");
 const evaluateSimpleQuery = query_executor.evaluateSimpleQuery;
@@ -890,144 +892,49 @@ pub fn main() !void {
     var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
-    // Parse server CLI args for optional result format and QUIC listener.
-    const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
-    var result_format_txt = false;
-    var disable_estimates = false;
-    var compact_profile = false;
-    var memcurve_profile = false;
-    var ai: usize = 1;
-    var log_level_arg: ?[]const u8 = null;
-    var test_wal_skip_ratio: ?f64 = null; // test-only override parsed from CLI
-    var listen_quic: ?[]const u8 = null;
-    var cert_path: ?[]const u8 = null;
-    var key_path: ?[]const u8 = null;
-    var order_keys_mode_expr = true; // enable property-based ordering by default
-    var data_dir: ?[]const u8 = null;
-    var test_exit_after_first: bool = false;
-    var force_no_tls: bool = false;
-    var catalog_create_name: ?[]const u8 = null;
-    var match_max_results_override: ?usize = null; // test deterministic guard trigger
+    // Parse server CLI args using modularized cli_args module (M3.2 Phase 3 CLI extraction)
+    const config_opt = try cli_args.parseArgs(gpa);
+    if (config_opt == null) return; // Help was shown, exit
 
-    // Check for help flag
-    for (args[1..]) |arg| {
-        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            std.debug.print("Geode Server v0.16.0\n\n", .{});
-            std.debug.print("Usage: geoded [OPTIONS]\n\n", .{});
-            std.debug.print("Options:\n", .{});
-            std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:3141)\n", .{});
-            std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
-            std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
-            std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});
-            std.debug.print("  --result-format <txt|json>   Result format (default: json)\n", .{});
-            std.debug.print("  --no-estimates               Disable query estimation\n", .{});
-            std.debug.print("  --profile-compact            Enable compact profiling\n", .{});
-            std.debug.print("  --profile-memcurve           Enable memory curve profiling\n", .{});
-            std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
-            std.debug.print("  --match-max-results <N>      Override MATCH guard max_results (test/deterministic)\n", .{});
-            std.debug.print("  --match-max-frontier <N>     Override MATCH guard max_frontier (test/deterministic)\n", .{});
-            std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
-            std.debug.print("  --help                       Show this help message\n", .{});
-            std.debug.print("\nIf no listen option is specified, defaults to stdio mode.\n", .{});
-            std.debug.print("Auto-generated certificates are placed in data_dir or /tmp.\n", .{});
-            return;
-        }
-    }
+    var config = config_opt.?;
 
-    while (ai < args.len) : (ai += 1) {
-        if (std.mem.eql(u8, args[ai], "--result-format") and ai + 1 < args.len) {
-            const f = args[ai + 1];
-            if (std.mem.eql(u8, f, "txt") or std.mem.eql(u8, f, "text")) result_format_txt = true;
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--no-estimates")) {
-            disable_estimates = true;
-        } else if (std.mem.eql(u8, args[ai], "--profile-compact")) {
-            compact_profile = true;
-        } else if (std.mem.eql(u8, args[ai], "--profile-memcurve")) {
-            memcurve_profile = true;
-        } else if (std.mem.eql(u8, args[ai], "--test-wal-skip-ratio") and ai + 1 < args.len) {
-            const v = std.fmt.parseFloat(f64, args[ai + 1]) catch -1.0;
-            if (v >= 0.0) test_wal_skip_ratio = v;
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--listen-quic") and ai + 1 < args.len) {
-            listen_quic = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--cert") and ai + 1 < args.len) {
-            cert_path = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--key") and ai + 1 < args.len) {
-            key_path = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--data_dir") and ai + 1 < args.len) {
-            data_dir = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--order-keys") and ai + 1 < args.len) {
-            const mode = args[ai + 1];
-            if (std.mem.eql(u8, mode, "expr")) {
-                order_keys_mode_expr = true;
-            } else if (std.mem.eql(u8, mode, "ident-only")) {
-                order_keys_mode_expr = false;
-            }
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--test-exit-after-first-request")) {
-            test_exit_after_first = true;
-            log.debug("test_exit_after_first set to true", .{});
-        } else if (std.mem.eql(u8, args[ai], "--no-tls")) {
-            force_no_tls = true;
-        } else if (std.mem.eql(u8, args[ai], "--log-level") and ai + 1 < args.len) {
-            log_level_arg = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--catalog-create") and ai + 1 < args.len) {
-            catalog_create_name = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--match-max-results") and ai + 1 < args.len) {
-            const mv = std.fmt.parseInt(usize, args[ai + 1], 10) catch 0;
-            if (mv > 0) match_max_results_override = mv;
-            ai += 1;
-        } else if (std.mem.eql(u8, args[ai], "--match-max-frontier") and ai + 1 < args.len) {
-            const fv = std.fmt.parseInt(usize, args[ai + 1], 10) catch 0;
-            if (fv > 0) g_match_max_frontier_override = fv;
-            ai += 1;
-        }
-    }
+    // Extract config values into local variables for compatibility with existing code
+    const result_format_txt = config.result_format_txt;
+    const disable_estimates = config.disable_estimates;
+    var compact_profile = config.compact_profile;
+    var memcurve_profile = config.memcurve_profile;
+    const test_wal_skip_ratio = config.test_wal_skip_ratio;
+    const listen_quic = config.listen_quic;
+    const order_keys_mode_expr = config.order_keys_mode_expr;
+    const data_dir = config.data_dir;
+    const test_exit_after_first = config.test_exit_after_first;
+    const force_no_tls = config.force_no_tls;
+    const catalog_create_name = config.catalog_create_name;
+    const log_level_arg = config.log_level_arg;
 
+    // Apply log level and MATCH overrides
     if (log_level_arg) |lla| {
         logger.setLevel(logger.parseLevel(lla));
     }
     log.info("server.start", .{.{ .key = "level", .value = log_level_arg orelse "info" }});
 
-    if (match_max_results_override) |mmr| g_match_max_results_override = mmr;
+    if (config.match_max_results_override) |mmr| g_match_max_results_override = mmr;
+    if (config.match_max_frontier_override) |mfr| g_match_max_frontier_override = mfr;
 
-    // Ensure TLS certificates exist (only if using QUIC and no custom certs specified)
+    // Resolve certificate paths and ensure they exist
+    const cert_paths = try cli_args.resolveCertPaths(gpa, &config);
+    var cert_path = cert_paths.cert_path;
+    var key_path = cert_paths.key_path;
+
+    // Try to generate certificates if using QUIC
     if (listen_quic != null) {
-        if (cert_path == null or key_path == null) {
-            // Use default paths or fallback to /tmp
-            const default_cert = if (data_dir) |dir|
-                try std.fmt.allocPrint(gpa, "{s}/server.crt", .{dir})
-            else
-                "/tmp/geode-server.crt";
-            const default_key = if (data_dir) |dir|
-                try std.fmt.allocPrint(gpa, "{s}/server.key", .{dir})
-            else
-                "/tmp/geode-server.key";
-
-            cert_path = cert_path orelse default_cert;
-            key_path = key_path orelse default_key;
-
-            // Try to generate certificates if they don't exist
-            cert_gen.ensureCertificatesAtPath(gpa, cert_path.?, key_path.?) catch |err| {
-                std.debug.print("Warning: Could not generate certificates: {s}\n", .{@errorName(err)});
-                std.debug.print("Using fallback paths in /tmp\n", .{});
-                cert_path = "/tmp/geode-server.crt";
-                key_path = "/tmp/geode-server.key";
-                try cert_gen.ensureCertificatesAtPath(gpa, cert_path.?, key_path.?);
-            };
-        }
-    } else {
-        // For non-QUIC, use dummy paths if not specified
-        cert_path = cert_path orelse "certs/server.crt";
-        key_path = key_path orelse "certs/server.key";
+        cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path) catch |err| {
+            std.debug.print("Warning: Could not generate certificates: {s}\n", .{@errorName(err)});
+            std.debug.print("Using fallback paths in /tmp\n", .{});
+            cert_path = "/tmp/geode-server.crt";
+            key_path = "/tmp/geode-server.key";
+            try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
+        };
     }
     // Initialize WAL (test / prototype). For now use a temp path under /tmp; future: data_dir option.
     var wal = wal_mod.Wal.init(gpa);
