@@ -517,28 +517,30 @@ Circular Dependencies Detected: 2
 - **Notes**: Followed P0 CRITICAL safety protocols with 7 incremental commits. Achieved 9.5% server reduction while maintaining 100% functionality. ServerState struct extraction deferred pending dependency resolution.
 
 #### M3.2: Extract Protocol Handler ⏳
-- **Status**: IN PROGRESS (First Increment Complete - Backup Protocol Handlers Extracted)
-- **Current File**: `src/server/main.zig` (6,271 lines, was 6,371 after M3.1)
+- **Status**: IN PROGRESS (Second Increment Complete - ServerState Struct Extracted)
+- **Current File**: `src/server/main.zig` (3,377 lines, was 3,484 before ServerState extraction)
 - **Created Files**:
   - `src/server/protocol_handler.zig` (132 lines) - Backup protocol handlers
+  - `src/server/server_state.zig` (ENHANCED, +107 lines) - ServerState struct added
 - **Tasks**:
   - [x] Identify protocol handling code (backup handlers: handleBackupRequest, handleRestoreRequest, handleUploadBackupRequest)
   - [x] Create `protocol_handler.zig` with backup protocol handlers
   - [x] Update `server/main.zig` imports and remove extracted functions
+  - [x] Extract ServerState struct to server_state.zig (resolves M3.1 deferred dependency issue)
   - [ ] Extract additional protocol handling code (QUIC connection setup, message parsing wrapper)
   - [ ] Add protocol tests
   - [ ] Verify QUIC communication works
-- **Verification**: Server functionality maintained, backup protocol handlers working
+- **Verification**: Server functionality maintained, backup protocol handlers working, ServerState successfully modularized
 - **Agent**: Claude Agent
 - **Started**: 2025-11-12
-- **Completed**: First increment complete (backup handlers)
+- **Completed**: Second increment complete (ServerState extraction)
 - **Test Results**: Functionality preserved through incremental approach
 - **Issues**: None
-- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Started with focused extraction of self-contained backup protocol handlers (~100 lines). Additional protocol handling code (QUIC connection setup, message parsing) remains for future increments.
+- **Notes**: Following P0 CRITICAL safety protocols with incremental extraction. Second increment extracted ServerState struct (107 lines) from main.zig to server_state.zig, resolving the dependency blocking issue from M3.1. Added proper imports (mvcc, query_plan_cache, protocol, geode, txn_mgr) to server_state.zig. ServerState can now be shared across server modules, enabling future protocol handler extractions. Main.zig reduced by 107 lines (3,484 → 3,377 lines, -3.1%). Next: Extract protocol handling functions (writeErrorWithFlags, handleCdcControl, handleQuicConnection, processMessage).
 
 #### M3.3: Extract Query Executor ⏳
 - **Status**: IN PROGRESS (Ninth Increment Complete - Statement Execution Functions Extracted - MAJOR MILESTONE: 50%+ Server Reduction)
-- **Current File**: `src/server/main.zig` (3,484 lines, was 4,584 before ninth increment, was 7,039 baseline - **50.5% REDUCTION**)
+- **Current File**: `src/server/main.zig` (3,377 lines after M3.2 ServerState extraction, was 3,484, was 7,039 baseline - **52.0% REDUCTION**)
 - **Created Files**:
   - `src/server/query_executor.zig` (2,942 lines) - Complete query execution module with utilities, diagnostics, AST analysis, formatting, conversion, profiling types, graph property utilities, query evaluation functions, and statement execution functions
 - **Tasks**:
