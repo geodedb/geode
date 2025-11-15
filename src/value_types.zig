@@ -34,6 +34,7 @@ pub const EvalError = error{
     IndexOutOfBounds,
     BitParseError,
     RangeBoundsError,
+    RangeTooLarge, // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; range() function safety limit
     FloatNaN,
     TimeParse,
     DecimalOverflow,

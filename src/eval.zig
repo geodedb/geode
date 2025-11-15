@@ -2791,6 +2791,74 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
+    // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; FEATURE="range() function"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-15
+    // Handle range(start, stop[, step]) function - generates integer sequences
+    // Used for performance testing: UNWIND range(1, 100) AS x RETURN x
+    if (std.mem.eql(u8, function_name, "range")) {
+        // range() requires 2 or 3 arguments
+        if (args.len < 2 or args.len > 3) return Value{ .Null = {} };
+
+        // Evaluate start argument (required)
+        const start_val = try evalExpr(allocator, args[0].*, env);
+        const start = switch (start_val) {
+            .Int => |i| i,
+            else => return Value{ .Null = {} },
+        };
+
+        // Evaluate stop argument (required)
+        const stop_val = try evalExpr(allocator, args[1].*, env);
+        const stop = switch (stop_val) {
+            .Int => |i| i,
+            else => return Value{ .Null = {} },
+        };
+
+        // Evaluate step argument (optional, defaults to 1)
+        const step = if (args.len == 3) blk: {
+            const step_val = try evalExpr(allocator, args[2].*, env);
+            break :blk switch (step_val) {
+                .Int => |i| i,
+                else => return Value{ .Null = {} },
+            };
+        } else 1;
+
+        // Step must not be zero
+        if (step == 0) return Value{ .Null = {} };
+
+        // Calculate the number of elements in the range
+        const count: i64 = if (step > 0) blk: {
+            if (stop <= start) break :blk 0;
+            const diff = stop - start;
+            break :blk @divFloor(diff + step - 1, step);
+        } else blk: {
+            if (stop >= start) break :blk 0;
+            const diff = start - stop;
+            break :blk @divFloor(diff - step - 1, -step);
+        };
+
+        // Allocate result array
+        if (count <= 0) {
+            return Value{ .List = &.{} };
+        }
+
+        // Safety check: limit range size to prevent OOM
+        const max_range_size: i64 = 10_000_000; // 10 million elements max
+        if (count > max_range_size) {
+            return error.RangeTooLarge;
+        }
+
+        const ucount = @as(usize, @intCast(count));
+        var result = try allocator.alloc(Value, ucount);
+
+        // Generate range values
+        var current = start;
+        for (0..ucount) |i| {
+            result[i] = Value{ .Int = current };
+            current += step;
+        }
+
+        return Value{ .List = result };
+    }
+
     // Function not recognized
     return null;
 }
