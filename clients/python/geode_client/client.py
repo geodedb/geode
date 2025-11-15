@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import ssl
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
@@ -178,7 +179,7 @@ class GeodeProtocol(QuicConnectionProtocol):
         stream_id = self._quic.get_next_available_stream_id(is_unidirectional=False)
         reader_queue = asyncio.Queue()
         self._stream_readers[stream_id] = reader_queue
-        print(f"[DEBUG] Created stream ID: {stream_id}")
+        print(f"[DEBUG] Created stream ID: {stream_id}", file=sys.stderr)
         return stream_id, reader_queue
 
     async def create_stream(self) -> Tuple['StreamReader', 'StreamWriter']:
@@ -195,10 +196,10 @@ class GeodeProtocol(QuicConnectionProtocol):
 
     def write_to_stream(self, stream_id: int, data: bytes, end_stream: bool = False) -> None:
         """Write data to a stream."""
-        print(f"[DEBUG] Writing {len(data)} bytes to stream {stream_id}")
+        print(f"[DEBUG] Writing {len(data)} bytes to stream {stream_id}", file=sys.stderr)
         self._quic.send_stream_data(stream_id, data, end_stream)
         self.transmit()
-        print(f"[DEBUG] Transmitted data on stream {stream_id}")
+        print(f"[DEBUG] Transmitted data on stream {stream_id}", file=sys.stderr)
 
     async def read_from_stream(self, stream_id: int) -> Optional[bytes]:
         """Read data from a stream."""
@@ -285,12 +286,12 @@ class Connection:
 
     async def connect(self) -> None:
         """Establish QUIC connection to Geode server."""
-        print(f"[DEBUG] connect() called, already connected: {self._connected}")
+        print(f"[DEBUG] connect() called, already connected: {self._connected}", file=sys.stderr)
         if self._connected:
             return
 
         # Configure QUIC - using same pattern as vendor/quic/clients/python/test_client.py
-        print("[DEBUG] Configuring QUIC...")
+        print("[DEBUG] Configuring QUIC...", file=sys.stderr)
         configuration = QuicConfiguration(
             is_client=True,
             alpn_protocols=["geode/1"],
@@ -299,13 +300,13 @@ class Connection:
         # Configure TLS
         if self.skip_verify:
             # Skip certificate verification (match vendor client pattern)
-            print("[DEBUG] Skipping TLS verification (skip_verify=True)")
+            print("[DEBUG] Skipping TLS verification (skip_verify=True)", file=sys.stderr)
             configuration.verify_mode = 0  # Same as ssl.CERT_NONE
             # DON'T set server_name when skipping verification - this causes cert issues
         else:
             # Set server name for SNI only when verifying
             configuration.server_name = self.server_name
-            print(f"[DEBUG] Server name for SNI: {self.server_name}")
+            print(f"[DEBUG] Server name for SNI: {self.server_name}", file=sys.stderr)
 
             # Try to load CA certificate
             ca_cert_path = self.ca_cert
@@ -315,20 +316,20 @@ class Connection:
                 test_harness_ca = os.path.join(os.path.dirname(__file__), '../../test-harness/certs/ca.crt')
                 if os.path.exists(test_harness_ca):
                     ca_cert_path = test_harness_ca
-                    print(f"[DEBUG] Using test harness CA: {test_harness_ca}")
+                    print(f"[DEBUG] Using test harness CA: {test_harness_ca}", file=sys.stderr)
 
             if ca_cert_path and os.path.exists(ca_cert_path):
-                print(f"[DEBUG] Loading CA certificate: {ca_cert_path}")
+                print(f"[DEBUG] Loading CA certificate: {ca_cert_path}", file=sys.stderr)
                 configuration.load_verify_locations(ca_cert_path)
             else:
-                print("[DEBUG] WARNING: No CA certificate found and skip_verify=False")
+                print("[DEBUG] WARNING: No CA certificate found and skip_verify=False", file=sys.stderr)
 
         if self.client_cert and self.client_key:
-            print(f"[DEBUG] Loading client certificate")
+            print(f"[DEBUG] Loading client certificate", file=sys.stderr)
             configuration.load_cert_chain(self.client_cert, self.client_key)
 
         # Connect using async with pattern (proper context manager usage)
-        print(f"[DEBUG] Connecting to {self.host}:{self.port}...")
+        print(f"[DEBUG] Connecting to {self.host}:{self.port}...", file=sys.stderr)
 
         try:
             # Store the async context manager
@@ -340,23 +341,23 @@ class Connection:
             )
 
             # Enter the context - this completes the QUIC handshake
-            print("[DEBUG] Entering QUIC connection context...")
+            print("[DEBUG] Entering QUIC connection context...", file=sys.stderr)
             self._protocol = await self._connection_cm.__aenter__()
-            print("[DEBUG] QUIC handshake complete")
+            print("[DEBUG] QUIC handshake complete", file=sys.stderr)
 
         except Exception as e:
-            print(f"[DEBUG] QUIC connection failed: {type(e).__name__}: {e}")
+            print(f"[DEBUG] QUIC connection failed: {type(e).__name__}: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
             raise GeodeConnectionError(f"Failed to establish QUIC connection: {e}")
 
         # Create bidirectional stream
         try:
-            print("[DEBUG] Creating bidirectional stream...")
+            print("[DEBUG] Creating bidirectional stream...", file=sys.stderr)
             self._reader, self._writer = await self._protocol.create_stream()
-            print(f"[DEBUG] Created bidirectional stream")
+            print(f"[DEBUG] Created bidirectional stream", file=sys.stderr)
         except Exception as e:
-            print(f"[DEBUG] Stream creation failed: {e}")
+            print(f"[DEBUG] Stream creation failed: {e}", file=sys.stderr)
             raise GeodeConnectionError(f"Failed to create stream: {e}")
 
         # Send HELLO message
@@ -366,25 +367,25 @@ class Connection:
             "client_ver": self.hello_ver,
             "wanted_conformance": self.conformance,
         }
-        print(f"[DEBUG] Sending HELLO message: {hello}")
+        print(f"[DEBUG] Sending HELLO message: {hello}", file=sys.stderr)
         await self._write_json(hello)
-        print("[DEBUG] HELLO sent, waiting for response...")
+        print("[DEBUG] HELLO sent, waiting for response...", file=sys.stderr)
 
         # Read HELLO response with timeout
         try:
             response = await asyncio.wait_for(self._read_json(), timeout=5.0)
-            print(f"[DEBUG] Received HELLO response: {response}")
+            print(f"[DEBUG] Received HELLO response: {response}", file=sys.stderr)
             if not response:
                 raise GeodeConnectionError("No HELLO response from server")
         except asyncio.TimeoutError:
-            print("[DEBUG] HELLO response timed out!")
+            print("[DEBUG] HELLO response timed out!", file=sys.stderr)
             raise GeodeConnectionError("Timeout waiting for HELLO response")
         except Exception as e:
-            print(f"[DEBUG] Error reading HELLO response: {e}")
+            print(f"[DEBUG] Error reading HELLO response: {e}", file=sys.stderr)
             raise GeodeConnectionError(f"Failed to read HELLO response: {e}")
 
         self._connected = True
-        print("[DEBUG] Connection fully established")
+        print("[DEBUG] Connection fully established", file=sys.stderr)
 
     async def _write_json(self, obj: Dict[str, Any]) -> None:
         """Write JSON object as a line."""
