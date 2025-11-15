@@ -261,3 +261,44 @@ python3 run_tests.py --server localhost:8443 --spec specs/connections.yaml --ver
 
 *Last Updated: October 28, 2025*
 *All QUIC server issues resolved. Client harness functional with documented workarounds.*
+
+### 🔍 DEEP INVESTIGATION UPDATE - November 15, 2025 (Afternoon)
+
+#### Server Connection Acceptance Issue - ROOT CAUSE IDENTIFIED
+
+**Investigation Findings**:
+1. ✅ Main server loop runs continuously (confirmed via iteration logging)
+2. ✅ Listener callback IS triggered for connection #2
+3. ✅ Connection #2 IS added to `pending_connections` queue (count=1)
+4. ❌ **`tryAccept()` fails to retrieve queued connection #2**
+
+**Evidence from Debug Logs**:
+```
+[LISTENER_CALLBACK] Event type: .QUIC_LISTENER_EVENT_NEW_CONNECTION
+[LISTENER_CALLBACK] NEW_CONNECTION: handle=*msquic_types.HQUIC__opaque_24025@704754024800
+[LISTENER_CALLBACK] Connection configured and queued, count=1
+[NO "✅ Accepted QUIC connection #2" message follows]
+```
+
+**Root Cause**: The issue is in the **msquic connection queue management** in `src/transport/quic_msquic.zig`. The `tryAccept()` function checks the `pending_connections` queue but appears to not find queued connections even though the listener callback successfully adds them.
+
+**Possible Causes**:
+1. Allocator lifetime issue with the queue
+2. Mutex deadlock preventing `tryAccept()` from accessing the queue
+3. Queue data structure corruption
+4. Race condition between callback and `tryAccept()`
+
+**Debug Logging Added** (Commit e69e1f3):
+- `src/cli/main.zig`: Main loop iteration counter (every 1000 iterations)
+- `src/transport/msquic_wrapper.zig`: Listener callback event logging
+- `src/transport/quic_msquic.zig`: `tryAccept()` queue inspection
+
+**Next Steps**:
+1. Add queue state logging at multiple points
+2. Check if connections are being added to different queue instance
+3. Verify mutex is not causing deadlock
+4. Review msquic API usage for connection acceptance pattern
+
+**Impact**: This is the PRIMARY blocker. Until the connection queue issue is resolved, the server will only accept one connection, making multi-test runs impossible.
+
+**Status**: 🔴 CRITICAL - Requires additional investigation into msquic internals and queue management.
