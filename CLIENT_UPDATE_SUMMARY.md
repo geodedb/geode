@@ -313,11 +313,11 @@ Server accepts connections and completes TLS handshakes successfully. The stream
   8. Zig YAML single-quote workaround (Commit 68e9e92) **[SUPERSEDED]**
   9. Zig YAML parser enhancement (Commit 7157f4a) **[COMPLETE YAML COMPLIANCE]**
 
-**Current Test Results** (Baseline - November 15, 2025):
-- **Python**: 3.6% (2/56) - 34 JSON parsing errors, 18 other failures
+**Current Test Results** (After All Fixes - November 15, 2025):
+- **Python**: 3.6% (2/56) - 35 JSON parsing errors, 17 other failures
 - **Go**: 7.1% (4/56) - 50 failures (UDP buffer warnings on all)
 - **Rust**: 5.4% (3/56) - 51 failures (connection failures)
-- **Zig**: 0.0% (0/56) - Client library not yet implemented
+- **Zig**: 0.0% (0/56) - 54 failures (1 YAML parse error on boolean-logic test, rest are client not implemented)
 - **Overall**: 4.0% (9/224 tests passing)
 
 **Current Status**:
@@ -327,10 +327,26 @@ Server accepts connections and completes TLS handshakes successfully. The stream
 - **JSON serialization**: ✅ FIXED - Decimal values serialize properly
 
 **Remaining Issues**:
-1. **Python**: 34 "Expecting value: line 1 column 2" errors - server returning empty/invalid JSON
-2. **Rust**: All connection failures - TLS/ALPN configuration mismatch
-3. **Go**: UDP buffer size warnings - system configuration issue (non-fatal)
-4. **Zig**: Client library not implemented
+1. **Python**: 35 "Expecting value: line 1 column 2" errors - Python client crashes before producing JSON output
+   - Root cause: Client library exceptions during connection/query execution
+   - Exception handling added to runner (Commit ac0dc54) ensures valid JSON, but client still fails
+   - Next step: Debug Python client connection and query execution
+
+2. **Rust**: 51 connection failures - TLS/ALPN configuration or Quinn library issue
+   - All tests show: "[QUINN] Connecting to 127.0.0.1:port with skip_verify=true" then fail
+   - Possible causes: Certificate validation, ALPN mismatch, or network configuration
+   - Next step: Add detailed logging to Rust client connection process
+
+3. **Go**: 50 UDP buffer warnings - system configuration issue (non-fatal but causes slowness)
+   - Warning: "failed to sufficiently increase receive buffer size"
+   - Tests are slow but eventually complete
+   - 4 tests passing despite warnings
+   - Next step: Document as known system limitation or provide sysctl configuration guide
+
+4. **Zig**: 54 failures - 1 YAML parse error (boolean-logic test), rest are client not implemented
+   - The Zig YAML parser still has one remaining issue on boolean-logic test
+   - Investigate: Why does the parser work for most tests but fail on this specific one?
+   - Next step: Debug the specific YAML content causing the parse error
 
 **Next Steps**:
 1. Debug Python JSON parsing errors (likely server-side response issue)
