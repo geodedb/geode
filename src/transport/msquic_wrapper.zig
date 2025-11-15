@@ -400,13 +400,18 @@ pub fn listenerCallback(
             // 4. Add to pending queue for accept() to retrieve
             ctx.mutex.lock();
             defer ctx.mutex.unlock();
+            std.debug.print("[LISTENER_CALLBACK] Pre-append: ListenerContext={*}, queue len={}, capacity={}\n", .{ctx, ctx.pending_connections.items.len, ctx.pending_connections.capacity});
             const pending = ListenerContext.PendingConnection{
                 .handle = connection,
                 .context = conn_ctx,
             };
-            ctx.pending_connections.append(pending) catch {};
-
-            std.debug.print("[LISTENER_CALLBACK] Connection configured and queued, count={}\n", .{ctx.pending_connections.items.len});
+            const append_result = ctx.pending_connections.append(pending);
+            if (append_result) |_| {
+                std.debug.print("[LISTENER_CALLBACK] ✅ Append SUCCESS: queue len={}, capacity={}\n", .{ctx.pending_connections.items.len, ctx.pending_connections.capacity});
+            } else |err| {
+                std.debug.print("[LISTENER_CALLBACK] ❌ Append FAILED: error={}\n", .{err});
+            }
+            std.debug.print("[LISTENER_CALLBACK] Post-append: Connection configured and queued, count={}\n", .{ctx.pending_connections.items.len});
             
             return QUIC_STATUS_SUCCESS;
         },
@@ -835,6 +840,7 @@ pub const MsQuic = struct {
     ) !void {
         // Create listener context with API and configuration handles
         self.listener_ctx = try ListenerContext.init(self.allocator, self.api, self.configuration);
+        std.debug.print("[startListener] Created ListenerContext={*}\n", .{self.listener_ctx.?});
         errdefer if (self.listener_ctx) |ctx| ctx.deinit();
         
         // Open listener

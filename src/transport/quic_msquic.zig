@@ -182,8 +182,11 @@ pub const QuicTransport = struct {
         defer listener_ctx.mutex.unlock();
 
         const queue_len = listener_ctx.pending_connections.items.len;
+
+        std.debug.print("[tryAccept] ListenerContext={*}, queue len={}, capacity={}\n", .{listener_ctx, queue_len, listener_ctx.pending_connections.capacity});
+
         if (queue_len > 0) {
-            std.debug.print("[tryAccept] Found {} pending connection(s)\n", .{queue_len});
+            std.debug.print("[tryAccept] ✅ Found {} pending connection(s)\n", .{queue_len});
         }
 
         if (queue_len == 0) {
@@ -260,40 +263,30 @@ pub const QuicConnection = struct {
     }
 
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
-        // DEBUG: std.debug.print("[acceptStream] Checking for pending streams...\n", .{});
-        while (true) {
-            self.context.mutex.lock();
-            
-            // DEBUG: std.debug.print("[acceptStream] Locked mutex, pending count={}\n", .{self.context.pending_streams.items.len});
-            
-            if (self.context.pending_streams.items.len > 0) {
-                // DEBUG: std.debug.print("[acceptStream] Found pending stream, extracting...\n", .{});
-                const pending = self.context.pending_streams.orderedRemove(0);
-                self.context.mutex.unlock();
-                
-                // DEBUG: std.debug.print("[acceptStream] Creating stream wrapper (context already set)...\n", .{});
-                // Stream context and callback already set in PEER_STREAM_STARTED
-                // Just create Zig stream wrapper
-                const stream = try self.allocator.create(QuicStream);
-                stream.* = .{
-                    .allocator = self.allocator,
-                    .msquic_stream = pending.handle,
-                    .context = pending.context,
-                    .api = self.api,
-                    .stream_id = self.streams.items.len,
-                };
-                
-                // DEBUG: std.debug.print("[acceptStream] Appending to streams list...\n", .{});
-                try self.streams.append(stream);
-                // DEBUG: std.debug.print("[acceptStream] ✅ Stream accepted successfully\n", .{});
-                return stream;
-            }
-            
-            self.context.mutex.unlock();
-            
-            // Wait a bit for incoming streams
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+        // Non-blocking stream acceptance - returns WouldBlock if no stream is ready
+        self.context.mutex.lock();
+        defer self.context.mutex.unlock();
+
+        if (self.context.pending_streams.items.len > 0) {
+            const pending = self.context.pending_streams.orderedRemove(0);
+
+            // Stream context and callback already set in PEER_STREAM_STARTED
+            // Just create Zig stream wrapper
+            const stream = try self.allocator.create(QuicStream);
+            stream.* = .{
+                .allocator = self.allocator,
+                .msquic_stream = pending.handle,
+                .context = pending.context,
+                .api = self.api,
+                .stream_id = self.streams.items.len,
+            };
+
+            try self.streams.append(stream);
+            return stream;
         }
+
+        // No stream available - return WouldBlock (non-blocking behavior)
+        return error.WouldBlock;
     }
 
     pub fn openStream(self: *QuicConnection, bidirectional: bool) !*QuicStream {
