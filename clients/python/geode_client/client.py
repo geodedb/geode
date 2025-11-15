@@ -349,9 +349,8 @@ class Connection:
             raise GeodeConnectionError(f"Failed to establish connection: {e}")
 
         # Create bidirectional stream AFTER handshake is complete
-        stream_id = self._protocol._quic.get_next_available_stream_id(is_unidirectional=False)
-        self._reader, self._writer = await self._protocol.create_stream(stream_id)
-        print(f"[DEBUG] Created stream {stream_id}")
+        self._reader, self._writer = await self._protocol.create_stream(is_unidirectional=False)
+        print(f"[DEBUG] Created bidirectional stream")
         
         # Send HELLO message
         hello = {
