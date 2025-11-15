@@ -4,38 +4,57 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Create executable
-    const exe = b.addExecutable(.{
+    // Build the test runner executable
+    const runner = b.addExecutable(.{
         .name = "zig_runner",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("zig_runner.zig"),
+            .root_source_file = b.path("zig_runner_new.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
 
-    // Add Zig client library path
-    const zig_client_path = b.pathFromRoot("../../zig");
-    exe.addIncludePath(.{ .cwd_relative = zig_client_path });
+    // Link msquic
+    runner.addLibraryPath(.{ .cwd_relative = "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/lib" });
+    runner.linkSystemLibrary("msquic");
+    runner.linkLibC();
 
-    // Add Geode source path for YAML parser
-    const geode_src_path = b.pathFromRoot("../../../src");
-    exe.root_module.addImport("geode", b.createModule(.{
-        .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ geode_src_path, "util/yaml.zig" }) },
+    // Create msquic modules
+    const msquic_types_mod = b.createModule(.{
+        .root_source_file = b.path("../../../src/transport/msquic_types.zig"),
         .target = target,
         .optimize = optimize,
-    }));
+    });
 
-    b.installArtifact(exe);
+    const msquic_wrapper_mod = b.createModule(.{
+        .root_source_file = b.path("../../../src/transport/msquic_wrapper.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    msquic_wrapper_mod.addImport("msquic_types", msquic_types_mod);
 
-    // Create run step
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
+    // Create GeodeClient module with msquic dependencies
+    const client_mod = b.createModule(.{
+        .root_source_file = b.path("../../zig/geode_client.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    client_mod.addImport("../../src/transport/msquic_wrapper", msquic_wrapper_mod);
+    client_mod.addImport("../../src/transport/msquic_types", msquic_types_mod);
+
+    // Add the client module to the runner
+    runner.root_module.addImport("../../zig/geode_client", client_mod);
+
+    b.installArtifact(runner);
+
+    // Run command
+    const run_runner = b.addRunArtifact(runner);
+    run_runner.step.dependOn(b.getInstallStep());
 
     if (b.args) |args| {
-        run_cmd.addArgs(args);
+        run_runner.addArgs(args);
     }
 
     const run_step = b.step("run", "Run the test runner");
-    run_step.dependOn(&run_cmd.step);
+    run_step.dependOn(&run_runner.step);
 }
