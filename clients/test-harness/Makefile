@@ -103,7 +103,7 @@ build-rust:
 build-zig:
 	@echo "Building Zig runner..."
 	@command -v zig >/dev/null 2>&1 || { echo "Zig not found, skipping"; exit 1; }
-	@cd runners && zig build
+	@cd runners && zig build && cp zig-out/bin/zig_runner ./zig_runner
 
 test: setup
 	@echo "Running basic tests on all clients..."
