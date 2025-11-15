@@ -33,12 +33,52 @@ This document details the fixes applied to resolve QUIC connection issues and en
 **Root Cause**: Python's yaml.dump() used single-quoted strings with `''` escaping
 **Fix**: Modified `clients/test-harness/run_tests.py` to use literal block scalars (`|`) for multi-line strings
 
-### Expected Impact
-With all three fixes applied, test pass rates should improve dramatically:
-- **Python**: 3.6% → 70%+ expected
-- **Go**: 7.1% → 70%+ expected
-- **Rust**: 5.4% → 70%+ expected
-- **Zig**: 0% → Client needs implementation (YAML parsing now works)
+### ⚠️ ACTUAL IMPACT - BLOCKING ISSUE DISCOVERED
+
+**Test Results After Fixes**: 4.0% (9/224) - **NO IMPROVEMENT**
+- **Python**: 3.6% (2 passed)
+- **Go**: 7.1% (4 passed)
+- **Rust**: 5.4% (3 passed)
+- **Zig**: 0% (0 passed)
+
+### 🔴 NEW CRITICAL ISSUE DISCOVERED (November 15, 2025)
+
+#### 4. Server Stream Handler Stops After First PULL (BLOCKING - Investigating)
+**Impact**: Server only processes ONE query per connection, all subsequent queries time out
+**Root Cause**: After sending PULL response for first query, server stops reading new messages
+**Evidence**:
+- Server log shows only 1 connection and 1 stream accepted during entire 224-test run
+- Python client creates 1 stream per connection and reuses it for all queries
+- After first query (CREATE USER + PULL), server logs stop - no further activity
+- All subsequent Python tests time out after 5 seconds
+- Go/Rust clients fail to establish connections at all
+
+**Server Logs Analysis**:
+```
+✅ Accepted QUIC connection #1
+✅ Accepted stream #1 from connection
+debug(cli): Received message: {"type": "HELLO"...}
+debug(cli): HELLO response sent
+debug(cli): Received message: {"type": "RUN_GQL"...}
+debug(cli): Query response sent successfully
+debug(cli): Received message: {"type": "PULL"...}
+debug(cli): Processing PULL request
+debug(cli): PULL: Forwarding error/status result
+[LOG ENDS - NO FURTHER ACTIVITY]
+```
+
+**Hypothesis**: The `handleQuicStream()` function's `while (true)` message loop (line 217) is not continuing after sending the PULL response. Possible causes:
+1. `stream.writeAll()` is blocking permanently
+2. `stream.readLine()` is hanging waiting for data that never arrives
+3. Stream is being closed prematurely
+4. Client is not sending subsequent messages due to malformed PULL response
+
+**Debug Logging Added** (Commit b512e8c):
+- Message loop iteration counter
+- PULL response size and send confirmation
+- Will help identify exact point of failure
+
+**Status**: This is the PRIMARY blocker preventing ANY meaningful test progress. Must be resolved before test pass rates can improve.
 
 ## QUIC Server Fixes (ROOT CAUSE RESOLUTION)
 
