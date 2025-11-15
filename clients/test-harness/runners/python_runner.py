@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import json
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,16 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "python"))
 
 from geode_client import Client, Connection
+
+
+class DecimalEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles Decimal objects."""
+
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            # Convert Decimal to float for JSON serialization
+            return float(obj)
+        return super().default(obj)
 
 
 class PythonTestRunner:
@@ -281,7 +292,7 @@ async def main():
         result = await runner.run_spec(spec)
 
         if args.json:
-            print(json.dumps(result, indent=2))
+            print(json.dumps(result, indent=2, cls=DecimalEncoder))
         else:
             print(f"Tests: {result['summary']['total']}")
             print(f"Passed: {result['summary']['passed']}")
