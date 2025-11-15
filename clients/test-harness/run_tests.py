@@ -30,6 +30,17 @@ class IndentedDumper(yaml.Dumper):
     def increase_indent(self, flow=False, indentless=False):
         return super(IndentedDumper, self).increase_indent(flow, False)
 
+    def represent_str(self, data):
+        """Represent strings using literal block scalars for multi-line strings."""
+        if '\n' in data:
+            # Use literal block scalar for multi-line strings
+            # This avoids single-quote escaping which the Zig parser can't handle
+            return self.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+        return self.represent_scalar('tag:yaml.org,2002:str', data)
+
+# Register the custom string representer
+IndentedDumper.add_representer(str, IndentedDumper.represent_str)
+
 
 @dataclass
 class TestResult:
