@@ -309,17 +309,48 @@ pub const Parser = struct {
 
     fn parseQuotedString(self: *Parser, quote_char: u8) Error!Value {
         self.pos += 1; // Skip opening quote
-        const start = self.pos;
+
+        var result = std.ArrayList(u8).initCapacity(self.allocator, 32) catch return Error.OutOfMemory;
+        errdefer result.deinit(self.allocator);
 
         while (self.pos < self.input.len) {
-            if (self.input[self.pos] == quote_char) {
-                const str = try self.allocator.dupe(u8, self.input[start..self.pos]);
+            const c = self.input[self.pos];
+
+            if (c == quote_char) {
+                // Check for escaped quote in single-quoted strings
+                if (quote_char == '\'' and self.pos + 1 < self.input.len and self.input[self.pos + 1] == '\'') {
+                    // '' in single-quoted string = literal single quote
+                    try result.append(self.allocator, '\'');
+                    self.pos += 2; // Skip both quotes
+                    continue;
+                }
+                // End of string
                 self.pos += 1; // Skip closing quote
-                return Value{ .string_value = str };
+                return Value{ .string_value = try result.toOwnedSlice(self.allocator) };
             }
-            if (self.input[self.pos] == '\\') {
-                self.pos += 1; // Skip escape char
+
+            if (quote_char == '"' and c == '\\') {
+                // Handle escape sequences in double-quoted strings
+                self.pos += 1;
+                if (self.pos >= self.input.len) return Error.UnexpectedEndOfInput;
+
+                const escaped = self.input[self.pos];
+                const ch: u8 = switch (escaped) {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    '\\' => '\\',
+                    '"' => '"',
+                    '\'' => '\'',
+                    else => escaped, // Keep as-is for unknown escapes
+                };
+                try result.append(self.allocator, ch);
+                self.pos += 1;
+                continue;
             }
+
+            // Regular character
+            try result.append(self.allocator, c);
             self.pos += 1;
         }
 
