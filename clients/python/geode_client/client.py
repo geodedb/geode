@@ -83,6 +83,10 @@ class GeodeProtocol(QuicConnectionProtocol):
 
     def quic_event_received(self, event: QuicEvent) -> None:
         """Handle QUIC events."""
+        # CRITICAL: Call parent to handle connection events (handshake, etc.)
+        super().quic_event_received(event)
+        
+        # Handle stream data events
         if isinstance(event, StreamDataReceived):
             stream_id = event.stream_id
 
@@ -184,10 +188,10 @@ class Connection:
         self.server_name = server_name or host
 
         # Connection state
-        self._protocol: Optional[GeodeProtocol] = None
+        self._protocol = None
         self._connection_context = None
-        self._stream_id: Optional[int] = None
-        self._reader_queue: Optional[asyncio.Queue] = None
+        self._reader = None
+        self._writer = None
         self._connected = False
         self._lock = asyncio.Lock()
         self._buffer = b""
@@ -251,7 +255,7 @@ class Connection:
             self.host,
             self.port,
             configuration=configuration,
-            create_protocol=GeodeProtocol,
+            # Don't use custom protocol - use aioquic's default which works correctly
         )
 
         # Enter the context manager - this establishes the connection and completes handshake
@@ -275,8 +279,9 @@ class Connection:
             raise GeodeConnectionError(f"Failed to establish connection: {e}")
 
         # Create bidirectional stream AFTER handshake is complete
-        self._stream_id, self._reader_queue = await self._protocol.create_bidirectional_stream()
-
+        self._reader, self._writer = await self._protocol.create_stream()
+        print(f"[DEBUG] Created stream")
+        
         # Send HELLO message
         hello = {
             "type": "HELLO",
@@ -306,15 +311,16 @@ class Connection:
 
     async def _write_json(self, obj: Dict[str, Any]) -> None:
         """Write JSON object as a line."""
-        if not self._protocol or self._stream_id is None:
+        if not self._writer:
             raise GeodeConnectionError("Not connected")
 
         line = json.dumps(obj) + "\n"
-        self._protocol.write_to_stream(self._stream_id, line.encode("utf-8"))
+        self._writer.write(line.encode("utf-8"))
+        await self._writer.drain()
 
     async def _read_line(self) -> bytes:
         """Read a single line from the stream."""
-        if not self._protocol or self._stream_id is None:
+        if not self._reader:
             raise GeodeConnectionError("Not connected")
 
         while True:
@@ -326,8 +332,8 @@ class Connection:
                 return line
 
             # Read more data
-            data = await self._protocol.read_from_stream(self._stream_id)
-            if data is None:
+            data = await self._reader.read(4096)
+            if not data:
                 # End of stream
                 if self._buffer:
                     line = self._buffer
