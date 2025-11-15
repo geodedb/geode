@@ -83,6 +83,7 @@ class GeodeServerManager:
         self.port: Optional[int] = None
         self.process: Optional[asyncio.subprocess.Process] = None
         self.log_file: Optional[Path] = None
+        self.data_dir: Optional[Path] = None
         self._cleanup_registered = False
 
         # Register this instance for cleanup
@@ -139,6 +140,9 @@ class GeodeServerManager:
         # Create log file in temp directory
         self.log_file = Path(tempfile.mktemp(prefix=f"geode_server_{self.port}_", suffix=".log"))
 
+        # Create temporary data directory for test isolation
+        self.data_dir = Path(tempfile.mkdtemp(prefix=f"geode_data_{self.port}_"))
+
         listen_addr = f"localhost:{self.port}"
 
         # Certificate paths for TLS
@@ -149,16 +153,19 @@ class GeodeServerManager:
         if self.verbose:
             print(f"Starting Geode server on {listen_addr}")
             print(f"Server log: {self.log_file}")
+            print(f"Server data: {self.data_dir}")
             print(f"Server cert: {cert_path}")
             print(f"Server key: {key_path}")
 
-        # Start server process
+        # Start server process with isolated data directory
         log_fd = open(self.log_file, 'w')
         self.process = await asyncio.create_subprocess_exec(
             str(self.geode_binary),
             "serve",
             "--listen",
             listen_addr,
+            "--data-dir",
+            str(self.data_dir),
             "--cert",
             str(cert_path),
             "--key",
@@ -241,6 +248,14 @@ class GeodeServerManager:
         if not self.verbose and self.log_file and self.log_file.exists():
             try:
                 self.log_file.unlink()
+            except Exception:
+                pass
+
+        # Clean up data directory
+        if self.data_dir and self.data_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(self.data_dir)
             except Exception:
                 pass
 
