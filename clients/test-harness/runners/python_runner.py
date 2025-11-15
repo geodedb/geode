@@ -301,6 +301,18 @@ async def main():
 
         sys.exit(0 if result["summary"]["failed"] + result["summary"]["errors"] == 0 else 1)
 
+    except Exception as e:
+        # Ensure we always output valid JSON even when runner crashes
+        error_result = {
+            "summary": {"total": 0, "passed": 0, "failed": 0, "errors": 1, "skipped": 0},
+            "results": []
+        }
+        if args.json:
+            print(json.dumps(error_result, indent=2))
+        else:
+            print(f"Runner error: {e}", file=sys.stderr)
+        sys.exit(1)
+
     finally:
         await runner.teardown()
 
