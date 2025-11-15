@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const audit_cli = @import("audit_cli");
 const geode = @import("geode");
+const Value = geode.value_types.Value;
 // Use std.log for debug logging (respects log level)
 const log = std.log.scoped(.cli);
 // const auth = @import("../security/auth.zig"); // Not needed for current implementation
@@ -78,6 +79,29 @@ fn getStdoutHandle() std.fs.File.Handle {
         return windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch unreachable;
     } else {
         return std.posix.STDOUT_FILENO;
+    }
+}
+
+const ParamError = error{
+    UnsupportedParameterType,
+    OutOfMemory,
+};
+
+fn convertJsonParam(allocator: std.mem.Allocator, value: std.json.Value) ParamError!Value {
+    return switch (value) {
+        .null => Value{ .Null = {} },
+        .bool => |b| Value{ .Bool = b },
+        .string => Value{ .Str = try allocator.dupe(u8, value.string) },
+        .integer => |i| Value{ .Int = @intCast(i) },
+        .float => return error.UnsupportedParameterType,
+        else => return error.UnsupportedParameterType,
+    };
+}
+
+fn freeParamValue(allocator: std.mem.Allocator, value: Value) void {
+    switch (value) {
+        .Str => |s| allocator.free(s),
+        else => {},
     }
 }
 
@@ -354,12 +378,48 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             const query_text = query_text_value.string;
             log.debug("Query text: {s}", .{query_text});
 
+            var param_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+            defer {
+                for (param_names.items) |pname| allocator.free(pname);
+                param_names.deinit(allocator);
+            }
+            var param_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
+            defer {
+                for (param_values.items) |pval| freeParamValue(allocator, pval);
+                param_values.deinit(allocator);
+            }
+            var params_valid = true;
+            if (obj.get("params")) |params_value| {
+                if (params_value != .object) {
+                    const error_response = "{\"status_class\":\"58000\",\"error\":\"params must be object\"}\n";
+                    try stream.writeAll(error_response);
+                    params_valid = false;
+                } else {
+                    var iter = params_value.object.iterator();
+                    while (iter.next()) |entry| {
+                        const dup_name = try allocator.dupe(u8, entry.key_ptr.*);
+                        const param_value = convertJsonParam(allocator, entry.value_ptr.*) catch {
+                            allocator.free(dup_name);
+                            const error_response = "{\"status_class\":\"58000\",\"error\":\"Unsupported parameter type\"}\n";
+                            try stream.writeAll(error_response);
+                            params_valid = false;
+                            break;
+                        };
+                        try param_names.append(allocator, dup_name);
+                        try param_values.append(allocator, param_value);
+                    }
+                }
+            }
+            if (!params_valid) continue;
+
             // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
             // Execute query with authenticated user context (using global geode import)
             const options = geode.test_harness.QueryOptions{
                 .token = null,
                 .user = authenticated_username,
                 .strict_offset_validation = true, // QUIC mode enforces US001 (OFFSET requires ORDER BY)
+                .param_names = param_names.items,
+                .param_values = param_values.items,
             };
 
             var mut_ally = allocator;
@@ -435,9 +495,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
                     const resp_writer = response_buf.writer(allocator);
 
                     // Forward the original result as a RESULT message
-                    try resp_writer.print("{{\"status_class\":\"{s}\",\"result\":{{\"type\":\"RESULT\",", .{
-                        if (status_class) |sc| sc.string else "00000"
-                    });
+                    try resp_writer.print("{{\"status_class\":\"{s}\",\"result\":{{\"type\":\"RESULT\",", .{if (status_class) |sc| sc.string else "00000"});
 
                     if (result_obj.get("error")) |error_val| {
                         try resp_writer.print("\"error\":\"{s}\",", .{error_val.string});
@@ -3321,7 +3379,6 @@ fn cmdAuthToken(allocator: std.mem.Allocator) !void {
         _ = try stdout_fd.writeAll("\n");
     }
 }
-
 
 /// FLE command handler
 fn cmdFLE(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {

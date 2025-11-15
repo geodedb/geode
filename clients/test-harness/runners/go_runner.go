@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -36,11 +37,11 @@ type Test struct {
 }
 
 type TestResult struct {
-	Test      string                 `json:"test"`
-	Status    string                 `json:"status"`
-	Error     string                 `json:"error,omitempty"`
-	Result    map[string]interface{} `json:"result,omitempty"`
-	DurationMS float64               `json:"duration_ms"`
+	Test       string                 `json:"test"`
+	Status     string                 `json:"status"`
+	Error      string                 `json:"error,omitempty"`
+	Result     map[string]interface{} `json:"result,omitempty"`
+	DurationMS float64                `json:"duration_ms"`
 }
 
 type Summary struct {
@@ -506,7 +507,15 @@ func convertParams(params map[string]interface{}) []interface{} {
 		return nil
 	}
 
-	// For Go database/sql, we need to handle named parameters
-	// The geode driver should support this
-	return nil
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	args := make([]interface{}, 0, len(keys))
+	for _, k := range keys {
+		args = append(args, sql.Named(k, params[k]))
+	}
+	return args
 }

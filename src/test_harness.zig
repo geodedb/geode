@@ -2,6 +2,7 @@ const std = @import("std");
 const gql = @import("lib.zig");
 const execution = @import("execution.zig");
 const txn_session = @import("txn_session.zig");
+const value_types = @import("value_types.zig");
 
 // Cleanup function for test catalog - called at end of tests
 pub fn cleanupTestCatalog() void {
@@ -15,6 +16,8 @@ pub const QueryOptions = struct {
     user: ?[]const u8 = null,
     password: ?[]const u8 = null,
     strict_offset_validation: bool = false, // If true, reject OFFSET without ORDER BY (US001)
+    param_names: []const []const u8 = &.{},
+    param_values: []const value_types.Value = &.{},
 };
 
 // Main query execution function - ONLY parses and calls real Geode execution
@@ -109,6 +112,8 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         .strict_offset_validation = options.strict_offset_validation,
         .session_state = &session_state,
         .transaction_state = if (transaction_session) |ts| ts.state else .None,
+        .query_param_names = options.param_names,
+        .query_param_values = options.param_values,
     };
     // Check if program contains transaction control statements
     var has_start_transaction = false;

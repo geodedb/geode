@@ -242,8 +242,42 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
     return executeQueryWithBindingsImpl(allocator, q, context, binding_names, binding_values);
 }
 
+const CombinedParams = struct {
+    names: []const []const u8,
+    values: []const Value,
+    owns: bool,
+};
+
+fn combineBindingParams(
+    allocator: std.mem.Allocator,
+    context: ExecutionContext,
+    binding_names: []const []const u8,
+    binding_values: []const Value,
+) !CombinedParams {
+    if (context.query_param_names.len == 0) {
+        return .{ .names = binding_names, .values = binding_values, .owns = false };
+    }
+
+    std.debug.assert(context.query_param_names.len == context.query_param_values.len);
+    const total = context.query_param_names.len + binding_names.len;
+    var combined_names = try allocator.alloc([]const u8, total);
+    errdefer allocator.free(combined_names);
+    var combined_values = try allocator.alloc(Value, total);
+    errdefer allocator.free(combined_values);
+
+    @memcpy(combined_names[0..context.query_param_names.len], context.query_param_names);
+    @memcpy(combined_values[0..context.query_param_values.len], context.query_param_values);
+
+    if (binding_names.len != 0) {
+        @memcpy(combined_names[context.query_param_names.len..], binding_names);
+        @memcpy(combined_values[context.query_param_values.len..], binding_values);
+    }
+
+    return .{ .names = combined_names, .values = combined_values, .owns = true };
+}
+
 // Execute a query with pre-existing bindings available as parameters
-pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, _: ExecutionContext, binding_names: []const []const u8, binding_values: []const Value) anyerror!ExecutionResult {
+pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext, binding_names: []const []const u8, binding_values: []const Value) anyerror!ExecutionResult {
     // For simple MATCH patterns with bound variables, we can shortcut the matching
     // and just use the bound values directly in the RETURN clause
 
@@ -300,10 +334,18 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         // Create a single row by evaluating RETURN expressions with bindings
         var row = try allocator.alloc(Value, items.len);
 
+        const combined = try combineBindingParams(allocator, context, binding_names, binding_values);
+        defer if (combined.owns) {
+            allocator.free(combined.names);
+            allocator.free(combined.values);
+        };
+
         const env = Env{
             .allocator = allocator,
             .names = binding_names,
             .values = binding_values,
+            .param_names = combined.names,
+            .param_values = combined.values,
         };
 
         for (items, 0..) |item, i| {
@@ -339,12 +381,18 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         // Create a single row by evaluating RETURN expressions with bound variables
         var row = try allocator.alloc(Value, items.len);
 
+        const combined = try combineBindingParams(allocator, context, binding_names, binding_values);
+        defer if (combined.owns) {
+            allocator.free(combined.names);
+            allocator.free(combined.values);
+        };
+
         const env = Env{
             .allocator = allocator,
             .names = bound_var_env_names.items,
             .values = bound_var_env_values.items,
-            .param_names = binding_names,
-            .param_values = binding_values,
+            .param_names = combined.names,
+            .param_values = combined.values,
         };
 
         for (items, 0..) |item, i| {
@@ -363,7 +411,12 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
 
     // Otherwise, execute the query normally with bindings available as parameters
     // Execute the full query with bindings passed as parameters
-    return executeMatchQueryImpl(allocator, q, binding_names, binding_values, &.{});
+    const combined = try combineBindingParams(allocator, context, binding_names, binding_values);
+    defer if (combined.owns) {
+        allocator.free(combined.names);
+        allocator.free(combined.values);
+    };
+    return executeMatchQueryImpl(allocator, q, combined.names, combined.values, &.{});
 }
 
 fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
@@ -384,6 +437,14 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     defer param_names.deinit(allocator);
     var param_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
     defer param_values.deinit(allocator);
+
+    if (context.query_param_names.len != 0) {
+        std.debug.assert(context.query_param_names.len == context.query_param_values.len);
+        for (context.query_param_names, context.query_param_values) |name, value| {
+            try param_names.append(allocator, name);
+            try param_values.append(allocator, value);
+        }
+    }
 
     // Empty environment for evaluating LET binding expressions
     const let_env = Env{

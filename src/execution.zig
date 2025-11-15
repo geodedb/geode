@@ -347,6 +347,9 @@ pub const ExecutionContext = struct {
     session_state: ?*SessionState = null,
     // Transaction state for START TRANSACTION/COMMIT/ROLLBACK
     transaction_state: TransactionState = .None,
+	// Input parameter bindings provided by client (query-level parameters)
+	query_param_names: []const []const u8 = &.{},
+	query_param_values: []const value_types.Value = &.{},
 };
 
 pub const ExecutionError = error{
