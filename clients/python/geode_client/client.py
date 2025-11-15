@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from aioquic.asyncio import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import QuicEvent, StreamDataReceived, StreamReset
+from aioquic.quic.events import QuicEvent, StreamDataReceived, StreamReset, ConnectionTerminated, StopSendingReceived
 
 from .types import Value, decode_value
 
@@ -156,6 +156,14 @@ class GeodeProtocol(QuicConnectionProtocol):
             stream_id = event.stream_id
             if stream_id in self._stream_readers:
                 self._stream_readers[stream_id].put_nowait(None)
+        elif isinstance(event, (ConnectionTerminated, StopSendingReceived)):
+            # Handle connection/stream termination - close all our queues
+            for queue in self._stream_readers.values():
+                try:
+                    queue.put_nowait(None)
+                except:
+                    pass
+            # Don't call super() for these events - they expect StreamReader with feed_eof()
         else:
             # For all other events (handshake, connection state, etc.), let parent handle
             super().quic_event_received(event)
@@ -319,39 +327,38 @@ class Connection:
             print(f"[DEBUG] Loading client certificate")
             configuration.load_cert_chain(self.client_cert, self.client_key)
 
-        # Connect - create context manager and enter it manually
+        # Connect using async with pattern (proper context manager usage)
         print(f"[DEBUG] Connecting to {self.host}:{self.port}...")
-        self._connection_context = connect(
-            self.host,
-            self.port,
-            configuration=configuration,
-            # Use default protocol - it handles streams correctly
-        )
 
-        # Enter the context manager - this establishes the connection and completes handshake
-        print("[DEBUG] Entering context manager...")
         try:
-            self._protocol = await asyncio.wait_for(
-                self._connection_context.__aenter__(),
-                timeout=10.0
+            # Store the async context manager
+            self._connection_cm = connect(
+                self.host,
+                self.port,
+                configuration=configuration,
+                create_protocol=GeodeProtocol,
             )
-            print("[DEBUG] Connection established and handshake complete")
-        except asyncio.TimeoutError:
-            print("[DEBUG] Context manager __aenter__() timed out!")
-            raise GeodeConnectionError("Connection handshake timed out after 10 seconds")
-        except ConnectionError as e:
-            print(f"[DEBUG] Connection error: {e}")
-            raise GeodeConnectionError(f"Connection refused or reset: {e}")
+
+            # Enter the context - this completes the QUIC handshake
+            print("[DEBUG] Entering QUIC connection context...")
+            self._protocol = await self._connection_cm.__aenter__()
+            print("[DEBUG] QUIC handshake complete")
+
         except Exception as e:
-            print(f"[DEBUG] Connection failed: {type(e).__name__}: {e}")
+            print(f"[DEBUG] QUIC connection failed: {type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
-            raise GeodeConnectionError(f"Failed to establish connection: {e}")
+            raise GeodeConnectionError(f"Failed to establish QUIC connection: {e}")
 
-        # Create bidirectional stream AFTER handshake is complete
-        self._reader, self._writer = await self._protocol.create_stream(is_unidirectional=False)
-        print(f"[DEBUG] Created bidirectional stream")
-        
+        # Create bidirectional stream
+        try:
+            print("[DEBUG] Creating bidirectional stream...")
+            self._reader, self._writer = await self._protocol.create_stream()
+            print(f"[DEBUG] Created bidirectional stream")
+        except Exception as e:
+            print(f"[DEBUG] Stream creation failed: {e}")
+            raise GeodeConnectionError(f"Failed to create stream: {e}")
+
         # Send HELLO message
         hello = {
             "type": "HELLO",
@@ -553,6 +560,21 @@ class Connection:
 
                 return first_page, empty_pager
 
+            if bindings_result.get("type") == "RESULT":
+                # Server sent complete result (no pagination needed)
+                first_page = Page(
+                    columns=columns,
+                    rows=self._parse_rows(bindings_result.get("rows", []), type_map),
+                    ordered=bindings_result.get("ordered", False),
+                    order_keys=bindings_result.get("order_keys", []),
+                    final=True,  # RESULT means all data is here
+                )
+                async def empty_pager():
+                    if False:
+                        yield  # Make it a generator but never yield
+
+                return first_page, empty_pager
+
             if bindings_result.get("type") != "BINDINGS":
                 raise QueryError(f"Unexpected frame type: {bindings_result.get('type')}")
 
@@ -566,7 +588,14 @@ class Connection:
                 final=bindings_result.get("final", False),
             )
 
-            # Create pager function
+            # If all results are in the first page, don't create a pager
+            if first_page.final:
+                async def empty_pager():
+                    if False:
+                        yield  # Make it a generator but never yield anything
+                return first_page, empty_pager
+
+            # Create pager function for multi-page results
             async def pager():
                 nonlocal first_page
                 while not first_page.final:
@@ -635,20 +664,25 @@ class Connection:
 
         self._connected = False
 
-        # Exit the context manager if we have one
-        if self._connection_context and self._protocol:
+        # Close the stream writer if we have one
+        if self._writer:
             try:
-                await self._connection_context.__aexit__(None, None, None)
+                self._writer.close()
+            except Exception:
+                pass
+            self._writer = None
+
+        self._reader = None
+
+        # Exit the connection context manager
+        if hasattr(self, '_connection_cm') and self._connection_cm and self._protocol:
+            try:
+                await self._connection_cm.__aexit__(None, None, None)
             except Exception:
                 pass
 
-        if self._protocol:
-            self._protocol.close()
-            self._protocol = None
-
-        self._connection_context = None
-        self._stream_id = None
-        self._reader_queue = None
+        self._protocol = None
+        self._connection_cm = None
 
 
 class Client:
