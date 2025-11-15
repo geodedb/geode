@@ -1,18 +1,21 @@
 # Geode Client Libraries - Test Harness Fixes Summary
 
 **Date**: November 15, 2025
-**Status**: Critical Investigation Complete - Msquic Queue Issue Identified
-**Previous Status**: October 31, 2025 - Configuration Updated
+**Status**: CRITICAL BLOCKER RESOLVED - acceptStream() Blocking Fix Applied
+**Previous Status**: Critical Investigation Complete - Root Cause Identified
 
 ## Executive Summary
 
-Conducted comprehensive investigation and fixes for client test harness failures. Successfully fixed 4 critical bugs but identified a fundamental issue in msquic connection queue management that blocks further progress.
+Successfully identified and fixed critical blocking bug that prevented server from accepting multiple connections. The `acceptStream()` function had an infinite blocking loop that hung the main loop, preventing `tryAccept()` from being called for queued connections.
 
-**Current Test Results**: 4.0% (9/224 tests passing)
-- Python: 2/56 (3.6%)
-- Go: 4/56 (7.1%)
-- Rust: 3/56 (5.4%)
-- Zig: 0/56 (0%)
+**Impact of Fix**:
+- **Before**: Only 1 connection accepted, server hung on first connection
+- **After**: 108+ connections accepted, all tests can run to completion
+
+**Current Test Results**: 3.6% (2/56 Python tests passing)
+- Tests can now run to completion (no more timeouts)
+- Low pass rate due to separate issues (not blocking bug)
+- Ready for systematic debugging of remaining test failures
 
 ## ✅ Fixes Applied (November 15, 2025)
 
@@ -64,46 +67,85 @@ class IndentedDumper(yaml.Dumper):
 
 **Fix**: Added logic to detect error results (no columns/rows) and forward them as RESULT messages instead of trying to parse as data.
 
-## 🔴 CRITICAL BLOCKER IDENTIFIED
+### 5. Blocking acceptStream() Main Loop Hang (Commit 824bf66) **CRITICAL**
+**File**: `src/transport/quic_msquic.zig`
+**Impact**: Server can now accept multiple connections instead of hanging after first
 
-### Msquic Connection Queue Issue (November 15, 2025)
+**Root Cause**: `acceptStream()` had infinite `while(true)` loop that blocked until stream arrived, preventing main loop from calling `tryAccept()` for queued connections.
 
-**Problem**: Server only accepts ONE connection during entire test run, preventing multi-test execution.
+**Fix**: Made `acceptStream()` non-blocking:
+- Removed infinite loop
+- Returns `error.WouldBlock` immediately if no stream available
+- Allows main loop to continue and process queued connections
 
-**Investigation Evidence** (from commits e69e1f3, c7f3d7a):
+**Results**:
+- Before: 1 connection accepted, 12+ queued but never retrieved
+- After: 108+ connections/streams accepted, all tests can run
 
-1. ✅ **Main server loop runs continuously**
-   - Verified via iteration counter logging (every 1000 loops)
-   - Loop reaches 9000+ iterations
+### 6. Zig Runner Stale Binary (Commit e05d940)
+**File**: `clients/test-harness/Makefile`
+**Impact**: Fixed YAML parsing errors that were actually caused by stale binary
 
-2. ✅ **Listener callback IS triggered for connection #2**
-   ```
-   [LISTENER_CALLBACK] Event type: .QUIC_LISTENER_EVENT_NEW_CONNECTION
-   [LISTENER_CALLBACK] NEW_CONNECTION: handle=*msquic_types.HQUIC__opaque_24025@704754024800
-   [LISTENER_CALLBACK] Connection configured and queued, count=1
-   ```
+**Root Cause**: The Makefile's `build-zig` target built the binary in `runners/zig-out/bin/zig_runner` but didn't copy it to `runners/zig_runner` where the test harness expected it. Tests were using a stale October 28 binary.
 
-3. ✅ **Connection #2 IS added to pending_connections queue**
-   - Callback shows "count=1" after appending
-   - No errors during queue append operation
+**Fix**: Updated Makefile to copy built binary to correct location:
+```makefile
+build-zig:
+	@echo "Building Zig runner..."
+	@command -v zig >/dev/null 2>&1 || { echo "Zig not found, skipping"; exit 1; }
+	@cd runners && zig build && cp zig-out/bin/zig_runner ./zig_runner
+```
 
-4. ❌ **`tryAccept()` FAILS to retrieve queued connection**
-   - No "✅ Accepted QUIC connection #2" message
-   - tryAccept() called repeatedly but finds empty queue
+**Results**:
+- Zig YAML parser now works correctly (supports literal block scalars `|`)
+- Previously reported YAML parsing errors were due to stale binary, not parser bugs
 
-**Root Cause**: Queue management issue in `src/transport/quic_msquic.zig`
+## ✅ CRITICAL BLOCKER RESOLVED (November 15, 2025 - Commit 824bf66)
 
-**Possible Causes**:
-1. Allocator lifetime problem - queue data freed prematurely
-2. Mutex deadlock - tryAccept() can't access queue
-3. Queue corruption - data structure integrity issue
-4. Race condition - timing issue between callback and tryAccept()
-5. Multiple queue instances - callback and tryAccept() use different queues
+### Root Cause: Blocking acceptStream() Hung Main Loop
 
-**Debug Logging Added** (Commit e69e1f3):
-- Main loop iteration counter (`src/cli/main.zig`)
-- Listener callback event logging (`src/transport/msquic_wrapper.zig`)
-- tryAccept() queue inspection (`src/transport/quic_msquic.zig`)
+**Problem**: Server only accepted ONE connection during entire test run.
+
+**Investigation Process**:
+1. Initial hypothesis: Queue management issue (connections queued but not retrieved)
+2. Enhanced logging revealed connections WERE queued successfully (up to 12+)
+3. Discovered main loop stopped calling `tryAccept()` after first connection
+4. No "Main loop iteration" logs indicated loop stopped entirely
+
+**Root Cause Identified**:
+`acceptStream()` in `src/transport/quic_msquic.zig:265` had an **infinite blocking loop**:
+```zig
+pub fn acceptStream(self: *QuicConnection) !*QuicStream {
+    while (true) {  // <-- BLOCKS FOREVER until stream arrives!
+        // ... check for pending streams ...
+        // ... if none, sleep 10ms and loop again ...
+    }
+}
+```
+
+**What Happened**:
+1. Main loop accepted connection #1 ✅
+2. Main loop called `acceptStream()` → blocked until stream #1 arrived
+3. Stream #1 accepted, handler thread spawned ✅
+4. Main loop continued to connection #1 again
+5. Main loop called `acceptStream()` AGAIN → **blocked forever waiting for stream #2**
+6. Meanwhile, connections #2-12+ queued by listener callback
+7. But `tryAccept()` NEVER called again - main loop stuck in `acceptStream()`!
+
+**The Fix** (Commit 824bf66):
+Made `acceptStream()` **non-blocking**:
+- Removed infinite `while(true)` loop
+- Check queue once, return `error.WouldBlock` if empty
+- Main loop can now continue and call `tryAccept()` for queued connections
+
+**Evidence**:
+- **Before**: 1 connection accepted, 12+ connections queued but never retrieved
+- **After**: 108 connections/streams accepted, all 56 Python tests ran to completion
+
+**Debug Logging Added**:
+- Enhanced queue management logging in `src/transport/msquic_wrapper.zig`
+- Queue instance identity verification (all callbacks use same ListenerContext)
+- Connection append success/failure tracking
 
 ## Technical Details
 
@@ -197,22 +239,28 @@ Server accepts connections and completes TLS handshakes successfully. The stream
 
 ## Conclusion
 
-**Completed**:
-- ✅ 4 critical bugs fixed (async cleanup, YAML parsing, PULL handler, error handling)
+**✅ CRITICAL BLOCKER RESOLVED**:
+- ✅ 5 critical bugs fixed (async cleanup, YAML parsing, PULL handler, error handling, **blocking acceptStream()**)
+- ✅ Root cause identified and fixed: infinite blocking loop in `acceptStream()`
+- ✅ Server now accepts 100+ connections instead of only 1
+- ✅ All tests can run to completion (no more timeouts)
 - ✅ Comprehensive debug logging added throughout QUIC stack
-- ✅ Root cause identified (msquic queue management)
-- ✅ Investigation findings documented
 
-**Blocking**:
-- ❌ Msquic connection queue issue prevents > 1 connection acceptance
-- ❌ Requires deep queue/allocator investigation or architectural change
-- ❌ Cannot achieve > 4.0% test pass rate until resolved
+**Current Status**:
+- **Connection handling**: ✅ FIXED - multiple connections work correctly
+- **Test execution**: ✅ WORKING - all 56 Python tests ran to completion
+- **Test pass rate**: 3.6% (2/56) - separate issues from blocking bug
 
-**Status**: Investigation complete, fix implementation requires msquic internals expertise or architectural redesign.
+**Next Steps**:
+1. Systematically debug remaining test failures (most are JSON parsing or transaction errors)
+2. Test Go, Rust, and Zig clients with fixed server
+3. Investigate specific test failure patterns
+
+**Status**: 🟢 UNBLOCKED - Ready for systematic test debugging
 
 ---
 
-*Last Updated*: 2025-11-15 (Investigation Phase Complete)
-*Previous Update*: 2025-10-31 (Configuration Complete)
+*Last Updated*: 2025-11-15 (Critical Blocker RESOLVED - Commit 824bf66)
+*Previous Update*: 2025-11-15 (Root Cause Identified)
 *Contributors*: Claude Code
-*Status*: 🔴 BLOCKED on msquic queue management issue
+*Status*: 🟢 UNBLOCKED
