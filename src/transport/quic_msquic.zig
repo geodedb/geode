@@ -364,12 +364,6 @@ pub const QuicStream = struct {
             .Length = @intCast(data_copy.len),
             .Buffer = data_copy.ptr,
         };
-        
-        // Track the send buffer and buffer struct
-        self.context.mutex.lock();
-        try self.context.send_buffers.append(data_copy);
-        try self.context.send_buffer_structs.append(buffer_struct);
-        self.context.mutex.unlock();
 
         // Pass the buffer pointer as context so we can identify it in SEND_COMPLETE
         const status = self.api.StreamSend(
@@ -381,20 +375,15 @@ pub const QuicStream = struct {
         );
 
         if (msquic.QUIC_FAILED(status)) {
-            // Remove from tracking and free on error
-            self.context.mutex.lock();
-            for (self.context.send_buffers.items, 0..) |buf, i| {
-                if (buf.ptr == data_copy.ptr) {
-                    _ = self.context.send_buffers.swapRemove(i);
-                    const buf_struct = self.context.send_buffer_structs.swapRemove(i);
-                    self.allocator.destroy(buf_struct);
-                    break;
-                }
-            }
-            self.context.mutex.unlock();
-            self.allocator.free(data_copy);
+            // Send failed, errdefer will clean up
             return QuicError.StreamFailed;
         }
+        
+        // Send successful, track buffers for cleanup on SEND_COMPLETE
+        self.context.mutex.lock();
+        self.context.send_buffers.append(data_copy) catch {};
+        self.context.send_buffer_structs.append(buffer_struct) catch {};
+        self.context.mutex.unlock();
     }
 
     pub fn writeAll(self: *QuicStream, data: []const u8) !void {

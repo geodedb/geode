@@ -835,16 +835,14 @@ REQ-GQL-073,MvccAdvanced,RepairThroughputBench,BENCHED,TestCANARY_REQ_GQL_073_Re
 REQ-GQL-073,MvccAdvanced,RepairThroughputBench,BENCHED,TestCANARY_REQ_GQL_073_RepairThroughputBench,BenchmarkCANARY_REQ_GQL_073_RepairThroughputBench,txn,2025-09-20,tests/benchmark_mvcc_repair_throughput.zig
 REQ-GQL-074,Network Transport,AlgorithmIntegration,TESTED,quic_algorithms_integration,,wire,2025-10-31,tests/quic_algorithms_integration_test.zig
 REQ-GQL-074,Network Transport,ConnectionManagement,IMPL,,,wire,2025-10-31,src/transport/connection_manager.zig
-REQ-GQL-074,Network Transport,QUICAccept,TESTED,TestCANARY_REQ_GQL_074_QUICAccept,,wire,2025-09-22,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICAccept,TESTED,TestCANARY_REQ_GQL_074_QUICAccept,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICAlgorithms,IMPL,,,wire,2025-10-31,src/algorithms.zig
 REQ-GQL-074,Network Transport,QUICBasicE2E,TESTED,TestCANARY_REQ_GQL_074_QUICBasicE2E,,wire,2025-09-22,tests/e2e_quic_basic.zig
-REQ-GQL-074,Network Transport,QUICClientConnect,TESTED,TestCANARY_REQ_GQL_074_QUICClientConnect,,wire,2025-09-22,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICClientConnect,TESTED,TestCANARY_REQ_GQL_074_QUICClientConnect,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICConnectionMigration,TESTED,TestCANARY_REQ_GQL_074_QUICConnectionMigration,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICConnectionParams,TESTED,TestCANARY_REQ_GQL_074_QUICConnectionParams,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICConnectionRecovery,TESTED,TestCANARY_REQ_GQL_074_QUICConnectionRecovery,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
-REQ-GQL-074,Network Transport,QUICCore,TESTED,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-09-22,src/transport/quic.zig
+REQ-GQL-074,Network Transport,QUICCore,TESTED,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-11-14,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICCore,IMPL,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-11-14,src/transport/quic_msquic.zig
 REQ-GQL-074,Network Transport,QUICCore,TESTED,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICErrorHandling,TESTED,TestCANARY_REQ_GQL_074_QUICErrorHandling,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
@@ -852,16 +850,13 @@ REQ-GQL-074,Network Transport,QUICFlowControl,TESTED,TestCANARY_REQ_GQL_074_QUIC
 REQ-GQL-074,Network Transport,QUICHandshake,TESTED,TestCANARY_REQ_GQL_074_QUICHandshake,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICHandshakeRegression,TESTED,TestCANARY_REQ_GQL_074_QUICHandshakeRegression,,wire,2025-10-01,tests/test_quic_handshake_regression.zig
 REQ-GQL-074,Network Transport,QUICIdleTimeout,TESTED,TestCANARY_REQ_GQL_074_QUICIdleTimeout,,wire,2025-09-22,tests/canary_quic_tls.zig
-REQ-GQL-074,Network Transport,QUICListener,TESTED,e2e_quic_startup,,wire,2025-09-25,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICListener,TESTED,TestCANARY_REQ_GQL_074_QUICListener,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICMultiplexedStreams,TESTED,TestCANARY_REQ_GQL_074_QUICMultiplexedStreams,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICMultiplexing,TESTED,TestCANARY_REQ_GQL_074_QUICMultiplexing,,wire,2025-09-22,src/canary.zig
 REQ-GQL-074,Network Transport,QUICMultiplexing,TESTED,TestCANARY_REQ_GQL_074_QUICMultiplexing,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICPerformanceMetrics,BENCHED,,BenchmarkCANARY_REQ_GQL_074_QUICPerformanceMetrics,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICProtocol,TESTED,TestCANARY_REQ_GQL_074_QUICProtocol,,wire,2025-09-22,tests/e2e_quic_basic.zig
-REQ-GQL-074,Network Transport,QUICStream,TESTED,TestCANARY_REQ_GQL_074_QUICStream,,wire,2025-09-22,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICStream,TESTED,TestCANARY_REQ_GQL_074_QUICStream,,wire,2025-09-22,tests/canary_quic.zig
-REQ-GQL-074,Network Transport,QUICStreamOpen,TESTED,TestCANARY_REQ_GQL_074_QUICStreamOpen,,wire,2025-09-22,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICStreamOpen,TESTED,TestCANARY_REQ_GQL_074_QUICStreamOpen,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICTLS,TESTED,TestCANARY_REQ_GQL_074_QUICTLS,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICTLSComprehensive,TESTED,TestCANARY_REQ_GQL_074_QUICTLSComprehensive,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
@@ -1519,7 +1514,6 @@ REQ-PERF-PHASE3-002,MemoryOptimization,HNSW_NEIGHBORS,IMPL,,,performance,2025-10
 REQ-PERF-PHASE3-002,MemoryOptimization,HNSW_NEIGHBORS,IMPL,,,performance,2025-10-16,docs/archive/PHASE3_COMPLETE_OCTOBER_2025.md
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyBenchmarking,BUILD,IMPL,,,performance,2025-10-16,build.zig
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyOptimization,TESTING,IMPL,,,performance,2025-10-16,benchmarks/phase3_benchmarks.zig
-REQ-PERF-PHASE4-002,LogOptimization,COMPILE_TIME_ELIM,IMPL,,,performance,2025-10-16,src/transport/quic.zig
 REQ-PERF-PHASE4-002,LogOptimization,COMPILE_TIME_ELIM,IMPL,,,performance,2025-10-16,docs/archive/PHASE4_COMPLETE_OCTOBER_2025.md
 REQ-PERF-PHASE5-001,Benchmarking,PHASE5,IMPL,,,performance,2025-10-16,docs/PERFORMANCE_PHASE5_PLAN.md
 REQ-PERF-PHASE5-001,ColumnOptimization,BATCH_ALLOC,IMPL,,,performance,2025-10-16,src/execution.zig
