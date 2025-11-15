@@ -1,21 +1,24 @@
 # Geode Client Libraries - Test Harness Fixes Summary
 
 **Date**: November 15, 2025
-**Status**: CRITICAL BLOCKER RESOLVED - acceptStream() Blocking Fix Applied
-**Previous Status**: Critical Investigation Complete - Root Cause Identified
+**Status**: MAJOR IMPROVEMENT - Python Client at 66.1% Pass Rate
+**Previous Status**: CRITICAL BLOCKER RESOLVED - acceptStream() Blocking Fix Applied
 
 ## Executive Summary
 
-Successfully identified and fixed critical blocking bug that prevented server from accepting multiple connections. The `acceptStream()` function had an infinite blocking loop that hung the main loop, preventing `tryAccept()` from being called for queued connections.
+Successfully resolved Python client JSON parsing issues and test isolation problems. Two additional critical fixes applied today have brought Python client test pass rate from 3.6% to 66.1%, and overall pass rate from 4.0% to 19.6%.
 
-**Impact of Fix**:
-- **Before**: Only 1 connection accepted, server hung on first connection
-- **After**: 108+ connections accepted, all tests can run to completion
+**Latest Fixes Impact**:
+- **Python debug output fix**: Redirected debug logs to stderr, fixing JSON parsing errors
+- **Test data isolation**: Each test server uses isolated temporary data directory
+- **Result**: Python tests jumped from 3.6% (2/56) to 66.1% (37/56)
 
-**Current Test Results**: 3.6% (2/56 Python tests passing)
-- Tests can now run to completion (no more timeouts)
-- Low pass rate due to separate issues (not blocking bug)
-- Ready for systematic debugging of remaining test failures
+**Current Test Results** (November 15, 2025 - Latest):
+- **Overall**: 19.6% (44/224 tests passing) [+490% from 4.0%]
+- **Python**: 66.1% (37/56) [+1,750% from 3.6%]
+- **Go**: 7.1% (4/56) [unchanged]
+- **Rust**: 5.4% (3/56) [unchanged]
+- **Zig**: 0.0% (0/56) [unchanged]
 
 ## ✅ Fixes Applied (November 15, 2025)
 
@@ -162,6 +165,52 @@ if (quote_char == '"' and c == '\\') {
 - All test specs parse correctly
 - No workarounds needed in test infrastructure
 
+### 10. Python Client Debug Output (Commit ebfb7c4) **[CRITICAL]**
+**File**: `clients/python/geode_client/client.py`
+**Impact**: Fixed JSON parsing errors by redirecting debug output to stderr
+
+**Root Cause**: Python client had hardcoded `print()` statements outputting debug messages to stdout, which corrupted JSON output from test runner. Test harness received debug messages mixed with JSON, causing "Expecting value: line 1 column 2" parsing errors.
+
+**Fix**: Modified all debug print statements to use `file=sys.stderr`:
+```python
+# Before:
+print(f"[DEBUG] connect() called, already connected: {self._connected}")
+
+# After:
+print(f"[DEBUG] connect() called, already connected: {self._connected}", file=sys.stderr)
+```
+
+**Results**:
+- Python test pass rate jumped from 3.6% (2/56) to 66.1% (37/56)
+- Clean JSON output on stdout, debug on stderr
+- Test harness can now properly parse all runner output
+
+### 11. Test Data Isolation (Commit ba55249) **[CRITICAL]**
+**File**: `clients/test-harness/run_tests.py`
+**Impact**: Isolated test data to prevent contamination between test runs
+
+**Root Cause**: Test server instances all shared the same persistent data directory, causing data from previous test runs to pollute new tests. Transaction rollback tests were failing because they found data created by earlier test runs.
+
+**Fix**: Modified `GeodeServerManager` to create isolated temporary data directory for each server:
+```python
+# Create temporary data directory for test isolation
+self.data_dir = Path(tempfile.mkdtemp(prefix=f"geode_data_{self.port}_"))
+
+# Start server with isolated data
+self.process = await asyncio.create_subprocess_exec(
+    str(self.geode_binary),
+    "serve",
+    "--listen", listen_addr,
+    "--data-dir", str(self.data_dir),  # Isolated data
+    ...
+)
+```
+
+**Results**:
+- Each test run gets clean database state
+- Transaction tests can now properly verify rollback behavior
+- Automatic cleanup of temporary directories on server shutdown
+
 ## ✅ CRITICAL BLOCKER RESOLVED (November 15, 2025 - Commit 824bf66)
 
 ### Root Cause: Blocking acceptStream() Hung Main Loop
@@ -301,8 +350,8 @@ Server accepts connections and completes TLS handshakes successfully. The stream
 
 ## Conclusion
 
-**✅ CRITICAL BLOCKERS RESOLVED + NEW FIXES**:
-- ✅ **9 critical bugs fixed** (November 15, 2025):
+**✅ CRITICAL BLOCKERS RESOLVED + MAJOR IMPROVEMENTS**:
+- ✅ **11 critical bugs fixed** (November 15, 2025):
   1. Python async generator cleanup (Commit 532943b)
   2. Zig YAML literal block scalars (Commit 3d3a6c2)
   3. Server PULL handler implementation (Commit b5f3108)
@@ -312,13 +361,15 @@ Server accepts connections and completes TLS handshakes successfully. The stream
   7. Python Decimal JSON serialization (Commit aeea55f)
   8. Zig YAML single-quote workaround (Commit 68e9e92) **[SUPERSEDED]**
   9. Zig YAML parser enhancement (Commit 7157f4a) **[COMPLETE YAML COMPLIANCE]**
+  10. Python client debug output to stderr (Commit ebfb7c4) **[CRITICAL - Fixed JSON parsing]**
+  11. Test data isolation with temp directories (Commit ba55249) **[CRITICAL - Fixed test contamination]**
 
-**Current Test Results** (After All Fixes - November 15, 2025):
-- **Python**: 3.6% (2/56) - 35 JSON parsing errors, 17 other failures
+**Current Test Results** (After All Fixes - November 15, 2025 Latest):
+- **Python**: 66.1% (37/56) - **+1,750% improvement!** (was 3.6%)
 - **Go**: 7.1% (4/56) - 50 failures (UDP buffer warnings on all)
 - **Rust**: 5.4% (3/56) - 51 failures (connection failures)
-- **Zig**: 0.0% (0/56) - 54 failures (1 YAML parse error on boolean-logic test, rest are client not implemented)
-- **Overall**: 4.0% (9/224 tests passing)
+- **Zig**: 0.0% (0/56) - 54 failures (client not fully implemented)
+- **Overall**: 19.6% (44/224 tests passing) - **+490% improvement!** (was 4.0%)
 
 **Current Status**:
 - **Connection handling**: ✅ FIXED - multiple connections work correctly
