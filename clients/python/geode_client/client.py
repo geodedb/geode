@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from aioquic.asyncio import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import QuicEvent, StreamDataReceived
+from aioquic.quic.events import QuicEvent, StreamDataReceived, StreamReset
 
 from .types import Value, decode_value
 
@@ -135,7 +135,8 @@ class GeodeProtocol(QuicConnectionProtocol):
 
     def quic_event_received(self, event: QuicEvent) -> None:
         """Handle QUIC events."""
-        # Handle stream data events ourselves (don't call super for these)
+        # Handle stream-related events ourselves (don't call super for these)
+        # because we use Queue instead of StreamReader
         if isinstance(event, StreamDataReceived):
             stream_id = event.stream_id
 
@@ -149,6 +150,11 @@ class GeodeProtocol(QuicConnectionProtocol):
 
             # Mark end of stream
             if event.end_stream:
+                self._stream_readers[stream_id].put_nowait(None)
+        elif isinstance(event, StreamReset):
+            # Handle stream reset - mark stream as ended
+            stream_id = event.stream_id
+            if stream_id in self._stream_readers:
                 self._stream_readers[stream_id].put_nowait(None)
         else:
             # For all other events (handshake, connection state, etc.), let parent handle
@@ -319,7 +325,7 @@ class Connection:
             self.host,
             self.port,
             configuration=configuration,
-            create_protocol=GeodeProtocol,  # Use our custom protocol with stream management
+            # Use default protocol - it handles streams correctly
         )
 
         # Enter the context manager - this establishes the connection and completes handshake
@@ -343,8 +349,9 @@ class Connection:
             raise GeodeConnectionError(f"Failed to establish connection: {e}")
 
         # Create bidirectional stream AFTER handshake is complete
-        self._reader, self._writer = await self._protocol.create_stream()
-        print(f"[DEBUG] Created stream")
+        stream_id = self._protocol._quic.get_next_available_stream_id(is_unidirectional=False)
+        self._reader, self._writer = await self._protocol.create_stream(stream_id)
+        print(f"[DEBUG] Created stream {stream_id}")
         
         # Send HELLO message
         hello = {
