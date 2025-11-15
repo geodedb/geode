@@ -100,6 +100,43 @@ build-zig:
 - Zig YAML parser now works correctly (supports literal block scalars `|`)
 - Previously reported YAML parsing errors were due to stale binary, not parser bugs
 
+### 7. Python Decimal JSON Serialization (Commit aeea55f)
+**File**: `clients/test-harness/runners/python_runner.py`
+**Impact**: Fixed TypeError when test results contain Decimal values
+
+**Root Cause**: Python's default JSON encoder cannot serialize `Decimal` objects. The decimal-values test and others with decimal results were failing with "TypeError: Object of type Decimal is not JSON serializable".
+
+**Fix**: Added `DecimalEncoder` class that extends `json.JSONEncoder`:
+```python
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
+```
+
+Updated `json.dumps()` call to use the custom encoder: `json.dumps(result, indent=2, cls=DecimalEncoder)`
+
+**Results**:
+- decimal-values test and similar tests can now serialize results properly
+
+### 8. Zig YAML Single-Quote Escaping (Commit 68e9e92)
+**File**: `clients/test-harness/run_tests.py`
+**Impact**: Fixed YAML parsing error on read-after-rollback test
+
+**Root Cause**: Python's YAML library generates single-quoted strings with `''` escaping for embedded single quotes (e.g., `'should_not_exist'` becomes `'should_not_exist'`). The Zig YAML parser doesn't support this escape sequence.
+
+**Fix**: Modified `represent_str()` to use double-quoted strings for strings containing single quotes:
+```python
+elif "'" in data:
+    # Use double-quoted to avoid '' escaping
+    return self.represent_scalar('tag:yaml.org,2002:str', data, style='"')
+```
+
+**Results**:
+- Zig YAML parser can now parse all test specs
+- read-after-rollback test no longer fails with YAML parse error
+
 ## ✅ CRITICAL BLOCKER RESOLVED (November 15, 2025 - Commit 824bf66)
 
 ### Root Cause: Blocking acceptStream() Hung Main Loop
@@ -239,24 +276,43 @@ Server accepts connections and completes TLS handshakes successfully. The stream
 
 ## Conclusion
 
-**✅ CRITICAL BLOCKER RESOLVED**:
-- ✅ 5 critical bugs fixed (async cleanup, YAML parsing, PULL handler, error handling, **blocking acceptStream()**)
-- ✅ Root cause identified and fixed: infinite blocking loop in `acceptStream()`
-- ✅ Server now accepts 100+ connections instead of only 1
-- ✅ All tests can run to completion (no more timeouts)
-- ✅ Comprehensive debug logging added throughout QUIC stack
+**✅ CRITICAL BLOCKERS RESOLVED + NEW FIXES**:
+- ✅ **8 critical bugs fixed** (November 15, 2025):
+  1. Python async generator cleanup (Commit 532943b)
+  2. Zig YAML literal block scalars (Commit 3d3a6c2)
+  3. Server PULL handler implementation (Commit b5f3108)
+  4. Server PULL error handling (Commit 96b1f36)
+  5. Blocking acceptStream() causing main loop hang (Commit 824bf66) **[CRITICAL]**
+  6. Zig runner stale binary issue (Commit e05d940)
+  7. Python Decimal JSON serialization (Commit aeea55f)
+  8. Zig YAML single-quote escaping (Commit 68e9e92)
+
+**Current Test Results** (Baseline - November 15, 2025):
+- **Python**: 3.6% (2/56) - 34 JSON parsing errors, 18 other failures
+- **Go**: 7.1% (4/56) - 50 failures (UDP buffer warnings on all)
+- **Rust**: 5.4% (3/56) - 51 failures (connection failures)
+- **Zig**: 0.0% (0/56) - Client library not yet implemented
+- **Overall**: 4.0% (9/224 tests passing)
 
 **Current Status**:
 - **Connection handling**: ✅ FIXED - multiple connections work correctly
-- **Test execution**: ✅ WORKING - all 56 Python tests ran to completion
-- **Test pass rate**: 3.6% (2/56) - separate issues from blocking bug
+- **Test execution**: ✅ WORKING - all tests run to completion (no timeouts)
+- **YAML parsing**: ✅ FIXED - supports multi-line and single-quote strings
+- **JSON serialization**: ✅ FIXED - Decimal values serialize properly
+
+**Remaining Issues**:
+1. **Python**: 34 "Expecting value: line 1 column 2" errors - server returning empty/invalid JSON
+2. **Rust**: All connection failures - TLS/ALPN configuration mismatch
+3. **Go**: UDP buffer size warnings - system configuration issue (non-fatal)
+4. **Zig**: Client library not implemented
 
 **Next Steps**:
-1. Systematically debug remaining test failures (most are JSON parsing or transaction errors)
-2. Test Go, Rust, and Zig clients with fixed server
-3. Investigate specific test failure patterns
+1. Debug Python JSON parsing errors (likely server-side response issue)
+2. Investigate Rust QUIC/TLS connection failures
+3. Document Go UDP buffer issue as known limitation
+4. Consider implementing basic Zig client library
 
-**Status**: 🟢 UNBLOCKED - Ready for systematic test debugging
+**Status**: 🟢 MAJOR PROGRESS - 8 fixes applied, test infrastructure working, ready for remaining fixes
 
 ---
 
