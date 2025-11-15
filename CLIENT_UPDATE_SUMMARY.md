@@ -405,6 +405,20 @@ Server accepts connections and completes TLS handshakes successfully. The stream
 3. Document Go UDP buffer issue as known limitation
 4. Consider implementing basic Zig client library
 
+## 📈 November 15 Evening Progress Snapshot
+
+### Server-Side Transaction Handling
+- Implemented QUIC handlers for `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, and `ROLLBACK_TO` inside `src/cli/main.zig`, mirroring the stdio behavior and unblocking every client that previously hung after its first transactional statement.
+- Responses now arrive immediately (no `PULL` required) so the existing Go/Python/Rust clients no longer deadlock waiting for an acknowledgement that never came.
+
+### Harness Status Accuracy
+- Updated `clients/test-harness/run_tests.py` to derive each result’s status from the runner-provided JSON summary instead of assuming “exit code 0 = success”.
+- Python/Go/Rust runner wrappers always emit JSON; even when they log QUIC warnings, the harness now records the true pass/fail/error disposition and surfaces the structured failure payloads.
+- Latest run (Nov 15, 20:35 UTC):
+  - Python: 39 passed / 15 failed / 2 skipped (remaining failures are real syntax/feature gaps, not harness artefacts).
+  - Go: 39 passed / 15 failed / 2 skipped (mirrors Python because both rely on GQL statements like `CREATE ROLE` that still report syntax errors).
+  - Rust: 3 passed / 51 failed / 2 skipped (still blocked on QUIC handshake settings; ALPN/TLS investigation pending).
+
 **Status**: 🟢 MAJOR PROGRESS - 8 fixes applied, test infrastructure working, ready for remaining fixes
 
 ---

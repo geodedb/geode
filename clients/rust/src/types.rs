@@ -144,7 +144,10 @@ impl Value {
         if self.kind == ValueKind::Int {
             Ok(self.int_value)
         } else {
-            Err(Error::type_error(format!("Cannot convert {:?} to int", self.kind)))
+            Err(Error::type_error(format!(
+                "Cannot convert {:?} to int",
+                self.kind
+            )))
         }
     }
 
@@ -153,26 +156,42 @@ impl Value {
         if self.kind == ValueKind::Bool {
             Ok(self.bool_value)
         } else {
-            Err(Error::type_error(format!("Cannot convert {:?} to bool", self.kind)))
+            Err(Error::type_error(format!(
+                "Cannot convert {:?} to bool",
+                self.kind
+            )))
         }
     }
 
     /// Get as string
     pub fn as_string(&self) -> Result<&str> {
         match self.kind {
-            ValueKind::String | ValueKind::Xml | ValueKind::Json | ValueKind::Jsonb |
-            ValueKind::Url | ValueKind::Domain | ValueKind::Uuid | ValueKind::Enum |
-            ValueKind::BitString => Ok(&self.string_value),
-            _ => Err(Error::type_error(format!("Cannot convert {:?} to string", self.kind)))
+            ValueKind::String
+            | ValueKind::Xml
+            | ValueKind::Json
+            | ValueKind::Jsonb
+            | ValueKind::Url
+            | ValueKind::Domain
+            | ValueKind::Uuid
+            | ValueKind::Enum
+            | ValueKind::BitString => Ok(&self.string_value),
+            _ => Err(Error::type_error(format!(
+                "Cannot convert {:?} to string",
+                self.kind
+            ))),
         }
     }
 
     /// Get as decimal
     pub fn as_decimal(&self) -> Result<Decimal> {
         if self.kind == ValueKind::Decimal {
-            self.decimal_value.ok_or_else(|| Error::type_error("Decimal value is None"))
+            self.decimal_value
+                .ok_or_else(|| Error::type_error("Decimal value is None"))
         } else {
-            Err(Error::type_error(format!("Cannot convert {:?} to decimal", self.kind)))
+            Err(Error::type_error(format!(
+                "Cannot convert {:?} to decimal",
+                self.kind
+            )))
         }
     }
 
@@ -181,7 +200,10 @@ impl Value {
         if self.kind == ValueKind::Array {
             Ok(&self.array_value)
         } else {
-            Err(Error::type_error(format!("Cannot convert {:?} to array", self.kind)))
+            Err(Error::type_error(format!(
+                "Cannot convert {:?} to array",
+                self.kind
+            )))
         }
     }
 
@@ -190,7 +212,10 @@ impl Value {
         if self.kind == ValueKind::Object {
             Ok(&self.object_value)
         } else {
-            Err(Error::type_error(format!("Cannot convert {:?} to object", self.kind)))
+            Err(Error::type_error(format!(
+                "Cannot convert {:?} to object",
+                self.kind
+            )))
         }
     }
 
@@ -199,34 +224,50 @@ impl Value {
         if self.kind == ValueKind::Bytea {
             Ok(&self.bytes_value)
         } else {
-            Err(Error::type_error(format!("Cannot convert {:?} to bytes", self.kind)))
+            Err(Error::type_error(format!(
+                "Cannot convert {:?} to bytes",
+                self.kind
+            )))
         }
     }
 
     /// Get as date
     pub fn as_date(&self) -> Result<NaiveDate> {
         if self.kind == ValueKind::Date {
-            self.date_value.ok_or_else(|| Error::type_error("Date value is None"))
+            self.date_value
+                .ok_or_else(|| Error::type_error("Date value is None"))
         } else {
-            Err(Error::type_error(format!("Cannot convert {:?} to date", self.kind)))
+            Err(Error::type_error(format!(
+                "Cannot convert {:?} to date",
+                self.kind
+            )))
         }
     }
 
     /// Get as timestamp
     pub fn as_timestamp(&self) -> Result<DateTime<Utc>> {
         if self.kind == ValueKind::Timestamp || self.kind == ValueKind::TimestampTz {
-            self.timestamp_value.ok_or_else(|| Error::type_error("Timestamp value is None"))
+            self.timestamp_value
+                .ok_or_else(|| Error::type_error("Timestamp value is None"))
         } else {
-            Err(Error::type_error(format!("Cannot convert {:?} to timestamp", self.kind)))
+            Err(Error::type_error(format!(
+                "Cannot convert {:?} to timestamp",
+                self.kind
+            )))
         }
     }
 
     /// Get as range
     pub fn as_range(&self) -> Result<&Range> {
         if self.kind == ValueKind::Range {
-            self.range_value.as_ref().ok_or_else(|| Error::type_error("Range value is None"))
+            self.range_value
+                .as_ref()
+                .ok_or_else(|| Error::type_error("Range value is None"))
         } else {
-            Err(Error::type_error(format!("Cannot convert {:?} to range", self.kind)))
+            Err(Error::type_error(format!(
+                "Cannot convert {:?} to range",
+                self.kind
+            )))
         }
     }
 
@@ -236,15 +277,23 @@ impl Value {
             ValueKind::Null => serde_json::Value::Null,
             ValueKind::Int => serde_json::Value::Number(self.int_value.into()),
             ValueKind::Bool => serde_json::Value::Bool(self.bool_value),
-            ValueKind::String | ValueKind::Xml | ValueKind::Json | ValueKind::Jsonb |
-            ValueKind::Url | ValueKind::Domain | ValueKind::Uuid | ValueKind::Enum |
-            ValueKind::BitString => serde_json::Value::String(self.string_value.clone()),
+            ValueKind::String
+            | ValueKind::Xml
+            | ValueKind::Json
+            | ValueKind::Jsonb
+            | ValueKind::Url
+            | ValueKind::Domain
+            | ValueKind::Uuid
+            | ValueKind::Enum
+            | ValueKind::BitString => serde_json::Value::String(self.string_value.clone()),
             ValueKind::Decimal => serde_json::Value::String(
-                self.decimal_value.map(|d| d.to_string()).unwrap_or_default()
+                self.decimal_value
+                    .map(|d| d.to_string())
+                    .unwrap_or_default(),
             ),
-            ValueKind::Array => serde_json::Value::Array(
-                self.array_value.iter().map(|v| v.to_json()).collect()
-            ),
+            ValueKind::Array => {
+                serde_json::Value::Array(self.array_value.iter().map(|v| v.to_json()).collect())
+            }
             ValueKind::Object => {
                 let mut map = serde_json::Map::new();
                 for (k, v) in &self.object_value {
@@ -259,10 +308,12 @@ impl Value {
                     serde_json::Value::String(format!("\\x{}", hex::encode(&self.bytes_value)))
                 }
             }
-            ValueKind::Date | ValueKind::Time | ValueKind::TimeTz |
-            ValueKind::Timestamp | ValueKind::TimestampTz | ValueKind::Interval => {
-                serde_json::Value::String(self.string_value.clone())
-            }
+            ValueKind::Date
+            | ValueKind::Time
+            | ValueKind::TimeTz
+            | ValueKind::Timestamp
+            | ValueKind::TimestampTz
+            | ValueKind::Interval => serde_json::Value::String(self.string_value.clone()),
             ValueKind::Range => {
                 if let Some(range) = &self.range_value {
                     let mut map = serde_json::Map::new();
@@ -272,7 +323,10 @@ impl Value {
                     if let Some(upper) = &range.upper {
                         map.insert("upper".to_string(), upper.to_json());
                     }
-                    map.insert("bounds".to_string(), serde_json::Value::String(range.bounds.clone()));
+                    map.insert(
+                        "bounds".to_string(),
+                        serde_json::Value::String(range.bounds.clone()),
+                    );
                     serde_json::Value::Object(map)
                 } else {
                     serde_json::Value::Null
@@ -313,9 +367,7 @@ pub fn decode_value(raw: &serde_json::Value, type_name: &str) -> Result<Value> {
                 Ok(Value::string(raw.to_string()))
             }
         }
-        "STRING" => {
-            Ok(Value::string(raw.as_str().unwrap_or("")))
-        }
+        "STRING" => Ok(Value::string(raw.as_str().unwrap_or(""))),
         "BYTEA" => {
             let s = raw.as_str().unwrap_or("");
             let bytes = if s.starts_with("\\x") {
@@ -370,9 +422,17 @@ pub fn decode_value(raw: &serde_json::Value, type_name: &str) -> Result<Value> {
         _ if type_upper.contains("RANGE") => {
             if let Some(obj) = raw.as_object() {
                 let range = Range {
-                    lower: obj.get("lower").and_then(|v| decode_value(v, "").ok().map(Box::new)),
-                    upper: obj.get("upper").and_then(|v| decode_value(v, "").ok().map(Box::new)),
-                    bounds: obj.get("bounds").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    lower: obj
+                        .get("lower")
+                        .and_then(|v| decode_value(v, "").ok().map(Box::new)),
+                    upper: obj
+                        .get("upper")
+                        .and_then(|v| decode_value(v, "").ok().map(Box::new)),
+                    bounds: obj
+                        .get("bounds")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 };
                 Ok(Value {
                     kind: ValueKind::Range,
@@ -386,9 +446,7 @@ pub fn decode_value(raw: &serde_json::Value, type_name: &str) -> Result<Value> {
         _ => {
             // Handle arrays and objects generically
             if let Some(arr) = raw.as_array() {
-                let values: Result<Vec<_>> = arr.iter()
-                    .map(|v| decode_value(v, ""))
-                    .collect();
+                let values: Result<Vec<_>> = arr.iter().map(|v| decode_value(v, "")).collect();
                 Ok(Value::array(values?))
             } else if let Some(obj) = raw.as_object() {
                 let mut map = HashMap::new();

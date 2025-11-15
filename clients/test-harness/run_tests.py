@@ -45,6 +45,18 @@ class IndentedDumper(yaml.Dumper):
 IndentedDumper.add_representer(str, IndentedDumper.represent_str)
 
 
+def derive_status_from_summary(result: Dict[str, Any]) -> str:
+    """Determine overall status from runner JSON summary."""
+    summary = result.get("summary", {})
+    errors = summary.get("errors", 0)
+    failed = summary.get("failed", 0)
+    if errors and errors > 0:
+        return "error"
+    if failed and failed > 0:
+        return "failed"
+    return "passed"
+
+
 @dataclass
 class TestResult:
     """Result of a single test execution."""
@@ -344,16 +356,22 @@ class PythonRunner(ClientRunner):
             duration_ms = (time.time() - start_time) * 1000
 
             # Parse result
-            if proc.returncode == 0:
-                result = json.loads(stdout.decode())
-                return TestResult(
-                    test_name=test["name"],
-                    client="python",
-                    status="passed",
-                    duration_ms=duration_ms,
-                    details=result,
-                )
-            else:
+            if stdout:
+                try:
+                    result = json.loads(stdout.decode())
+                    status = derive_status_from_summary(result)
+                    return TestResult(
+                        test_name=test["name"],
+                        client="python",
+                        status=status,
+                        duration_ms=duration_ms,
+                        details=result,
+                        error_message=stderr.decode() if status != "passed" and stderr else None,
+                    )
+                except json.JSONDecodeError:
+                    pass
+
+            if proc.returncode != 0:
                 return TestResult(
                     test_name=test["name"],
                     client="python",
@@ -361,6 +379,14 @@ class PythonRunner(ClientRunner):
                     duration_ms=duration_ms,
                     error_message=stderr.decode(),
                 )
+
+            return TestResult(
+                test_name=test["name"],
+                client="python",
+                status="error",
+                duration_ms=duration_ms,
+                error_message="Runner produced no output",
+            )
 
         except asyncio.TimeoutError:
             return TestResult(
@@ -418,16 +444,22 @@ class GoRunner(ClientRunner):
 
             duration_ms = (time.time() - start_time) * 1000
 
-            if proc.returncode == 0:
-                result = json.loads(stdout.decode())
-                return TestResult(
-                    test_name=test["name"],
-                    client="go",
-                    status="passed",
-                    duration_ms=duration_ms,
-                    details=result,
-                )
-            else:
+            if stdout:
+                try:
+                    result = json.loads(stdout.decode())
+                    status = derive_status_from_summary(result)
+                    return TestResult(
+                        test_name=test["name"],
+                        client="go",
+                        status=status,
+                        duration_ms=duration_ms,
+                        details=result,
+                        error_message=stderr.decode() if status != "passed" and stderr else None,
+                    )
+                except json.JSONDecodeError:
+                    pass
+
+            if proc.returncode != 0:
                 return TestResult(
                     test_name=test["name"],
                     client="go",
@@ -435,6 +467,14 @@ class GoRunner(ClientRunner):
                     duration_ms=duration_ms,
                     error_message=stderr.decode(),
                 )
+
+            return TestResult(
+                test_name=test["name"],
+                client="go",
+                status="error",
+                duration_ms=duration_ms,
+                error_message="Runner produced no output",
+            )
 
         except asyncio.TimeoutError:
             return TestResult(
@@ -544,16 +584,22 @@ class RustRunner(ClientRunner):
 
             duration_ms = (time.time() - start_time) * 1000
 
-            if proc.returncode == 0:
-                result = json.loads(stdout.decode())
-                return TestResult(
-                    test_name=test["name"],
-                    client="rust",
-                    status="passed",
-                    duration_ms=duration_ms,
-                    details=result,
-                )
-            else:
+            if stdout:
+                try:
+                    result = json.loads(stdout.decode())
+                    status = derive_status_from_summary(result)
+                    return TestResult(
+                        test_name=test["name"],
+                        client="rust",
+                        status=status,
+                        duration_ms=duration_ms,
+                        details=result,
+                        error_message=stderr.decode() if status != "passed" and stderr else None,
+                    )
+                except json.JSONDecodeError:
+                    pass
+
+            if proc.returncode != 0:
                 return TestResult(
                     test_name=test["name"],
                     client="rust",
@@ -561,6 +607,14 @@ class RustRunner(ClientRunner):
                     duration_ms=duration_ms,
                     error_message=stderr.decode(),
                 )
+
+            return TestResult(
+                test_name=test["name"],
+                client="rust",
+                status="error",
+                duration_ms=duration_ms,
+                error_message="Runner produced no output",
+            )
 
         except asyncio.TimeoutError:
             return TestResult(

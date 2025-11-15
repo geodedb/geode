@@ -1,6 +1,6 @@
 //! Geode client implementation using quinn library for QUIC transport.
 
-use quinn::{Endpoint, ClientConfig, Connection as QuinnConnection};
+use quinn::{ClientConfig, Connection as QuinnConnection, Endpoint};
 use rustls::pki_types::CertificateDer;
 use rustls::RootCertStore;
 use rustls_pemfile;
@@ -11,10 +11,24 @@ use std::io::BufReader;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{Error, Result};
 use crate::types::{decode_value, Value};
+
+const GEODE_ALPN: &[u8] = b"geode/1";
+
+fn apply_geode_alpn(config: &mut rustls::ClientConfig) {
+    config.alpn_protocols.clear();
+    config.alpn_protocols.push(GEODE_ALPN.to_vec());
+}
+
+fn build_client_config(crypto: rustls::ClientConfig) -> ClientConfig {
+    let mut client_config = ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap(),
+    ));
+    client_config.transport_config(Arc::new(create_transport_config()));
+    client_config
+}
 
 /// Column in a result set
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,7 +129,8 @@ impl Client {
             &self.hello_name,
             &self.hello_ver,
             &self.conformance,
-        ).await
+        )
+        .await
     }
 }
 
@@ -145,7 +160,9 @@ impl Connection {
         let addr_str = format!("{}:{}", host, port);
         let server_addr: SocketAddr = addr_str
             .to_socket_addrs()
-            .map_err(|e| Error::connection(&format!("Failed to resolve address {}: {}", addr_str, e)))?
+            .map_err(|e| {
+                Error::connection(&format!("Failed to resolve address {}: {}", addr_str, e))
+            })?
             .next()
             .ok_or_else(|| Error::connection(&format!("No addresses found for {}", addr_str)))?;
 
@@ -157,13 +174,21 @@ impl Connection {
         if skip_verify {
             eprintln!("[QUINN] TLS peer verification DISABLED (skip_verify=true)");
             // Create a dangerous configuration that skips verification
-            let crypto = rustls::ClientConfig::builder()
+            let mut crypto = rustls::ClientConfig::builder()
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
                 .with_no_client_auth();
+            apply_geode_alpn(&mut crypto);
+            eprintln!(
+                "[QUINN] Using ALPNs: {:?}",
+                crypto
+                    .alpn_protocols
+                    .iter()
+                    .map(|p| String::from_utf8_lossy(p).into_owned())
+                    .collect::<Vec<_>>()
+            );
 
-            let mut client_config = ClientConfig::new(Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap()));
-            client_config.transport_config(Arc::new(create_transport_config()));
+            let client_config = build_client_config(crypto);
 
             // Create endpoint
             let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
@@ -171,7 +196,10 @@ impl Connection {
             endpoint.set_default_client_config(client_config);
 
             // Connect
-            eprintln!("[QUINN] Connecting to {} with skip_verify=true", server_addr);
+            eprintln!(
+                "[QUINN] Connecting to {} with skip_verify=true",
+                server_addr
+            );
             let connection = endpoint
                 .connect(server_addr, host)
                 .map_err(|e| Error::connection(&format!("Failed to initiate connection: {}", e)))?
@@ -221,26 +249,38 @@ impl Connection {
                 let mut reader = BufReader::new(cert_file);
 
                 for cert_result in rustls_pemfile::certs(&mut reader) {
-                    let cert = cert_result
-                        .map_err(|e| Error::connection(&format!("Failed to parse CA cert: {}", e)))?;
-                    roots.add(cert)
+                    let cert = cert_result.map_err(|e| {
+                        Error::connection(&format!("Failed to parse CA cert: {}", e))
+                    })?;
+                    roots
+                        .add(cert)
                         .map_err(|e| Error::connection(&format!("Failed to add CA cert: {}", e)))?;
                 }
             } else {
                 eprintln!("[QUINN] No CA certificate specified, using system trust store");
-                for cert in rustls_native_certs::load_native_certs()
-                    .map_err(|e| Error::connection(&format!("Failed to load system certs: {}", e)))? {
-                    roots.add(cert)
-                        .map_err(|e| Error::connection(&format!("Failed to add system cert: {}", e)))?;
+                for cert in rustls_native_certs::load_native_certs().map_err(|e| {
+                    Error::connection(&format!("Failed to load system certs: {}", e))
+                })? {
+                    roots.add(cert).map_err(|e| {
+                        Error::connection(&format!("Failed to add system cert: {}", e))
+                    })?;
                 }
             }
 
-            let crypto = rustls::ClientConfig::builder()
+            let mut crypto = rustls::ClientConfig::builder()
                 .with_root_certificates(roots)
                 .with_no_client_auth();
+            apply_geode_alpn(&mut crypto);
+            eprintln!(
+                "[QUINN] Using ALPNs: {:?}",
+                crypto
+                    .alpn_protocols
+                    .iter()
+                    .map(|p| String::from_utf8_lossy(p).into_owned())
+                    .collect::<Vec<_>>()
+            );
 
-            let mut client_config = ClientConfig::new(Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap()));
-            client_config.transport_config(Arc::new(create_transport_config()));
+            let client_config = build_client_config(crypto);
 
             // Create endpoint
             let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
@@ -281,7 +321,12 @@ impl Connection {
         }
     }
 
-    async fn send_hello(&mut self, hello_name: &str, hello_ver: &str, conformance: &str) -> Result<()> {
+    async fn send_hello(
+        &mut self,
+        hello_name: &str,
+        hello_ver: &str,
+        conformance: &str,
+    ) -> Result<()> {
         let hello = serde_json::json!({
             "type": "HELLO",
             "client_name": hello_name,
@@ -304,7 +349,8 @@ impl Connection {
 
         eprintln!("[QUINN] Writing JSON: {}", line.trim());
 
-        self.send_stream.write_all(line.as_bytes())
+        self.send_stream
+            .write_all(line.as_bytes())
             .await
             .map_err(|e| Error::connection(&format!("Failed to write to stream: {}", e)))?;
 
@@ -325,10 +371,7 @@ impl Connection {
 
             // Read more data from the stream
             let mut buf = [0u8; 4096];
-            let n = tokio::time::timeout(
-                Duration::from_secs(5),
-                self.recv_stream.read(&mut buf)
-            )
+            let n = tokio::time::timeout(Duration::from_secs(5), self.recv_stream.read(&mut buf))
                 .await
                 .map_err(|_| Error::connection("Read timeout"))?
                 .map_err(|e| Error::connection(&format!("Stream read error: {}", e)))?
@@ -339,7 +382,11 @@ impl Connection {
     }
 
     /// Execute a query
-    pub async fn query(&mut self, text: &str, params: Option<HashMap<String, serde_json::Value>>) -> Result<Page> {
+    pub async fn query(
+        &mut self,
+        text: &str,
+        params: Option<HashMap<String, serde_json::Value>>,
+    ) -> Result<Page> {
         let mut run_msg = serde_json::json!({"type": "RUN_GQL", "text": text});
         if let Some(p) = params {
             run_msg["params"] = serde_json::to_value(p)?;
@@ -351,17 +398,29 @@ impl Connection {
         let schema_line = self.read_line().await?;
         let schema: serde_json::Value = serde_json::from_str(&schema_line)?;
 
-        let result = schema.get("result").ok_or_else(|| Error::connection("Missing result"))?;
+        let result = schema
+            .get("result")
+            .ok_or_else(|| Error::connection("Missing result"))?;
         if result.get("type").and_then(|t| t.as_str()) == Some("ERROR") {
-            let code = result.get("code").and_then(|c| c.as_str()).unwrap_or("UNKNOWN");
-            let message = result.get("message").and_then(|m| m.as_str()).unwrap_or("Query failed");
+            let code = result
+                .get("code")
+                .and_then(|c| c.as_str())
+                .unwrap_or("UNKNOWN");
+            let message = result
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Query failed");
             return Err(Error::query(code, message));
         }
 
         let columns: Vec<Column> = serde_json::from_value(
-            result.get("columns").cloned().unwrap_or(serde_json::json!([]))
+            result
+                .get("columns")
+                .cloned()
+                .unwrap_or(serde_json::json!([])),
         )?;
-        let type_map: HashMap<String, String> = columns.iter()
+        let type_map: HashMap<String, String> = columns
+            .iter()
             .map(|c| (c.name.clone(), c.col_type.clone()))
             .collect();
 
@@ -370,11 +429,14 @@ impl Connection {
             "type": "PULL",
             "request_id": 1,
             "page_size": self.page_size,
-        })).await?;
+        }))
+        .await?;
 
         let bindings_line = self.read_line().await?;
         let bindings: serde_json::Value = serde_json::from_str(&bindings_line)?;
-        let bindings_result = bindings.get("result").ok_or_else(|| Error::connection("Missing result"))?;
+        let bindings_result = bindings
+            .get("result")
+            .ok_or_else(|| Error::connection("Missing result"))?;
 
         if bindings_result.get("type").and_then(|t| t.as_str()) == Some("PROFILE") {
             return Ok(Page {
@@ -387,37 +449,56 @@ impl Connection {
         }
 
         let empty_vec = vec![];
-        let raw_rows = bindings_result.get("rows").and_then(|r| r.as_array()).unwrap_or(&empty_vec);
+        let raw_rows = bindings_result
+            .get("rows")
+            .and_then(|r| r.as_array())
+            .unwrap_or(&empty_vec);
         let rows = parse_rows(raw_rows, &type_map)?;
 
         Ok(Page {
             columns,
             rows,
-            ordered: bindings_result.get("ordered").and_then(|o| o.as_bool()).unwrap_or(false),
-            order_keys: bindings_result.get("order_keys").and_then(|ok| {
-                ok.as_array().map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            }).unwrap_or_default(),
-            final_page: bindings_result.get("final").and_then(|f| f.as_bool()).unwrap_or(false),
+            ordered: bindings_result
+                .get("ordered")
+                .and_then(|o| o.as_bool())
+                .unwrap_or(false),
+            order_keys: bindings_result
+                .get("order_keys")
+                .and_then(|ok| {
+                    ok.as_array().map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default(),
+            final_page: bindings_result
+                .get("final")
+                .and_then(|f| f.as_bool())
+                .unwrap_or(false),
         })
     }
 
     /// Begin a transaction
     pub async fn begin(&mut self) -> Result<()> {
-        self.write_json(&serde_json::json!({"type": "BEGIN"})).await?;
+        self.write_json(&serde_json::json!({"type": "BEGIN"}))
+            .await?;
         self.read_line().await?;
         Ok(())
     }
 
     /// Commit a transaction
     pub async fn commit(&mut self) -> Result<()> {
-        self.write_json(&serde_json::json!({"type": "COMMIT"})).await?;
+        self.write_json(&serde_json::json!({"type": "COMMIT"}))
+            .await?;
         self.read_line().await?;
         Ok(())
     }
 
     /// Rollback a transaction
     pub async fn rollback(&mut self) -> Result<()> {
-        self.write_json(&serde_json::json!({"type": "ROLLBACK"})).await?;
+        self.write_json(&serde_json::json!({"type": "ROLLBACK"}))
+            .await?;
         self.read_line().await?;
         Ok(())
     }
@@ -427,7 +508,8 @@ impl Connection {
         self.write_json(&serde_json::json!({
             "type": "SAVEPOINT",
             "name": name
-        })).await?;
+        }))
+        .await?;
         self.read_line().await?;
         Ok(Savepoint {
             name: name.to_string(),
@@ -439,7 +521,8 @@ impl Connection {
         self.write_json(&serde_json::json!({
             "type": "ROLLBACK_TO",
             "name": savepoint.name
-        })).await?;
+        }))
+        .await?;
         self.read_line().await?;
         Ok(())
     }
@@ -451,7 +534,10 @@ impl Connection {
     }
 }
 
-fn parse_rows(raw_rows: &[serde_json::Value], type_map: &HashMap<String, String>) -> Result<Vec<HashMap<String, Value>>> {
+fn parse_rows(
+    raw_rows: &[serde_json::Value],
+    type_map: &HashMap<String, String>,
+) -> Result<Vec<HashMap<String, Value>>> {
     let mut rows = Vec::new();
     for raw_row in raw_rows {
         if let Some(obj) = raw_row.as_object() {
@@ -509,8 +595,16 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         vec![
             rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
             rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
             rustls::SignatureScheme::ED25519,
+            rustls::SignatureScheme::ED448,
         ]
     }
 }

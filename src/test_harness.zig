@@ -2,6 +2,12 @@ const std = @import("std");
 const gql = @import("lib.zig");
 const execution = @import("execution.zig");
 const txn_session = @import("txn_session.zig");
+const auth = @import("security/auth.zig");
+const rls = @import("security/rls.zig");
+const user_manager = @import("security/user_manager.zig");
+const user_storage = @import("storage/user_storage.zig");
+const storage_inmemory = @import("storage/inmemory.zig");
+const storage_interface = @import("interface");
 const value_types = @import("value_types.zig");
 
 // Cleanup function for test catalog - called at end of tests

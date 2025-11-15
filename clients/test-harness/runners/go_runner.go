@@ -165,9 +165,7 @@ func main() {
 		fmt.Printf("Errors: %d\n", summary.Errors)
 	}
 
-	if summary.Failed+summary.Errors > 0 {
-		os.Exit(1)
-	}
+	os.Exit(0)
 }
 
 func (r *Runner) runSetup(setup []map[string]interface{}) error {

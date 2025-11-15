@@ -130,10 +130,18 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Exec
         return executeReturnClauseWithNodes(allocator, q.ret, all_created_nodes, all_created_relationships);
     }
 
-    // Default: return empty result if no RETURN clause
+    // Default: return summary row showing how many entities were created
+    var columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "nodes_created");
+
+    var rows = try allocator.alloc([]Value, 1);
+    var summary_row = try allocator.alloc(Value, 1);
+    summary_row[0] = Value{ .Int = total_created_count };
+    rows[0] = summary_row;
+
     return ExecutionResult{
-        .columns = &.{},
-        .rows = &.{},
+        .columns = columns,
+        .rows = rows,
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
 }

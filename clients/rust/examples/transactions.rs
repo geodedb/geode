@@ -1,4 +1,3 @@
-
 //! Transaction and savepoint example for Geode Rust client.
 //!
 //! Demonstrates:
@@ -53,7 +52,10 @@ fn savepoint_example() -> Result<()> {
     conn.begin()?;
 
     // Create initial data
-    conn.query("CREATE (p:Person {name: 'Charlie', age: 35, city: 'NYC'})", None)?;
+    conn.query(
+        "CREATE (p:Person {name: 'Charlie', age: 35, city: 'NYC'})",
+        None,
+    )?;
     println!("Created person: Charlie, age 35, city NYC");
 
     // Create a savepoint before making changes
@@ -88,9 +90,12 @@ fn savepoint_example() -> Result<()> {
     )?;
 
     if let Some(row) = page.rows.first() {
-        println!("Final state: age={}, city={}",
+        println!(
+            "Final state: age={}, city={}",
             row.get("age").map(|v| format!("{}", v)).unwrap_or_default(),
-            row.get("city").map(|v| format!("{}", v)).unwrap_or_default()
+            row.get("city")
+                .map(|v| format!("{}", v))
+                .unwrap_or_default()
         );
     }
 
@@ -177,35 +182,31 @@ async fn pool_with_transactions_example() -> Result<()> {
         .page_size(1000);
 
     // Simulate concurrent transactions
-    let handles: Vec<_> = vec![
-        ("David", 28),
-        ("Emma", 32),
-        ("Frank", 45),
-    ]
-    .into_iter()
-    .map(|(name, age)| {
-        let pool_clone = pool.clone();
-        tokio::spawn(async move {
-            let mut conn = pool_clone.acquire().await?;
-            conn.begin()?;
+    let handles: Vec<_> = vec![("David", 28), ("Emma", 32), ("Frank", 45)]
+        .into_iter()
+        .map(|(name, age)| {
+            let pool_clone = pool.clone();
+            tokio::spawn(async move {
+                let mut conn = pool_clone.acquire().await?;
+                conn.begin()?;
 
-            match conn.query(
-                &format!("CREATE (p:Person {{name: '{}', age: {}}})", name, age),
-                None,
-            ) {
-                Ok(_) => {
-                    conn.commit()?;
-                    println!("Created person: {}, age {}", name, age);
-                    Ok(())
+                match conn.query(
+                    &format!("CREATE (p:Person {{name: '{}', age: {}}})", name, age),
+                    None,
+                ) {
+                    Ok(_) => {
+                        conn.commit()?;
+                        println!("Created person: {}, age {}", name, age);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        conn.rollback()?;
+                        Err(e)
+                    }
                 }
-                Err(e) => {
-                    conn.rollback()?;
-                    Err(e)
-                }
-            }
+            })
         })
-    })
-    .collect();
+        .collect();
 
     // Wait for all tasks to complete
     for handle in handles {

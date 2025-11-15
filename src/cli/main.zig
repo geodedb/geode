@@ -221,6 +221,49 @@ fn handleQuicStreamThread(allocator: std.mem.Allocator, conn: anytype, stream: a
     };
 }
 
+fn runSimpleStatement(
+    writer: anytype,
+    allocator: std.mem.Allocator,
+    statement: []const u8,
+    authenticated_username: ?[]const u8,
+) !void {
+    var query_allocator = allocator;
+    const options = geode.test_harness.QueryOptions{
+        .user = authenticated_username,
+        .strict_offset_validation = true,
+    };
+    const result_data = geode.test_harness.runQueryWithAuth(&query_allocator, statement, options) catch |err| {
+        const err_msg = try std.fmt.allocPrint(
+            allocator,
+            "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}",
+            .{@errorName(err)},
+        );
+        defer allocator.free(err_msg);
+        try writer.writeAll(err_msg);
+        try writer.writeAll("\n");
+        return;
+    };
+    defer query_allocator.free(result_data);
+    try writer.writeAll(result_data);
+    try writer.writeAll("\n");
+}
+
+fn handleControlStatement(
+    writer: anytype,
+    allocator: std.mem.Allocator,
+    statement: []const u8,
+    authenticated_username: ?[]const u8,
+    last_result_data: ?*?[]const u8,
+) !void {
+    if (last_result_data) |ptr| {
+        if (ptr.*) |data| {
+            allocator.free(data);
+        }
+        ptr.* = null;
+    }
+    try runSimpleStatement(writer, allocator, statement, authenticated_username);
+}
+
 // Handle a QUIC stream and process queries
 fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !void {
     defer stream.close();
@@ -544,6 +587,45 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
                 const end_response = "{\"status_class\":\"00000\",\"result\":{\"type\":\"END\"}}\n";
                 try stream.writeAll(end_response);
             }
+        } else if (std.mem.eql(u8, type_str, "BEGIN")) {
+            try handleControlStatement(stream, allocator, "BEGIN", authenticated_username, &last_result_data);
+            continue;
+        } else if (std.mem.eql(u8, type_str, "COMMIT")) {
+            try handleControlStatement(stream, allocator, "COMMIT", authenticated_username, &last_result_data);
+            continue;
+        } else if (std.mem.eql(u8, type_str, "ROLLBACK")) {
+            try handleControlStatement(stream, allocator, "ROLLBACK", authenticated_username, &last_result_data);
+            continue;
+        } else if (std.mem.eql(u8, type_str, "SAVEPOINT")) {
+            const name_value = obj.get("name") orelse {
+                const error_response = "{\"status_class\":\"58000\",\"error\":\"SAVEPOINT requires name\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            };
+            if (name_value != .string) {
+                const error_response = "{\"status_class\":\"58000\",\"error\":\"SAVEPOINT name must be string\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            }
+            const savepoint_stmt = try std.fmt.allocPrint(allocator, "SAVEPOINT {s}", .{name_value.string});
+            defer allocator.free(savepoint_stmt);
+            try handleControlStatement(stream, allocator, savepoint_stmt, authenticated_username, &last_result_data);
+            continue;
+        } else if (std.mem.eql(u8, type_str, "ROLLBACK_TO")) {
+            const name_value = obj.get("name") orelse {
+                const error_response = "{\"status_class\":\"58000\",\"error\":\"ROLLBACK_TO requires name\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            };
+            if (name_value != .string) {
+                const error_response = "{\"status_class\":\"58000\",\"error\":\"ROLLBACK_TO name must be string\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            }
+            const rollback_stmt = try std.fmt.allocPrint(allocator, "ROLLBACK TO {s}", .{name_value.string});
+            defer allocator.free(rollback_stmt);
+            try handleControlStatement(stream, allocator, rollback_stmt, authenticated_username, &last_result_data);
+            continue;
         } else {
             // Unknown message type
             const error_msg = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"58000\",\"error\":\"Unknown message type: {s}\"}}\n", .{type_str});
@@ -1587,19 +1669,39 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"END\"}}\n");
             }
         } else if (std.mem.eql(u8, msg_type.string, "BEGIN")) {
-            // Transaction begin - not implemented yet, send error response
-            const error_resp = "{\"result\":{\"type\":\"ERROR\",\"code\":\"0A000\",\"message\":\"Transactions not yet implemented\"}}\n";
-            _ = try stdout_fd.writeAll(error_resp);
+            try handleControlStatement(stdout_fd, allocator, "BEGIN", null, null);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "COMMIT")) {
-            // Transaction commit - not implemented yet, send error response
-            const error_resp = "{\"result\":{\"type\":\"ERROR\",\"code\":\"0A000\",\"message\":\"Transactions not yet implemented\"}}\n";
-            _ = try stdout_fd.writeAll(error_resp);
+            try handleControlStatement(stdout_fd, allocator, "COMMIT", null, null);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK")) {
-            // Transaction rollback - not implemented yet, send error response
-            const error_resp = "{\"result\":{\"type\":\"ERROR\",\"code\":\"0A000\",\"message\":\"Transactions not yet implemented\"}}\n";
-            _ = try stdout_fd.writeAll(error_resp);
+            try handleControlStatement(stdout_fd, allocator, "ROLLBACK", null, null);
+            continue;
+        } else if (std.mem.eql(u8, msg_type.string, "SAVEPOINT")) {
+            const name_value = obj.get("name") orelse {
+                _ = try stdout_fd.writeAll("{\"status_class\":\"58000\",\"error\":\"SAVEPOINT requires name\"}\n");
+                continue;
+            };
+            if (name_value != .string) {
+                _ = try stdout_fd.writeAll("{\"status_class\":\"58000\",\"error\":\"SAVEPOINT name must be string\"}\n");
+                continue;
+            }
+            const savepoint_stmt = try std.fmt.allocPrint(allocator, "SAVEPOINT {s}", .{name_value.string});
+            defer allocator.free(savepoint_stmt);
+            try handleControlStatement(stdout_fd, allocator, savepoint_stmt, null, null);
+            continue;
+        } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK_TO")) {
+            const name_value = obj.get("name") orelse {
+                _ = try stdout_fd.writeAll("{\"status_class\":\"58000\",\"error\":\"ROLLBACK_TO requires name\"}\n");
+                continue;
+            };
+            if (name_value != .string) {
+                _ = try stdout_fd.writeAll("{\"status_class\":\"58000\",\"error\":\"ROLLBACK_TO name must be string\"}\n");
+                continue;
+            }
+            const rollback_stmt = try std.fmt.allocPrint(allocator, "ROLLBACK TO {s}", .{name_value.string});
+            defer allocator.free(rollback_stmt);
+            try handleControlStatement(stdout_fd, allocator, rollback_stmt, null, null);
             continue;
         }
     }

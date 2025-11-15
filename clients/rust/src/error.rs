@@ -14,10 +14,7 @@ pub enum Error {
 
     /// Query execution error
     #[error("Query error: {code} - {message}")]
-    Query {
-        code: String,
-        message: String,
-    },
+    Query { code: String, message: String },
 
     /// Authentication error
     #[error("Authentication error: {0}")]
@@ -99,4 +96,3 @@ impl Error {
         Error::Pool(msg.into())
     }
 }
-

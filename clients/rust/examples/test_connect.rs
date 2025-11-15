@@ -1,21 +1,32 @@
 use geode_client::Client;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     println!("[TEST] Starting Rust client connection test...");
-    println!("[TEST] Connecting to localhost:7567");
+    println!("[TEST] Connecting to localhost:8443");
 
     // Try with skip_verify first
-    let client = Client::new("localhost", 7567)
-        .skip_verify(true);
+    let client = Client::new("localhost", 8443).skip_verify(true);
 
     println!("[TEST] Client configured with skip_verify=true");
 
-    match client.connect() {
-        Ok(conn) => {
+    match client.connect().await {
+        Ok(mut conn) => {
             println!("[TEST] ✓ Successfully connected!");
-            println!("[TEST] Connection established with quiche QUIC library");
+            println!("[TEST] Connection established with Quinn QUIC library");
 
-            // Note: Query execution would need async runtime, skipping for now
+            // Try a simple query
+            match conn.query("RETURN 1 AS x", None).await {
+                Ok(page) => {
+                    println!("[TEST] ✓ Query successful!");
+                    println!("[TEST] Columns: {:?}", page.columns);
+                    println!("[TEST] Rows: {:?}", page.rows);
+                }
+                Err(e) => {
+                    eprintln!("[TEST] ✗ Query failed: {}", e);
+                }
+            }
+
             println!("[TEST] Connection successful - test complete");
         }
         Err(e) => {

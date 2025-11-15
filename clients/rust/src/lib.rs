@@ -44,12 +44,12 @@ pub mod query_builder;
 pub mod types;
 
 // Re-export main types
-pub use client::{Client, Connection, Page, Column};
+pub use auth::{AuthClient, Permission, RLSPolicy, Role, SessionInfo, User};
+pub use client::{Client, Column, Connection, Page};
 pub use error::{Error, Result};
-pub use query_builder::{QueryBuilder, PatternBuilder, PredicateBuilder, EdgeDirection};
-pub use types::{Value, ValueKind, Range};
-pub use auth::{AuthClient, User, Role, Permission, RLSPolicy, SessionInfo};
 pub use pool::ConnectionPool;
+pub use query_builder::{EdgeDirection, PatternBuilder, PredicateBuilder, QueryBuilder};
+pub use types::{Range, Value, ValueKind};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

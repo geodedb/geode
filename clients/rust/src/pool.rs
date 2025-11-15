@@ -39,10 +39,7 @@ impl ConnectionPool {
 
     /// Acquire a connection from the pool
     pub async fn acquire(&self) -> Result<PooledConnection> {
-        let permit = Arc::clone(&self.semaphore)
-            .acquire_owned()
-            .await
-            .unwrap();
+        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
 
         // Try to get an existing connection
         let conn = {

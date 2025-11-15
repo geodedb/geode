@@ -29,8 +29,7 @@ fn main() -> Result<()> {
     params.insert("name".to_string(), serde_json::json!("Alice"));
     params.insert("age".to_string(), serde_json::json!(30));
 
-    let page = conn
-        .query("RETURN $name AS name, $age AS age", Some(params))?;
+    let page = conn.query("RETURN $name AS name, $age AS age", Some(params))?;
     println!("\nParameterized query results:");
     for row in &page.rows {
         if let (Ok(name), Ok(age)) = (
@@ -49,12 +48,10 @@ fn main() -> Result<()> {
     create_params.insert("name".to_string(), serde_json::json!("Bob"));
     create_params.insert("age".to_string(), serde_json::json!(25));
 
-    match conn
-        .query(
-            "CREATE (p:Person {name: $name, age: $age})",
-            Some(create_params),
-        )
-    {
+    match conn.query(
+        "CREATE (p:Person {name: $name, age: $age})",
+        Some(create_params),
+    ) {
         Ok(_) => {
             conn.commit()?;
             println!("Transaction committed successfully");

@@ -573,9 +573,5 @@ async fn main() -> Result<()> {
         println!("Errors: {}", output.summary.errors);
     }
 
-    if output.summary.failed + output.summary.errors > 0 {
-        std::process::exit(1);
-    }
-
     Ok(())
 }

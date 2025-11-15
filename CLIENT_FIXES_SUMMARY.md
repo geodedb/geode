@@ -302,3 +302,15 @@ python3 run_tests.py --server localhost:8443 --spec specs/connections.yaml --ver
 **Impact**: This is the PRIMARY blocker. Until the connection queue issue is resolved, the server will only accept one connection, making multi-test runs impossible.
 
 **Status**: 🔴 CRITICAL - Requires additional investigation into msquic internals and queue management.
+
+## ✅ November 15 Evening Updates
+
+### QUIC Transaction Message Support
+- Added `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, and `ROLLBACK_TO` handlers to `src/cli/main.zig` so QUIC clients no longer time out after issuing transaction control messages.
+- Each handler executes the corresponding GQL statement through `geode.test_harness.runQueryWithAuth` and returns an immediate JSON response, matching the behavior of the legacy CLI/stdin path.
+- STDIO mode now reuses the same helpers, ensuring consistent transaction semantics regardless of transport.
+
+### Harness Result Parsing Improvements
+- `clients/test-harness/run_tests.py` now derives the per-test status from each runner’s JSON summary rather than trusting process exit codes.
+- The Python, Go, and Rust runners still emit detailed JSON on stdout while optional warnings remain on stderr; the harness records failures accurately even when runners log diagnostic output.
+- With these changes, the Python client now progresses past transaction blockers (39/56 tests currently passing, up from 37) and reported results reflect the real assertion failures instead of opaque “runner error” messages.

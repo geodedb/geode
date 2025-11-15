@@ -25,32 +25,38 @@ impl QueryBuilder {
     }
 
     pub fn match_pattern(mut self, pattern: &str) -> Self {
-        self.clauses.push(("MATCH".to_string(), pattern.to_string()));
+        self.clauses
+            .push(("MATCH".to_string(), pattern.to_string()));
         self
     }
 
     pub fn optional_match(mut self, pattern: &str) -> Self {
-        self.clauses.push(("OPTIONAL MATCH".to_string(), pattern.to_string()));
+        self.clauses
+            .push(("OPTIONAL MATCH".to_string(), pattern.to_string()));
         self
     }
 
     pub fn where_clause(mut self, condition: &str) -> Self {
-        self.clauses.push(("WHERE".to_string(), condition.to_string()));
+        self.clauses
+            .push(("WHERE".to_string(), condition.to_string()));
         self
     }
 
     pub fn with(mut self, expressions: &[&str]) -> Self {
-        self.clauses.push(("WITH".to_string(), expressions.join(", ")));
+        self.clauses
+            .push(("WITH".to_string(), expressions.join(", ")));
         self
     }
 
     pub fn return_(mut self, expressions: &[&str]) -> Self {
-        self.clauses.push(("RETURN".to_string(), expressions.join(", ")));
+        self.clauses
+            .push(("RETURN".to_string(), expressions.join(", ")));
         self
     }
 
     pub fn order_by(mut self, expressions: &[&str]) -> Self {
-        self.clauses.push(("ORDER BY".to_string(), expressions.join(", ")));
+        self.clauses
+            .push(("ORDER BY".to_string(), expressions.join(", ")));
         self
     }
 
@@ -67,7 +73,9 @@ impl QueryBuilder {
     }
 
     pub fn build(self) -> (String, HashMap<String, serde_json::Value>) {
-        let query = self.clauses.iter()
+        let query = self
+            .clauses
+            .iter()
             .map(|(clause_type, content)| {
                 if content.is_empty() {
                     clause_type.clone()
@@ -94,7 +102,9 @@ pub struct PatternBuilder {
 
 impl PatternBuilder {
     pub fn new() -> Self {
-        Self { elements: Vec::new() }
+        Self {
+            elements: Vec::new(),
+        }
     }
 
     pub fn node(mut self, variable: &str, label: &str) -> Self {
@@ -153,7 +163,9 @@ pub struct PredicateBuilder {
 
 impl PredicateBuilder {
     pub fn new() -> Self {
-        Self { conditions: Vec::new() }
+        Self {
+            conditions: Vec::new(),
+        }
     }
 
     pub fn greater_than(mut self, left: &str, right: &str) -> Self {
