@@ -145,12 +145,12 @@ quic-test: build
 # Client test targets
 client-test-python: build
 	@echo "Testing Python client..."
-	@if [ -x "clients/python/test_client.py" ] || [ -f "test_msquic_protocol.py" ]; then \
-		python3 test_msquic_protocol.py 2>/dev/null || \
-		(cd clients/python && python3 test_client.py) 2>/dev/null || \
-		echo "Python client test requires server running"; \
+	@if [ -f "test_msquic_protocol.py" ] && [ -x "scripts/test_client_with_server.sh" ]; then \
+		scripts/test_client_with_server.sh test_msquic_protocol.py; \
+	elif [ -f "clients/python/test_client.py" ] && [ -x "scripts/test_client_with_server.sh" ]; then \
+		cd clients/python && ../../scripts/test_client_with_server.sh test_client.py; \
 	else \
-		echo "Python client tests not found"; \
+		echo "Python client tests not found or test runner not available"; \
 	fi
 
 client-test-go: go-build
