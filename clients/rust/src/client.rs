@@ -1,34 +1,17 @@
-//! Geode client implementation using quinn library for QUIC transport.
+//! Geode client implementation using s2n-quic library for QUIC transport.
 
-use quinn::{ClientConfig, Connection as QuinnConnection, Endpoint};
-use rustls::pki_types::CertificateDer;
-use rustls::RootCertStore;
-use rustls_pemfile;
+use s2n_quic::client::Connect;
+use s2n_quic::stream::BidirectionalStream;
+use s2n_quic::Client as QuicClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
-use std::time::Duration;
+use std::net::SocketAddr;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::error::{Error, Result};
 use crate::types::{decode_value, Value};
 
 const GEODE_ALPN: &[u8] = b"geode/1";
-
-fn apply_geode_alpn(config: &mut rustls::ClientConfig) {
-    config.alpn_protocols.clear();
-    config.alpn_protocols.push(GEODE_ALPN.to_vec());
-}
-
-fn build_client_config(crypto: rustls::ClientConfig) -> ClientConfig {
-    let mut client_config = ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap(),
-    ));
-    client_config.transport_config(Arc::new(create_transport_config()));
-    client_config
-}
 
 /// Column in a result set
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,7 +37,7 @@ pub struct Savepoint {
     pub name: String,
 }
 
-/// Geode database client using quinn
+/// Geode database client using s2n-quic
 #[derive(Clone)]
 pub struct Client {
     host: String,
@@ -134,13 +117,11 @@ impl Client {
     }
 }
 
-/// A single connection to Geode via QUIC (using quinn)
+/// A single connection to Geode via QUIC (using s2n-quic)
 pub struct Connection {
-    connection: QuinnConnection,
-    send_stream: quinn::SendStream,
-    recv_stream: quinn::RecvStream,
+    reader: BufReader<tokio::io::ReadHalf<BidirectionalStream>>,
+    writer: tokio::io::WriteHalf<BidirectionalStream>,
     page_size: usize,
-    read_buffer: Vec<u8>,
 }
 
 impl Connection {
@@ -154,457 +135,387 @@ impl Connection {
         hello_ver: &str,
         conformance: &str,
     ) -> Result<Self> {
-        eprintln!("[QUINN] Creating connection to {}:{}", host, port);
+        eprintln!("[S2N-QUIC] Creating connection to {}:{}", host, port);
 
-        // Resolve server address
-        let addr_str = format!("{}:{}", host, port);
-        let server_addr: SocketAddr = addr_str
-            .to_socket_addrs()
-            .map_err(|e| {
-                Error::connection(&format!("Failed to resolve address {}: {}", addr_str, e))
-            })?
-            .next()
-            .ok_or_else(|| Error::connection(&format!("No addresses found for {}", addr_str)))?;
-
-        eprintln!("[QUINN] Resolved server address: {}", server_addr);
-
-        // Configure TLS
-        let mut roots = RootCertStore::empty();
+        // Build TLS config
+        let mut tls_builder = s2n_quic::provider::tls::default::Client::builder();
 
         if skip_verify {
-            eprintln!("[QUINN] TLS peer verification DISABLED (skip_verify=true)");
-            // Create a dangerous configuration that skips verification
-            let mut crypto = rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-                .with_no_client_auth();
-            apply_geode_alpn(&mut crypto);
-            eprintln!(
-                "[QUINN] Using ALPNs: {:?}",
-                crypto
-                    .alpn_protocols
-                    .iter()
-                    .map(|p| String::from_utf8_lossy(p).into_owned())
-                    .collect::<Vec<_>>()
-            );
-
-            let client_config = build_client_config(crypto);
-
-            // Create endpoint
-            let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
-                .map_err(|e| Error::connection(&format!("Failed to create endpoint: {}", e)))?;
-            endpoint.set_default_client_config(client_config);
-
-            // Connect
-            eprintln!(
-                "[QUINN] Connecting to {} with skip_verify=true",
-                server_addr
-            );
-            let connection = endpoint
-                .connect(server_addr, host)
-                .map_err(|e| Error::connection(&format!("Failed to initiate connection: {}", e)))?
-                .await
-                .map_err(|e| Error::connection(&format!("Connection failed: {}", e)))?;
-
-            eprintln!("[QUINN] QUIC connection established");
-
-            // Open bidirectional stream
-            let (mut send_stream, mut recv_stream) = connection
-                .open_bi()
-                .await
-                .map_err(|e| Error::connection(&format!("Failed to open stream: {}", e)))?;
-
-            eprintln!("[QUINN] Bidirectional stream opened");
-
-            // Create connection
-            let mut conn = Self {
-                connection,
-                send_stream,
-                recv_stream,
-                page_size,
-                read_buffer: Vec::new(),
-            };
-
-            // Send HELLO message
-            conn.send_hello(hello_name, hello_ver, conformance).await?;
-
-            Ok(conn)
-        } else {
-            // Load CA certificate
-            let default_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../test-harness/certs/ca.crt");
-
-            let ca_path: Option<&str> = if let Some(ref path) = ca_cert_path {
-                Some(path)
-            } else if default_path.exists() {
-                default_path.to_str()
-            } else {
-                None
-            };
-
-            if let Some(path) = ca_path {
-                eprintln!("[QUINN] Loading CA certificate from: {}", path);
-                let cert_file = File::open(path)
-                    .map_err(|e| Error::connection(&format!("Failed to open CA cert: {}", e)))?;
-                let mut reader = BufReader::new(cert_file);
-
-                for cert_result in rustls_pemfile::certs(&mut reader) {
-                    let cert = cert_result.map_err(|e| {
-                        Error::connection(&format!("Failed to parse CA cert: {}", e))
-                    })?;
-                    roots
-                        .add(cert)
-                        .map_err(|e| Error::connection(&format!("Failed to add CA cert: {}", e)))?;
-                }
-            } else {
-                eprintln!("[QUINN] No CA certificate specified, using system trust store");
-                for cert in rustls_native_certs::load_native_certs().map_err(|e| {
-                    Error::connection(&format!("Failed to load system certs: {}", e))
-                })? {
-                    roots.add(cert).map_err(|e| {
-                        Error::connection(&format!("Failed to add system cert: {}", e))
-                    })?;
-                }
-            }
-
-            let mut crypto = rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            apply_geode_alpn(&mut crypto);
-            eprintln!(
-                "[QUINN] Using ALPNs: {:?}",
-                crypto
-                    .alpn_protocols
-                    .iter()
-                    .map(|p| String::from_utf8_lossy(p).into_owned())
-                    .collect::<Vec<_>>()
-            );
-
-            let client_config = build_client_config(crypto);
-
-            // Create endpoint
-            let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
-                .map_err(|e| Error::connection(&format!("Failed to create endpoint: {}", e)))?;
-            endpoint.set_default_client_config(client_config);
-
-            // Connect
-            eprintln!("[QUINN] Connecting to {}", server_addr);
-            let connection = endpoint
-                .connect(server_addr, host)
-                .map_err(|e| Error::connection(&format!("Failed to initiate connection: {}", e)))?
-                .await
-                .map_err(|e| Error::connection(&format!("Connection failed: {}", e)))?;
-
-            eprintln!("[QUINN] QUIC connection established");
-
-            // Open bidirectional stream
-            let (mut send_stream, mut recv_stream) = connection
-                .open_bi()
-                .await
-                .map_err(|e| Error::connection(&format!("Failed to open stream: {}", e)))?;
-
-            eprintln!("[QUINN] Bidirectional stream opened");
-
-            // Create connection
-            let mut conn = Self {
-                connection,
-                send_stream,
-                recv_stream,
-                page_size,
-                read_buffer: Vec::new(),
-            };
-
-            // Send HELLO message
-            conn.send_hello(hello_name, hello_ver, conformance).await?;
-
-            Ok(conn)
+            // For development - skip certificate verification
+            tls_builder = tls_builder
+                .with_empty_trust_store()
+                .map_err(|e| Error::connection(&format!("Trust store error: {}", e)))?;
+        } else if let Some(cert_path) = ca_cert_path {
+            tls_builder = tls_builder
+                .with_certificate(std::path::Path::new(cert_path))
+                .map_err(|e| Error::connection(&format!("Certificate error: {}", e)))?;
         }
-    }
 
-    async fn send_hello(
-        &mut self,
-        hello_name: &str,
-        hello_ver: &str,
-        conformance: &str,
-    ) -> Result<()> {
-        let hello = serde_json::json!({
+        let tls = tls_builder
+            .with_application_protocols([GEODE_ALPN])
+            .map_err(|e| Error::connection(&format!("ALPN error: {}", e)))?
+            .build()
+            .map_err(|e| Error::connection(&format!("TLS config error: {}", e)))?;
+
+        // Create QUIC client
+        let client = QuicClient::builder()
+            .with_tls(tls)
+            .map_err(|e| Error::connection(&format!("Client builder error: {}", e)))?
+            .with_io("0.0.0.0:0")
+            .map_err(|e| Error::connection(&format!("IO bind error: {}", e)))?
+            .start()
+            .map_err(|e| Error::connection(&format!("Client start error: {}", e)))?;
+
+        // Parse server address
+        let server_addr: SocketAddr = format!("{}:{}", host, port)
+            .parse()
+            .map_err(|e| Error::connection(&format!("Invalid address: {}", e)))?;
+
+        // Connect to server
+        let connect = Connect::new(server_addr).with_server_name(host);
+        let mut connection = client
+            .connect(connect)
+            .await
+            .map_err(|e| Error::connection(&format!("Connection failed: {}", e)))?;
+
+        eprintln!("[S2N-QUIC] Connected, opening bidirectional stream");
+
+        // Open bidirectional stream
+        let stream = connection
+            .open_bidirectional_stream()
+            .await
+            .map_err(|e| Error::connection(&format!("Failed to open stream: {}", e)))?;
+
+        let (read_half, write_half) = tokio::io::split(stream);
+        let mut reader = BufReader::new(read_half);
+        let mut writer = write_half;
+
+        eprintln!("[S2N-QUIC] Stream opened, sending HELLO");
+
+        // Send HELLO message
+        let hello_msg = serde_json::json!({
             "type": "HELLO",
-            "client_name": hello_name,
-            "client_ver": hello_ver,
-            "wanted_conformance": conformance,
+            "name": hello_name,
+            "ver": hello_ver,
+            "conformance": conformance
         });
 
-        self.write_json(&hello).await?;
+        let mut hello_json = serde_json::to_string(&hello_msg)
+            .map_err(|e| Error::protocol(&format!("Failed to serialize HELLO: {}", e)))?;
+        hello_json.push('\n');
+
+        writer
+            .write_all(hello_json.as_bytes())
+            .await
+            .map_err(|e| Error::protocol(&format!("Failed to send HELLO: {}", e)))?;
+
+        writer
+            .flush()
+            .await
+            .map_err(|e| Error::protocol(&format!("Failed to flush HELLO: {}", e)))?;
+
+        eprintln!("[S2N-QUIC] HELLO sent, waiting for response");
 
         // Read HELLO response
-        let _response = self.read_line().await?;
-        eprintln!("[QUINN] HELLO exchange completed");
+        let mut response_line = String::new();
+        reader
+            .read_line(&mut response_line)
+            .await
+            .map_err(|e| Error::protocol(&format!("Failed to read HELLO response: {}", e)))?;
 
-        Ok(())
+        eprintln!("[S2N-QUIC] Received HELLO response: {}", response_line.trim());
+
+        let response: serde_json::Value = serde_json::from_str(&response_line)
+            .map_err(|e| Error::protocol(&format!("Invalid HELLO response JSON: {}", e)))?;
+
+        if response.get("type").and_then(|t| t.as_str()) != Some("HELLO") {
+            return Err(Error::protocol(&format!(
+                "Expected HELLO response, got: {}",
+                response_line.trim()
+            )));
+        }
+
+        eprintln!("[S2N-QUIC] Handshake complete");
+
+        // Open new stream for queries (handshake stream is consumed)
+        let query_stream = connection
+            .open_bidirectional_stream()
+            .await
+            .map_err(|e| Error::connection(&format!("Failed to open query stream: {}", e)))?;
+
+        let (read_half, write_half) = tokio::io::split(query_stream);
+
+        Ok(Connection {
+            reader: BufReader::new(read_half),
+            writer: write_half,
+            page_size,
+        })
     }
 
+    /// Send JSON message to server
     async fn write_json(&mut self, obj: &serde_json::Value) -> Result<()> {
-        let mut line = serde_json::to_string(obj)?;
+        let mut line = serde_json::to_string(obj)
+            .map_err(|e| Error::protocol(&format!("Failed to serialize JSON: {}", e)))?;
         line.push('\n');
 
-        eprintln!("[QUINN] Writing JSON: {}", line.trim());
-
-        self.send_stream
+        self.writer
             .write_all(line.as_bytes())
             .await
-            .map_err(|e| Error::connection(&format!("Failed to write to stream: {}", e)))?;
+            .map_err(|e| Error::protocol(&format!("Failed to write: {}", e)))?;
+
+        self.writer
+            .flush()
+            .await
+            .map_err(|e| Error::protocol(&format!("Failed to flush: {}", e)))?;
 
         Ok(())
     }
 
-    async fn read_line(&mut self) -> Result<String> {
+    /// Read JSON message from server
+    async fn read_json(&mut self) -> Result<serde_json::Value> {
         let mut line = String::new();
+        let bytes_read = self
+            .reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| Error::protocol(&format!("Failed to read line: {}", e)))?;
 
-        loop {
-            // Check if we have a complete line in the buffer
-            if let Some(pos) = self.read_buffer.iter().position(|&b| b == b'\n') {
-                let line_bytes: Vec<u8> = self.read_buffer.drain(..=pos).collect();
-                line = String::from_utf8_lossy(&line_bytes[..line_bytes.len() - 1]).to_string();
-                eprintln!("[QUINN] Read line: {}", line);
-                return Ok(line);
-            }
-
-            // Read more data from the stream
-            let mut buf = [0u8; 4096];
-            let n = tokio::time::timeout(Duration::from_secs(5), self.recv_stream.read(&mut buf))
-                .await
-                .map_err(|_| Error::connection("Read timeout"))?
-                .map_err(|e| Error::connection(&format!("Stream read error: {}", e)))?
-                .ok_or_else(|| Error::connection("Stream closed"))?;
-
-            self.read_buffer.extend_from_slice(&buf[..n]);
+        if bytes_read == 0 {
+            return Err(Error::protocol("Connection closed by server"));
         }
+
+        serde_json::from_str(&line)
+            .map_err(|e| Error::protocol(&format!("Invalid JSON: {}", e)))
     }
 
-    /// Execute a query
+    /// Execute a GQL query
     pub async fn query(
         &mut self,
         text: &str,
         params: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<Page> {
-        let mut run_msg = serde_json::json!({"type": "RUN_GQL", "text": text});
-        if let Some(p) = params {
-            run_msg["params"] = serde_json::to_value(p)?;
-        }
+        // Send RUN_GQL message
+        let run_msg = if let Some(p) = params {
+            serde_json::json!({"type": "RUN_GQL", "text": text, "params": p})
+        } else {
+            serde_json::json!({"type": "RUN_GQL", "text": text})
+        };
 
         self.write_json(&run_msg).await?;
 
-        // Read schema
-        let schema_line = self.read_line().await?;
-        let schema: serde_json::Value = serde_json::from_str(&schema_line)?;
+        // Receive SCHEMA message
+        let schema_msg = self.read_json().await?;
 
-        let result = schema
-            .get("result")
-            .ok_or_else(|| Error::connection("Missing result"))?;
-        if result.get("type").and_then(|t| t.as_str()) == Some("ERROR") {
-            let code = result
-                .get("code")
-                .and_then(|c| c.as_str())
-                .unwrap_or("UNKNOWN");
-            let message = result
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Query failed");
-            return Err(Error::query(code, message));
+        let msg_type = schema_msg
+            .get("type")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| Error::protocol("Missing type in response"))?;
+
+        if msg_type == "ERROR" {
+            let error_msg = schema_msg
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("Unknown error");
+            return Err(Error::query(error_msg));
         }
 
-        let columns: Vec<Column> = serde_json::from_value(
-            result
-                .get("columns")
-                .cloned()
-                .unwrap_or(serde_json::json!([])),
-        )?;
-        let type_map: HashMap<String, String> = columns
-            .iter()
-            .map(|c| (c.name.clone(), c.col_type.clone()))
-            .collect();
+        if msg_type != "SCHEMA" {
+            return Err(Error::protocol(&format!(
+                "Expected SCHEMA, got {}",
+                msg_type
+            )));
+        }
 
-        // Send PULL
-        self.write_json(&serde_json::json!({
+        let columns_json = schema_msg
+            .get("columns")
+            .ok_or_else(|| Error::protocol("Missing columns in SCHEMA"))?;
+
+        let columns: Vec<Column> = serde_json::from_value(columns_json.clone())
+            .map_err(|e| Error::protocol(&format!("Invalid columns: {}", e)))?;
+
+        // Send PULL message
+        let pull_msg = serde_json::json!({
             "type": "PULL",
             "request_id": 1,
-            "page_size": self.page_size,
-        }))
-        .await?;
+            "page_size": self.page_size
+        });
 
-        let bindings_line = self.read_line().await?;
-        let bindings: serde_json::Value = serde_json::from_str(&bindings_line)?;
-        let bindings_result = bindings
-            .get("result")
-            .ok_or_else(|| Error::connection("Missing result"))?;
+        self.write_json(&pull_msg).await?;
 
-        if bindings_result.get("type").and_then(|t| t.as_str()) == Some("PROFILE") {
-            return Ok(Page {
-                columns,
-                rows: Vec::new(),
-                ordered: false,
-                order_keys: Vec::new(),
-                final_page: true,
-            });
+        // Receive BINDINGS message
+        let bindings_msg = self.read_json().await?;
+
+        let msg_type = bindings_msg
+            .get("type")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| Error::protocol("Missing type in bindings response"))?;
+
+        if msg_type == "ERROR" {
+            let error_msg = bindings_msg
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("Unknown error");
+            return Err(Error::query(error_msg));
         }
 
-        let empty_vec = vec![];
-        let raw_rows = bindings_result
+        if msg_type != "BINDINGS" {
+            return Err(Error::protocol(&format!(
+                "Expected BINDINGS, got {}",
+                msg_type
+            )));
+        }
+
+        let rows_json = bindings_msg
             .get("rows")
-            .and_then(|r| r.as_array())
-            .unwrap_or(&empty_vec);
-        let rows = parse_rows(raw_rows, &type_map)?;
+            .ok_or_else(|| Error::protocol("Missing rows in BINDINGS"))?
+            .as_array()
+            .ok_or_else(|| Error::protocol("rows must be an array"))?;
+
+        let mut rows = Vec::new();
+        for row_json in rows_json {
+            let row_obj = row_json
+                .as_object()
+                .ok_or_else(|| Error::protocol("Each row must be an object"))?;
+
+            let mut row_map = HashMap::new();
+            for (key, val) in row_obj {
+                // Use generic "ANY" type since we don't have type info in BINDINGS
+                let decoded = decode_value(val, "ANY")?;
+                row_map.insert(key.clone(), decoded);
+            }
+            rows.push(row_map);
+        }
+
+        let ordered = bindings_msg
+            .get("ordered")
+            .and_then(|o| o.as_bool())
+            .unwrap_or(false);
+
+        let order_keys = bindings_msg
+            .get("order_keys")
+            .and_then(|ok| ok.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let final_page = bindings_msg
+            .get("final")
+            .and_then(|f| f.as_bool())
+            .unwrap_or(true);
 
         Ok(Page {
             columns,
             rows,
-            ordered: bindings_result
-                .get("ordered")
-                .and_then(|o| o.as_bool())
-                .unwrap_or(false),
-            order_keys: bindings_result
-                .get("order_keys")
-                .and_then(|ok| {
-                    ok.as_array().map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                })
-                .unwrap_or_default(),
-            final_page: bindings_result
-                .get("final")
-                .and_then(|f| f.as_bool())
-                .unwrap_or(false),
+            ordered,
+            order_keys,
+            final_page,
         })
     }
 
     /// Begin a transaction
     pub async fn begin(&mut self) -> Result<()> {
-        self.write_json(&serde_json::json!({"type": "BEGIN"}))
-            .await?;
-        self.read_line().await?;
+        let begin_msg = serde_json::json!({"type": "BEGIN"});
+        self.write_json(&begin_msg).await?;
+
+        let response = self.read_json().await?;
+        let msg_type = response
+            .get("type")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| Error::protocol("Missing type in BEGIN response"))?;
+
+        if msg_type == "ERROR" {
+            let error_msg = response
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("Unknown error");
+            return Err(Error::transaction(error_msg));
+        }
+
+        if msg_type != "ACK" {
+            return Err(Error::protocol(&format!(
+                "Expected ACK for BEGIN, got {}",
+                msg_type
+            )));
+        }
+
         Ok(())
     }
 
-    /// Commit a transaction
+    /// Commit the current transaction
     pub async fn commit(&mut self) -> Result<()> {
-        self.write_json(&serde_json::json!({"type": "COMMIT"}))
-            .await?;
-        self.read_line().await?;
+        let commit_msg = serde_json::json!({"type": "COMMIT"});
+        self.write_json(&commit_msg).await?;
+
+        let response = self.read_json().await?;
+        let msg_type = response
+            .get("type")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| Error::protocol("Missing type in COMMIT response"))?;
+
+        if msg_type == "ERROR" {
+            let error_msg = response
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("Unknown error");
+            return Err(Error::transaction(error_msg));
+        }
+
+        if msg_type != "ACK" {
+            return Err(Error::protocol(&format!(
+                "Expected ACK for COMMIT, got {}",
+                msg_type
+            )));
+        }
+
         Ok(())
     }
 
-    /// Rollback a transaction
+    /// Rollback the current transaction
     pub async fn rollback(&mut self) -> Result<()> {
-        self.write_json(&serde_json::json!({"type": "ROLLBACK"}))
-            .await?;
-        self.read_line().await?;
-        Ok(())
-    }
+        let rollback_msg = serde_json::json!({"type": "ROLLBACK"});
+        self.write_json(&rollback_msg).await?;
 
-    /// Create a savepoint within the current transaction
-    pub async fn savepoint(&mut self, name: &str) -> Result<Savepoint> {
-        self.write_json(&serde_json::json!({
-            "type": "SAVEPOINT",
-            "name": name
-        }))
-        .await?;
-        self.read_line().await?;
-        Ok(Savepoint {
-            name: name.to_string(),
-        })
-    }
+        let response = self.read_json().await?;
+        let msg_type = response
+            .get("type")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| Error::protocol("Missing type in ROLLBACK response"))?;
 
-    /// Rollback to a savepoint
-    pub async fn rollback_to(&mut self, savepoint: &Savepoint) -> Result<()> {
-        self.write_json(&serde_json::json!({
-            "type": "ROLLBACK_TO",
-            "name": savepoint.name
-        }))
-        .await?;
-        self.read_line().await?;
+        if msg_type == "ERROR" {
+            let error_msg = response
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("Unknown error");
+            return Err(Error::transaction(error_msg));
+        }
+
+        if msg_type != "ACK" {
+            return Err(Error::protocol(&format!(
+                "Expected ACK for ROLLBACK, got {}",
+                msg_type
+            )));
+        }
+
         Ok(())
     }
 
     /// Close the connection
     pub async fn close(&mut self) -> Result<()> {
-        self.connection.close(0u32.into(), b"goodbye");
+        let close_msg = serde_json::json!({"type": "GOODBYE"});
+        self.write_json(&close_msg).await?;
+
+        // Best effort - don't wait for response
+        let _ = self.reader.read_line(&mut String::new()).await;
+
         Ok(())
     }
 }
 
-fn parse_rows(
-    raw_rows: &[serde_json::Value],
-    type_map: &HashMap<String, String>,
-) -> Result<Vec<HashMap<String, Value>>> {
-    let mut rows = Vec::new();
-    for raw_row in raw_rows {
-        if let Some(obj) = raw_row.as_object() {
-            let mut row = HashMap::new();
-            for (col_name, raw_value) in obj {
-                let col_type = type_map.get(col_name).map(|s| s.as_str()).unwrap_or("");
-                row.insert(col_name.clone(), decode_value(raw_value, col_type)?);
-            }
-            rows.push(row);
-        }
-    }
-    Ok(rows)
-}
-
-fn create_transport_config() -> quinn::TransportConfig {
-    let mut config = quinn::TransportConfig::default();
-    config.max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()));
-    config
-}
-
-// Certificate verifier that skips all verification (insecure, for development only)
-#[derive(Debug)]
-struct SkipServerVerification;
-
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::RSA_PSS_SHA384,
-            rustls::SignatureScheme::RSA_PSS_SHA512,
-            rustls::SignatureScheme::ED25519,
-            rustls::SignatureScheme::ED448,
-        ]
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // Connection will be closed automatically when dropped
     }
 }

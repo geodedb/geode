@@ -64,11 +64,26 @@ impl Error {
     }
 
     /// Create a query error
-    pub fn query<S: Into<String>>(code: S, message: S) -> Self {
+    pub fn query<S: Into<String>>(msg: S) -> Self {
         Error::Query {
-            code: code.into(),
-            message: message.into(),
+            code: "QUERY_ERROR".to_string(),
+            message: msg.into(),
         }
+    }
+
+    /// Create a protocol error
+    pub fn protocol<S: Into<String>>(msg: S) -> Self {
+        Error::Connection(format!("Protocol error: {}", msg.into()))
+    }
+
+    /// Create a transaction error
+    pub fn transaction<S: Into<String>>(msg: S) -> Self {
+        Error::Connection(format!("Transaction error: {}", msg.into()))
+    }
+
+    /// Create a timeout error
+    pub fn timeout() -> Self {
+        Error::Timeout
     }
 
     /// Create an auth error

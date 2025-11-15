@@ -2,18 +2,19 @@
 
 use geode_client::{Client, Result};
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Create QUIC client (skip TLS verification for development)
     let client = Client::new("127.0.0.1", 3141)
         .skip_verify(true)
         .page_size(1000);
 
     // Connect via QUIC
-    let mut conn = client.connect()?;
+    let mut conn = client.connect().await?;
     println!("Connected to Geode via QUIC!");
 
     // Simple query
-    let page = conn.query("RETURN 1 AS x, 'Hello QUIC' AS greeting", None)?;
+    let page = conn.query("RETURN 1 AS x, 'Hello QUIC' AS greeting", None).await?;
     println!("\nSimple query results:");
     for row in &page.rows {
         if let (Ok(x), Ok(greeting)) = (
@@ -29,7 +30,7 @@ fn main() -> Result<()> {
     params.insert("name".to_string(), serde_json::json!("Alice"));
     params.insert("age".to_string(), serde_json::json!(30));
 
-    let page = conn.query("RETURN $name AS name, $age AS age", Some(params))?;
+    let page = conn.query("RETURN $name AS name, $age AS age", Some(params)).await?;
     println!("\nParameterized query results:");
     for row in &page.rows {
         if let (Ok(name), Ok(age)) = (
@@ -42,7 +43,7 @@ fn main() -> Result<()> {
 
     // Transaction
     println!("\nStarting transaction...");
-    conn.begin()?;
+    conn.begin().await?;
 
     let mut create_params = std::collections::HashMap::new();
     create_params.insert("name".to_string(), serde_json::json!("Bob"));
@@ -51,19 +52,19 @@ fn main() -> Result<()> {
     match conn.query(
         "CREATE (p:Person {name: $name, age: $age})",
         Some(create_params),
-    ) {
+    ).await {
         Ok(_) => {
-            conn.commit()?;
+            conn.commit().await?;
             println!("Transaction committed successfully");
         }
         Err(e) => {
-            conn.rollback()?;
+            conn.rollback().await?;
             println!("Transaction rolled back: {}", e);
         }
     }
 
     // Close connection
-    conn.close()?;
+    conn.close().await?;
     println!("\nConnection closed");
 
     Ok(())

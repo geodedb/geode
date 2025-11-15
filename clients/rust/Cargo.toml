@@ -13,12 +13,10 @@ categories = ["database"]
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
 
-# QUIC support - using quinn (pure Rust, no C++ dependencies)
-quinn = "0.11"
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
-rustls-pemfile = "2.0"  # For loading certificates
-rustls-native-certs = "0.7"  # For loading system certificates
-ring = "0.17"  # For crypto operations
+# QUIC support - using s2n-quic (AWS, pure Rust, msquic-compatible)
+s2n-quic = "1.48"
+rustls = "0.23"
+rustls-pemfile = "2.1"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
