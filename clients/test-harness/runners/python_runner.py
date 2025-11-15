@@ -68,14 +68,20 @@ class PythonTestRunner:
         if not self.connection:
             await self.connect()
 
-        page, _ = await self.connection.query(query, params)
+        page, pager = await self.connection.query(query, params)
+
+        # Collect all pages if there are more
+        all_rows = list(page.rows)
+        if not page.final:
+            async for next_page in pager():
+                all_rows.extend(next_page.rows)
 
         return {
-            "rows": len(page.rows),
+            "rows": len(all_rows),
             "columns": [col.name for col in page.columns],
             "data": [
                 {col.name: row[col.name].raw_value for col in page.columns}
-                for row in page.rows
+                for row in all_rows
             ],
         }
 
