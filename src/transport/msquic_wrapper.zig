@@ -353,19 +353,19 @@ pub fn listenerCallback(
     const event_type_int = event_type_ptr.*;
     const event_type: QUIC_LISTENER_EVENT_TYPE = @enumFromInt(event_type_int);
     
-    // DEBUG: std.debug.print("[LISTENER_CALLBACK] Event type: {}\n", .{event_type});
-    
+    std.debug.print("[LISTENER_CALLBACK] Event type: {}\n", .{event_type});
+
     switch (event_type) {
         .QUIC_LISTENER_EVENT_NEW_CONNECTION => {
-            // Event structure: 
+            // Event structure:
             // Type (4 bytes c_int) + padding (4 bytes for alignment)
             // Info pointer (8 bytes) + Connection handle (8 bytes)
             // Total offset to Connection: 8 (Type+padding) + 8 (Info) = 16
             const event_bytes: [*]const u8 = @ptrCast(event_ptr);
             const conn_ptr: *const HQUIC = @ptrCast(@alignCast(event_bytes + 16));
             const connection = conn_ptr.*;
-            
-            // DEBUG: std.debug.print("[LISTENER_CALLBACK] NEW_CONNECTION: handle={*}\n", .{connection});
+
+            std.debug.print("[LISTENER_CALLBACK] NEW_CONNECTION: handle={*}\n", .{connection});
             
             // Configure connection immediately in callback (required by msquic)
             // 1. Create connection context
@@ -405,8 +405,8 @@ pub fn listenerCallback(
                 .context = conn_ctx,
             };
             ctx.pending_connections.append(pending) catch {};
-            
-            // DEBUG: std.debug.print("[LISTENER_CALLBACK] Connection configured and queued, count={}\n", .{ctx.pending_connections.items.len});
+
+            std.debug.print("[LISTENER_CALLBACK] Connection configured and queued, count={}\n", .{ctx.pending_connections.items.len});
             
             return QUIC_STATUS_SUCCESS;
         },

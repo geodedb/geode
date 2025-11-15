@@ -682,7 +682,13 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     // Accept and handle connections
     var connection_count: u32 = 0;
     var stream_count: u32 = 0;
+    var loop_iteration: u64 = 0;
     while (true) {
+        loop_iteration += 1;
+        if (loop_iteration % 1000 == 0) {
+            std.debug.print("Main loop iteration #{} (conns={}, streams={})\n", .{ loop_iteration, connection_count, stream_count });
+        }
+
         if (test_exit_after_first and stream_count > 0) break;
 
         // Poll to process packets (critical for handshake completion)

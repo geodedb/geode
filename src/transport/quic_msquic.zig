@@ -177,15 +177,21 @@ pub const QuicTransport = struct {
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
         const mq = self.msquic orelse return null;
         const listener_ctx = mq.listener_ctx orelse return null;
-        
+
         listener_ctx.mutex.lock();
         defer listener_ctx.mutex.unlock();
-        
-        if (listener_ctx.pending_connections.items.len == 0) {
+
+        const queue_len = listener_ctx.pending_connections.items.len;
+        if (queue_len > 0) {
+            std.debug.print("[tryAccept] Found {} pending connection(s)\n", .{queue_len});
+        }
+
+        if (queue_len == 0) {
             return null;
         }
-        
+
         const pending = listener_ctx.pending_connections.orderedRemove(0);
+        std.debug.print("[tryAccept] Removed connection from queue, new count={}\n", .{listener_ctx.pending_connections.items.len});
         
         // Connection and context already configured in listener callback
         // Create Zig connection wrapper
