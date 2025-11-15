@@ -213,7 +213,10 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
     defer if (last_result_data) |data| allocator.free(data);
 
     // Main message processing loop
+    var message_count: usize = 0;
     while (true) {
+        message_count += 1;
+        log.debug("Message loop iteration #{}", .{message_count});
         // Retry readLine until we get a message or real error
         const msg = blk: while (true) {
             // Main loop handles all polling - we just retry reading
@@ -441,7 +444,9 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
                     }
 
                     try resp_writer.writeAll("\"rows\":[],\"final\":true}}\n");
+                    log.debug("PULL: Sending RESULT response ({} bytes)", .{response_buf.items.len});
                     try stream.writeAll(response_buf.items);
+                    log.debug("PULL: RESULT response sent successfully", .{});
                 } else {
                     // This is a data result - send BINDINGS response
                     log.debug("PULL: Sending BINDINGS with row data", .{});
