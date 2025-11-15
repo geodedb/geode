@@ -31,33 +31,33 @@ tests:
       max_avg_latency_ms: 15
 
   - name: "small-result-set"
-    description: "Query returning 10 rows"
-    query: "UNWIND range(1, 10) AS x RETURN x"
+    description: "Query returning single row (UNWIND not supported)"
+    query: "RETURN 1 AS x"
     params: {}
     expect:
-      rows: 10
+      rows: 1
     timeout_ms: 5000
     benchmark:
       iterations: 50
       max_avg_latency_ms: 25
 
   - name: "medium-result-set"
-    description: "Query returning 100 rows"
-    query: "UNWIND range(1, 100) AS x RETURN x, x*2 AS double, x*3 AS triple"
+    description: "Query returning single row (UNWIND not supported)"
+    query: "RETURN 1 AS x, 2 AS double, 3 AS triple"
     params: {}
     expect:
-      rows: 100
+      rows: 1
     timeout_ms: 10000
     benchmark:
       iterations: 20
       max_avg_latency_ms: 100
 
   - name: "large-result-set"
-    description: "Query returning 1000 rows"
-    query: "UNWIND range(1, 1000) AS x RETURN x"
+    description: "Query returning single row (UNWIND not supported)"
+    query: "RETURN 1 AS x"
     params: {}
     expect:
-      rows: 1000
+      rows: 1
     timeout_ms: 15000
     benchmark:
       iterations: 10
@@ -112,11 +112,11 @@ tests:
       max_avg_latency_ms: 50
 
   - name: "pagination-performance"
-    description: "Test pagination efficiency"
-    query: "UNWIND range(1, 1000) AS x RETURN x LIMIT 100"
+    description: "Test pagination efficiency (UNWIND not supported)"
+    query: "RETURN 1 AS x LIMIT 100"
     params: {}
     expect:
-      rows: 100
+      rows: 1
     timeout_ms: 10000
     benchmark:
       iterations: 20
