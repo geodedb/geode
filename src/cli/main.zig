@@ -406,49 +406,78 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             log.debug("Query response sent successfully", .{});
         } else if (std.mem.eql(u8, type_str, "PULL")) {
             // Handle PULL request - send result data from last query
+            log.debug("Processing PULL request", .{});
             if (last_result_data) |result_data| {
                 // Parse the stored result
                 const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result_data, .{});
                 defer result_parsed.deinit();
 
                 const result_obj = result_parsed.value.object;
+
+                // Check if this is an error result (no columns/rows fields)
+                const status_class = result_obj.get("status_class");
+                const has_error = result_obj.get("error") != null;
                 const columns_val = result_obj.get("columns");
                 const rows_val = result_obj.get("rows");
 
-                // Build BINDINGS response with all rows
-                var response_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
-                    const error_response = "{\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
-                    try stream.writeAll(error_response);
-                    continue;
-                };
-                defer response_buf.deinit(allocator);
-                const resp_writer = response_buf.writer(allocator);
+                if (has_error or columns_val == null or rows_val == null) {
+                    // This is an error result or non-data query - send RESULT with status
+                    log.debug("PULL: Forwarding error/status result", .{});
+                    var response_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
+                        const error_response = "{\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
+                        try stream.writeAll(error_response);
+                        continue;
+                    };
+                    defer response_buf.deinit(allocator);
+                    const resp_writer = response_buf.writer(allocator);
 
-                try resp_writer.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":false,\"final\":true,\"rows\":[");
+                    // Forward the original result as a RESULT message
+                    try resp_writer.print("{{\"status_class\":\"{s}\",\"result\":{{\"type\":\"RESULT\",", .{
+                        if (status_class) |sc| sc.string else "00000"
+                    });
 
-                if (rows_val) |rows| {
-                    if (columns_val) |columns| {
-                        for (rows.array.items, 0..) |row_array, row_idx| {
-                            if (row_idx > 0) try resp_writer.writeAll(",");
-                            try resp_writer.writeAll("{");
-
-                            // Convert row from array to object with column names
-                            for (columns.array.items, 0..) |col, col_idx| {
-                                if (col_idx > 0) try resp_writer.writeAll(",");
-                                try resp_writer.print("\"{s}\":", .{col.string});
-                                try writeJsonValueWithDecimalScale(resp_writer, row_array.array.items[col_idx], allocator);
-                            }
-
-                            try resp_writer.writeAll("}");
-                        }
+                    if (result_obj.get("error")) |error_val| {
+                        try resp_writer.print("\"error\":\"{s}\",", .{error_val.string});
                     }
+
+                    try resp_writer.writeAll("\"rows\":[],\"final\":true}}\n");
+                    try stream.writeAll(response_buf.items);
+                } else {
+                    // This is a data result - send BINDINGS response
+                    log.debug("PULL: Sending BINDINGS with row data", .{});
+                    var response_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
+                        const error_response = "{\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
+                        try stream.writeAll(error_response);
+                        continue;
+                    };
+                    defer response_buf.deinit(allocator);
+                    const resp_writer = response_buf.writer(allocator);
+
+                    try resp_writer.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":false,\"final\":true,\"rows\":[");
+
+                    const rows = rows_val.?;
+                    const columns = columns_val.?;
+
+                    for (rows.array.items, 0..) |row_array, row_idx| {
+                        if (row_idx > 0) try resp_writer.writeAll(",");
+                        try resp_writer.writeAll("{");
+
+                        // Convert row from array to object with column names
+                        for (columns.array.items, 0..) |col, col_idx| {
+                            if (col_idx > 0) try resp_writer.writeAll(",");
+                            try resp_writer.print("\"{s}\":", .{col.string});
+                            try writeJsonValueWithDecimalScale(resp_writer, row_array.array.items[col_idx], allocator);
+                        }
+
+                        try resp_writer.writeAll("}");
+                    }
+
+                    try resp_writer.writeAll("]}}\n");
+                    try stream.writeAll(response_buf.items);
                 }
-
-                try resp_writer.writeAll("]}}\n");
-
-                try stream.writeAll(response_buf.items);
             } else {
                 // No stored result, send END
+                log.debug("PULL: No stored result, sending END", .{});
                 const end_response = "{\"status_class\":\"00000\",\"result\":{\"type\":\"END\"}}\n";
                 try stream.writeAll(end_response);
             }
