@@ -135,10 +135,7 @@ class GeodeProtocol(QuicConnectionProtocol):
 
     def quic_event_received(self, event: QuicEvent) -> None:
         """Handle QUIC events."""
-        # CRITICAL: Call parent to handle connection events (handshake, etc.)
-        super().quic_event_received(event)
-        
-        # Handle stream data events
+        # Handle stream data events ourselves (don't call super for these)
         if isinstance(event, StreamDataReceived):
             stream_id = event.stream_id
 
@@ -153,6 +150,9 @@ class GeodeProtocol(QuicConnectionProtocol):
             # Mark end of stream
             if event.end_stream:
                 self._stream_readers[stream_id].put_nowait(None)
+        else:
+            # For all other events (handshake, connection state, etc.), let parent handle
+            super().quic_event_received(event)
 
     async def create_bidirectional_stream(self) -> Tuple[int, asyncio.Queue]:
         """
