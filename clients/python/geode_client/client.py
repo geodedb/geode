@@ -69,6 +69,58 @@ class AuthError(GeodeError):
     pass
 
 
+class StreamReader:
+    """Async stream reader that wraps a queue."""
+
+    def __init__(self, queue: asyncio.Queue):
+        self._queue = queue
+        self._buffer = b""
+
+    async def read(self, n: int = -1) -> bytes:
+        """Read up to n bytes from the stream."""
+        # If we have buffered data, return it first
+        if self._buffer:
+            if n < 0 or len(self._buffer) <= n:
+                data = self._buffer
+                self._buffer = b""
+                return data
+            else:
+                data = self._buffer[:n]
+                self._buffer = self._buffer[n:]
+                return data
+
+        # Read from queue
+        chunk = await self._queue.get()
+        if chunk is None:  # End of stream
+            return b""
+
+        if n < 0 or len(chunk) <= n:
+            return chunk
+        else:
+            self._buffer = chunk[n:]
+            return chunk[:n]
+
+
+class StreamWriter:
+    """Async stream writer that wraps the protocol's write method."""
+
+    def __init__(self, protocol: 'GeodeProtocol', stream_id: int):
+        self._protocol = protocol
+        self._stream_id = stream_id
+
+    def write(self, data: bytes) -> None:
+        """Write data to the stream."""
+        self._protocol.write_to_stream(self._stream_id, data)
+
+    async def drain(self) -> None:
+        """Wait for the write buffer to drain (no-op for QUIC)."""
+        await asyncio.sleep(0)  # Yield control to event loop
+
+    def close(self) -> None:
+        """Close the stream."""
+        self._protocol.close_stream(self._stream_id)
+
+
 class GeodeProtocol(QuicConnectionProtocol):
     """
     QUIC protocol handler for Geode.
@@ -114,6 +166,18 @@ class GeodeProtocol(QuicConnectionProtocol):
         self._stream_readers[stream_id] = reader_queue
         print(f"[DEBUG] Created stream ID: {stream_id}")
         return stream_id, reader_queue
+
+    async def create_stream(self) -> Tuple['StreamReader', 'StreamWriter']:
+        """
+        Create a bidirectional stream and return reader/writer objects.
+
+        Returns:
+            Tuple of (reader, writer) objects compatible with asyncio streams
+        """
+        stream_id, queue = await self.create_bidirectional_stream()
+        reader = StreamReader(queue)
+        writer = StreamWriter(self, stream_id)
+        return reader, writer
 
     def write_to_stream(self, stream_id: int, data: bytes, end_stream: bool = False) -> None:
         """Write data to a stream."""
@@ -255,7 +319,7 @@ class Connection:
             self.host,
             self.port,
             configuration=configuration,
-            # Don't use custom protocol - use aioquic's default which works correctly
+            create_protocol=GeodeProtocol,  # Use our custom protocol with stream management
         )
 
         # Enter the context manager - this establishes the connection and completes handshake

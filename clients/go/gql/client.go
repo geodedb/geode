@@ -301,8 +301,27 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		}
 
 		fmt.Printf("DEBUG: Go client attempting to connect via QUIC to %s\n", addr)
-		qConn, err := quic.DialAddr(ctx, addr, tlsConf, qConfig)
+
+		// Create UDP connection with configured buffer sizes
+		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
+			fmt.Printf("DEBUG: Go client failed to resolve UDP address: %v\n", err)
+			return nil, err
+		}
+
+		udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		if err != nil {
+			fmt.Printf("DEBUG: Go client failed to create UDP connection: %v\n", err)
+			return nil, err
+		}
+
+		// Try to set larger buffer sizes (ignore errors as these are system-dependent)
+		_ = udpConn.SetReadBuffer(7168 * 1024)  // 7 MB as requested by quic-go
+		_ = udpConn.SetWriteBuffer(7168 * 1024)
+
+		qConn, err := quic.Dial(ctx, udpConn, udpAddr, tlsConf, qConfig)
+		if err != nil {
+			udpConn.Close()
 			fmt.Printf("DEBUG: Go client QUIC connection failed: %v\n", err)
 			return nil, err
 		}
@@ -312,6 +331,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		select {
 		case <-ctx.Done():
 			_ = qConn.CloseWithError(0, "context cancelled")
+			udpConn.Close()
 			return nil, ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 			// Continue after brief delay
@@ -399,8 +419,27 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		}
 
 		fmt.Printf("DEBUG: Go client attempting to connect via QUIC to %s\n", addr)
-		qConn, err := quic.DialAddr(ctx, addr, tlsConf, qConfig)
+
+		// Create UDP connection with configured buffer sizes
+		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
+			fmt.Printf("DEBUG: Go client failed to resolve UDP address: %v\n", err)
+			return nil, err
+		}
+
+		udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		if err != nil {
+			fmt.Printf("DEBUG: Go client failed to create UDP connection: %v\n", err)
+			return nil, err
+		}
+
+		// Try to set larger buffer sizes (ignore errors as these are system-dependent)
+		_ = udpConn.SetReadBuffer(7168 * 1024)  // 7 MB as requested by quic-go
+		_ = udpConn.SetWriteBuffer(7168 * 1024)
+
+		qConn, err := quic.Dial(ctx, udpConn, udpAddr, tlsConf, qConfig)
+		if err != nil {
+			udpConn.Close()
 			fmt.Printf("DEBUG: Go client QUIC connection failed: %v\n", err)
 			return nil, err
 		}
@@ -410,6 +449,7 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 		select {
 		case <-ctx.Done():
 			_ = qConn.CloseWithError(0, "context cancelled")
+			udpConn.Close()
 			return nil, ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 			// Continue after brief delay

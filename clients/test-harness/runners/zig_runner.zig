@@ -148,7 +148,8 @@ pub fn main() !void {
     }
 
     // Parse YAML spec
-    var spec_value = yaml.parse(allocator, spec_content) catch |err| {
+    var parser = yaml.Parser.init(allocator, spec_content);
+    var spec_value = parser.parse() catch |err| {
         std.debug.print("Error parsing YAML: {}\n", .{err});
         var results = [_]TestResult{
             .{
