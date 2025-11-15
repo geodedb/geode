@@ -1513,6 +1513,7 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             i += 1;
         } else if (std.mem.eql(u8, arg, "--listen") and i + 1 < argv.len) {
             listen_addr = argv[i + 1];
+            std.debug.print("DEBUG: Parsed --listen argument: {s}\n", .{listen_addr});
             i += 1;
         } else if (std.mem.eql(u8, arg, "--log-level") and i + 1 < argv.len) {
             log_level = argv[i + 1];

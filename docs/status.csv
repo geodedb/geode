@@ -845,6 +845,7 @@ REQ-GQL-074,Network Transport,QUICConnectionMigration,TESTED,TestCANARY_REQ_GQL_
 REQ-GQL-074,Network Transport,QUICConnectionParams,TESTED,TestCANARY_REQ_GQL_074_QUICConnectionParams,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICConnectionRecovery,TESTED,TestCANARY_REQ_GQL_074_QUICConnectionRecovery,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICCore,TESTED,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-09-22,src/transport/quic.zig
+REQ-GQL-074,Network Transport,QUICCore,IMPL,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-11-14,src/transport/quic_msquic.zig
 REQ-GQL-074,Network Transport,QUICCore,TESTED,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICErrorHandling,TESTED,TestCANARY_REQ_GQL_074_QUICErrorHandling,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICFlowControl,TESTED,TestCANARY_REQ_GQL_074_QUICFlowControl,,wire,2025-09-22,tests/canary_quic_tls.zig

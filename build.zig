@@ -118,6 +118,21 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addOptions("build_options", build_opts);
     geode_exe.root_module.addImport("geode", root_mod);
 
+    // Link with msquic and OpenSSL for QUIC transport
+    geode_exe.linkLibC();
+    geode_exe.linkSystemLibrary("msquic");
+    geode_exe.linkSystemLibrary("ssl");
+    geode_exe.linkSystemLibrary("crypto");
+    if (target.result.os.tag == .linux) {
+        geode_exe.linkSystemLibrary("dl");
+    }
+    
+    // Add msquic include and lib paths
+    const geode_msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/include";
+    const geode_msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/lib";
+    geode_exe.addIncludePath(.{ .cwd_relative = geode_msquic_include });
+    geode_exe.addLibraryPath(.{ .cwd_relative = geode_msquic_lib });
+
     // Add essential modules for server and client functionality
     // Note: transport_quic_mod is defined later after vendor_quic_mod is available
 
@@ -366,6 +381,12 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("client/repl.zig", repl_mod_tests);
 
     // Add transport/quic module for QUIC canary tests
+    // New: msquic wrapper module
+    const msquic_wrapper_mod = b.createModule(.{ .root_source_file = b.path("src/transport/msquic_wrapper.zig"), .target = target, .optimize = optimize });
+    const transport_quic_msquic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic_msquic.zig"), .target = target, .optimize = optimize });
+    transport_quic_msquic_mod.addImport("msquic_wrapper.zig", msquic_wrapper_mod);
+    
+    // Legacy vendor QUIC (kept for backward compatibility)
     const transport_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     const vendor_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
 
@@ -452,11 +473,24 @@ pub fn build(b: *std.Build) void {
 
     transport_quic_mod_tests.addImport("vendor_quic", vendor_quic_mod_tests);
     custom_tests.root_module.addImport("transport/quic", transport_quic_mod_tests);
+    custom_tests.root_module.addImport("transport/quic_msquic", transport_quic_msquic_mod);
     custom_tests.root_module.addImport("vendor_quic", vendor_quic_mod_tests);
+    custom_tests.root_module.addImport("msquic_wrapper", msquic_wrapper_mod);
+    
+    // Link with msquic and OpenSSL
     custom_tests.linkLibC();
+    custom_tests.linkSystemLibrary("msquic");
+    custom_tests.linkSystemLibrary("ssl");
+    custom_tests.linkSystemLibrary("crypto");
     if (target.result.os.tag == .linux) {
         custom_tests.linkSystemLibrary("dl");
     }
+    
+    // Add msquic include and lib paths from nix
+    const msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/include";
+    const msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/lib";
+    custom_tests.addIncludePath(.{ .cwd_relative = msquic_include });
+    custom_tests.addLibraryPath(.{ .cwd_relative = msquic_lib });
     const run_custom_tests = b.addRunArtifact(custom_tests);
 
     const test_step = b.step("test", "Run unit tests");
@@ -944,12 +978,18 @@ pub fn build(b: *std.Build) void {
     vendor_quic_mod.addImport("byteorder", vq_byteorder_mod);
     // No longer need ed25519 import - using std.crypto.sign.Ed25519
 
-    // Create transport QUIC module for unified binary and tests
-    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
-    transport_quic_mod.addImport("vendor_quic", vendor_quic_mod);
+    // Create transport QUIC module for unified binary - using msquic
+    const msquic_types_mod = b.createModule(.{ .root_source_file = b.path("src/transport/msquic_types.zig"), .target = target, .optimize = optimize });
+    const msquic_wrapper_main_mod = b.createModule(.{ .root_source_file = b.path("src/transport/msquic_wrapper.zig"), .target = target, .optimize = optimize });
+    msquic_wrapper_main_mod.addImport("msquic_types.zig", msquic_types_mod);
+    
+    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic_msquic.zig"), .target = target, .optimize = optimize });
+    transport_quic_mod.addImport("msquic_wrapper.zig", msquic_wrapper_main_mod);
 
     // Add transport modules to unified geode binary
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
+    geode_exe.root_module.addImport("transport/quic_msquic", transport_quic_mod);
+    // Keep vendor_quic available for compatibility (but not used in main code)
     geode_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
 
     // Add audit CLI module for verification functionality

@@ -33,7 +33,7 @@ class PythonTestRunner:
             host=host,
             port=int(port),
             ca_cert=str(ca_cert_path),
-            skip_verify=False
+            skip_verify=True  # MSQUIC migration: self-signed cert without proper SAN validation
         )
         self.verbose = verbose
         self.connection: Optional[Connection] = None

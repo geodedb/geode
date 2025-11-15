@@ -3,8 +3,7 @@ const geode = @import("geode");
 const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
 const eval = geode.eval;
-const quic_transport = @import("transport/quic.zig");
-const vendor_quic = @import("vendor_quic");
+const quic_transport = @import("transport/quic_msquic.zig");
 const wal_mod = @import("wal");
 const query_plan_cache = @import("query_plan_cache.zig");
 const ServerState = @import("server_state.zig").ServerState;
@@ -72,26 +71,8 @@ pub fn handleQuicConnection(
 
     // Poll the endpoint to process incoming STREAM frames before accepting
     // This ensures that the client's initial stream creation is processed
-    if (transport.endpoint) |ep| {
-        // Give the endpoint a chance to process incoming packets
-        var poll_attempts: usize = 0;
-        while (poll_attempts < 10) : (poll_attempts += 1) {
-            log.debug("Polling endpoint, attempt {}", .{poll_attempts});
-            vendor_quic.poll(ep, 10) catch {};
-            // Check if we have incoming streams now
-            if (conn.quic_connection) |qc| {
-                if (vendor_quic.hasIncomingStreams(qc)) {
-                    log.debug("Found incoming streams after {} polls", .{poll_attempts + 1});
-                    break;
-                }
-                // Also check for stream 0 directly
-                if (vendor_quic.getFirstStream(qc)) |sid| {
-                    log.debug("Found stream {} after {} polls", .{ sid, poll_attempts + 1 });
-                    break;
-                }
-            }
-        }
-    }
+    // msquic uses event-driven callbacks, no polling needed
+    // Streams will be available when callback is invoked
 
     // Accept a stream for the protocol communication
     log.debug("Attempting to accept stream", .{});

@@ -1,5 +1,5 @@
 const std = @import("std");
-const quic = @import("../transport/quic.zig");
+const quic = @import("../transport/quic_msquic.zig");
 
 // CANARY: REQ=REQ-GQL-041; FEATURE="Cluster Networking"; ASPECT=InterNodeMessaging; STATUS=TESTED; TEST=e2e_distributed_cluster; OWNER=distributed; UPDATED=2025-09-25
 

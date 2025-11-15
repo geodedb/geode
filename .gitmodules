@@ -13,3 +13,6 @@
 [submodule "specs/lsp/language-server-protocol"]
 	path = specs/lsp/language-server-protocol
 	url = git@github.com:microsoft/language-server-protocol.git
+[submodule "tools/zig-msquic"]
+	path = tools/zig-msquic
+	url = https://github.com/MarcoPolo/zig-msquic

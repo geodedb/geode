@@ -13,8 +13,7 @@ const storage_catalog = @import("storage_catalog");
 const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
-const quic_transport = @import("transport/quic.zig");
-const vendor_quic = @import("vendor_quic");
+const quic_transport = @import("transport/quic_msquic.zig");
 const cert_gen = @import("../tools/cert_gen.zig");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
 // const mvcc = @import("server/txn/mvcc.zig");
@@ -374,16 +373,7 @@ pub fn main() !void {
                 return;
             };
 
-            // Poll to ensure STREAM frames are processed
-            log.debug("Test mode - connection accepted, polling endpoint", .{});
-            if (transport.endpoint) |ep| {
-                // Poll multiple times to ensure all packets are processed
-                var i: usize = 0;
-                while (i < 10) : (i += 1) {
-                    log.debug("Test mode poll {}", .{i});
-                    vendor_quic.poll(ep, 50) catch {};
-                }
-            }
+            // msquic uses event-driven callbacks, no polling needed
             log.debug("Test mode - calling handleQuicConnection", .{});
 
             quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {
@@ -397,17 +387,7 @@ pub fn main() !void {
                     continue;
                 };
 
-                // For now, handle connections synchronously but poll the endpoint first
-                // to ensure the STREAM frames are processed
-                log.debug("Main loop - connection accepted, polling endpoint", .{});
-                if (transport.endpoint) |ep| {
-                    // Poll multiple times to ensure all packets are processed
-                    var i: usize = 0;
-                    while (i < 5) : (i += 1) {
-                        log.debug("Main loop poll {}", .{i});
-                        vendor_quic.poll(ep, 10) catch {};
-                    }
-                }
+                // msquic uses event-driven callbacks, no polling needed
                 log.debug("Main loop - calling handleQuicConnection", .{});
 
                 quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {

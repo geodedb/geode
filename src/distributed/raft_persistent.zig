@@ -1,5 +1,5 @@
 const std = @import("std");
-const quic = @import("../transport/quic.zig");
+const quic = @import("../transport/quic_msquic.zig");
 
 // CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Persistence"; ASPECT=CorePersistence; STATUS=TESTED; TEST=e2e_raft_persist_snapshot_membership; OWNER=distributed; UPDATED=2025-09-25
 

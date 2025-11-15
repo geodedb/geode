@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const protocol = @import("../protocol.zig");
-const quic = @import("../transport/quic.zig");
+const quic = @import("../transport/quic_msquic.zig");
 const federation = @import("federation.zig");
 const network_transport = @import("network_transport.zig");
 
