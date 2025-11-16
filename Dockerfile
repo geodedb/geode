@@ -99,23 +99,33 @@ RUN chmod +x /tmp/install-zig.sh && \
 # Set working directory
 WORKDIR /build
 
-# Copy build configuration files first (for better caching)
-COPY build.zig ./
-
-# Create empty src directory to satisfy build.zig
-RUN mkdir -p src && touch src/main.zig
-
-# Now copy the actual source code
+# Copy all source code (don't use dummy files - causes conflicts)
 COPY . .
 
-# Build geode binaries and tools
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        export ZIG_TARGET="aarch64-linux-gnu"; \
+# Build geode binaries and tools - try native build first
+RUN echo "Building with Zig $(zig version)..." && \
+    echo "Attempting native build first..." && \
+    if zig build -Doptimize=ReleaseSafe --summary all 2>&1 | tee /tmp/build.log; then \
+        echo "✓ Native build successful!"; \
     else \
-        export ZIG_TARGET="x86_64-linux-gnu"; \
+        echo "Native build failed, trying with explicit target..." && \
+        if [ "$TARGETARCH" = "arm64" ]; then \
+            export ZIG_TARGET="aarch64-linux-gnu"; \
+        else \
+            export ZIG_TARGET="x86_64-linux-gnu"; \
+        fi && \
+        echo "Building with target: $ZIG_TARGET" && \
+        if zig build -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET --summary all 2>&1 | tee /tmp/build.log; then \
+            echo "✓ Target build successful!"; \
+        else \
+            echo "=== BUILD FAILED - Last 100 lines ===" && \
+            tail -100 /tmp/build.log && \
+            exit 1; \
+        fi; \
     fi && \
-    zig build -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET && \
-    (zig build tools -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET || echo "Warning: Some tools may not have built")
+    echo "Main build complete" && \
+    (zig build tools -Doptimize=ReleaseSafe --summary all 2>&1 || \
+     echo "Note: Some tools may not have built")
 
 # Stage 4: Runtime stage with FIPS and MsQUIC support
 FROM debian:bookworm-slim AS runtime
