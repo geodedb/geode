@@ -93,6 +93,7 @@
             pkgs.glslang
             pkgs.cudaPackages.libnpp
             unstablePkgs.zig-zlint
+            pkgs.glibc.dev # Required for building quiche/BoringSSL with C++ stdlib
           ];
 
           # Documentation packages
@@ -215,9 +216,13 @@
 
                 # Set CFLAGS/CXXFLAGS for CMake-based builds (e.g., BoringSSL in quiche)
                 # CMake doesn't inherit Nix's wrapper flags, so we need to set them explicitly
-                export CFLAGS="''${CFLAGS:-""}"
-                export CXXFLAGS="''${CXXFLAGS:-""}"
+                export CFLAGS="''${CFLAGS:-""} -I${pkgs.glibc.dev}/include"
+                export CXXFLAGS="''${CXXFLAGS:-""} -I${pkgs.glibc.dev}/include"
                 export LDFLAGS="''${LDFLAGS:-""} -L${pkgs.glibc}/lib -L${pkgs.gcc.cc.lib}/lib -L${pkgs.libffi}/lib"
+
+                # CMake-specific flags (CMake doesn't use CFLAGS/CXXFLAGS from environment)
+                export CMAKE_C_FLAGS="''${CMAKE_C_FLAGS:-""} -I${pkgs.glibc.dev}/include"
+                export CMAKE_CXX_FLAGS="''${CMAKE_CXX_FLAGS:-""} -I${pkgs.glibc.dev}/include"
 
                 # Ensure libffi is in the library path for cffi
                 export LD_LIBRARY_PATH="${pkgs.libffi}/lib:''${LD_LIBRARY_PATH:-""}"

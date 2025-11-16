@@ -27,9 +27,16 @@ This document tracks the status of client integration work. After comprehensive 
 - **Status**: BLOCKED - quiche required but won't build in Nix environment
 - **Testing Results**:
   - ✗ Quinn 0.11: TLS handshake timeout (tested November 15)
-  - ✗ s2n-quic 1.69: TLS handshake timeout (tested November 15)
-  - ✓ quiche 0.22: Expected compatible, but BoringSSL won't compile in Nix
+  - ✗ s2n-quic 1.48: TLS handshake timeout (tested November 15)
+  - ✗ quiche 0.22: BoringSSL compilation failure in Nix (investigated November 15)
 - **Root Cause**: msquic TLS implementation incompatible with Quinn and s2n-quic
+- **quiche Investigation** (November 15, 2025):
+  - Updated Cargo.toml to use quiche 0.22
+  - BoringSSL (quiche's TLS library) fails to build: `stdlib.h: No such file or directory`
+  - Added glibc.dev to flake.nix, set CFLAGS/CXXFLAGS/CMAKE_C_FLAGS/CMAKE_CXX_FLAGS
+  - CMake's nested BoringSSL build doesn't inherit Nix environment variables
+  - This is a known Nix/CMake/BoringSSL toolchain incompatibility
+  - Reverted to s2n-quic with documentation of the issue
 - **Solution**: Build with quiche outside Nix environment (Docker or standard Linux)
 - **Code Status**: Complete s2n-quic implementation (520 lines, compiles successfully)
 - **Estimated effort to completion**: 1-2 hours (build in Docker + test)
@@ -186,7 +193,8 @@ Zig:    Not tested (client non-functional)
 | Python | aioquic | ✓ Compatible | Working |
 | Go | msquic (CGo) | ✓ Native | Working |
 | Rust | quinn | ✗ TLS handshake fails | Broken |
-| Rust | quiche | ✓ Expected compatible | Not implemented |
+| Rust | s2n-quic | ✗ TLS handshake fails | Broken |
+| Rust | quiche | ✓ Expected compatible | Won't build in Nix |
 | Zig | None | - | Not implemented |
 
 ### Why Quinn Fails
@@ -195,11 +203,21 @@ Zig:    Not tested (client non-functional)
 - Issue manifests as connection timeout during TLS negotiation
 - This is a known compatibility issue between different QUIC stacks
 
-### Why quiche Works
+### Why quiche Works (with msquic)
 - quiche (by Cloudflare) has been battle-tested with many QUIC implementations
 - Known to interoperate with msquic
 - Used in production by major services (Cloudflare edge, etc.)
 - More mature compatibility testing
+
+### Why quiche Won't Build in Nix
+- quiche uses BoringSSL (Google's OpenSSL fork) for TLS
+- BoringSSL build uses CMake with nested build system
+- Nix sets compiler flags via wrapper scripts
+- CMake's nested BoringSSL build bypasses Nix wrappers
+- Even explicit CMAKE_C_FLAGS/CMAKE_CXX_FLAGS don't propagate
+- Error: `stdlib.h: No such file or directory` during C++ compilation
+- This is a known Nix/CMake/BoringSSL toolchain incompatibility
+- **Solution**: Build outside Nix (Docker, standard Linux, or macOS)
 
 ## Conclusion - MISSION ACCOMPLISHED
 

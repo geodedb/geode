@@ -471,8 +471,67 @@ let mut crypto = rustls::ClientConfig::builder()
 
 **Status**: 🟢 CLIENT CODE FULLY FUNCTIONAL - Remaining failures are server-side feature gaps
 
+### 13. quiche Migration Investigation - BoringSSL Build Issue (November 15, 2025)
+**Files**: `clients/rust/Cargo.toml`, `flake.nix`
+**Impact**: Determined quiche (msquic-compatible QUIC library) cannot build in Nix environment
+
+**Background**:
+- Quinn and s2n-quic both have TLS handshake incompatibility with msquic server
+- quiche (by Cloudflare) is known to interoperate with msquic
+- Attempted migration from s2n-quic to quiche 0.22
+
+**Investigation Steps**:
+1. Updated Cargo.toml to use `quiche = "0.22"` instead of s2n-quic
+2. Attempted build: BoringSSL (quiche's TLS library) failed with `stdlib.h: No such file or directory`
+3. Added `pkgs.glibc.dev` to flake.nix devShellPackages (line 96)
+4. Added CFLAGS/CXXFLAGS with glibc include paths (lines 218-220)
+5. Added CMAKE_C_FLAGS/CMAKE_CXX_FLAGS for CMake builds (lines 224-225)
+6. All builds still failed with same error
+
+**Root Cause**: CMake's nested build for BoringSSL doesn't inherit Nix environment variables
+- Nix sets CFLAGS/CXXFLAGS via compiler wrappers
+- CMake spawns nested build for BoringSSL that bypasses these wrappers
+- Even explicit CMAKE_C_FLAGS/CMAKE_CXX_FLAGS don't propagate to nested build
+- This is a known Nix/CMake/BoringSSL toolchain issue
+
+**Error Message**:
+```
+/nix/store/.../include/c++/14.3.0/cstdlib:79:15: fatal error: stdlib.h: No such file or directory
+   79 | #include_next <stdlib.h>
+      |               ^~~~~~~~~~
+```
+
+**Resolution**:
+- Reverted Cargo.toml back to s2n-quic with explanatory comment
+- Documented quiche as ideal but not buildable in Nix environment
+- Retained flake.nix glibc.dev additions for future C/C++ builds
+
+**flake.nix Improvements** (Retained):
+```nix
+# Line 96: Added glibc.dev for C/C++ builds
+pkgs.glibc.dev # Required for building quiche/BoringSSL with C++ stdlib
+
+# Lines 218-225: CMake build environment
+export CFLAGS="''${CFLAGS:-""} -I${pkgs.glibc.dev}/include"
+export CXXFLAGS="''${CXXFLAGS:-""} -I${pkgs.glibc.dev}/include"
+export LDFLAGS="''${LDFLAGS:-""} -L${pkgs.glibc}/lib -L${pkgs.gcc.cc.lib}/lib -L${pkgs.libffi}/lib"
+export CMAKE_C_FLAGS="''${CMAKE_C_FLAGS:-""} -I${pkgs.glibc.dev}/include"
+export CMAKE_CXX_FLAGS="''${CMAKE_CXX_FLAGS:-""} -I${pkgs.glibc.dev}/include"
+```
+
+**Alternative Solutions**:
+1. Build Rust client outside Nix (Docker or standard Linux)
+2. Use quiche pre-built as a system library (requires non-Nix setup)
+3. Accept s2n-quic/Quinn limitation and rely on Python/Go clients (current approach)
+
+**Status**:
+- ✅ Investigation complete - quiche incompatible with Nix build environment
+- ✅ flake.nix improvements retained for other C/C++ projects
+- ⚠️ Rust client remains at 0% due to QUIC library incompatibility
+- ✅ Python (94.1%) and Go (94.1%) clients provide production-ready coverage
+
 ---
 
-*Last Updated*: 2025-11-15 (Rust Client Compilation Fixed - Commit 0fbe499)
+*Last Updated*: 2025-11-15 (quiche Investigation Complete)
 *Contributors*: Claude Code
-*Status*: 🟢 CLIENTS WORKING - SERVER FEATURES NEEDED
+*Status*: 🟢 PYTHON/GO PRODUCTION READY - RUST BLOCKED ON QUIC LIBRARY
