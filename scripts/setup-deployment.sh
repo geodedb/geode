@@ -58,11 +58,11 @@ if [ ! -f "$PROJECT_ROOT/.env" ]; then
     REDIS_PASSWORD=$(openssl rand -base64 24)
     GRAFANA_PASSWORD=$(openssl rand -base64 16)
 
-    # Update .env with generated passwords
-    sed -i "s/CHANGE-ME-minio-secret-key-12345/$MINIO_PASSWORD/g" "$PROJECT_ROOT/.env"
-    sed -i "s/CHANGE-ME-redis-password-12345/$REDIS_PASSWORD/g" "$PROJECT_ROOT/.env"
-    sed -i "s/CHANGE-ME-grafana-admin-12345/$GRAFANA_PASSWORD/g" "$PROJECT_ROOT/.env"
-    sed -i "s/geode-dev-token-CHANGE-ME/$VAULT_TOKEN/g" "$PROJECT_ROOT/.env"
+    # Update .env with generated passwords (using | as delimiter to avoid conflicts with base64 / and +)
+    sed -i "s|CHANGE-ME-minio-secret-key-12345|$MINIO_PASSWORD|g" "$PROJECT_ROOT/.env"
+    sed -i "s|CHANGE-ME-redis-password-12345|$REDIS_PASSWORD|g" "$PROJECT_ROOT/.env"
+    sed -i "s|CHANGE-ME-grafana-admin-12345|$GRAFANA_PASSWORD|g" "$PROJECT_ROOT/.env"
+    sed -i "s|geode-dev-token-CHANGE-ME|$VAULT_TOKEN|g" "$PROJECT_ROOT/.env"
 
     echo -e "${GREEN}✓${NC} Environment file created with generated passwords\n"
     echo -e "${YELLOW}Important: Review and update $PROJECT_ROOT/.env with your settings${NC}\n"
@@ -107,10 +107,10 @@ echo -e "${GREEN}=== Setup Complete ===${NC}\n"
 echo "Next steps:"
 echo "1. Review and update .env file with your configuration"
 echo "2. Start the stack:"
-echo "   ${YELLOW}docker-compose up -d${NC}"
+echo -e "   ${YELLOW}docker-compose up -d${NC}"
 echo ""
 echo "3. For GPU-accelerated deployment:"
-echo "   ${YELLOW}docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d${NC}"
+echo -e "   ${YELLOW}docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d${NC}"
 echo ""
 echo "4. Access the services:"
 echo "   - Grafana: https://grafana.geode.local (admin/[check .env])"
@@ -120,6 +120,6 @@ echo "   - Vault: https://vault.geode.local"
 echo "   - Geode QUIC: udp://geode.local:8443"
 echo ""
 echo "5. Initialize Vault secrets:"
-echo "   ${YELLOW}docker-compose exec vault vault operator init${NC}"
+echo -e "   ${YELLOW}docker-compose exec vault vault operator init${NC}"
 echo ""
 echo -e "${GREEN}Documentation: See DEPLOYMENT.md for detailed instructions${NC}"
