@@ -252,6 +252,16 @@ pub const Parser = struct {
             return try self.parseQuotedString(c);
         }
 
+        // Handle flow-style list [...]
+        if (c == '[') {
+            return try self.parseFlowList();
+        }
+
+        // Handle flow-style map {...}
+        if (c == '{') {
+            return try self.parseFlowMap();
+        }
+
         // Handle null (check word boundary)
         if (std.mem.startsWith(u8, self.input[self.pos..], "null")) {
             const after_pos = self.pos + 4;
@@ -277,20 +287,18 @@ pub const Parser = struct {
             }
         }
 
-        // Handle empty map/object
-        if (std.mem.startsWith(u8, self.input[self.pos..], "{}")) {
-            self.pos += 2;
-            return Value{ .map = std.StringHashMap(Value).init(self.allocator) };
-        }
-
         // Parse unquoted scalar (number or string)
         while (self.pos < self.input.len) {
             const ch = self.input[self.pos];
-            if (ch == '\n' or ch == '\r' or ch == '#') break;
+            if (ch == '\n' or ch == '\r' or ch == '#' or ch == ',' or ch == ']' or ch == '}') break;
             self.pos += 1;
         }
 
         const raw = std.mem.trim(u8, self.input[start..self.pos], " \t");
+
+        if (raw.len == 0) {
+            return Value{ .null_value = {} };
+        }
 
         // Try to parse as integer
         if (std.fmt.parseInt(i64, raw, 10)) |int_val| {
@@ -305,6 +313,210 @@ pub const Parser = struct {
         // Return as string
         const str = try self.allocator.dupe(u8, raw);
         return Value{ .string_value = str };
+    }
+
+    fn parseFlowList(self: *Parser) Error!Value {
+        self.pos += 1; // Skip '['
+
+        var list = try std.ArrayList(Value).initCapacity(self.allocator, 4);
+        errdefer {
+            for (list.items) |*item| {
+                item.deinit(self.allocator);
+            }
+            list.deinit(self.allocator);
+        }
+
+        while (self.pos < self.input.len) {
+            self.skipWhitespace();
+
+            if (self.pos >= self.input.len) return Error.UnexpectedEndOfInput;
+
+            // Check for end of list
+            if (self.input[self.pos] == ']') {
+                self.pos += 1; // Skip ']'
+                return Value{ .list = list };
+            }
+
+            // Parse item
+            const item = try self.parseFlowValue();
+            try list.append(self.allocator, item);
+
+            self.skipWhitespace();
+
+            if (self.pos >= self.input.len) return Error.UnexpectedEndOfInput;
+
+            // Check for comma or end
+            if (self.input[self.pos] == ',') {
+                self.pos += 1; // Skip ','
+            } else if (self.input[self.pos] == ']') {
+                self.pos += 1; // Skip ']'
+                return Value{ .list = list };
+            } else {
+                return Error.UnexpectedToken;
+            }
+        }
+
+        return Error.UnexpectedEndOfInput;
+    }
+
+    fn parseFlowMap(self: *Parser) Error!Value {
+        self.pos += 1; // Skip '{'
+
+        var map = std.StringHashMap(Value).init(self.allocator);
+        errdefer {
+            var iter = map.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(self.allocator);
+            }
+            map.deinit();
+        }
+
+        while (self.pos < self.input.len) {
+            self.skipWhitespace();
+
+            if (self.pos >= self.input.len) return Error.UnexpectedEndOfInput;
+
+            // Check for end of map
+            if (self.input[self.pos] == '}') {
+                self.pos += 1; // Skip '}'
+                return Value{ .map = map };
+            }
+
+            // Parse key (can be quoted or unquoted)
+            const key = blk: {
+                const c = self.input[self.pos];
+                if (c == '"' or c == '\'') {
+                    var key_value = try self.parseQuotedString(c);
+                    defer key_value.deinit(self.allocator);
+                    break :blk try self.allocator.dupe(u8, key_value.string_value);
+                } else {
+                    break :blk try self.parseFlowKey();
+                }
+            };
+            errdefer self.allocator.free(key);
+
+            self.skipWhitespace();
+
+            // Expect ':'
+            if (self.pos >= self.input.len or self.input[self.pos] != ':') {
+                return Error.UnexpectedToken;
+            }
+            self.pos += 1; // Skip ':'
+            self.skipWhitespace();
+
+            // Parse value
+            const value = try self.parseFlowValue();
+            try map.put(key, value);
+
+            self.skipWhitespace();
+
+            if (self.pos >= self.input.len) return Error.UnexpectedEndOfInput;
+
+            // Check for comma or end
+            if (self.input[self.pos] == ',') {
+                self.pos += 1; // Skip ','
+            } else if (self.input[self.pos] == '}') {
+                self.pos += 1; // Skip '}'
+                return Value{ .map = map };
+            } else {
+                return Error.UnexpectedToken;
+            }
+        }
+
+        return Error.UnexpectedEndOfInput;
+    }
+
+    fn parseFlowValue(self: *Parser) Error!Value {
+        self.skipWhitespace();
+
+        if (self.pos >= self.input.len) {
+            return Value{ .null_value = {} };
+        }
+
+        const c = self.input[self.pos];
+
+        // Handle quoted string
+        if (c == '"' or c == '\'') {
+            return try self.parseQuotedString(c);
+        }
+
+        // Handle flow-style list
+        if (c == '[') {
+            return try self.parseFlowList();
+        }
+
+        // Handle flow-style map
+        if (c == '{') {
+            return try self.parseFlowMap();
+        }
+
+        // Handle null
+        if (std.mem.startsWith(u8, self.input[self.pos..], "null")) {
+            const after_pos = self.pos + 4;
+            if (after_pos >= self.input.len or isFlowDelimiter(self.input[after_pos])) {
+                self.pos = after_pos;
+                return Value{ .null_value = {} };
+            }
+        }
+
+        // Handle boolean
+        if (std.mem.startsWith(u8, self.input[self.pos..], "true")) {
+            const after_pos = self.pos + 4;
+            if (after_pos >= self.input.len or isFlowDelimiter(self.input[after_pos])) {
+                self.pos = after_pos;
+                return Value{ .bool_value = true };
+            }
+        }
+        if (std.mem.startsWith(u8, self.input[self.pos..], "false")) {
+            const after_pos = self.pos + 5;
+            if (after_pos >= self.input.len or isFlowDelimiter(self.input[after_pos])) {
+                self.pos = after_pos;
+                return Value{ .bool_value = false };
+            }
+        }
+
+        // Parse unquoted scalar until delimiter
+        const start = self.pos;
+        while (self.pos < self.input.len) {
+            const ch = self.input[self.pos];
+            if (ch == ',' or ch == ']' or ch == '}' or ch == '\n' or ch == '\r' or ch == '#') break;
+            self.pos += 1;
+        }
+
+        const raw = std.mem.trim(u8, self.input[start..self.pos], " \t");
+
+        if (raw.len == 0) {
+            return Value{ .null_value = {} };
+        }
+
+        // Try to parse as integer
+        if (std.fmt.parseInt(i64, raw, 10)) |int_val| {
+            return Value{ .int_value = int_val };
+        } else |_| {}
+
+        // Try to parse as float
+        if (std.fmt.parseFloat(f64, raw)) |float_val| {
+            return Value{ .float_value = float_val };
+        } else |_| {}
+
+        // Return as string
+        const str = try self.allocator.dupe(u8, raw);
+        return Value{ .string_value = str };
+    }
+
+    fn parseFlowKey(self: *Parser) Error![]const u8 {
+        const start = self.pos;
+        while (self.pos < self.input.len) {
+            const c = self.input[self.pos];
+            if (c == ':' or c == ',' or c == '}' or c == '\n' or c == '\r') break;
+            self.pos += 1;
+        }
+
+        const key = std.mem.trim(u8, self.input[start..self.pos], " \t");
+        if (key.len == 0) return Error.UnexpectedToken;
+
+        return try self.allocator.dupe(u8, key);
     }
 
     fn parseQuotedString(self: *Parser, quote_char: u8) Error!Value {
@@ -409,21 +621,95 @@ pub const Parser = struct {
 
     fn parseKey(self: *Parser) Error![]const u8 {
         const start = self.pos;
+        var in_quotes: ?u8 = null;
+
         while (self.pos < self.input.len) {
             const c = self.input[self.pos];
+
+            // Handle quotes
+            if (c == '"' or c == '\'') {
+                if (in_quotes == null) {
+                    in_quotes = c;
+                } else if (in_quotes == c) {
+                    // Check for escaped quotes
+                    if (c == '\'' and self.pos + 1 < self.input.len and self.input[self.pos + 1] == '\'') {
+                        self.pos += 1; // Skip the escaped quote
+                    } else if (c == '"' and self.pos > 0 and self.input[self.pos - 1] == '\\') {
+                        // Escaped double quote
+                    } else {
+                        in_quotes = null;
+                    }
+                }
+                self.pos += 1;
+                continue;
+            }
+
+            // If inside quotes, continue
+            if (in_quotes != null) {
+                self.pos += 1;
+                continue;
+            }
+
+            // Outside quotes - stop at colon or newline
             if (c == ':' or c == '\n' or c == '\r') break;
             self.pos += 1;
         }
 
         const key = std.mem.trim(u8, self.input[start..self.pos], " \t");
+        if (key.len == 0) return Error.UnexpectedToken;
+
         return try self.allocator.dupe(u8, key);
     }
 
     fn isMapStart(self: *Parser) bool {
         var lookahead = self.pos;
+        var in_quotes: ?u8 = null; // Track if we're inside quotes (' or ")
+
         while (lookahead < self.input.len) {
             const c = self.input[lookahead];
-            if (c == ':') return true;
+
+            // Handle quote state
+            if (c == '"' or c == '\'') {
+                if (in_quotes == null) {
+                    // Entering quoted string
+                    in_quotes = c;
+                } else if (in_quotes == c) {
+                    // Exiting quoted string (check for escaped quote)
+                    if (c == '\'' and lookahead + 1 < self.input.len and self.input[lookahead + 1] == '\'') {
+                        // '' inside single quote - skip both
+                        lookahead += 1;
+                    } else if (c == '"' and lookahead > 0 and self.input[lookahead - 1] == '\\') {
+                        // Escaped double quote - ignore
+                    } else {
+                        // Actually exiting quotes
+                        in_quotes = null;
+                    }
+                }
+                lookahead += 1;
+                continue;
+            }
+
+            // If we're inside quotes, skip this character
+            if (in_quotes != null) {
+                lookahead += 1;
+                continue;
+            }
+
+            // Outside quotes - check for map indicators
+            if (c == ':') {
+                // Found colon outside quotes - check if it's followed by space or newline
+                // This is the key-value separator
+                if (lookahead + 1 < self.input.len) {
+                    const next = self.input[lookahead + 1];
+                    if (next == ' ' or next == '\n' or next == '\r' or next == '\t') {
+                        return true;
+                    }
+                } else {
+                    // Colon at end of input
+                    return true;
+                }
+            }
+
             if (c == '\n' or c == '\r' or c == '-' or c == '[' or c == '{') return false;
             lookahead += 1;
         }
@@ -650,6 +936,10 @@ fn isDelimiter(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '#' or c == ',' or c == '}' or c == ']';
 }
 
+fn isFlowDelimiter(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == ',' or c == '}' or c == ']';
+}
+
 // Tests
 test "yaml: parse simple scalar" {
     const allocator = std.testing.allocator;
@@ -714,4 +1004,113 @@ test "yaml: parse list" {
 
     try std.testing.expect(value == .list);
     try std.testing.expectEqual(@as(usize, 3), value.list.items.len);
+}
+
+test "yaml: parse flow-style list" {
+    const allocator = std.testing.allocator;
+
+    const input = "[1, 2, 3, 4, 5]";
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .list);
+    try std.testing.expectEqual(@as(usize, 5), value.list.items.len);
+    try std.testing.expectEqual(@as(i64, 1), value.list.items[0].int_value);
+    try std.testing.expectEqual(@as(i64, 5), value.list.items[4].int_value);
+}
+
+test "yaml: parse flow-style list with strings" {
+    const allocator = std.testing.allocator;
+
+    const input = "[\"x\", \"greeting\", \"flag\"]";
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .list);
+    try std.testing.expectEqual(@as(usize, 3), value.list.items.len);
+    try std.testing.expectEqualStrings("x", value.list.items[0].string_value);
+    try std.testing.expectEqualStrings("greeting", value.list.items[1].string_value);
+    try std.testing.expectEqualStrings("flag", value.list.items[2].string_value);
+}
+
+test "yaml: parse empty flow-style list" {
+    const allocator = std.testing.allocator;
+
+    const input = "[]";
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .list);
+    try std.testing.expectEqual(@as(usize, 0), value.list.items.len);
+}
+
+test "yaml: parse flow-style map" {
+    const allocator = std.testing.allocator;
+
+    const input = "{name: Alice, age: 30}";
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    try std.testing.expectEqual(@as(usize, 2), value.map.count());
+
+    const name = value.map.get("name").?;
+    try std.testing.expect(name == .string_value);
+    try std.testing.expectEqualStrings("Alice", name.string_value);
+
+    const age = value.map.get("age").?;
+    try std.testing.expect(age == .int_value);
+    try std.testing.expectEqual(@as(i64, 30), age.int_value);
+}
+
+test "yaml: parse empty flow-style map" {
+    const allocator = std.testing.allocator;
+
+    const input = "{}";
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    try std.testing.expectEqual(@as(usize, 0), value.map.count());
+}
+
+test "yaml: parse nested flow-style collections" {
+    const allocator = std.testing.allocator;
+
+    const input = "{items: [1, 2, 3], nested: {key: value}}";
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    try std.testing.expectEqual(@as(usize, 2), value.map.count());
+
+    const items = value.map.get("items").?;
+    try std.testing.expect(items == .list);
+    try std.testing.expectEqual(@as(usize, 3), items.list.items.len);
+
+    const nested = value.map.get("nested").?;
+    try std.testing.expect(nested == .map);
+    try std.testing.expectEqual(@as(usize, 1), nested.map.count());
+}
+
+test "yaml: parse map with flow-style list value" {
+    const allocator = std.testing.allocator;
+
+    const input =
+        \\columns: ["x", "greeting", "flag"]
+    ;
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    const columns = value.map.get("columns").?;
+    try std.testing.expect(columns == .list);
+    try std.testing.expectEqual(@as(usize, 3), columns.list.items.len);
 }
