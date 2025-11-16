@@ -1114,3 +1114,48 @@ test "yaml: parse map with flow-style list value" {
     try std.testing.expect(columns == .list);
     try std.testing.expectEqual(@as(usize, 3), columns.list.items.len);
 }
+
+test "yaml: parse nested quotes in string value" {
+    const allocator = std.testing.allocator;
+
+    const input =
+        \\text: "MATCH (n) WHERE n.id IN ['a', 'b'] RETURN n"
+    ;
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    const text = value.map.get("text").?;
+    try std.testing.expect(text == .string_value);
+    try std.testing.expectEqualStrings("MATCH (n) WHERE n.id IN ['a', 'b'] RETURN n", text.string_value);
+}
+
+test "yaml: parse complex nested structure with quotes" {
+    const allocator = std.testing.allocator;
+
+    const input =
+        \\steps:
+        \\  - type: query
+        \\    text: "MATCH (n) WHERE n.id IN ['a', 'b'] RETURN n"
+        \\    expect:
+        \\      rows: 1
+    ;
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    const steps = value.map.get("steps").?;
+    try std.testing.expect(steps == .list);
+    try std.testing.expectEqual(@as(usize, 1), steps.list.items.len);
+
+    const step = steps.list.items[0];
+    try std.testing.expect(step == .map);
+
+    const type_val = step.map.get("type").?;
+    try std.testing.expectEqualStrings("query", type_val.string_value);
+
+    const text = step.map.get("text").?;
+    try std.testing.expectEqualStrings("MATCH (n) WHERE n.id IN ['a', 'b'] RETURN n", text.string_value);
+}
