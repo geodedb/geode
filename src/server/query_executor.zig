@@ -212,46 +212,86 @@ pub fn writeJsonValue(w: anytype, v: eval.Value) !void {
 }
 
 /// Parse JSON parameters into parameter names and row matrix
-/// Support single array param (tests only need this)
+/// Supports both object params ({"id": 8, "name": "Alice"}) and array params ({"values": [1,2,3]})
 pub fn parseParams(allocator: std.mem.Allocator, params_json: ?[]const u8, out_names: *[][]const u8, out_rows: *[][]const eval.Value) void {
     if (params_json == null) return;
     const src = params_json.?;
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, src, .{}) catch return;
     defer parsed.deinit();
     if (parsed.value != .object) return;
+
+    // Count parameters
+    var count: usize = 0;
     var it = parsed.value.object.iterator();
-    // Support single array param (tests only need this)
-    if (it.next()) |entry| {
+    while (it.next()) |_| count += 1;
+    if (count == 0) return;
+
+    // Allocate names array
+    var names = allocator.alloc([]const u8, count) catch return;
+
+    // Check if this is a single array param or multiple scalar params
+    it = parsed.value.object.iterator();
+    if (count == 1) {
+        if (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+
+            // Single array parameter (e.g., {"values": [1,2,3]})
+            if (val == .array) {
+                const arr = val.array.items;
+                names[0] = allocator.dupe(u8, key) catch key;
+                // Collect raw scalar values first
+                var rows = allocator.alloc(eval.Value, arr.len) catch return;
+                var i: usize = 0;
+                while (i < arr.len) : (i += 1) {
+                    const v = arr[i];
+                    rows[i] = switch (v) {
+                        .integer => |iv| eval.Value{ .Int = @intCast(iv) },
+                        .bool => |bv| eval.Value{ .Bool = bv },
+                        .string => |sv| eval.Value{ .Str = sv },
+                        .null => eval.Value{ .Null = {} },
+                        .float => eval.Value{ .Null = {} },
+                        .number_string => eval.Value{ .Null = {} },
+                        .array => eval.Value{ .Null = {} },
+                        .object => eval.Value{ .Null = {} },
+                    };
+                }
+                out_names.* = names;
+                // Wrap each into a single-column row matrix
+                out_rows.* = allocator.alloc([]const eval.Value, rows.len) catch return;
+                var j: usize = 0;
+                while (j < rows.len) : (j += 1) out_rows.*[j] = rows[j .. j + 1];
+                return;
+            }
+        }
+        it = parsed.value.object.iterator(); // Reset for scalar case below
+    }
+
+    // Multiple scalar parameters (e.g., {"id": 8, "name": "Alice"})
+    var values = allocator.alloc(eval.Value, count) catch return;
+    var idx: usize = 0;
+    it = parsed.value.object.iterator();
+    while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         const val = entry.value_ptr.*;
-        if (val != .array) return;
-        const arr = val.array.items;
-        // Empty array -> zero rows (handled by caller when constructing row pages)
-        var names = allocator.alloc([]const u8, 1) catch return;
-        names[0] = allocator.dupe(u8, key) catch key;
-        // Collect raw scalar values first
-        var rows = allocator.alloc(eval.Value, arr.len) catch return;
-        var i: usize = 0;
-        while (i < arr.len) : (i += 1) {
-            const v = arr[i];
-            rows[i] = switch (v) {
-                .integer => |iv| eval.Value{ .Int = @intCast(iv) },
-                .bool => |bv| eval.Value{ .Bool = bv },
-                .string => |sv| eval.Value{ .Str = sv },
-                .null => eval.Value{ .Null = {} },
-                .float => eval.Value{ .Null = {} },
-                .number_string => eval.Value{ .Null = {} },
-                .array => eval.Value{ .Null = {} },
-                .object => eval.Value{ .Null = {} },
-            };
-        }
-        out_names.* = names;
-        // Wrap each into a single-column row matrix later during evaluation
-        // We'll store as param vector values, not full rows yet.
-        out_rows.* = allocator.alloc([]const eval.Value, rows.len) catch return;
-        var j: usize = 0;
-        while (j < rows.len) : (j += 1) out_rows.*[j] = rows[j .. j + 1];
+        names[idx] = allocator.dupe(u8, key) catch key;
+        values[idx] = switch (val) {
+            .integer => |iv| eval.Value{ .Int = @intCast(iv) },
+            .bool => |bv| eval.Value{ .Bool = bv },
+            .string => |sv| eval.Value{ .Str = sv },
+            .null => eval.Value{ .Null = {} },
+            .float => eval.Value{ .Null = {} },
+            .number_string => eval.Value{ .Null = {} },
+            .array => eval.Value{ .Null = {} },
+            .object => eval.Value{ .Null = {} },
+        };
+        idx += 1;
     }
+
+    out_names.* = names;
+    // Single row with all parameters
+    out_rows.* = allocator.alloc([]const eval.Value, 1) catch return;
+    out_rows.*[0] = values;
 }
 
 /// Build EXPLAIN JSON with logical query plan
