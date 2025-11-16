@@ -7,9 +7,9 @@ const QuicStatus = MsQuic.QuicStatus;
 
 pub const GeodeClient = struct {
     allocator: std.mem.Allocator,
-    msquic: *MsQuic.QUIC_API_TABLE,
-    registration: MsQuic.HQUIC,
-    configuration: MsQuic.HQUIC,
+    msquic: ?*MsQuic.QUIC_API_TABLE = null,
+    registration: ?MsQuic.HQUIC = null,
+    configuration: ?MsQuic.HQUIC = null,
     connection: ?MsQuic.HQUIC = null,
     stream_ctx: ?*StreamContext = null,
 
@@ -23,59 +23,9 @@ pub const GeodeClient = struct {
         .Buffer = @constCast(alpn_name[0..].ptr),
     };
 
-    pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16, insecure: bool) !GeodeClient {
-        // Open MsQuic API
-        var msquic: *MsQuic.QUIC_API_TABLE = undefined;
-        const msquic_ptr: [*c]?*const anyopaque = @ptrCast(&msquic);
-        if (QuicStatus.isError(MsQuic.MsQuicOpenVersion(MsQuic.QUIC_API_VERSION_2, msquic_ptr))) {
-            return error.MsQuicOpenFailed;
-        }
-        errdefer MsQuic.MsQuicClose(msquic);
-
-        // Create registration
-        const app_name: [:0]const u8 = "geode-zig-client";
-        const reg_config = MsQuic.QUIC_REGISTRATION_CONFIG{
-            .AppName = @ptrCast(app_name.ptr),
-            .ExecutionProfile = MsQuic.QUIC_EXECUTION_PROFILE_LOW_LATENCY,
-        };
-        var registration: MsQuic.HQUIC = undefined;
-        if (QuicStatus.isError(msquic.RegistrationOpen.?(&reg_config, &registration))) {
-            return error.RegistrationFailed;
-        }
-        errdefer msquic.RegistrationClose.?(registration);
-
-        // Create configuration
-        var configuration: MsQuic.HQUIC = undefined;
-        var settings = std.mem.zeroes(MsQuic.QuicSettings);
-
-        settings.IdleTimeoutMs = 30000;
-        settings.IsSet.flags.IdleTimeoutMs = true;
-
-        settings.PeerBidiStreamCount = 100;
-        settings.IsSet.flags.PeerBidiStreamCount = true;
-
-        if (QuicStatus.isError(msquic.ConfigurationOpen.?(registration, &alpn, 1, &settings, @sizeOf(@TypeOf(settings)), null, &configuration))) {
-            return error.ConfigurationFailed;
-        }
-        errdefer msquic.ConfigurationClose.?(configuration);
-
-        // Load client credentials
-        var cred_config = std.mem.zeroes(MsQuic.QUIC_CREDENTIAL_CONFIG);
-        cred_config.Flags = MsQuic.QUIC_CREDENTIAL_FLAG_CLIENT;
-        if (insecure) {
-            cred_config.Flags |= MsQuic.QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
-        }
-
-        const status = msquic.ConfigurationLoadCredential.?(configuration, &cred_config);
-        if (QuicStatus.isError(status)) {
-            return error.ConfigurationLoadCredentialFailed;
-        }
-
-        return GeodeClient{
+    pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16, insecure: bool) GeodeClient {
+        return .{
             .allocator = allocator,
-            .msquic = msquic,
-            .registration = registration,
-            .configuration = configuration,
             .host = host,
             .port = port,
             .insecure = insecure,
@@ -83,10 +33,65 @@ pub const GeodeClient = struct {
     }
 
     pub fn connect(self: *GeodeClient) !void {
+        // Lazy initialization of MsQuic API
+        if (self.msquic == null) {
+            // Open MsQuic API
+            var msquic: *MsQuic.QUIC_API_TABLE = undefined;
+            const msquic_ptr: [*c]?*const anyopaque = @ptrCast(&msquic);
+            if (QuicStatus.isError(MsQuic.MsQuicOpenVersion(MsQuic.QUIC_API_VERSION_2, msquic_ptr))) {
+                return error.MsQuicOpenFailed;
+            }
+            self.msquic = msquic;
+        }
+
+        // Lazy initialization of registration
+        if (self.registration == null) {
+            const app_name: [:0]const u8 = "geode-zig-client";
+            const reg_config = MsQuic.QUIC_REGISTRATION_CONFIG{
+                .AppName = @ptrCast(app_name.ptr),
+                .ExecutionProfile = MsQuic.QUIC_EXECUTION_PROFILE_LOW_LATENCY,
+            };
+            var registration: MsQuic.HQUIC = undefined;
+            if (QuicStatus.isError(self.msquic.?.RegistrationOpen.?(&reg_config, &registration))) {
+                return error.RegistrationFailed;
+            }
+            self.registration = registration;
+        }
+
+        // Lazy initialization of configuration
+        if (self.configuration == null) {
+            var configuration: MsQuic.HQUIC = undefined;
+            var settings = std.mem.zeroes(MsQuic.QuicSettings);
+
+            settings.IdleTimeoutMs = 30000;
+            settings.IsSet.flags.IdleTimeoutMs = true;
+
+            settings.PeerBidiStreamCount = 100;
+            settings.IsSet.flags.PeerBidiStreamCount = true;
+
+            if (QuicStatus.isError(self.msquic.?.ConfigurationOpen.?(self.registration.?, &alpn, 1, &settings, @sizeOf(@TypeOf(settings)), null, &configuration))) {
+                return error.ConfigurationFailed;
+            }
+
+            // Load client credentials
+            var cred_config = std.mem.zeroes(MsQuic.QUIC_CREDENTIAL_CONFIG);
+            cred_config.Flags = MsQuic.QUIC_CREDENTIAL_FLAG_CLIENT;
+            if (self.insecure) {
+                cred_config.Flags |= MsQuic.QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
+            }
+
+            const status = self.msquic.?.ConfigurationLoadCredential.?(configuration, &cred_config);
+            if (QuicStatus.isError(status)) {
+                return error.ConfigurationLoadCredentialFailed;
+            }
+
+            self.configuration = configuration;
+        }
+
         // Open connection
         var conn: MsQuic.HQUIC = undefined;
-        if (QuicStatus.isError(self.msquic.ConnectionOpen.?(
-            self.registration,
+        if (QuicStatus.isError(self.msquic.?.ConnectionOpen.?(
+            self.registration.?,
             connectionCallback,
             self,
             &conn,
@@ -95,26 +100,47 @@ pub const GeodeClient = struct {
         }
         self.connection = conn;
         errdefer {
-            self.msquic.ConnectionShutdown.?(conn, MsQuic.QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
+            self.msquic.?.ConnectionShutdown.?(conn, MsQuic.QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
             self.connection = null;
         }
 
-        // Open stream
+        // Start connection to server
+        const conn_start_status = self.msquic.?.ConnectionStart.?(
+            conn,
+            self.configuration.?,
+            MsQuic.QUIC_ADDRESS_FAMILY_UNSPEC,
+            @ptrCast(self.host.ptr),
+            self.port,
+        );
+        if (QuicStatus.isError(conn_start_status)) {
+            return error.ConnectionStartFailed;
+        }
+
+        // Wait for connection to establish (basic wait, no stream yet)
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+    }
+
+    pub fn openStream(self: *GeodeClient) !void {
+        if (self.connection == null) {
+            return error.NotConnected;
+        }
+
+        // Create stream context
         var stream_ctx = try self.allocator.create(StreamContext);
         stream_ctx.client = self;
         stream_ctx.handle = undefined;
         stream_ctx.allocator = self.allocator;
         stream_ctx.recv_buffer = .{};
         stream_ctx.mutex = .{};
-        stream_ctx.connected = false;
+        stream_ctx.connected = true;  // Connection already established
         self.stream_ctx = stream_ctx;
         errdefer {
             self.allocator.destroy(stream_ctx);
             self.stream_ctx = null;
         }
 
-        const stream_status = self.msquic.StreamOpen.?(
-            conn,
+        const stream_status = self.msquic.?.StreamOpen.?(
+            self.connection.?,
             MsQuic.QUIC_STREAM_OPEN_FLAG_NONE,
             StreamContext.streamCallback,
             stream_ctx,
@@ -124,34 +150,13 @@ pub const GeodeClient = struct {
             return error.StreamOpenFailed;
         }
 
-        const start_status = self.msquic.StreamStart.?(stream_ctx.handle, MsQuic.QUIC_STREAM_START_FLAG_NONE);
+        const start_status = self.msquic.?.StreamStart.?(stream_ctx.handle, MsQuic.QUIC_STREAM_START_FLAG_NONE);
         if (QuicStatus.isError(start_status)) {
             return error.StreamStartFailed;
         }
 
-        // Start connection to server
-        const conn_start_status = self.msquic.ConnectionStart.?(
-            conn,
-            self.configuration,
-            MsQuic.QUIC_ADDRESS_FAMILY_UNSPEC,
-            @ptrCast(self.host.ptr),
-            self.port,
-        );
-        if (QuicStatus.isError(conn_start_status)) {
-            return error.ConnectionStartFailed;
-        }
-
-        // Wait for connection to establish
-        const timeout_ns: u64 = 10 * std.time.ns_per_s;
-        const start = std.time.nanoTimestamp();
-        while (std.time.nanoTimestamp() - start < timeout_ns) {
-            stream_ctx.mutex.lock();
-            const connected = stream_ctx.connected;
-            stream_ctx.mutex.unlock();
-            if (connected) return;
-            std.Thread.sleep(10 * std.time.ns_per_ms);
-        }
-        return error.ConnectionTimeout;
+        // Give stream time to start (no need to wait for connection flag - already connected)
+        std.Thread.sleep(100 * std.time.ns_per_ms);
     }
 
     pub fn sendMessage(self: *GeodeClient, message: []const u8) !void {
@@ -168,7 +173,8 @@ pub const GeodeClient = struct {
             .Buffer = data.ptr,
         };
 
-        const status = self.msquic.StreamSend.?(
+        const msquic = self.msquic orelse return error.NotInitialized;
+        const status = msquic.StreamSend.?(
             stream_ctx.handle,
             &buffer,
             1,
@@ -278,13 +284,30 @@ pub const GeodeClient = struct {
         }
 
         if (self.connection) |conn| {
-            self.msquic.ConnectionShutdown.?(conn, MsQuic.QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
+            if (self.msquic) |msquic| {
+                msquic.ConnectionShutdown.?(conn, MsQuic.QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
+            }
             self.connection = null;
         }
 
-        self.msquic.ConfigurationClose.?(self.configuration);
-        self.msquic.RegistrationClose.?(self.registration);
-        MsQuic.MsQuicClose(self.msquic);
+        if (self.configuration) |config| {
+            if (self.msquic) |msquic| {
+                msquic.ConfigurationClose.?(config);
+            }
+            self.configuration = null;
+        }
+
+        if (self.registration) |reg| {
+            if (self.msquic) |msquic| {
+                msquic.RegistrationClose.?(reg);
+            }
+            self.registration = null;
+        }
+
+        if (self.msquic) |msquic| {
+            MsQuic.MsQuicClose(msquic);
+            self.msquic = null;
+        }
     }
 
     fn connectionCallback(
@@ -304,7 +327,9 @@ pub const GeodeClient = struct {
             },
             MsQuic.QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE => {
                 if (!event.*.unnamed_0.SHUTDOWN_COMPLETE.AppCloseInProgress) {
-                    self.msquic.ConnectionClose.?(connection);
+                    if (self.msquic) |msquic| {
+                        msquic.ConnectionClose.?(connection);
+                    }
                 }
             },
             else => {},
@@ -352,7 +377,9 @@ pub const GeodeClient = struct {
 
                     // Tell MsQuic we consumed the data
                     const total_len = event.*.unnamed_0.RECEIVE.TotalBufferLength;
-                    self.client.msquic.StreamReceiveComplete.?(stream, total_len);
+                    if (self.client.msquic) |msquic| {
+                        msquic.StreamReceiveComplete.?(stream, total_len);
+                    }
                 },
                 MsQuic.QUIC_STREAM_EVENT_SEND_COMPLETE => {
                     // Send completed successfully

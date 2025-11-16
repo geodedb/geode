@@ -7,12 +7,16 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     std.debug.print("Creating Geode client...\n", .{});
-    var client = try GeodeClient.init(allocator, "127.0.0.1", 8443, true);
+    var client = GeodeClient.init(allocator, "127.0.0.1", 8443, true);
     defer client.deinit();
 
     std.debug.print("Connecting to server...\n", .{});
     try client.connect();
     std.debug.print("✓ Connected successfully!\n", .{});
+
+    std.debug.print("Opening stream...\n", .{});
+    try client.openStream();
+    std.debug.print("✓ Stream opened successfully!\n", .{});
 
     std.debug.print("Sending HELLO...\n", .{});
     try client.sendHello("test-client-v2", "2.0.0");
