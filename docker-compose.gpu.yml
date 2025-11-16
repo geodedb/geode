@@ -1,7 +1,6 @@
-version: '3.8'
-
 # Geode Graph Database - GPU-Accelerated Deployment
 # Extends base docker-compose.yml with GPU support
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 
 services:
   # Geode Database - GPU-accelerated version
@@ -93,7 +92,7 @@ services:
 
 networks:
   geode-network:
-    external: true
+    driver: bridge
 
 volumes:
   geode-gpu-data:
