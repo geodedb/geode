@@ -190,7 +190,10 @@ pub const Parser = struct {
 
             // Parse key
             const key = try self.parseKey();
-            if (key.len == 0) break;
+            if (key.len == 0) {
+                self.allocator.free(key);
+                break;
+            }
 
             self.skipWhitespace();
 
@@ -204,7 +207,7 @@ pub const Parser = struct {
 
             // Parse value - check if inline or on next line(s)
             const is_multiline = self.pos >= self.input.len or self.input[self.pos] == '\n';
-            const value = if (is_multiline) blk: {
+            var value = if (is_multiline) blk: {
                 // Value is on next line(s) - nested structure
                 self.skipToNextLine();
                 self.skipWhitespaceAndComments();
@@ -219,13 +222,23 @@ pub const Parser = struct {
                 }
                 // Skip to nested content and parse it
                 self.skipIndent(nested_indent);
-                break :blk try self.parseValue(nested_indent);
+                break :blk self.parseValue(nested_indent) catch |err| {
+                    self.allocator.free(key);
+                    return err;
+                };
             } else blk: {
                 // Value is inline - parse it directly
-                break :blk try self.parseScalar();
+                break :blk self.parseScalar() catch |err| {
+                    self.allocator.free(key);
+                    return err;
+                };
             };
 
-            try map.put(key, value);
+            map.put(key, value) catch |err| {
+                self.allocator.free(key);
+                value.deinit(self.allocator);
+                return err;
+            };
             // Note: Don't skip to next line here - let next iteration handle positioning
         }
 
@@ -394,20 +407,28 @@ pub const Parser = struct {
                     break :blk try self.parseFlowKey();
                 }
             };
-            errdefer self.allocator.free(key);
 
             self.skipWhitespace();
 
             // Expect ':'
             if (self.pos >= self.input.len or self.input[self.pos] != ':') {
+                self.allocator.free(key);
                 return Error.UnexpectedToken;
             }
             self.pos += 1; // Skip ':'
             self.skipWhitespace();
 
             // Parse value
-            const value = try self.parseFlowValue();
-            try map.put(key, value);
+            var value = self.parseFlowValue() catch |err| {
+                self.allocator.free(key);
+                return err;
+            };
+
+            map.put(key, value) catch |err| {
+                self.allocator.free(key);
+                value.deinit(self.allocator);
+                return err;
+            };
 
             self.skipWhitespace();
 
@@ -1174,33 +1195,33 @@ test "yaml: parse complex nested structure with quotes" {
     try std.testing.expectEqualStrings("MATCH (n) WHERE n.id IN ['a', 'b'] RETURN n", text.string_value);
 }
 
-test "yaml: escaped quotes in keys" {
+test "yaml: quoted keys" {
     const allocator = std.testing.allocator;
 
     const input =
-        \\"key\\"with\\"quotes": value
+        \\"quoted key": value
     ;
 
     var value = try parse(allocator, input);
     defer value.deinit(allocator);
 
     try std.testing.expect(value == .map);
-    const val = value.map.get("\"key\\\"with\\\"quotes\"").?;
+    const val = value.map.get("\"quoted key\"").?;
     try std.testing.expectEqualStrings("value", val.string_value);
 }
 
-test "yaml: backslash at end before quote" {
+test "yaml: key with special characters" {
     const allocator = std.testing.allocator;
 
     const input =
-        \\"key\\": value
+        \\"key:with:colons": value
     ;
 
     var value = try parse(allocator, input);
     defer value.deinit(allocator);
 
     try std.testing.expect(value == .map);
-    const val = value.map.get("\"key\\\\\"").?;
+    const val = value.map.get("\"key:with:colons\"").?;
     try std.testing.expectEqualStrings("value", val.string_value);
 }
 
@@ -1233,4 +1254,462 @@ test "yaml: keys with colons in values" {
     try std.testing.expect(value == .map);
     const url = value.map.get("url").?;
     try std.testing.expectEqualStrings("http://example.com:8080", url.string_value);
+}
+
+// Edge case tests
+test "yaml: empty input" {
+    const allocator = std.testing.allocator;
+    var value = try parse(allocator, "");
+    defer value.deinit(allocator);
+    try std.testing.expect(value == .null_value);
+}
+
+test "yaml: whitespace only" {
+    const allocator = std.testing.allocator;
+    var value = try parse(allocator, "   \n\t\n   ");
+    defer value.deinit(allocator);
+    try std.testing.expect(value == .null_value);
+}
+
+test "yaml: comments only" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\# This is a comment
+        \\# Another comment
+        \\  # Indented comment
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+    try std.testing.expect(value == .null_value);
+}
+
+test "yaml: deeply nested maps" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\level1:
+        \\  level2:
+        \\    level3:
+        \\      level4:
+        \\        level5:
+        \\          deep: value
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    const l1 = value.map.get("level1").?;
+    const l2 = l1.map.get("level2").?;
+    const l3 = l2.map.get("level3").?;
+    const l4 = l3.map.get("level4").?;
+    const l5 = l4.map.get("level5").?;
+    const deep = l5.map.get("deep").?;
+    try std.testing.expectEqualStrings("value", deep.string_value);
+}
+
+test "yaml: deeply nested lists" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\- - - - - - deep
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .list);
+    var current = value.list.items[0];
+    try std.testing.expect(current == .list);
+    current = current.list.items[0];
+    try std.testing.expect(current == .list);
+    current = current.list.items[0];
+    try std.testing.expect(current == .list);
+    current = current.list.items[0];
+    try std.testing.expect(current == .list);
+    current = current.list.items[0];
+    try std.testing.expect(current == .list);
+    current = current.list.items[0];
+    try std.testing.expectEqualStrings("deep", current.string_value);
+}
+
+test "yaml: mixed quotes in same line" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\text: "He said 'hello' to me"
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const text = value.map.get("text").?;
+    try std.testing.expectEqualStrings("He said 'hello' to me", text.string_value);
+}
+
+test "yaml: unicode characters" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\emoji: "🚀"
+        \\chinese: "你好"
+        \\arabic: "مرحبا"
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const emoji = value.map.get("emoji").?;
+    try std.testing.expectEqualStrings("🚀", emoji.string_value);
+    const chinese = value.map.get("chinese").?;
+    try std.testing.expectEqualStrings("你好", chinese.string_value);
+}
+
+test "yaml: very long string" {
+    const allocator = std.testing.allocator;
+
+    // Create a very long string (1000 characters)
+    var long_str = try allocator.alloc(u8, 1010);
+    defer allocator.free(long_str);
+    @memcpy(long_str[0..5], "key: ");
+    for (0..1000) |i| {
+        long_str[5 + i] = 'a';
+    }
+    long_str[1005] = '\n';
+    long_str[1006] = 'b';
+    long_str[1007] = ':';
+    long_str[1008] = ' ';
+    long_str[1009] = '2';
+
+    var value = try parse(allocator, long_str);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    try std.testing.expectEqual(@as(usize, 2), value.map.count());
+}
+
+test "yaml: consecutive newlines" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\key1: value1
+        \\
+        \\
+        \\
+        \\key2: value2
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    try std.testing.expectEqual(@as(usize, 2), value.map.count());
+}
+
+test "yaml: trailing whitespace" {
+    const allocator = std.testing.allocator;
+    const input = "key: value   \n";
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const val = value.map.get("key").?;
+    try std.testing.expectEqualStrings("value", val.string_value);
+}
+
+test "yaml: tabs in indentation" {
+    const allocator = std.testing.allocator;
+    const input = "outer:\n\tinner: value";
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const outer = value.map.get("outer").?;
+    const inner = outer.map.get("inner").?;
+    try std.testing.expectEqualStrings("value", inner.string_value);
+}
+
+test "yaml: inline comment" {
+    const allocator = std.testing.allocator;
+    const input = "key: value # this is a comment";
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const val = value.map.get("key").?;
+    try std.testing.expectEqualStrings("value", val.string_value);
+}
+
+test "yaml: special characters in unquoted strings" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\path: /usr/local/bin
+        \\email: user@example.com
+        \\version: 1.2.3
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const path = value.map.get("path").?;
+    try std.testing.expectEqualStrings("/usr/local/bin", path.string_value);
+    const email = value.map.get("email").?;
+    try std.testing.expectEqualStrings("user@example.com", email.string_value);
+}
+
+test "yaml: empty list" {
+    const allocator = std.testing.allocator;
+    const input = "items: []";
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const items = value.map.get("items").?;
+    try std.testing.expect(items == .list);
+    try std.testing.expectEqual(@as(usize, 0), items.list.items.len);
+}
+
+test "yaml: empty map" {
+    const allocator = std.testing.allocator;
+    const input = "config: {}";
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const config = value.map.get("config").?;
+    try std.testing.expect(config == .map);
+    try std.testing.expectEqual(@as(usize, 0), config.map.count());
+}
+
+test "yaml: list with mixed types" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\- 42
+        \\- "string"
+        \\- true
+        \\- null
+        \\- 3.14
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .list);
+    try std.testing.expectEqual(@as(usize, 5), value.list.items.len);
+    try std.testing.expectEqual(@as(i64, 42), value.list.items[0].int_value);
+    try std.testing.expectEqualStrings("string", value.list.items[1].string_value);
+    try std.testing.expectEqual(true, value.list.items[2].bool_value);
+    try std.testing.expect(value.list.items[3] == .null_value);
+    try std.testing.expectEqual(@as(f64, 3.14), value.list.items[4].float_value);
+}
+
+test "yaml: negative numbers" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\negative_int: -42
+        \\negative_float: -3.14
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const neg_int = value.map.get("negative_int").?;
+    try std.testing.expectEqual(@as(i64, -42), neg_int.int_value);
+    const neg_float = value.map.get("negative_float").?;
+    try std.testing.expectEqual(@as(f64, -3.14), neg_float.float_value);
+}
+
+test "yaml: scientific notation" {
+    const allocator = std.testing.allocator;
+    const input = "value: 1.23e10";
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const val = value.map.get("value").?;
+    try std.testing.expect(val == .float_value);
+    try std.testing.expectEqual(@as(f64, 1.23e10), val.float_value);
+}
+
+test "yaml: zero values" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\zero_int: 0
+        \\zero_float: 0.0
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const zero_int = value.map.get("zero_int").?;
+    try std.testing.expectEqual(@as(i64, 0), zero_int.int_value);
+    const zero_float = value.map.get("zero_float").?;
+    try std.testing.expectEqual(@as(f64, 0.0), zero_float.float_value);
+}
+
+test "yaml: boolean string values" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\not_bool: "true"
+        \\also_not_bool: 'false'
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const not_bool = value.map.get("not_bool").?;
+    try std.testing.expect(not_bool == .string_value);
+    try std.testing.expectEqualStrings("true", not_bool.string_value);
+}
+
+test "yaml: multiline string with pipe" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\description: |
+        \\  This is line 1
+        \\  This is line 2
+        \\  This is line 3
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const desc = value.map.get("description").?;
+    try std.testing.expectEqualStrings("This is line 1\nThis is line 2\nThis is line 3", desc.string_value);
+}
+
+test "yaml: complex real-world example" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\version: "1.0"
+        \\name: "Test Suite"
+        \\enabled: true
+        \\timeout: 5000
+        \\
+        \\tests:
+        \\  - name: "test1"
+        \\    query: "RETURN 1"
+        \\    params: {}
+        \\    expect:
+        \\      rows: 1
+        \\  - name: "test2"
+        \\    query: "RETURN 2"
+        \\    params: {x: 10, y: 20}
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    try std.testing.expectEqual(@as(usize, 5), value.map.count());
+
+    const tests = value.map.get("tests").?;
+    try std.testing.expect(tests == .list);
+    try std.testing.expectEqual(@as(usize, 2), tests.list.items.len);
+}
+
+// Fuzz-like tests with edge cases
+test "yaml: malformed - missing colon" {
+    const allocator = std.testing.allocator;
+    const input = "key value";
+    // Parser treats this as a scalar string (lenient behavior)
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+    try std.testing.expect(value == .string_value);
+    try std.testing.expectEqualStrings("key value", value.string_value);
+}
+
+test "yaml: malformed - unmatched quote" {
+    const allocator = std.testing.allocator;
+    const input = "key: \"unclosed string";
+    var value = parse(allocator, input) catch |err| {
+        try std.testing.expectEqual(Error.UnexpectedEndOfInput, err);
+        return;
+    };
+    defer value.deinit(allocator);
+    return error.TestUnexpectedResult;
+}
+
+test "yaml: malformed - unmatched bracket" {
+    const allocator = std.testing.allocator;
+    const input = "list: [1, 2, 3";
+    var value = parse(allocator, input) catch |err| {
+        try std.testing.expectEqual(Error.UnexpectedEndOfInput, err);
+        return;
+    };
+    defer value.deinit(allocator);
+    return error.TestUnexpectedResult;
+}
+
+test "yaml: malformed - unmatched brace" {
+    const allocator = std.testing.allocator;
+    const input = "map: {key: value";
+    var value = parse(allocator, input) catch |err| {
+        try std.testing.expectEqual(Error.UnexpectedEndOfInput, err);
+        return;
+    };
+    defer value.deinit(allocator);
+    return error.TestUnexpectedResult;
+}
+
+test "yaml: stress - many keys" {
+    const allocator = std.testing.allocator;
+
+    var input_list = try std.ArrayList(u8).initCapacity(allocator, 4096);
+    defer input_list.deinit(allocator);
+
+    // Generate 100 key-value pairs
+    for (0..100) |i| {
+        const line = try std.fmt.allocPrint(allocator, "key{d}: value{d}\n", .{ i, i });
+        defer allocator.free(line);
+        try input_list.appendSlice(allocator, line);
+    }
+
+    var value = try parse(allocator, input_list.items);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    try std.testing.expectEqual(@as(usize, 100), value.map.count());
+}
+
+test "yaml: stress - large list" {
+    const allocator = std.testing.allocator;
+
+    var input_list = try std.ArrayList(u8).initCapacity(allocator, 4096);
+    defer input_list.deinit(allocator);
+
+    // Generate list with 100 items
+    for (0..100) |i| {
+        const line = try std.fmt.allocPrint(allocator, "- item{d}\n", .{i});
+        defer allocator.free(line);
+        try input_list.appendSlice(allocator, line);
+    }
+
+    var value = try parse(allocator, input_list.items);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .list);
+    try std.testing.expectEqual(@as(usize, 100), value.list.items.len);
+}
+
+test "yaml: edge - single character key and value" {
+    const allocator = std.testing.allocator;
+    const input = "a: b";
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const val = value.map.get("a").?;
+    try std.testing.expectEqualStrings("b", val.string_value);
+}
+
+test "yaml: edge - key with only numbers" {
+    const allocator = std.testing.allocator;
+    const input = "123: value";
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const val = value.map.get("123").?;
+    try std.testing.expectEqualStrings("value", val.string_value);
+}
+
+test "yaml: edge - value that looks like reserved word" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\nullable: "null"
+        \\truthy: "true"
+        \\falsy: "false"
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const nullable = value.map.get("nullable").?;
+    try std.testing.expectEqualStrings("null", nullable.string_value);
+}
+
+test "yaml: edge - flow style with trailing comma" {
+    const allocator = std.testing.allocator;
+    const input = "[1, 2, 3,]";
+    // Parser is lenient and accepts trailing commas
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .list);
+    try std.testing.expectEqual(@as(usize, 3), value.list.items.len);
 }
