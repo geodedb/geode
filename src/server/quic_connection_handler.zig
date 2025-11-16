@@ -11,6 +11,7 @@ const SessionConfiguration = @import("server_state.zig").SessionConfiguration;
 const CatalogSchema = @import("server_state.zig").CatalogSchema;
 const CatalogGraph = @import("server_state.zig").CatalogGraph;
 const query_executor = @import("query_executor.zig");
+const execution = @import("../execution.zig");
 const cost_explain = @import("cost_explain.zig");
 const server_flags = @import("server_flags.zig");
 const message_handlers = @import("message_handlers.zig");
@@ -360,7 +361,54 @@ pub fn processMessage(
                                 }
                             }
 
-                            const rows = evaluateSimpleQuery(gpa, q, pn, pr, &ord, &oks, &cols, if (need_timings) &timings else null, &run_code, null) catch &.{};
+                            // For CREATE queries, use the new execution path which supports parameters properly
+                            const rows = if (q.create_pattern != null) blk: {
+                                // Get global catalog (stub for now - will need proper initialization)
+                                const catalog_stub = execution.initCatalog(gpa, ".") catch unreachable;
+                                defer catalog_stub.deinit();
+
+                                // Extract first row of parameters (most queries have single parameter row)
+                                const param_values = if (pr.len > 0) pr[0] else &[_]eval.Value{};
+
+                                // Create execution context with parameters
+                                const context = execution.ExecutionContext{
+                                    .catalog = @constCast(&catalog_stub),
+                                    .query_param_names = pn,
+                                    .query_param_values = param_values,
+                                };
+
+                                // Execute via new path
+                                const result = execution.executeQueryWithContext(gpa, q, context) catch break :blk &.{};
+
+                                // Convert ExecutionResult to JSON rows
+                                var result_rows = std.ArrayList([]const u8).initCapacity(gpa, result.rows.len) catch break :blk &.{};
+                                for (result.rows) |row| {
+                                    var buf = std.ArrayList(u8).initCapacity(gpa, 0) catch continue;
+                                    const w = buf.writer(gpa);
+                                    w.writeAll("{") catch continue;
+                                    for (row, 0..) |val, idx| {
+                                        if (idx > 0) w.writeAll(",") catch continue;
+                                        if (idx < result.columns.len) {
+                                            w.print("\"{s}\":", .{result.columns[idx]}) catch continue;
+                                        }
+                                        query_executor.writeValue(gpa, w, val) catch continue;
+                                    }
+                                    w.writeAll("}") catch continue;
+                                    const json_row = buf.toOwnedSlice(gpa) catch continue;
+                                    result_rows.append(gpa, json_row) catch continue;
+                                }
+
+                                // Set output metadata
+                                var out_cols = gpa.alloc(protocol.SchemaCol, result.columns.len) catch break :blk &.{};
+                                for (result.columns, 0..) |col_name, idx| {
+                                    out_cols[idx] = .{ .name = col_name, .type = "ANY" };
+                                }
+                                cols = out_cols;
+                                ord = false;
+                                oks = &.{};
+
+                                break :blk result_rows.toOwnedSlice(gpa) catch &.{};
+                            } else evaluateSimpleQuery(gpa, q, pn, pr, &ord, &oks, &cols, if (need_timings) &timings else null, &run_code, null) catch &.{};
                             state.last_columns = cols;
                             state.last_ordered = ord;
                             state.last_order_keys = oks;

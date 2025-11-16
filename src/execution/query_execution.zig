@@ -469,7 +469,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
     // Check if there's a CREATE pattern (CREATE ... WITH ... SET ... RETURN)
     if (q.create_pattern) |create_pattern| {
-        return executeCreateQuery(allocator, q, create_pattern, null);
+        return executeCreateQuery(allocator, q, create_pattern, null, param_names.items, param_values.items);
     }
 
     // Check if there's a MATCH + CALL pattern

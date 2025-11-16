@@ -346,7 +346,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     };
 }
 
-pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pattern: ast.GraphPattern, matched_bindings: ?std.StringHashMap(u64)) !ExecutionResult {
+pub fn executeCreateQuery(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    create_pattern: ast.GraphPattern,
+    matched_bindings: ?std.StringHashMap(u64),
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
 
     // Track created nodes by variable name for WITH/SET/RETURN clauses (store IDs not pointers)
@@ -391,6 +398,8 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                 const env = Env{
                     .names = &.{},
                     .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
                     .allocator = allocator,
                 };
 
@@ -456,6 +465,8 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                 const env = Env{
                     .names = &.{},
                     .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
                     .allocator = allocator,
                 };
 
@@ -488,6 +499,8 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                 const env = Env{
                     .names = &.{},
                     .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
                     .allocator = allocator,
                 };
 
@@ -524,6 +537,8 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                 const env = Env{
                     .names = &.{},
                     .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
                     .allocator = allocator,
                 };
 
@@ -593,6 +608,8 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                 const env = Env{
                     .names = names.items,
                     .values = values.items,
+                    .param_names = param_names,
+                    .param_values = param_values,
                     .allocator = allocator,
                 };
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
@@ -653,7 +670,9 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                     const env = Env{
                         .names = names.items,
                         .values = values.items,
-                        .allocator = allocator,
+                        .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
                     };
 
                     const value = try eval.evalExpr(allocator, prop.value, env);
@@ -713,7 +732,9 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
                     const env = Env{
                         .names = names.items,
                         .values = values.items,
-                        .allocator = allocator,
+                        .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
                     };
 
                     // Evaluate the properties expression (should be a map literal)
@@ -796,9 +817,11 @@ pub fn executeCreateQuery(allocator: std.mem.Allocator, q: ast.Query, create_pat
 
             // Create environment from WITH result columns and this row's values
             const env = Env{
-                .allocator = allocator,
                 .names = result.columns,
                 .values = with_row,
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
             };
 
             for (q.ret.items, 0..) |item, col_idx| {
