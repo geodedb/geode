@@ -235,30 +235,30 @@ pub const QUIC_API_TABLE = extern struct {
 // Listener context for callbacks
 pub const ListenerContext = struct {
     allocator: std.mem.Allocator,
-    pending_connections: std.array_list.AlignedManaged(PendingConnection, null),
+    pending_connections: std.ArrayList(PendingConnection),
     mutex: std.Thread.Mutex = .{},
     api: *const QUIC_API_TABLE,
     configuration: HQUIC,
-    
+
     pub const PendingConnection = struct {
         handle: HQUIC,
         context: *ConnectionContext,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator, api: *const QUIC_API_TABLE, configuration: HQUIC) !*ListenerContext {
         const ctx = try allocator.create(ListenerContext);
         ctx.* = .{
             .allocator = allocator,
-            .pending_connections = std.array_list.AlignedManaged(PendingConnection, null).init(allocator),
+            .pending_connections = try std.ArrayList(PendingConnection).initCapacity(allocator, 0),
             .mutex = .{},
             .api = api,
             .configuration = configuration,
         };
         return ctx;
     }
-    
+
     pub fn deinit(self: *ListenerContext) void {
-        self.pending_connections.deinit();
+        self.pending_connections.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 };
@@ -266,22 +266,22 @@ pub const ListenerContext = struct {
 // Connection context
 pub const ConnectionContext = struct {
     allocator: std.mem.Allocator,
-    pending_streams: std.array_list.AlignedManaged(PendingStream, null),
+    pending_streams: std.ArrayList(PendingStream),
     mutex: std.Thread.Mutex = .{},
     connected: bool = false,
     api: ?*const QUIC_API_TABLE,
     connection: ?HQUIC,
-    
+
     pub const PendingStream = struct {
         handle: HQUIC,
         context: *StreamContext,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator, api: ?*const QUIC_API_TABLE, connection: ?HQUIC) !*ConnectionContext {
         const ctx = try allocator.create(ConnectionContext);
         ctx.* = .{
             .allocator = allocator,
-            .pending_streams = std.array_list.AlignedManaged(PendingStream, null).init(allocator),
+            .pending_streams = try std.ArrayList(PendingStream).initCapacity(allocator, 0),
             .mutex = .{},
             .connected = false,
             .api = api,
@@ -289,13 +289,13 @@ pub const ConnectionContext = struct {
         };
         return ctx;
     }
-    
+
     pub fn deinit(self: *ConnectionContext) void {
         // Clean up any remaining pending streams
         for (self.pending_streams.items) |pending| {
             pending.context.deinit();
         }
-        self.pending_streams.deinit();
+        self.pending_streams.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 };
@@ -303,37 +303,37 @@ pub const ConnectionContext = struct {
 // Stream context
 pub const StreamContext = struct {
     allocator: std.mem.Allocator,
-    recv_buffer: std.array_list.AlignedManaged(u8, null),
-    send_buffers: std.array_list.AlignedManaged([]u8, null),
-    send_buffer_structs: std.array_list.AlignedManaged(*QUIC_BUFFER, null),
+    recv_buffer: std.ArrayList(u8),
+    send_buffers: std.ArrayList([]u8),
+    send_buffer_structs: std.ArrayList(*QUIC_BUFFER),
     mutex: std.Thread.Mutex = .{},
     recv_complete: bool = false,
-    
+
     pub fn init(allocator: std.mem.Allocator) !*StreamContext {
         const ctx = try allocator.create(StreamContext);
         ctx.* = .{
             .allocator = allocator,
-            .recv_buffer = std.array_list.AlignedManaged(u8, null).init(allocator),
-            .send_buffers = std.array_list.AlignedManaged([]u8, null).init(allocator),
-            .send_buffer_structs = std.array_list.AlignedManaged(*QUIC_BUFFER, null).init(allocator),
+            .recv_buffer = try std.ArrayList(u8).initCapacity(allocator, 0),
+            .send_buffers = try std.ArrayList([]u8).initCapacity(allocator, 0),
+            .send_buffer_structs = try std.ArrayList(*QUIC_BUFFER).initCapacity(allocator, 0),
             .mutex = .{},
             .recv_complete = false,
         };
         return ctx;
     }
-    
+
     pub fn deinit(self: *StreamContext) void {
-        self.recv_buffer.deinit();
+        self.recv_buffer.deinit(self.allocator);
         // Free any remaining send buffers
         for (self.send_buffers.items) |buf| {
             self.allocator.free(buf);
         }
-        self.send_buffers.deinit();
+        self.send_buffers.deinit(self.allocator);
         // Free any remaining buffer structs
         for (self.send_buffer_structs.items) |buf_struct| {
             self.allocator.destroy(buf_struct);
         }
-        self.send_buffer_structs.deinit();
+        self.send_buffer_structs.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 };
@@ -405,7 +405,7 @@ pub fn listenerCallback(
                 .handle = connection,
                 .context = conn_ctx,
             };
-            const append_result = ctx.pending_connections.append(pending);
+            const append_result = ctx.pending_connections.append(ctx.allocator, pending);
             if (append_result) |_| {
                 std.debug.print("[LISTENER_CALLBACK] ✅ Append SUCCESS: queue len={}, capacity={}\n", .{ctx.pending_connections.items.len, ctx.pending_connections.capacity});
             } else |err| {
@@ -434,16 +434,16 @@ pub fn connectionCallback(
     _ = connection;
     
     // DEBUG: std.debug.print("[CALLBACK] connectionCallback INVOKED!\n", .{});
-    
+
     const ctx: *ConnectionContext = @ptrCast(@alignCast(context.?));
-    
+
     // Event structure has Type field first (4 bytes for c_int), then union
     const event_type_ptr: *const c_int = @ptrCast(@alignCast(event_ptr));
     const event_type_int = event_type_ptr.*;
     const event_type: QUIC_CONNECTION_EVENT_TYPE = @enumFromInt(event_type_int);
-    
+
     // DEBUG: std.debug.print("[CALLBACK] Event type: {}\n", .{event_type});
-    
+
     switch (event_type) {
         .QUIC_CONNECTION_EVENT_CONNECTED => {
             // DEBUG: std.debug.print("[CALLBACK] ✅ CONNECTED event!\n", .{});
@@ -488,7 +488,7 @@ pub fn connectionCallback(
                 .handle = stream,
                 .context = stream_ctx,
             };
-            ctx.pending_streams.append(pending) catch {};
+            ctx.pending_streams.append(ctx.allocator, pending) catch {};
             
             // DEBUG: std.debug.print("[CALLBACK] ⭐ Stream queued for accept, count={}\n", .{ctx.pending_streams.items.len});
             
@@ -578,7 +578,7 @@ pub fn streamCallback(
                 // DEBUG: std.debug.print("[STREAM_CALLBACK] Buffer[{}]: length={}\n", .{i, buf.Length});
                 
                 // Append to receive buffer
-                ctx.recv_buffer.appendSlice(buf.Buffer[0..buf.Length]) catch {
+                ctx.recv_buffer.appendSlice(ctx.allocator, buf.Buffer[0..buf.Length]) catch {
                     // DEBUG: std.debug.print("[STREAM_CALLBACK] Failed to append to recv buffer\n", .{});
                     return types.QUIC_STATUS_OUT_OF_MEMORY;
                 };

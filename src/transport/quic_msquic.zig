@@ -380,8 +380,8 @@ pub const QuicStream = struct {
         
         // Send successful, track buffers for cleanup on SEND_COMPLETE
         self.context.mutex.lock();
-        self.context.send_buffers.append(data_copy) catch {};
-        self.context.send_buffer_structs.append(buffer_struct) catch {};
+        self.context.send_buffers.append(self.context.allocator, data_copy) catch {};
+        self.context.send_buffer_structs.append(self.context.allocator, buffer_struct) catch {};
         self.context.mutex.unlock();
     }
 
