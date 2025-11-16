@@ -4,72 +4,46 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Build the Geode client library
-    const client_lib = b.addLibrary(.{
-        .name = "geode_client_zig",
+    // Build the test executable
+    const test_exe = b.addExecutable(.{
+        .name = "test_connection_v2",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("geode_client.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-        .linkage = .static,
-    });
-
-    // Add msquic library dependency
-    client_lib.linkSystemLibrary("msquic");
-    client_lib.linkLibC();
-
-    // Add module paths for imports
-    const msquic_wrapper_path = b.path("../../src/transport/msquic_wrapper.zig");
-    const msquic_types_path = b.path("../../src/transport/msquic_types.zig");
-
-    const msquic_wrapper_mod = b.createModule(.{
-        .root_source_file = msquic_wrapper_path,
-        .target = target,
-        .optimize = optimize,
-    });
-    const msquic_types_mod = b.createModule(.{
-        .root_source_file = msquic_types_path,
-        .target = target,
-        .optimize = optimize,
-    });
-
-    client_lib.root_module.addImport("msquic_wrapper", msquic_wrapper_mod);
-    client_lib.root_module.addImport("msquic_types", msquic_types_mod);
-
-    b.installArtifact(client_lib);
-
-    // Build example programs
-    const example = b.addExecutable(.{
-        .name = "geode_example",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("example_usage.zig"),
+            .root_source_file = b.path("test_connection_v2.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
 
-    example.linkLibrary(client_lib);
-    example.linkSystemLibrary("msquic");
-    example.linkLibC();
+    // Link msquic (using the Nix store path that works for geode)
+    test_exe.addLibraryPath(.{ .cwd_relative = "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/lib" });
+    test_exe.linkSystemLibrary("msquic");
+    test_exe.linkLibC();
 
+    // Create GeodeClient module that imports zig-msquic wrapper
     const client_mod = b.createModule(.{
-        .root_source_file = b.path("geode_client.zig"),
+        .root_source_file = b.path("geode_client_v2.zig"),
         .target = target,
         .optimize = optimize,
     });
-    example.root_module.addImport("geode_client", client_mod);
 
-    b.installArtifact(example);
+    // Add imports for the client module (zig-msquic wrapper)
+    const msquic_wrapper_mod = b.createModule(.{
+        .root_source_file = b.path("../../tools/zig-msquic/src/msquic_wrapper.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
-    // Run example
-    const run_example = b.addRunArtifact(example);
-    run_example.step.dependOn(b.getInstallStep());
+    client_mod.addImport("../../tools/zig-msquic/src/msquic_wrapper.zig", msquic_wrapper_mod);
 
-    if (b.args) |args| {
-        run_example.addArgs(args);
-    }
+    // Add modules to the test executable
+    test_exe.root_module.addImport("geode_client_v2.zig", client_mod);
 
-    const run_step = b.step("run", "Run the example");
-    run_step.dependOn(&run_example.step);
+    b.installArtifact(test_exe);
+
+    // Run command
+    const run_test = b.addRunArtifact(test_exe);
+    run_test.step.dependOn(b.getInstallStep());
+
+    const run_step = b.step("run", "Run the test");
+    run_step.dependOn(&run_test.step);
 }
