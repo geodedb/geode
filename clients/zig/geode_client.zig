@@ -17,9 +17,9 @@ pub const QUIC_STATUS = msquic_types.QUIC_STATUS;
 pub const GeodeClient = struct {
     allocator: std.mem.Allocator,
     msquic: ?*msquic_wrapper.MsQuic = null,
-    connection: ?HQUIC = null,
+    connection: HQUIC = null,
     conn_ctx: ?*msquic_wrapper.ConnectionContext = null,
-    stream: ?HQUIC = null,
+    stream: HQUIC = null,
     stream_ctx: ?*msquic_wrapper.StreamContext = null,
     host: []const u8,
     port: u16,
@@ -63,7 +63,7 @@ pub const GeodeClient = struct {
         const addr_z = try std.fmt.bufPrintZ(&addr_buf, "{s}", .{self.host});
 
         const start_status = self.msquic.?.api.ConnectionStart(
-            self.connection.?,
+            self.connection,
             self.msquic.?.configuration,
             2, // AF_INET
             addr_z.ptr,
@@ -106,7 +106,7 @@ pub const GeodeClient = struct {
 
         // Open bidirectional stream
         const open_status = mq.api.StreamOpen(
-            self.connection.?,
+            self.connection,
             0, // Bidirectional
             msquic_wrapper.streamCallback,
             self.stream_ctx,
@@ -119,7 +119,7 @@ pub const GeodeClient = struct {
 
         // Start the stream
         const start_status = mq.api.StreamStart(
-            self.stream.?,
+            self.stream,
             1, // QUIC_STREAM_START_FLAG_IMMEDIATE
         );
 
@@ -163,8 +163,8 @@ pub const GeodeClient = struct {
     pub fn receiveMessage(self: *GeodeClient) ![]u8 {
         const ctx = self.stream_ctx orelse return error.NoStream;
 
-        var result = std.ArrayList(u8).init(self.allocator);
-        errdefer result.deinit();
+        var result = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+        errdefer result.deinit(self.allocator);
 
         const timeout_ns: u64 = 30 * std.time.ns_per_s; // 30 second timeout
         const start = std.time.nanoTimestamp();
@@ -176,7 +176,7 @@ pub const GeodeClient = struct {
             for (ctx.recv_buffer.items, 0..) |byte, i| {
                 if (byte == '\n') {
                     // Found complete message
-                    try result.appendSlice(ctx.recv_buffer.items[0..i]);
+                    try result.appendSlice(self.allocator, ctx.recv_buffer.items[0..i]);
 
                     // Remove message from buffer
                     if (i + 1 < ctx.recv_buffer.items.len) {
@@ -189,7 +189,7 @@ pub const GeodeClient = struct {
                     ctx.recv_buffer.shrinkRetainingCapacity(ctx.recv_buffer.items.len - i - 1);
 
                     ctx.mutex.unlock();
-                    return result.toOwnedSlice();
+                    return result.toOwnedSlice(self.allocator);
                 }
             }
 
@@ -215,7 +215,7 @@ pub const GeodeClient = struct {
 
     pub fn sendRunGql(self: *GeodeClient, request_id: []const u8, query: []const u8, params: ?std.json.Value) !void {
         const params_json = if (params) |p|
-            try std.json.stringifyAlloc(self.allocator, p, .{})
+            try std.json.Stringify.valueAlloc(self.allocator, p, .{})
         else
             try self.allocator.dupe(u8, "null");
         defer self.allocator.free(params_json);

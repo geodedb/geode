@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    msquic_wrapper_mod.addImport("msquic_types", msquic_types_mod);
+    msquic_wrapper_mod.addImport("msquic_types.zig", msquic_types_mod);
 
     // Create GeodeClient module with msquic dependencies
     const client_mod = b.createModule(.{
@@ -42,8 +42,16 @@ pub fn build(b: *std.Build) void {
     client_mod.addImport("../../src/transport/msquic_wrapper", msquic_wrapper_mod);
     client_mod.addImport("../../src/transport/msquic_types", msquic_types_mod);
 
-    // Add the client module to the runner
+    // Create YAML parser module
+    const yaml_mod = b.createModule(.{
+        .root_source_file = b.path("../../../src/util/yaml.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add modules to the runner
     runner.root_module.addImport("../../zig/geode_client", client_mod);
+    runner.root_module.addImport("yaml", yaml_mod);
 
     b.installArtifact(runner);
 

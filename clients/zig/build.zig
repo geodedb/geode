@@ -5,11 +5,14 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Build the Geode client library
-    const client_lib = b.addStaticLibrary(.{
+    const client_lib = b.addLibrary(.{
         .name = "geode_client_zig",
-        .root_source_file = b.path("geode_client.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("geode_client.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .linkage = .static,
     });
 
     // Add msquic library dependency
@@ -22,9 +25,13 @@ pub fn build(b: *std.Build) void {
 
     const msquic_wrapper_mod = b.createModule(.{
         .root_source_file = msquic_wrapper_path,
+        .target = target,
+        .optimize = optimize,
     });
     const msquic_types_mod = b.createModule(.{
         .root_source_file = msquic_types_path,
+        .target = target,
+        .optimize = optimize,
     });
 
     client_lib.root_module.addImport("msquic_wrapper", msquic_wrapper_mod);
@@ -35,9 +42,11 @@ pub fn build(b: *std.Build) void {
     // Build example programs
     const example = b.addExecutable(.{
         .name = "geode_example",
-        .root_source_file = b.path("example_usage.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("example_usage.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     example.linkLibrary(client_lib);
@@ -46,6 +55,8 @@ pub fn build(b: *std.Build) void {
 
     const client_mod = b.createModule(.{
         .root_source_file = b.path("geode_client.zig"),
+        .target = target,
+        .optimize = optimize,
     });
     example.root_module.addImport("geode_client", client_mod);
 
