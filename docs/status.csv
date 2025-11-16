@@ -146,6 +146,7 @@ REQ-CLI-SUBPROCESS-UNIT-002,CLI Subprocess Elimination,UnitTesting,IMPL,TestCANA
 REQ-CLI-WD-001,CLI Working Directory Handling,TestInfrastructure,TESTED,TestCANARY_REQ_CLI_WD_001_WorkingDirectory,,cli,2025-10-04,tests/cli_working_directory_regression_test.sh
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,IntegrationTests,TESTED,TestCANARY_ClientEnvVar_Integration,,clients,2025-10-04,tests/test_environment_variables_integration.zig
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,VariableResolution,IMPL,TestCANARY_ClientCli_EnvVarResolution,,clients,2025-10-04,src/client/main.zig
+REQ-CLIENT-INTEGRATION-001,range() function,BuiltinFunctions,IMPL,,,eval,2025-11-15,src/eval.zig
 REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-001,Compilation Fixes Integration,CrossAlgorithmConsistency,TESTED,test_cross_algorithm_consistency_post_fix,,build,2025-10-05,tests/test_compilation_fixes_integration_october_2025.zig
 REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-002,Compilation Fixes Integration,LargeScaleStability,TESTED,test_large_scale_stability_post_fix,,build,2025-10-05,tests/test_compilation_fixes_integration_october_2025.zig
 REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-003,Compilation Fixes Integration,MemoryLeakPrevention,TESTED,test_memory_leak_prevention_post_fix,,build,2025-10-05,tests/test_compilation_fixes_integration_october_2025.zig
@@ -1661,4 +1662,7 @@ REQ-VECTOR-INDEX-POPULATION-002,Vector Index Population,PropertyValueIntegration
 REQ-VECTOR-INDEX-POPULATION-003,Vector Index Population,JSONSerialization,TESTED,TestCANARY_REQ_VECTOR_INDEX_POPULATION_003_JSONFormat,,index,2025-10-05,tests/test_vector_index_population.zig
 REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001,Vector Index Population Integration,IntegrationTesting,IMPL,TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001,,claude,2025-01-05,tests/test_vector_index_population_integration.zig
 REQ-XXX-NNN,Feature Name,Category,TESTED,TestName,,team,YYYY-MM-DD,CONTRIBUTING.md
+REQ-ZIG-CLIENT-001,Zig Client,MsquicIntegration,IMPL,,,clients,2025-11-15,clients/zig/geode_client.zig
+REQ-ZIG-CLIENT-002,Zig Client v2,ClientSideMsquic,IMPL,,,clients,2025-11-16,clients/zig/geode_client_v2.zig
+REQ-ZIG-RUNNER-001,Zig Test Runner,MsquicClient,IMPL,,,test-harness,2025-11-15,clients/test-harness/runners/zig_runner_new.zig
 identifier,name,component,IMPL,test_name,bench_name,team,2025-09-29,docs/archive/GROUND_TRUTH.md

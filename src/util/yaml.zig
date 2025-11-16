@@ -634,8 +634,22 @@ pub const Parser = struct {
                     // Check for escaped quotes
                     if (c == '\'' and self.pos + 1 < self.input.len and self.input[self.pos + 1] == '\'') {
                         self.pos += 1; // Skip the escaped quote
-                    } else if (c == '"' and self.pos > 0 and self.input[self.pos - 1] == '\\') {
-                        // Escaped double quote
+                    } else if (c == '"' and self.pos > 0) {
+                        // Count consecutive backslashes before this quote
+                        var num_backslashes: usize = 0;
+                        var check_pos = self.pos - 1;
+                        while (check_pos < self.input.len and self.input[check_pos] == '\\') {
+                            num_backslashes += 1;
+                            if (check_pos == 0) break;
+                            check_pos -= 1;
+                        }
+                        // If odd number of backslashes, the quote is escaped
+                        if (num_backslashes % 2 == 1) {
+                            // Escaped quote - stay in quoted mode
+                        } else {
+                            // Not escaped - end quote
+                            in_quotes = null;
+                        }
                     } else {
                         in_quotes = null;
                     }
@@ -1158,4 +1172,65 @@ test "yaml: parse complex nested structure with quotes" {
 
     const text = step.map.get("text").?;
     try std.testing.expectEqualStrings("MATCH (n) WHERE n.id IN ['a', 'b'] RETURN n", text.string_value);
+}
+
+test "yaml: escaped quotes in keys" {
+    const allocator = std.testing.allocator;
+
+    const input =
+        \\"key\\"with\\"quotes": value
+    ;
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    const val = value.map.get("\"key\\\"with\\\"quotes\"").?;
+    try std.testing.expectEqualStrings("value", val.string_value);
+}
+
+test "yaml: backslash at end before quote" {
+    const allocator = std.testing.allocator;
+
+    const input =
+        \\"key\\": value
+    ;
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    const val = value.map.get("\"key\\\\\"").?;
+    try std.testing.expectEqualStrings("value", val.string_value);
+}
+
+test "yaml: empty map values" {
+    const allocator = std.testing.allocator;
+
+    const input =
+        \\key1:
+        \\key2: value
+    ;
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    try std.testing.expectEqual(@as(usize, 2), value.map.count());
+}
+
+test "yaml: keys with colons in values" {
+    const allocator = std.testing.allocator;
+
+    const input =
+        \\url: "http://example.com:8080"
+        \\path: /api/v1
+    ;
+
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    try std.testing.expect(value == .map);
+    const url = value.map.get("url").?;
+    try std.testing.expectEqualStrings("http://example.com:8080", url.string_value);
 }

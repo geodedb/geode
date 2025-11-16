@@ -41,7 +41,6 @@ const cli_args = @import("cli_args.zig");
 const server_init = @import("server_init.zig");
 // Import query executor (M3.3 Phase 3 modularization)
 const query_executor = @import("query_executor.zig");
-const evaluateSimpleQuery = query_executor.evaluateSimpleQuery;
 const evaluateUnion = query_executor.evaluateUnion;
 const evaluateBinarySet = query_executor.evaluateBinarySet;
 const executeCreateStatement = query_executor.executeCreateStatement;

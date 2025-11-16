@@ -27,7 +27,6 @@ const log = std.log.scoped(.server);
 // Import types and functions from query_executor
 const evaluateUnion = query_executor.evaluateUnion;
 const UnionMetrics = query_executor.UnionMetrics;
-const evaluateSimpleQuery = query_executor.evaluateSimpleQuery;
 const StageTimings = query_executor.StageTimings;
 const parseParams = query_executor.parseParams;
 const collectTextDiagnostics = query_executor.collectTextDiagnostics;
@@ -218,6 +217,7 @@ pub fn processMessage(
         },
         .RUN_GQL => |rq| {
             state.resetResult();
+            std.debug.print("[DEBUG RUN_GQL] text={s}, params_json={s}\n", .{rq.text, if (rq.params_json) |p| p else "NULL"});
             var text = rq.text;
             // Detect EXPLAIN / EXPLAIN CALIBRATED / PROFILE prefixes; track modes then strip
             var explain_mode = false;
@@ -325,15 +325,21 @@ pub fn processMessage(
                             return protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(false, state.last_distinct)) catch try gpa.dupe(u8, "");
                         },
                         .Query => |q| {
+                            std.debug.print("[DEBUG .Query] Entering Query statement handler\n", .{});
                             var pn: [][]const u8 = &.{};
                             var pr: [][]const eval.Value = &.{};
+                            std.debug.print("[DEBUG] Before parseParams: params_json is {s}\n", .{if (rq.params_json) |p| p else "NULL"});
                             parseParams(gpa, rq.params_json, &pn, &pr);
+                            std.debug.print("[DEBUG] After parseParams: pn.len={d}, pr.len={d}\n", .{pn.len, pr.len});
                             var ord = false;
                             var oks: [][]const u8 = &.{};
                             var cols: []const protocol.SchemaCol = &.{};
                             var run_code: diagnostics.Code = .IllegalOrderKey;
+                            _ = run_code; // Not used with new execution path
                             var timings: StageTimings = .{};
                             const need_timings = profile_mode or explain_calibrated;
+                            _ = need_timings; // TODO: Add timing support to new execution path
+                            _ = timings; // TODO: Add timing support to new execution path
 
                             // Query plan optimization with caching
                             if (state.query_optimizer) |optimizer| {
@@ -361,8 +367,8 @@ pub fn processMessage(
                                 }
                             }
 
-                            // For CREATE queries, use the new execution path which supports parameters properly
-                            const rows = if (q.create_pattern != null) blk: {
+                            // Use new modular execution path for ALL queries (with parameter support)
+                            const rows = blk: {
                                 // Get global catalog (stub for now - will need proper initialization)
                                 const catalog_stub = execution.initCatalog(gpa, ".") catch unreachable;
                                 defer catalog_stub.deinit();
@@ -377,7 +383,7 @@ pub fn processMessage(
                                     .query_param_values = param_values,
                                 };
 
-                                // Execute via new path
+                                // Execute via new modular execution path
                                 const result = execution.executeQueryWithContext(gpa, q, context) catch break :blk &.{};
 
                                 // Convert ExecutionResult to JSON rows
@@ -408,7 +414,7 @@ pub fn processMessage(
                                 oks = &.{};
 
                                 break :blk result_rows.toOwnedSlice(gpa) catch &.{};
-                            } else evaluateSimpleQuery(gpa, q, pn, pr, &ord, &oks, &cols, if (need_timings) &timings else null, &run_code, null) catch &.{};
+                            };
                             state.last_columns = cols;
                             state.last_ordered = ord;
                             state.last_order_keys = oks;

@@ -483,10 +483,18 @@ pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !Clien
         // Duplicate text to avoid use-after-free of parsed JSON buffer
         const txt = try allocator.dupe(u8, txtv.string);
         const params_val = obj.get("params");
+        std.debug.print("[DEBUG protocol] params_val present: {}\n", .{params_val != null});
         var params_json: ?[]const u8 = null;
         if (params_val) |pv| {
+            std.debug.print("[DEBUG protocol] params_val type: {s}\n", .{@tagName(pv)});
             // Allocate JSON string for params that outlives the parser
-            params_json = std.json.Stringify.valueAlloc(allocator, pv, .{}) catch null;
+            params_json = std.fmt.allocPrint(allocator, "{any}", .{std.json.fmt(pv, .{})}) catch |err| {
+                std.debug.print("[DEBUG protocol] JSON stringify ERROR: {}\n", .{err});
+                return error.OutOfMemory;
+            };
+            std.debug.print("[DEBUG protocol] params_json created: {s}\n", .{params_json.?});
+        } else {
+            std.debug.print("[DEBUG protocol] No params_val found\n", .{});
         }
         return .{ .RUN_GQL = .{ .text = txt, .params_json = params_json } };
     } else if (std.mem.eql(u8, typ, "PULL")) {
