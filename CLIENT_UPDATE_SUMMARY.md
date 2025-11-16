@@ -1,10 +1,59 @@
 # Geode Client Libraries - Test Harness Fixes Summary
 
-**Date**: November 16, 2025 - ZIG CLIENT INVESTIGATION UPDATE (02:00 UTC)
-**Status**: 🎯 94.1% PASS RATE FOR PRODUCTION CLIENTS + ZIG msquic FIX
-**Achievement**: Python and Go clients production-ready, critical msquic ArrayList API fix applied
+**Date**: November 16, 2025 - ZIG CLIENT V2 IMPLEMENTATION (10:00 UTC)
+**Status**: 🔧 ZIG CLIENT REBUILD + MSQUIC API MIGRATION
+**Achievement**: Created Zig client v2 with zig-msquic, migrated 22 Zig 0.15.1 API changes
 
-## 🏆 Executive Summary - NEAR-PERFECT ACHIEVEMENT
+## 🔧 November 16, 2025 - Zig Client V2 Implementation
+
+### Zig Client Rebuild with zig-msquic
+**Commit**: d32bcd0
+**Status**: 🚧 PARTIAL - 38 errors → 16 remaining
+**Approach**: Complete rewrite using client-side msquic patterns
+
+**Problem Identified**:
+- Original `clients/zig/geode_client.zig` used `src/transport/msquic_wrapper.zig` (SERVER-SIDE)
+- Server-side wrapper designed for accepting connections, not initiating them
+- Caused segfaults in client callbacks
+
+**Solution**:
+Created `clients/zig/geode_client_v2.zig` using `tools/zig-msquic/src/perf/throughput_client.zig` patterns:
+- Client-side connection initiation
+- Proper credential configuration (QUIC_CREDENTIAL_FLAG_CLIENT)
+- Stream opening and management
+- Thread-safe receive buffer with mutex
+
+**Zig 0.15.1 API Migration** (tools/zig-msquic/src/msquic_wrapper.zig - 6346 lines):
+
+| API Change | Count | Status |
+|------------|-------|--------|
+| `callconv(.C)` → `callconv(.c)` | 70+ | ✅ Complete |
+| `@ptrCast(Type, val)` → `@ptrCast(val)` | 15+ | ✅ Complete |
+| `@bitCast(Type, val)` → `@bitCast(val)` | 25+ | ⚠️ 8 remaining |
+| `@intToPtr` → `@ptrFromInt` | 6 | ✅ Complete |
+| `@ptrToInt` → `@intFromPtr` | 4 | ✅ Complete |
+| `@truncate(Type, val)` → `@truncate(val)` | 8+ | ⚠️ 5 remaining |
+| `@intCast(Type, val)` → `@intCast(val)` | 10+ | ⚠️ 1 remaining |
+| `@boolToInt` → `@intFromBool` | 2 | ✅ Complete |
+| `var` → `const` (immutable) | 8 | ⚠️ 2 remaining |
+
+**Files Created**:
+- `clients/zig/geode_client_v2.zig` (415 lines) - New client implementation
+- `clients/zig/test_connection_v2.zig` - Integration test
+- `/tmp/fix_zig_msquic_v2.py` - Automated migration script
+
+**Remaining Issues** (16 compilation errors):
+- Platform-specific helpers: fd_set operations (macOS file descriptors)
+- QUIC address helper functions (QuicAddr* family)
+- Auto-generated code with complex nested type casts
+- Functions not used by client (can potentially be stubbed)
+
+**Next Steps**:
+1. Option A: Complete remaining 16 fixes (est. 1-2 hours)
+2. Option B: Investigate Python/Go to reach 100% (current 94.1%)
+3. Option C: Document and defer Zig client (Python/Go already production-ready)
+
+## 🏆 Executive Summary - NEAR-PERFECT ACHIEVEMENT (November 15, 2025)
 
 After extensive debugging and fixes, the Geode client test harness now shows:
 
@@ -12,7 +61,7 @@ After extensive debugging and fixes, the Geode client test harness now shows:
 - **Python**: 94.1% (48/51 passing, 2 skipped, 1 error) - PRODUCTION READY ✓
 - **Go**: 94.1% (48/51 passing, 2 skipped, 1 error) - PRODUCTION READY ✓
 - **Rust**: 0% (0/51) - Blocked on Quinn/msquic QUIC library incompatibility
-- **Zig**: 0% (0/51) - QUIC client not implemented
+- **Zig**: 0% (0/51) - Being rebuilt with zig-msquic (v2 in progress)
 - **Overall Production**: 94.1% (96/102 for Python + Go)
 
 **Note**: The 2 skipped tests are intentionally disabled (connection-timeout, complex-query-performance)
