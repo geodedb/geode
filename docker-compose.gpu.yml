@@ -1,0 +1,102 @@
+version: '3.8'
+
+# Geode Graph Database - GPU-Accelerated Deployment
+# Extends base docker-compose.yml with GPU support
+
+services:
+  # Geode Database - GPU-accelerated version
+  geode-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      args:
+        ZIG_VERSION: "0.15.1"
+        TARGETARCH: amd64
+        CUDA_VERSION: "12.3.0"
+    image: geode:gpu
+    container_name: geode-db-gpu
+    restart: unless-stopped
+    ports:
+      - "8444:8443/udp"  # QUIC protocol (different port to avoid conflict)
+      - "9092:9091/tcp"  # Metrics endpoint
+    environment:
+      - LOG_LEVEL=info
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=geode-dev-token
+      - REDIS_URL=redis://geode-redis-password@redis:6379
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=geode-minio-admin
+      - S3_SECRET_KEY=geode-minio-password-change-me
+      - S3_BUCKET=geode-backups-gpu
+      - FIPS_MODE=enabled
+      - GPU_ENABLED=true
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - geode-gpu-data:/data
+      - geode-gpu-logs:/var/log/geode
+      - ./certs:/certs:ro
+    command:
+      - "serve"
+      - "--data-dir"
+      - "/data"
+      - "--listen"
+      - "0.0.0.0:8443"
+      - "--cert"
+      - "/certs/server.crt"
+      - "--key"
+      - "/certs/server.key"
+      - "--gpu-enabled"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:8443"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - geode-network
+    depends_on:
+      vault:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Prometheus with GPU metrics
+  nvidia-exporter:
+    image: nvidia/dcgm-exporter:3.3.0-3.2.0-ubuntu22.04
+    container_name: geode-nvidia-exporter
+    restart: unless-stopped
+    ports:
+      - "9400:9400"
+    environment:
+      - DCGM_EXPORTER_LISTEN=:9400
+      - DCGM_EXPORTER_KUBERNETES=false
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - geode-network
+
+networks:
+  geode-network:
+    external: true
+
+volumes:
+  geode-gpu-data:
+    driver: local
+  geode-gpu-logs:
+    driver: local
