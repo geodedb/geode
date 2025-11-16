@@ -1,17 +1,20 @@
-//! Geode client implementation using s2n-quic library for QUIC transport.
+//! Geode client implementation using quiche library for QUIC transport.
 
-use s2n_quic::client::Connect;
-use s2n_quic::stream::BidirectionalStream;
-use s2n_quic::Client as QuicClient;
+use quiche;
+use ring::rand::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
+use tokio::net::UdpSocket;
+use tokio::time::{timeout, Duration};
 
 use crate::error::{Error, Result};
 use crate::types::{decode_value, Value};
 
 const GEODE_ALPN: &[u8] = b"geode/1";
+const MAX_DATAGRAM_SIZE: usize = 1350;
+const IDLE_TIMEOUT: u64 = 30_000; // 30 seconds
 
 /// Column in a result set
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +40,7 @@ pub struct Savepoint {
     pub name: String,
 }
 
-/// Geode database client using s2n-quic
+/// Geode database client using quiche
 #[derive(Clone)]
 pub struct Client {
     host: String,
@@ -117,11 +120,15 @@ impl Client {
     }
 }
 
-/// A single connection to Geode via QUIC (using s2n-quic)
+/// A single connection to Geode via QUIC (using quiche)
 pub struct Connection {
-    reader: BufReader<tokio::io::ReadHalf<BidirectionalStream>>,
-    writer: tokio::io::WriteHalf<BidirectionalStream>,
+    socket: Arc<UdpSocket>,
+    conn: quiche::Connection,
+    server_addr: SocketAddr,
     page_size: usize,
+    recv_buf: Vec<u8>,
+    send_buf: Vec<u8>,
+    stream_recv_buf: HashMap<u64, Vec<u8>>,
 }
 
 impl Connection {
@@ -135,62 +142,150 @@ impl Connection {
         hello_ver: &str,
         conformance: &str,
     ) -> Result<Self> {
-        eprintln!("[S2N-QUIC] Creating connection to {}:{}", host, port);
+        eprintln!("[QUICHE] Creating connection to {}:{}", host, port);
 
-        // Build TLS config
-        let mut tls_builder = s2n_quic::provider::tls::default::Client::builder();
+        // Resolve server address
+        let server_addr = format!("{}:{}", host, port)
+            .to_socket_addrs()
+            .map_err(|e| Error::connection(&format!("Failed to resolve address: {}", e)))?
+            .next()
+            .ok_or_else(|| Error::connection("No address found"))?;
 
+        // Bind local UDP socket
+        let local_addr: SocketAddr = if server_addr.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        }
+        .parse()
+        .unwrap();
+
+        let socket = UdpSocket::bind(local_addr)
+            .await
+            .map_err(|e| Error::connection(&format!("Failed to bind socket: {}", e)))?;
+
+        let socket = Arc::new(socket);
+
+        // Create quiche config
+        let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)
+            .map_err(|e| Error::connection(&format!("Failed to create config: {:?}", e)))?;
+
+        config.set_application_protos(&[GEODE_ALPN])
+            .map_err(|e| Error::connection(&format!("Failed to set ALPN: {:?}", e)))?;
+
+        config.set_max_idle_timeout(IDLE_TIMEOUT);
+        config.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
+        config.set_max_send_udp_payload_size(MAX_DATAGRAM_SIZE);
+        config.set_initial_max_data(10_000_000);
+        config.set_initial_max_stream_data_bidi_local(1_000_000);
+        config.set_initial_max_stream_data_bidi_remote(1_000_000);
+        config.set_initial_max_stream_data_uni(1_000_000);
+        config.set_initial_max_streams_bidi(100);
+        config.set_initial_max_streams_uni(100);
+        config.set_disable_active_migration(true);
+
+        // Configure TLS
         if skip_verify {
-            // For development - skip certificate verification
-            tls_builder = tls_builder
-                .with_empty_trust_store()
-                .map_err(|e| Error::connection(&format!("Trust store error: {}", e)))?;
+            config.verify_peer(false);
         } else if let Some(cert_path) = ca_cert_path {
-            tls_builder = tls_builder
-                .with_certificate(std::path::Path::new(cert_path))
-                .map_err(|e| Error::connection(&format!("Certificate error: {}", e)))?;
+            config.load_verify_locations_from_file(cert_path)
+                .map_err(|e| Error::connection(&format!("Failed to load CA cert: {:?}", e)))?;
         }
 
-        let tls = tls_builder
-            .with_application_protocols([GEODE_ALPN])
-            .map_err(|e| Error::connection(&format!("ALPN error: {}", e)))?
-            .build()
-            .map_err(|e| Error::connection(&format!("TLS config error: {}", e)))?;
+        // Generate connection ID
+        let mut scid = [0; quiche::MAX_CONN_ID_LEN];
+        SystemRandom::new().fill(&mut scid)
+            .map_err(|e| Error::connection(&format!("Failed to generate connection ID: {:?}", e)))?;
+        let scid = quiche::ConnectionId::from_ref(&scid);
 
-        // Create QUIC client
-        let client = QuicClient::builder()
-            .with_tls(tls)
-            .map_err(|e| Error::connection(&format!("Client builder error: {}", e)))?
-            .with_io("0.0.0.0:0")
-            .map_err(|e| Error::connection(&format!("IO bind error: {}", e)))?
-            .start()
-            .map_err(|e| Error::connection(&format!("Client start error: {}", e)))?;
+        // Create connection
+        let local_addr = socket.local_addr()
+            .map_err(|e| Error::connection(&format!("Failed to get local address: {}", e)))?;
 
-        // Parse server address
-        let server_addr: SocketAddr = format!("{}:{}", host, port)
-            .parse()
-            .map_err(|e| Error::connection(&format!("Invalid address: {}", e)))?;
+        let mut conn = quiche::connect(Some(host), &scid, local_addr, server_addr, &mut config)
+            .map_err(|e| Error::connection(&format!("Failed to create connection: {:?}", e)))?;
 
-        // Connect to server
-        let connect = Connect::new(server_addr).with_server_name(host);
-        let mut connection = client
-            .connect(connect)
+        let mut out = vec![0; MAX_DATAGRAM_SIZE];
+
+        // Send initial packet
+        let (write, send_info) = conn.send(&mut out)
+            .map_err(|e| Error::connection(&format!("Failed to create initial packet: {:?}", e)))?;
+
+        socket.send_to(&out[..write], send_info.to)
             .await
-            .map_err(|e| Error::connection(&format!("Connection failed: {}", e)))?;
+            .map_err(|e| Error::connection(&format!("Failed to send initial packet: {}", e)))?;
 
-        eprintln!("[S2N-QUIC] Connected, opening bidirectional stream");
+        eprintln!("[QUICHE] Sent initial packet ({} bytes)", write);
 
-        // Open bidirectional stream
-        let stream = connection
-            .open_bidirectional_stream()
+        // Complete handshake
+        let mut recv_buf = vec![0; 65535];
+        let mut send_buf = vec![0; MAX_DATAGRAM_SIZE];
+
+        let handshake_timeout = Duration::from_secs(10);
+        let start = std::time::Instant::now();
+
+        while !conn.is_established() {
+            if start.elapsed() > handshake_timeout {
+                return Err(Error::connection("Handshake timeout"));
+            }
+
+            // Receive packets
+            match timeout(Duration::from_millis(100), socket.recv_from(&mut recv_buf)).await {
+                Ok(Ok((len, from))) => {
+                    let recv_info = quiche::RecvInfo {
+                        to: local_addr,
+                        from,
+                    };
+
+                    match conn.recv(&mut recv_buf[..len], recv_info) {
+                        Ok(_) => {},
+                        Err(quiche::Error::Done) => {},
+                        Err(e) => {
+                            eprintln!("[QUICHE] Recv error: {:?}", e);
+                            return Err(Error::connection(&format!("Receive error: {:?}", e)));
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    return Err(Error::connection(&format!("Socket recv error: {}", e)));
+                }
+                Err(_) => {
+                    // Timeout, continue
+                }
+            }
+
+            // Send any pending packets
+            loop {
+                let (write, send_info) = match conn.send(&mut send_buf) {
+                    Ok(v) => v,
+                    Err(quiche::Error::Done) => break,
+                    Err(e) => {
+                        return Err(Error::connection(&format!("Send error: {:?}", e)));
+                    }
+                };
+
+                socket.send_to(&send_buf[..write], send_info.to)
+                    .await
+                    .map_err(|e| Error::connection(&format!("Socket send error: {}", e)))?;
+            }
+        }
+
+        eprintln!("[QUICHE] Handshake complete");
+
+        let mut connection = Connection {
+            socket,
+            conn,
+            server_addr,
+            page_size,
+            recv_buf,
+            send_buf,
+            stream_recv_buf: HashMap::new(),
+        };
+
+        // Open stream for handshake
+        let stream_id = connection.open_stream()
             .await
-            .map_err(|e| Error::connection(&format!("Failed to open stream: {}", e)))?;
-
-        let (read_half, write_half) = tokio::io::split(stream);
-        let mut reader = BufReader::new(read_half);
-        let mut writer = write_half;
-
-        eprintln!("[S2N-QUIC] Stream opened, sending HELLO");
+            .map_err(|e| Error::connection(&format!("Failed to open handshake stream: {}", e)))?;
 
         // Send HELLO message
         let hello_msg = serde_json::json!({
@@ -204,26 +299,11 @@ impl Connection {
             .map_err(|e| Error::protocol(&format!("Failed to serialize HELLO: {}", e)))?;
         hello_json.push('\n');
 
-        writer
-            .write_all(hello_json.as_bytes())
-            .await
-            .map_err(|e| Error::protocol(&format!("Failed to send HELLO: {}", e)))?;
-
-        writer
-            .flush()
-            .await
-            .map_err(|e| Error::protocol(&format!("Failed to flush HELLO: {}", e)))?;
-
-        eprintln!("[S2N-QUIC] HELLO sent, waiting for response");
+        connection.write_stream(stream_id, hello_json.as_bytes()).await?;
 
         // Read HELLO response
-        let mut response_line = String::new();
-        reader
-            .read_line(&mut response_line)
-            .await
-            .map_err(|e| Error::protocol(&format!("Failed to read HELLO response: {}", e)))?;
-
-        eprintln!("[S2N-QUIC] Received HELLO response: {}", response_line.trim());
+        let response_line = connection.read_line(stream_id).await?;
+        eprintln!("[QUICHE] Received HELLO response: {}", response_line.trim());
 
         let response: serde_json::Value = serde_json::from_str(&response_line)
             .map_err(|e| Error::protocol(&format!("Invalid HELLO response JSON: {}", e)))?;
@@ -235,57 +315,153 @@ impl Connection {
             )));
         }
 
-        eprintln!("[S2N-QUIC] Handshake complete");
+        eprintln!("[QUICHE] Handshake complete");
 
-        // Open new stream for queries (handshake stream is consumed)
-        let query_stream = connection
-            .open_bidirectional_stream()
-            .await
-            .map_err(|e| Error::connection(&format!("Failed to open query stream: {}", e)))?;
-
-        let (read_half, write_half) = tokio::io::split(query_stream);
-
-        Ok(Connection {
-            reader: BufReader::new(read_half),
-            writer: write_half,
-            page_size,
-        })
+        Ok(connection)
     }
 
-    /// Send JSON message to server
-    async fn write_json(&mut self, obj: &serde_json::Value) -> Result<()> {
-        let mut line = serde_json::to_string(obj)
-            .map_err(|e| Error::protocol(&format!("Failed to serialize JSON: {}", e)))?;
-        line.push('\n');
+    /// Open a bidirectional stream
+    async fn open_stream(&mut self) -> Result<u64> {
+        // Try to open a stream
+        loop {
+            match self.conn.stream_writable_next() {
+                Some(stream_id) if stream_id % 4 == 0 => {
+                    // Client-initiated bidirectional stream
+                    return Ok(stream_id);
+                }
+                _ => {}
+            }
 
-        self.writer
-            .write_all(line.as_bytes())
-            .await
-            .map_err(|e| Error::protocol(&format!("Failed to write: {}", e)))?;
+            // No writable stream available, create new one
+            let mut stream_id = 0u64;
+            while stream_id < 1000 {
+                if self.conn.stream_writable(stream_id, 1).unwrap_or(false) {
+                    return Ok(stream_id);
+                }
+                stream_id += 4; // Client-initiated bidirectional streams are 0, 4, 8, ...
+            }
 
-        self.writer
-            .flush()
-            .await
-            .map_err(|e| Error::protocol(&format!("Failed to flush: {}", e)))?;
+            // If we can't open a stream, try processing events
+            self.process_events().await?;
+
+            // Brief yield to allow other tasks to run
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Write data to a stream
+    async fn write_stream(&mut self, stream_id: u64, data: &[u8]) -> Result<()> {
+        let mut offset = 0;
+        while offset < data.len() {
+            match self.conn.stream_send(stream_id, &data[offset..], false) {
+                Ok(written) => {
+                    offset += written;
+                }
+                Err(quiche::Error::Done) => {
+                    // Wait and retry
+                    self.process_events().await?;
+                    tokio::task::yield_now().await;
+                }
+                Err(e) => {
+                    return Err(Error::protocol(&format!("Stream write error: {:?}", e)));
+                }
+            }
+        }
+
+        // Flush by sending packets
+        self.flush().await?;
 
         Ok(())
     }
 
-    /// Read JSON message from server
-    async fn read_json(&mut self) -> Result<serde_json::Value> {
-        let mut line = String::new();
-        let bytes_read = self
-            .reader
-            .read_line(&mut line)
-            .await
-            .map_err(|e| Error::protocol(&format!("Failed to read line: {}", e)))?;
+    /// Read a line from a stream (newline-delimited)
+    async fn read_line(&mut self, stream_id: u64) -> Result<String> {
+        loop {
+            // Scope the mutable borrow of stream_recv_buf
+            {
+                let buf = self.stream_recv_buf.entry(stream_id).or_insert_with(Vec::new);
 
-        if bytes_read == 0 {
-            return Err(Error::protocol("Connection closed by server"));
+                // Check if we have a complete line
+                if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                    let line: Vec<u8> = buf.drain(..=pos).collect();
+                    return String::from_utf8(line)
+                        .map_err(|e| Error::protocol(&format!("Invalid UTF-8: {}", e)));
+                }
+            }
+
+            // Read more data (borrow is now released)
+            let mut stream_buf = vec![0; 65535];
+            match self.conn.stream_recv(stream_id, &mut stream_buf) {
+                Ok((len, _fin)) => {
+                    let buf = self.stream_recv_buf.entry(stream_id).or_insert_with(Vec::new);
+                    buf.extend_from_slice(&stream_buf[..len]);
+                }
+                Err(quiche::Error::Done) => {
+                    // No data available, process events and wait
+                    self.process_events().await?;
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Err(e) => {
+                    return Err(Error::protocol(&format!("Stream read error: {:?}", e)));
+                }
+            }
+        }
+    }
+
+    /// Process network events (send/receive packets)
+    async fn process_events(&mut self) -> Result<()> {
+        // Send any pending packets
+        loop {
+            let (write, send_info) = match self.conn.send(&mut self.send_buf) {
+                Ok(v) => v,
+                Err(quiche::Error::Done) => break,
+                Err(e) => {
+                    return Err(Error::connection(&format!("Send error: {:?}", e)));
+                }
+            };
+
+            self.socket.send_to(&self.send_buf[..write], send_info.to)
+                .await
+                .map_err(|e| Error::connection(&format!("Socket send error: {}", e)))?;
         }
 
-        serde_json::from_str(&line)
-            .map_err(|e| Error::protocol(&format!("Invalid JSON: {}", e)))
+        // Try to receive packets (non-blocking)
+        loop {
+            match timeout(Duration::from_millis(1),
+                         self.socket.recv_from(&mut self.recv_buf)).await {
+                Ok(Ok((len, from))) => {
+                    let local_addr = self.socket.local_addr()
+                        .map_err(|e| Error::connection(&format!("Failed to get local addr: {}", e)))?;
+
+                    let recv_info = quiche::RecvInfo {
+                        to: local_addr,
+                        from,
+                    };
+
+                    match self.conn.recv(&mut self.recv_buf[..len], recv_info) {
+                        Ok(_) => {},
+                        Err(quiche::Error::Done) => {},
+                        Err(e) => {
+                            return Err(Error::connection(&format!("Receive error: {:?}", e)));
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    return Err(Error::connection(&format!("Socket recv error: {}", e)));
+                }
+                Err(_) => {
+                    // Timeout, no more packets
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Flush pending data
+    async fn flush(&mut self) -> Result<()> {
+        self.process_events().await
     }
 
     /// Execute a GQL query
@@ -294,6 +470,9 @@ impl Connection {
         text: &str,
         params: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<Page> {
+        // Open new stream for query
+        let stream_id = self.open_stream().await?;
+
         // Send RUN_GQL message
         let run_msg = if let Some(p) = params {
             serde_json::json!({"type": "RUN_GQL", "text": text, "params": p})
@@ -301,10 +480,16 @@ impl Connection {
             serde_json::json!({"type": "RUN_GQL", "text": text})
         };
 
-        self.write_json(&run_msg).await?;
+        let mut run_json = serde_json::to_string(&run_msg)
+            .map_err(|e| Error::protocol(&format!("Failed to serialize RUN_GQL: {}", e)))?;
+        run_json.push('\n');
+
+        self.write_stream(stream_id, run_json.as_bytes()).await?;
 
         // Receive SCHEMA message
-        let schema_msg = self.read_json().await?;
+        let schema_line = self.read_line(stream_id).await?;
+        let schema_msg: serde_json::Value = serde_json::from_str(&schema_line)
+            .map_err(|e| Error::protocol(&format!("Invalid SCHEMA JSON: {}", e)))?;
 
         let msg_type = schema_msg
             .get("type")
@@ -340,10 +525,16 @@ impl Connection {
             "page_size": self.page_size
         });
 
-        self.write_json(&pull_msg).await?;
+        let mut pull_json = serde_json::to_string(&pull_msg)
+            .map_err(|e| Error::protocol(&format!("Failed to serialize PULL: {}", e)))?;
+        pull_json.push('\n');
+
+        self.write_stream(stream_id, pull_json.as_bytes()).await?;
 
         // Receive BINDINGS message
-        let bindings_msg = self.read_json().await?;
+        let bindings_line = self.read_line(stream_id).await?;
+        let bindings_msg: serde_json::Value = serde_json::from_str(&bindings_line)
+            .map_err(|e| Error::protocol(&format!("Invalid BINDINGS JSON: {}", e)))?;
 
         let msg_type = bindings_msg
             .get("type")
@@ -379,7 +570,6 @@ impl Connection {
 
             let mut row_map = HashMap::new();
             for (key, val) in row_obj {
-                // Use generic "ANY" type since we don't have type info in BINDINGS
                 let decoded = decode_value(val, "ANY")?;
                 row_map.insert(key.clone(), decoded);
             }
@@ -417,10 +607,19 @@ impl Connection {
 
     /// Begin a transaction
     pub async fn begin(&mut self) -> Result<()> {
-        let begin_msg = serde_json::json!({"type": "BEGIN"});
-        self.write_json(&begin_msg).await?;
+        let stream_id = self.open_stream().await?;
 
-        let response = self.read_json().await?;
+        let begin_msg = serde_json::json!({"type": "BEGIN"});
+        let mut begin_json = serde_json::to_string(&begin_msg)
+            .map_err(|e| Error::protocol(&format!("Failed to serialize BEGIN: {}", e)))?;
+        begin_json.push('\n');
+
+        self.write_stream(stream_id, begin_json.as_bytes()).await?;
+
+        let response_line = self.read_line(stream_id).await?;
+        let response: serde_json::Value = serde_json::from_str(&response_line)
+            .map_err(|e| Error::protocol(&format!("Invalid BEGIN response: {}", e)))?;
+
         let msg_type = response
             .get("type")
             .and_then(|t| t.as_str())
@@ -446,10 +645,19 @@ impl Connection {
 
     /// Commit the current transaction
     pub async fn commit(&mut self) -> Result<()> {
-        let commit_msg = serde_json::json!({"type": "COMMIT"});
-        self.write_json(&commit_msg).await?;
+        let stream_id = self.open_stream().await?;
 
-        let response = self.read_json().await?;
+        let commit_msg = serde_json::json!({"type": "COMMIT"});
+        let mut commit_json = serde_json::to_string(&commit_msg)
+            .map_err(|e| Error::protocol(&format!("Failed to serialize COMMIT: {}", e)))?;
+        commit_json.push('\n');
+
+        self.write_stream(stream_id, commit_json.as_bytes()).await?;
+
+        let response_line = self.read_line(stream_id).await?;
+        let response: serde_json::Value = serde_json::from_str(&response_line)
+            .map_err(|e| Error::protocol(&format!("Invalid COMMIT response: {}", e)))?;
+
         let msg_type = response
             .get("type")
             .and_then(|t| t.as_str())
@@ -475,10 +683,19 @@ impl Connection {
 
     /// Rollback the current transaction
     pub async fn rollback(&mut self) -> Result<()> {
-        let rollback_msg = serde_json::json!({"type": "ROLLBACK"});
-        self.write_json(&rollback_msg).await?;
+        let stream_id = self.open_stream().await?;
 
-        let response = self.read_json().await?;
+        let rollback_msg = serde_json::json!({"type": "ROLLBACK"});
+        let mut rollback_json = serde_json::to_string(&rollback_msg)
+            .map_err(|e| Error::protocol(&format!("Failed to serialize ROLLBACK: {}", e)))?;
+        rollback_json.push('\n');
+
+        self.write_stream(stream_id, rollback_json.as_bytes()).await?;
+
+        let response_line = self.read_line(stream_id).await?;
+        let response: serde_json::Value = serde_json::from_str(&response_line)
+            .map_err(|e| Error::protocol(&format!("Invalid ROLLBACK response: {}", e)))?;
+
         let msg_type = response
             .get("type")
             .and_then(|t| t.as_str())
@@ -504,11 +721,23 @@ impl Connection {
 
     /// Close the connection
     pub async fn close(&mut self) -> Result<()> {
-        let close_msg = serde_json::json!({"type": "GOODBYE"});
-        self.write_json(&close_msg).await?;
+        let stream_id = self.open_stream().await?;
 
-        // Best effort - don't wait for response
-        let _ = self.reader.read_line(&mut String::new()).await;
+        let close_msg = serde_json::json!({"type": "GOODBYE"});
+        let mut close_json = serde_json::to_string(&close_msg)
+            .map_err(|e| Error::protocol(&format!("Failed to serialize GOODBYE: {}", e)))?;
+        close_json.push('\n');
+
+        self.write_stream(stream_id, close_json.as_bytes()).await?;
+
+        // Try to read response, but don't fail if we can't
+        let _ = timeout(Duration::from_millis(500), self.read_line(stream_id)).await;
+
+        // Close the QUIC connection
+        self.conn.close(true, 0x00, b"goodbye")
+            .map_err(|e| Error::connection(&format!("Failed to close connection: {:?}", e)))?;
+
+        self.flush().await?;
 
         Ok(())
     }
@@ -516,6 +745,7 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        // Connection will be closed automatically when dropped
+        // Connection will be closed automatically
+        let _ = self.conn.close(true, 0x00, b"dropped");
     }
 }

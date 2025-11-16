@@ -13,10 +13,9 @@ categories = ["database"]
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
 
-# QUIC support - using s2n-quic (AWS, pure Rust)
-# NOTE: quiche would be ideal for msquic compatibility but BoringSSL won't build in Nix
-# due to CMake not finding glibc headers even with CMAKE_C_FLAGS/CMAKE_CXX_FLAGS set
-s2n-quic = "1.48"
+# QUIC support - using quiche (cloudflare, msquic compatible)
+quiche = { version = "0.22", features = ["boringssl-boring-crate"] }
+ring = "0.17"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -41,6 +40,9 @@ url = "2.5"
 
 # Hex encoding/decoding
 hex = "0.4"
+
+# Logging
+log = "0.4"
 
 [dev-dependencies]
 tokio-test = "0.4"

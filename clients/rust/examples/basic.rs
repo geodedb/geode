@@ -5,7 +5,7 @@ use geode_client::{Client, Result};
 #[tokio::main]
 async fn main() -> Result<()> {
     // Create QUIC client (skip TLS verification for development)
-    let client = Client::new("127.0.0.1", 3141)
+    let client = Client::new("127.0.0.1", 8443)
         .skip_verify(true)
         .page_size(1000);
 

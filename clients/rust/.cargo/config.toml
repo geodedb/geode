@@ -1,0 +1,6 @@
+[env]
+# Use prebuilt BoringSSL from Nix store instead of building from source
+# This avoids the glibc header issues when building BoringSSL via CMake
+BORING_BSSL_PATH = { value = "/nix/store/fwkhkn96dshakq3ai9acj4ka8lw97myg-boringssl-unstable-2024-09-20", force = true }
+BORING_BSSL_INCLUDE_PATH = { value = "/nix/store/fwkhkn96dshakq3ai9acj4ka8lw97myg-boringssl-unstable-2024-09-20/include", force = true }
+BORING_BSSL_LIB_PATH = { value = "/nix/store/fwkhkn96dshakq3ai9acj4ka8lw97myg-boringssl-unstable-2024-09-20/lib", force = true }

@@ -33,7 +33,7 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 .PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset go-build go-test go-clean go-example fuzz bench tools doccheck clean cert-gen fmt ci help
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
-.PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test quic-test-msquic client-test-python client-test-go client-test-rust client-test-zig
+.PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test quic-test-msquic client-test-python client-test-go client-test-rust client-test-zig rust-build-docker rust-test-docker
 .PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
 .PHONY: geodetestlab geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
 .PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
@@ -170,6 +170,32 @@ client-test-rust: build
 	else \
 		echo "Rust client not available (cargo not found or client not present)"; \
 	fi
+
+# Build Rust client using Docker container (bypasses Nix/BoringSSL build issues)
+rust-build-docker:
+	@echo "Building Rust client in Docker container..."
+	@if [ -d "clients/rust" ] && command -v docker >/dev/null 2>&1; then \
+		cd clients/rust && ./build-docker.sh; \
+	else \
+		echo "Docker not available or Rust client directory not found"; \
+		exit 1; \
+	fi
+
+# Test Rust client with Docker build
+rust-test-docker: rust-build-docker build
+	@echo "Testing Rust client (Docker build)..."
+	@echo "Starting Geode server for integration tests..."
+	@./zig-out/bin/geode serve --listen 127.0.0.1:8443 2>&1 &
+	@SERVER_PID=$$!; \
+	sleep 3; \
+	echo "Running Rust client tests..."; \
+	cd clients/rust && cargo test --release 2>&1 || { \
+		echo "Rust client tests failed"; \
+		kill $$SERVER_PID 2>/dev/null || true; \
+		exit 1; \
+	}; \
+	kill $$SERVER_PID 2>/dev/null || true; \
+	echo "Rust client tests completed"
 
 client-test-zig: build
 	@echo "Testing Zig client..."

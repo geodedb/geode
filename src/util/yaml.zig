@@ -199,6 +199,16 @@ pub const Parser = struct {
 
             // Expect ':'
             if (self.pos >= self.input.len or self.input[self.pos] != ':') {
+                // DEBUG: Log what we found instead
+                std.debug.print("[YAML DEBUG] Expected ':' after key '{s}' at pos={}, line={}, col={}\n", .{ key, self.pos, self.line, self.col });
+                if (self.pos < self.input.len) {
+                    std.debug.print("[YAML DEBUG] Found character: '{c}' (0x{x})\n", .{ self.input[self.pos], self.input[self.pos] });
+                    const context_start = if (self.pos > 50) self.pos - 50 else 0;
+                    const context_end = @min(self.pos + 50, self.input.len);
+                    std.debug.print("[YAML DEBUG] Context: {s}\n", .{self.input[context_start..context_end]});
+                } else {
+                    std.debug.print("[YAML DEBUG] Reached end of input\n", .{});
+                }
                 self.allocator.free(key);
                 return Error.UnexpectedToken;
             }
@@ -1712,4 +1722,124 @@ test "yaml: edge - flow style with trailing comma" {
 
     try std.testing.expect(value == .list);
     try std.testing.expectEqual(@as(usize, 3), value.list.items.len);
+}
+
+test "yaml: list with multi-field map elements" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\values:
+        \\  - x: 1
+        \\    greeting: "Hello"
+        \\    flag: true
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const values_list = value.map.get("values").?;
+    try std.testing.expect(values_list == .list);
+    try std.testing.expectEqual(@as(usize, 1), values_list.list.items.len);
+
+    const first_item = values_list.list.items[0];
+    try std.testing.expect(first_item == .map);
+    try std.testing.expectEqual(@as(usize, 3), first_item.map.count());
+
+    const x_val = first_item.map.get("x").?;
+    try std.testing.expectEqual(@as(i64, 1), x_val.int_value);
+
+    const greeting_val = first_item.map.get("greeting").?;
+    try std.testing.expectEqualStrings("Hello", greeting_val.string_value);
+
+    const flag_val = first_item.map.get("flag").?;
+    try std.testing.expect(flag_val.bool_value == true);
+}
+
+test "yaml: parse basic.yaml from test-harness" {
+    const allocator = std.testing.allocator;
+
+    // Read the actual basic.yaml file
+    const file = try std.fs.cwd().openFile("clients/test-harness/specs/basic.yaml", .{});
+    defer file.close();
+
+    const content = try file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(content);
+
+    // Try to parse it
+    var value = try parse(allocator, content);
+    defer value.deinit(allocator);
+
+    // If we get here, parsing succeeded
+    try std.testing.expect(value == .map);
+}
+
+test "yaml: list with inline map and additional fields" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\steps:
+        \\  - type: begin
+        \\  - type: query
+        \\    text: "CREATE (n) RETURN n"
+        \\    expect:
+        \\      rows: 1
+        \\  - type: rollback
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const steps = value.map.get("steps").?;
+    try std.testing.expect(steps == .list);
+    try std.testing.expectEqual(@as(usize, 3), steps.list.items.len);
+
+    // First step
+    const first_step = steps.list.items[0];
+    try std.testing.expect(first_step == .map);
+    try std.testing.expectEqualStrings("begin", first_step.map.get("type").?.string_value);
+
+    // Second step with multiple fields
+    const second_step = steps.list.items[1];
+    try std.testing.expect(second_step == .map);
+    try std.testing.expectEqualStrings("query", second_step.map.get("type").?.string_value);
+    try std.testing.expectEqualStrings("CREATE (n) RETURN n", second_step.map.get("text").?.string_value);
+
+    const expect_val = second_step.map.get("expect").?;
+    try std.testing.expect(expect_val == .map);
+    try std.testing.expectEqual(@as(i64, 1), expect_val.map.get("rows").?.int_value);
+
+    // Third step
+    const third_step = steps.list.items[2];
+    try std.testing.expect(third_step == .map);
+    try std.testing.expectEqualStrings("rollback", third_step.map.get("type").?.string_value);
+}
+
+test "yaml: exact read-after-rollback pattern" {
+    const allocator = std.testing.allocator;
+    const input =
+        \\steps:
+        \\  - type: begin
+        \\  - type: query
+        \\    text: "CREATE (n:TransTest {id: 7, name: 'should_not_exist', testmarker: 'rollback_verify'}) RETURN n"
+        \\    expect:
+        \\      rows: 1
+        \\  - type: rollback
+    ;
+    var value = try parse(allocator, input);
+    defer value.deinit(allocator);
+
+    const steps = value.map.get("steps").?;
+    try std.testing.expect(steps == .list);
+    try std.testing.expectEqual(@as(usize, 3), steps.list.items.len);
+
+    // First step
+    const first_step = steps.list.items[0];
+    try std.testing.expect(first_step == .map);
+    try std.testing.expectEqualStrings("begin", first_step.map.get("type").?.string_value);
+
+    // Second step
+    const second_step = steps.list.items[1];
+    try std.testing.expect(second_step == .map);
+    try std.testing.expectEqualStrings("query", second_step.map.get("type").?.string_value);
+
+    // Third step
+    const third_step = steps.list.items[2];
+    try std.testing.expect(third_step == .map);
+    try std.testing.expectEqualStrings("rollback", third_step.map.get("type").?.string_value);
 }
