@@ -642,6 +642,112 @@ The clean environment verification confirms that Python and Go clients maintain 
 
 ---
 
-*Final Report Date*: November 15, 2025
+## 🔬 November 15, 2025 - quiche Migration Investigation (FINAL)
+
+### Objective
+Migrate Rust client from s2n-quic to quiche 0.22 for msquic compatibility.
+
+### Background
+- Quinn and s2n-quic both have TLS handshake incompatibility with msquic server
+- quiche (by Cloudflare) is known to interoperate with msquic
+- Expected to resolve Rust client's 0% pass rate
+
+### Investigation Process
+
+**Step 1**: Updated Cargo.toml
+```toml
+# Removed:
+s2n-quic = "1.48"
+
+# Added:
+quiche = "0.22"
+mio = { version = "0.8", features = ["os-poll", "net"] }
+ring = "0.17"
+```
+
+**Step 2**: Attempted build
+```bash
+cd clients/rust && cargo build
+```
+**Result**: ❌ BoringSSL compilation failure
+```
+error: stdlib.h: No such file or directory
+   79 | #include_next <stdlib.h>
+```
+
+**Step 3**: Added glibc.dev to flake.nix (line 96)
+```nix
+pkgs.glibc.dev # Required for building quiche/BoringSSL with C++ stdlib
+```
+
+**Step 4**: Set environment variables in flake.nix (lines 218-225)
+```nix
+export CFLAGS="''${CFLAGS:-""} -I${pkgs.glibc.dev}/include"
+export CXXFLAGS="''${CXXFLAGS:-""} -I${pkgs.glibc.dev}/include"
+export LDFLAGS="''${LDFLAGS:-""} -L${pkgs.glibc}/lib ..."
+export CMAKE_C_FLAGS="''${CMAKE_C_FLAGS:-""} -I${pkgs.glibc.dev}/include"
+export CMAKE_CXX_FLAGS="''${CMAKE_CXX_FLAGS:-""} -I${pkgs.glibc.dev}/include"
+```
+
+**Step 5**: Rebuilt in Nix environment
+```bash
+nix develop --command bash -c 'cd clients/rust && cargo build'
+```
+**Result**: ❌ Same error - CMake's nested BoringSSL build doesn't inherit environment variables
+
+### Root Cause Analysis
+
+**Technical Issue**:
+1. quiche uses BoringSSL (Google's OpenSSL fork) for TLS
+2. BoringSSL build system uses CMake
+3. CMake spawns a nested build process for BoringSSL
+4. Nix sets compiler flags via wrapper scripts (gcc/g++ wrappers)
+5. CMake's nested build bypasses Nix's wrappers
+6. Even explicit CMAKE_C_FLAGS/CMAKE_CXX_FLAGS don't propagate to nested build
+7. Result: stdlib.h not found during C++ compilation
+
+**Why This Is Hard to Fix**:
+- Nix's approach to isolation conflicts with CMake's nested build model
+- BoringSSL's build system is complex and doesn't easily accept external flags
+- This is a known incompatibility between Nix, CMake, and BoringSSL
+- Other projects have similar issues (documented in nixpkgs issues)
+
+### Resolution
+
+**Decision**: Reverted to s2n-quic
+- Updated Cargo.toml back to `s2n-quic = "1.48"`
+- Added detailed comment explaining why quiche won't build in Nix
+- Retained flake.nix improvements for future C/C++ builds
+
+**Alternative Solutions**:
+1. Build Rust client outside Nix environment (Docker or standard Linux)
+2. Use quiche pre-built as a system library
+3. Accept s2n-quic/Quinn limitation and rely on Python/Go clients (current)
+4. Switch server from msquic to Quinn (major server-side change)
+
+### Changes Committed (Commit 989d44e)
+
+**Files Modified**:
+1. `flake.nix`: Added glibc.dev and CMake environment variables (retained)
+2. `clients/rust/Cargo.toml`: Kept s2n-quic with explanatory comment
+3. `CLIENT_FIXES_SUMMARY.md`: Added Fix #13 with investigation details
+4. `CLIENT_INTEGRATION_STATUS.md`: Updated Rust section and technical notes
+
+### Conclusion
+
+**quiche Migration**: ❌ NOT FEASIBLE in Nix environment
+**Reason**: CMake/BoringSSL build incompatibility with Nix
+**Impact**: Rust client remains at 0% due to QUIC library incompatibility
+**Mitigation**: Python (94.1%) and Go (94.1%) provide production-ready coverage
+
+**Final Status**:
+- ✅ Investigation complete and documented
+- ✅ flake.nix improvements retained for future use
+- ✅ Alternative paths identified (non-Nix builds)
+- ✅ Production coverage unaffected (Python/Go at 94.1%)
+
+---
+
+*Final Report Date*: November 15, 2025 (quiche Investigation Complete)
 *Contributors*: Claude Code
-*Status*: ✅ CLIENTS COMPLETE - SERVER FEATURES PENDING
+*Status*: ✅ PYTHON/GO PRODUCTION READY - RUST REQUIRES NON-NIX BUILD
