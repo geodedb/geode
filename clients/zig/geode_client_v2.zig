@@ -101,14 +101,12 @@ pub const GeodeClient = struct {
 
         // Open stream
         var stream_ctx = try self.allocator.create(StreamContext);
-        stream_ctx.* = StreamContext{
-            .client = self,
-            .handle = undefined,
-            .allocator = self.allocator,
-            .recv_buffer = std.ArrayList(u8).init(self.allocator),
-            .mutex = .{},
-            .connected = false,
-        };
+        stream_ctx.client = self;
+        stream_ctx.handle = undefined;
+        stream_ctx.allocator = self.allocator;
+        stream_ctx.recv_buffer = .{};
+        stream_ctx.mutex = .{};
+        stream_ctx.connected = false;
         self.stream_ctx = stream_ctx;
         errdefer {
             self.allocator.destroy(stream_ctx);
@@ -237,7 +235,7 @@ pub const GeodeClient = struct {
 
     pub fn sendRunGql(self: *GeodeClient, request_id: []const u8, query: []const u8, params: ?std.json.Value) !void {
         const params_json = if (params) |p|
-            try std.json.stringifyAlloc(self.allocator, p, .{})
+            try std.json.Stringify.valueAlloc(self.allocator, p, .{})
         else
             try self.allocator.dupe(u8, "null");
         defer self.allocator.free(params_json);
@@ -324,7 +322,7 @@ pub const GeodeClient = struct {
         connected: bool = false,
 
         pub fn deinit(self: *StreamContext) void {
-            self.recv_buffer.deinit();
+            self.recv_buffer.deinit(self.allocator);
             self.allocator.destroy(self);
         }
 
@@ -347,7 +345,7 @@ pub const GeodeClient = struct {
                     while (i < buffer_count) : (i += 1) {
                         const buf = buffers[i];
                         const data = buf.Buffer[0..buf.Length];
-                        self.recv_buffer.appendSlice(data) catch {
+                        self.recv_buffer.appendSlice(self.allocator, data) catch {
                             return MsQuic.QUIC_STATUS_OUT_OF_MEMORY;
                         };
                     }
