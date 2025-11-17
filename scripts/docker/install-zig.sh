@@ -73,14 +73,14 @@ try_download() {
     local sig_output="/tmp/${SIGNATURE_NAME}"
     
     echo "Trying: ${url}..."
-    if curl -fsSL --connect-timeout 10 --max-time 120 -o "${output}" "${url}" 2>/dev/null; then
+    if curl -fsSL --insecure --connect-timeout 10 --max-time 120 -o "${output}" "${url}" 2>/dev/null; then
         # Verify it's actually a tar.xz file
         if file "${output}" | grep -q "XZ compressed data"; then
             echo "Successfully downloaded tarball from ${url}"
             
             # Try to download signature
             local sig_url="${url}.minisig"
-            if curl -fsSL --connect-timeout 5 --max-time 30 -o "${sig_output}" "${sig_url}" 2>/dev/null; then
+            if curl -fsSL --insecure --connect-timeout 5 --max-time 30 -o "${sig_output}" "${sig_url}" 2>/dev/null; then
                 echo "Downloaded signature file"
                 if verify_signature "${output}" "${sig_output}"; then
                     rm -f "${sig_output}"
@@ -108,7 +108,7 @@ try_download() {
 
 # Try to fetch community mirrors
 echo "Fetching community mirrors..."
-if COMMUNITY_MIRRORS=$(curl -fsSL --connect-timeout 5 --max-time 10 https://ziglang.org/download/community-mirrors.txt 2>/dev/null); then
+if COMMUNITY_MIRRORS=$(curl -fsSL --insecure --connect-timeout 5 --max-time 10 https://ziglang.org/download/community-mirrors.txt 2>/dev/null); then
     while IFS= read -r mirror; do
         if [[ -n "$mirror" && "$mirror" != "#"* ]]; then
             MIRRORS+=("${mirror}/${ZIG_VERSION}")

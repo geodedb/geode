@@ -15,14 +15,30 @@ WORKDIR /build
 RUN curl -L https://www.openssl.org/source/openssl-3.3.2.tar.gz -o openssl-3.3.2.tar.gz && \
     tar xzf openssl-3.3.2.tar.gz && \
     cd openssl-3.3.2 && \
-    ./Configure enable-fips --prefix=/opt/openssl-fips --openssldir=/opt/openssl-fips && \
+    ./Configure enable-fips --prefix=/opt/openssl-fips --openssldir=/opt/openssl-fips/ssl && \
     make -j$(nproc) && \
     make install && \
+    # Generate FIPS module configuration
     export LD_LIBRARY_PATH=/opt/openssl-fips/lib64:$LD_LIBRARY_PATH && \
     /opt/openssl-fips/bin/openssl fipsinstall \
         -out /opt/openssl-fips/ssl/fipsmodule.cnf \
         -module /opt/openssl-fips/lib64/ossl-modules/fips.so && \
-    sed -i 's|# .include fipsmodule.cnf|.include /opt/openssl-fips/ssl/fipsmodule.cnf|' /opt/openssl-fips/ssl/openssl.cnf
+    # Update openssl.cnf to include FIPS module
+    cat >> /opt/openssl-fips/ssl/openssl.cnf <<'EOF'
+
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+fips = fips_sect
+base = base_sect
+
+[base_sect]
+activate = 1
+
+[fips_sect]
+activate = 1
+EOF
 
 # Stage 2: Build MsQUIC
 FROM debian:bookworm-slim AS msquic-builder
