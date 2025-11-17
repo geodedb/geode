@@ -207,7 +207,6 @@ services:
       - geode-logs:/var/log/geode
       - ./certs:/certs:ro
     command:
-      - "serve"
       - "--data-dir"
       - "/data"
       - "--listen"
@@ -216,6 +215,10 @@ services:
       - "/certs/server.crt"
       - "--key"
       - "/certs/server.key"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_RESOURCE
     healthcheck:
       test: ["CMD", "geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:8443"]
       interval: 30s

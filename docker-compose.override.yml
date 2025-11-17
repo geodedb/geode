@@ -20,8 +20,17 @@ services:
     ports:
       # Additional debug port
       - '9999:9999'
-    command: >
-      --listen-quic 0.0.0.0:7567
-      --data-dir /data
-      --log-json
-    # QUIC-only transport; TCP removed
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_RESOURCE
+    command:
+      - "--data-dir"
+      - "/data"
+      - "--listen"
+      - "0.0.0.0:8443"
+      - "--cert"
+      - "/certs/server.crt"
+      - "--key"
+      - "/certs/server.key"
+    # QUIC-only transport with TLS certificates

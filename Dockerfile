@@ -100,17 +100,20 @@ ENV OPENSSL_ROOT_DIR=/opt/openssl-fips \
     LD_LIBRARY_PATH=/opt/openssl-fips/lib64:/opt/msquic/lib:$LD_LIBRARY_PATH \
     PATH=/opt/openssl-fips/bin:$PATH
 
-# Copy and run Zig installation script
-COPY scripts/docker/install-zig.sh /tmp/install-zig.sh
+# Copy pre-downloaded Zig archive (avoids entropy issues in Docker build)
+COPY docker/zig/zig-x86_64-linux-0.15.1.tar.xz /tmp/zig.tar.xz
 ARG ZIG_VERSION=0.15.1
-RUN chmod +x /tmp/install-zig.sh && \
-    if [ "$TARGETARCH" = "arm64" ]; then \
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
         ARCH="aarch64"; \
     else \
         ARCH="x86_64"; \
     fi && \
-    /tmp/install-zig.sh ${ZIG_VERSION} $ARCH linux /opt && \
-    rm /tmp/install-zig.sh
+    echo "Installing Zig ${ZIG_VERSION} for ${ARCH}-linux..." && \
+    tar -xf /tmp/zig.tar.xz -C /opt && \
+    ln -s /opt/zig-${ARCH}-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
+    rm /tmp/zig.tar.xz && \
+    zig version && \
+    echo "Zig installed successfully!"
 
 # Set working directory
 WORKDIR /build
@@ -118,28 +121,13 @@ WORKDIR /build
 # Copy all source code (don't use dummy files - causes conflicts)
 COPY . .
 
-# Build geode binaries and tools - try native build first
+# Build geode binaries and tools with library search paths
 RUN echo "Building with Zig $(zig version)..." && \
-    echo "Attempting native build first..." && \
-    if zig build -Doptimize=ReleaseSafe --summary all 2>&1 | tee /tmp/build.log; then \
-        echo "✓ Native build successful!"; \
-    else \
-        echo "Native build failed, trying with explicit target..." && \
-        if [ "$TARGETARCH" = "arm64" ]; then \
-            export ZIG_TARGET="aarch64-linux-gnu"; \
-        else \
-            export ZIG_TARGET="x86_64-linux-gnu"; \
-        fi && \
-        echo "Building with target: $ZIG_TARGET" && \
-        if zig build -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET --summary all 2>&1 | tee /tmp/build.log; then \
-            echo "✓ Target build successful!"; \
-        else \
-            echo "=== BUILD FAILED - Last 100 lines ===" && \
-            tail -100 /tmp/build.log && \
-            exit 1; \
-        fi; \
-    fi && \
-    echo "Main build complete" && \
+    zig build -Doptimize=ReleaseSafe \
+      --search-prefix /opt/msquic \
+      --search-prefix /opt/openssl-fips \
+      --summary all 2>&1 | tee /tmp/build.log && \
+    echo "✓ Build successful!" && \
     (zig build tools -Doptimize=ReleaseSafe --summary all 2>&1 || \
      echo "Note: Some tools may not have built")
 

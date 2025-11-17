@@ -1,6 +1,8 @@
 # Temporary and log files
 *cweb.log
 *.tmp
+*.tar.gz
+*.tar.xz
 
 # Root-level generated directories and files
 /core
