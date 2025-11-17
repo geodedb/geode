@@ -223,7 +223,8 @@ RUN curl https://cursor.com/install -fsSL | bash || \
     echo "Cursor agent CLI installation skipped"
 
 # Install Aider (AI pair programming tool that works with Claude/GPT)
-RUN pip3 install --no-cache-dir --break-system-packages aider-chat
+# Use --ignore-installed to avoid conflicts with system-installed packages
+RUN pip3 install --no-cache-dir --break-system-packages --ignore-installed aider-chat
 
 # Install Rust for client development
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable && \
