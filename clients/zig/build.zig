@@ -14,8 +14,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Link msquic (using the Nix store path that works for geode)
-    test_exe.addLibraryPath(.{ .cwd_relative = "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/lib" });
+    // Link msquic (check environment variable first, fall back to Nix path)
+    const msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/opt/msquic/lib";
+    test_exe.addLibraryPath(.{ .cwd_relative = msquic_lib });
     test_exe.linkSystemLibrary("msquic");
     test_exe.linkLibC();
 
