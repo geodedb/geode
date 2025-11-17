@@ -128,9 +128,19 @@ pub fn build(b: *std.Build) void {
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
     geode_exe.root_module.addImport("storage/backup", storage_backup_mod);
 
-    if (target.result.os.tag == .windows) {
-        geode_exe.linkLibC();
-    }
+    // Link C library (required for msquic and OpenSSL)
+    geode_exe.linkLibC();
+
+    // MSQUIC Migration: Link msquic and OpenSSL libraries
+    // CANARY: REQ=REQ-MSQUIC-006; FEATURE="MSQUIC_Migration"; ASPECT=BuildSystem; STATUS=IMPL; OWNER=transport; UPDATED=2025-11-14
+    geode_exe.linkSystemLibrary("msquic");
+    geode_exe.linkSystemLibrary("ssl");
+    geode_exe.linkSystemLibrary("crypto");
+
+    // Add include path for msquic headers
+    geode_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    geode_exe.addIncludePath(.{ .cwd_relative = "/usr/local/include" });
+
     b.installArtifact(geode_exe);
 
     // Remove legacy wire binary build and install (deprecated)

@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-pub const quic_lib = @import("vendor_quic");
+// MIGRATED TO MSQUIC: Using Microsoft's msquic library with OpenSSL for TLS
+// CANARY: REQ=REQ-MSQUIC-004; FEATURE="MSQUIC_Migration"; ASPECT=Integration; STATUS=IMPL; OWNER=transport; UPDATED=2025-11-14
+pub const quic_lib = @import("quic_msquic.zig");
 const tls = std.crypto.tls;
 
 // CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2025-09-22
