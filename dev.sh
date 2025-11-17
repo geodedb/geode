@@ -61,6 +61,8 @@ Commands:
   down            Stop and remove all containers and volumes
   rebuild         Rebuild the development Docker image
   monitoring      Start with monitoring stack (Prometheus + Grafana)
+  vscode          Open in VSCode Dev Container
+  cursor          Open in Cursor Dev Container
 
 Examples:
   ./dev.sh start              # Start development environment
@@ -69,6 +71,8 @@ Examples:
   ./dev.sh exec make test     # Run tests
   ./dev.sh logs -f geode-dev  # Follow logs
   ./dev.sh monitoring         # Start with monitoring
+  ./dev.sh vscode             # Open in VSCode with AI assistants
+  ./dev.sh cursor             # Open in Cursor with AI assistants
 
 EOF
 }
@@ -194,6 +198,64 @@ cmd_monitoring() {
     echo "  • Grafana:    http://localhost:3000 (admin/geode-dev-password)"
 }
 
+# Open in VSCode Dev Container
+cmd_vscode() {
+    info "Opening Geode in VSCode Dev Container..."
+    check_docker
+
+    if ! command -v code &>/dev/null; then
+        error "VSCode (code command) is not found in PATH."
+        info "Please install VSCode or ensure 'code' is in your PATH."
+        exit 1
+    fi
+
+    # Check if Dev Containers extension is installed
+    if ! code --list-extensions | grep -q "ms-vscode-remote.remote-containers"; then
+        warning "Dev Containers extension not found."
+        info "Installing Dev Containers extension..."
+        code --install-extension ms-vscode-remote.remote-containers
+    fi
+
+    success "Opening in VSCode..."
+    info "VSCode will:"
+    echo "  1. Build/start the Docker container if needed"
+    echo "  2. Install extensions inside the container"
+    echo "  3. Mount all AI assistant configs (Copilot, Claude, etc.)"
+    echo "  4. Open the workspace at /workspace"
+    echo ""
+    info "If this is the first time, it may take a few minutes to build."
+
+    # Use the helper script
+    ./.devcontainer/open-vscode.sh
+}
+
+# Open in Cursor Dev Container
+cmd_cursor() {
+    info "Opening Geode in Cursor Dev Container..."
+    check_docker
+
+    if ! command -v cursor &>/dev/null; then
+        error "Cursor (cursor command) is not found in PATH."
+        info "Please install Cursor from https://cursor.sh/"
+        exit 1
+    fi
+
+    success "Opening in Cursor..."
+    info "Cursor will:"
+    echo "  1. Build/start the Docker container if needed"
+    echo "  2. Install extensions inside the container"
+    echo "  3. Mount all AI assistant configs (Cursor AI, Copilot, Claude, etc.)"
+    echo "  4. Open the workspace at /workspace"
+    echo ""
+    info "After Cursor opens:"
+    echo "  1. Press Cmd/Ctrl+Shift+P"
+    echo "  2. Select 'Dev Containers: Reopen in Container'"
+    echo "  3. Wait for the container to build and start"
+
+    # Use the helper script
+    ./.devcontainer/open-cursor.sh
+}
+
 # Main command router
 case "${1:-}" in
     start)
@@ -236,6 +298,12 @@ case "${1:-}" in
         ;;
     monitoring)
         cmd_monitoring
+        ;;
+    vscode)
+        cmd_vscode
+        ;;
+    cursor)
+        cmd_cursor
         ;;
     help|--help|-h)
         usage

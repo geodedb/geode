@@ -1,0 +1,174 @@
+{
+  "name": "Geode Development Environment",
+  "dockerComposeFile": ["../docker-compose.dev.yml"],
+  "service": "geode-dev",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+
+  // VSCode settings
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.shell.linux": "/bin/bash",
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "files.watcherExclude": {
+          "**/zig-cache/**": true,
+          "**/zig-out/**": true,
+          "**/.zig-cache/**": true
+        },
+        // Zig language settings
+        "zig.path": "/usr/local/bin/zig",
+        "zig.buildOnSave": false,
+        "zig.buildFilePath": "${workspaceFolder}/build.zig",
+        // Rust settings
+        "rust-analyzer.server.path": "/root/.cargo/bin/rust-analyzer",
+        "rust-analyzer.cargo.buildScripts.enable": true,
+        // Go settings
+        "go.gopath": "/home/${localEnv:USER}/go",
+        "go.toolsGopath": "/home/${localEnv:USER}/go",
+        // Python settings
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.linting.enabled": true,
+        "python.linting.flake8Enabled": true,
+        "python.formatting.provider": "black",
+        // Editor settings
+        "editor.formatOnSave": false,
+        "editor.rulers": [100],
+        "files.trimTrailingWhitespace": true,
+        "files.insertFinalNewline": true
+      },
+
+      "extensions": [
+        // Zig support
+        "ziglang.vscode-zig",
+
+        // Rust support
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
+
+        // Go support
+        "golang.go",
+
+        // Python support
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+
+        // Docker support
+        "ms-azuretools.vscode-docker",
+
+        // Git support
+        "eamodio.gitlens",
+
+        // General development
+        "editorconfig.editorconfig",
+        "ms-vscode.makefile-tools",
+
+        // AI assistants (if not already installed on host)
+        "github.copilot",
+        "github.copilot-chat",
+
+        // Database/query tools
+        "mtxr.sqltools",
+
+        // YAML/JSON/TOML
+        "redhat.vscode-yaml",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  },
+
+  // Forward ports for services
+  "forwardPorts": [
+    3141,  // Geode server
+    8200,  // Vault
+    9000,  // MinIO API
+    9001,  // MinIO Console
+    6379,  // Redis
+    9090,  // Prometheus (if enabled)
+    3000   // Grafana (if enabled)
+  ],
+
+  // Port labels
+  "portsAttributes": {
+    "3141": {
+      "label": "Geode Server",
+      "onAutoForward": "notify"
+    },
+    "8200": {
+      "label": "Vault",
+      "onAutoForward": "silent"
+    },
+    "9000": {
+      "label": "MinIO API",
+      "onAutoForward": "silent"
+    },
+    "9001": {
+      "label": "MinIO Console",
+      "onAutoForward": "silent"
+    },
+    "6379": {
+      "label": "Redis",
+      "onAutoForward": "ignore"
+    }
+  },
+
+  // Use 'postCreateCommand' to run commands after container creation
+  "postCreateCommand": "echo '🚀 Geode development environment ready!' && zig version && rustc --version",
+
+  // Use 'postStartCommand' to run commands after container starts
+  "postStartCommand": "bash ~/.welcome.sh",
+
+  // Environment variables
+  "containerEnv": {
+    "ZIG_GLOBAL_CACHE_DIR": "${containerWorkspaceFolder}/zig-cache",
+    "GEODE_DEV_MODE": "docker"
+  },
+
+  // Run as the developer user (not root)
+  "remoteUser": "${localEnv:USER}",
+
+  // Mount additional volumes for AI assistants
+  "mounts": [
+    // VSCode extensions and settings
+    "source=${localEnv:HOME}/.vscode,target=/home/${localEnv:USER}/.vscode,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.vscode-server,target=/home/${localEnv:USER}/.vscode-server,type=bind,consistency=cached",
+
+    // Cursor settings
+    "source=${localEnv:HOME}/.cursor,target=/home/${localEnv:USER}/.cursor,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.cursor-server,target=/home/${localEnv:USER}/.cursor-server,type=bind,consistency=cached",
+
+    // Claude Desktop config (if exists)
+    "source=${localEnv:HOME}/.config/Claude,target=/home/${localEnv:USER}/.config/Claude,type=bind,consistency=cached",
+
+    // GitHub Copilot config
+    "source=${localEnv:HOME}/.config/github-copilot,target=/home/${localEnv:USER}/.config/github-copilot,type=bind,consistency=cached",
+
+    // SSH keys (read-only for git operations)
+    "source=${localEnv:HOME}/.ssh,target=/home/${localEnv:USER}/.ssh,type=bind,readonly,consistency=cached",
+
+    // Git config
+    "source=${localEnv:HOME}/.gitconfig,target=/home/${localEnv:USER}/.gitconfig,type=bind,readonly,consistency=cached"
+  ],
+
+  // Features to add
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": false,
+      "installOhMyZsh": false,
+      "upgradePackages": false
+    },
+    "ghcr.io/devcontainers/features/git:1": {
+      "version": "latest"
+    }
+  },
+
+  // Uncomment to connect as root instead
+  // "remoteUser": "root",
+
+  // Use 'initializeCommand' to run commands on the host before container starts
+  "initializeCommand": "echo 'Initializing Geode development environment...'",
+
+  // Lifecycle scripts
+  "updateContentCommand": "echo 'Updating development environment...'",
+  "postAttachCommand": "echo 'Attached to Geode development container'"
+}

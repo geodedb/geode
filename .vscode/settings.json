@@ -1,0 +1,26 @@
+{
+  "zig.path": "zig",
+  "zig.buildOnSave": false,
+  "zig.buildFilePath": "${workspaceFolder}/build.zig",
+  "rust-analyzer.check.command": "clippy",
+  "python.defaultInterpreterPath": "/usr/bin/python3",
+  "python.linting.enabled": true,
+  "python.linting.flake8Enabled": true,
+  "editor.formatOnSave": false,
+  "editor.rulers": [100],
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.watcherExclude": {
+    "**/zig-cache/**": true,
+    "**/zig-out/**": true,
+    "**/.zig-cache/**": true,
+    "**/target/**": true
+  },
+  "github.copilot.enable": {
+    "*": true,
+    "zig": true,
+    "rust": true,
+    "go": true,
+    "python": true
+  }
+}

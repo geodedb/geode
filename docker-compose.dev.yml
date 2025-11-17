@@ -26,11 +26,27 @@ services:
       - .:/workspace:cached
       # Separate cache directories for better performance
       - zig-cache:/workspace/zig-cache
-      - zig-global-cache:/home/dev/.cache/zig
-      # Mount host SSH keys for git operations
-      - ~/.ssh:/home/dev/.ssh:ro
-      # Mount host git config
-      - ~/.gitconfig:/home/dev/.gitconfig:ro
+      - zig-global-cache:/home/${USERNAME:-dev}/.cache/zig
+
+      # Git configuration (read-only)
+      - ~/.ssh:/home/${USERNAME:-dev}/.ssh:ro
+      - ~/.gitconfig:/home/${USERNAME:-dev}/.gitconfig:ro
+
+      # VSCode and Cursor IDE configurations
+      - ~/.vscode:/home/${USERNAME:-dev}/.vscode:cached
+      - ~/.vscode-server:/home/${USERNAME:-dev}/.vscode-server:cached
+      - ~/.cursor:/home/${USERNAME:-dev}/.cursor:cached
+      - ~/.cursor-server:/home/${USERNAME:-dev}/.cursor-server:cached
+      - ~/.config/Code:/home/${USERNAME:-dev}/.config/Code:cached
+      - ~/.config/Cursor:/home/${USERNAME:-dev}/.config/Cursor:cached
+
+      # AI Assistant configurations
+      - ~/.config/Claude:/home/${USERNAME:-dev}/.config/Claude:cached
+      - ~/.config/github-copilot:/home/${USERNAME:-dev}/.config/github-copilot:cached
+      - ~/.config/opencode:/home/${USERNAME:-dev}/.config/opencode:cached
+      - ~/.config/crush:/home/${USERNAME:-dev}/.config/crush:cached
+      - ~/.anthropic:/home/${USERNAME:-dev}/.anthropic:cached
+
       # Share Docker socket for docker-in-docker operations
       - /var/run/docker.sock:/var/run/docker.sock
     environment:

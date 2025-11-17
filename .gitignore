@@ -115,9 +115,25 @@ ui/node_modules/
 vendor/*
 !vendor/quic/
 
-# Editor directories
-.vscode/
+# Editor directories and IDE configurations
+# Keep workspace settings for VSCode/Cursor but ignore user-specific files
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.cursor/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude settings
 .claude/settings.local.json
+
+# Keep devcontainer configuration
+!.devcontainer/
 
 # Binaries for programs and plugins
 *.exe
