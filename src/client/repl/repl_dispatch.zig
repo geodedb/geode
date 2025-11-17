@@ -409,6 +409,9 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll(reset);
         try stdout.writeAll("\n");
         try stdout.writeAll("\n");
+
+        // CRITICAL FIX: Flush stdout after help message
+        try stdout.sync();
     } else if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "exit")) {
         state.quit_requested = true;
     } else if (std.mem.eql(u8, cmd, "history")) {
@@ -428,8 +431,12 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 try stdout.writeAll(line);
             }
         }
+        // CRITICAL FIX: Flush stdout after history command
+        try stdout.sync();
     } else if (std.mem.eql(u8, cmd, "clear")) {
         try stdout.writeAll("\x1b[2J\x1b[H"); // Clear screen and home cursor
+        // CRITICAL FIX: Flush stdout after clear command
+        try stdout.sync();
     } else if (std.mem.eql(u8, cmd, "connect")) {
         if (args.len > 0) {
             state.session.deinit();
@@ -535,6 +542,10 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
 pub fn executeGql(state: anytype, gql: []const u8) !void {
     const stdout = platform.getStdoutHandle();
 
+    // CRITICAL FIX: Move to new line before displaying results
+    // This prevents overlapping with the prompt
+    try stdout.writeAll("\n");
+
     // Start timing the query execution
     var timer = try std.time.Timer.start();
 
@@ -560,6 +571,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             try stderr.writeAll("Error: ");
             try stderr.writeAll(schema_response);
             try stderr.writeAll("\n");
+            try stderr.sync(); // Flush error output
             return;
         }
 
@@ -589,6 +601,9 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
         const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\n", .{duration_ms});
         try stdout.writeAll(timing_msg);
     }
+
+    // CRITICAL FIX: Flush stdout to ensure all output is displayed
+    try stdout.sync();
 }
 
 fn formatQueryResult(stdout: anytype, allocator: std.mem.Allocator, response: []const u8, format: anytype) !void {
