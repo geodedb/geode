@@ -649,12 +649,16 @@ pub const MsQuic = struct {
         const self = try allocator.create(MsQuic);
         errdefer allocator.destroy(self);
 
-        // Open MsQuic API (version 2)
+        // Open MsQuic API (try version 2, fallback to version 1)
         var api_table: ?*const anyopaque = null;
-        const status = MsQuicOpenVersion(2, &api_table);
+        var status = MsQuicOpenVersion(2, &api_table);
         if (QUIC_FAILED(status) or api_table == null) {
-            std.debug.print("MsQuicOpenVersion failed: status={}\n", .{status});
-            return QuicError.InitFailed;
+            std.debug.print("MsQuicOpenVersion(2) failed: status={}, trying version 1\n", .{status});
+            status = MsQuicOpenVersion(1, &api_table);
+            if (QUIC_FAILED(status) or api_table == null) {
+                std.debug.print("MsQuicOpenVersion(1) failed: status={}\n", .{status});
+                return QuicError.InitFailed;
+            }
         }
 
         // Cast to QUIC_API_TABLE

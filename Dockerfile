@@ -40,7 +40,7 @@ activate = 1
 activate = 1
 EOF
 
-# Stage 2: Build MsQUIC
+# Stage 2: Build MsQUIC (requires privileged mode for initialization)
 FROM debian:bookworm-slim AS msquic-builder
 
 RUN apt-get update && apt-get install -y \
@@ -54,13 +54,13 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Clone and build MsQUIC v2.5.5 (latest stable)
-RUN git clone --depth 1 --branch v2.5.5 https://github.com/microsoft/msquic.git && \
+# Clone and build MsQUIC v2.5.4 with logging disabled
+RUN git clone --depth 1 --branch v2.5.4 https://github.com/microsoft/msquic.git && \
     cd msquic && \
     git submodule update --init --recursive && \
     mkdir build && \
     cd build && \
-    cmake -G 'Unix Makefiles' -DCMAKE_BUILD_TYPE=Release -DQUIC_BUILD_SHARED=ON .. && \
+    cmake -G 'Unix Makefiles' -DCMAKE_BUILD_TYPE=Release -DQUIC_BUILD_SHARED=ON -DQUIC_ENABLE_LOGGING=OFF .. && \
     cmake --build . --config Release -j$(nproc) && \
     cmake --install . --prefix /opt/msquic
 

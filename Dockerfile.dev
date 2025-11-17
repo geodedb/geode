@@ -1,0 +1,298 @@
+# Geode Development Environment
+# Complete Docker-based development environment replicating Nix flake setup
+# Avoids Nix/Docker compatibility issues while maintaining identical tooling
+
+FROM ubuntu:24.04 AS base
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC
+
+# Install base system packages
+RUN apt-get update && apt-get install -y \
+    # Build essentials
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    git \
+    curl \
+    wget \
+    xz-utils \
+    ca-certificates \
+    # Development tools
+    vim \
+    nano \
+    tmux \
+    htop \
+    ripgrep \
+    fd-find \
+    bat \
+    jq \
+    yq \
+    # Network tools
+    tcpdump \
+    netcat-openbsd \
+    dnsutils \
+    iputils-ping \
+    traceroute \
+    # SSL/TLS
+    openssl \
+    libssl-dev \
+    # System libraries
+    liblttng-ust-dev \
+    libnuma-dev \
+    libvulkan-dev \
+    vulkan-tools \
+    glslang-tools \
+    # Vulkan development
+    libvulkan1 \
+    vulkan-validationlayers \
+    spirv-tools \
+    # Python development
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    # PDF tools
+    pdftk \
+    # Go language
+    golang-go \
+    # Node.js and npm (for any JS clients)
+    nodejs \
+    npm \
+    # Rust dependencies
+    libclang-dev \
+    # Utilities
+    file \
+    sudo \
+    locales \
+    && rm -rf /var/lib/apt/lists/*
+
+# Setup locale
+RUN locale-gen en_US.UTF-8
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8
+
+# Stage 2: Build OpenSSL with FIPS support
+FROM base AS openssl-builder
+
+WORKDIR /build
+
+RUN curl -L https://www.openssl.org/source/openssl-3.3.2.tar.gz -o openssl-3.3.2.tar.gz && \
+    tar xzf openssl-3.3.2.tar.gz && \
+    cd openssl-3.3.2 && \
+    ./Configure enable-fips --prefix=/opt/openssl-fips --openssldir=/opt/openssl-fips/ssl && \
+    make -j$(nproc) && \
+    make install && \
+    # Generate FIPS module configuration
+    export LD_LIBRARY_PATH=/opt/openssl-fips/lib64:$LD_LIBRARY_PATH && \
+    /opt/openssl-fips/bin/openssl fipsinstall \
+        -out /opt/openssl-fips/ssl/fipsmodule.cnf \
+        -module /opt/openssl-fips/lib64/ossl-modules/fips.so && \
+    # Add FIPS configuration to openssl.cnf
+    cat >> /opt/openssl-fips/ssl/openssl.cnf <<'EOF'
+
+# FIPS Configuration
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+fips = fips_sect
+
+[fips_sect]
+activate = 1
+EOF
+
+# Stage 3: Build MsQUIC
+FROM base AS msquic-builder
+
+RUN apt-get update && apt-get install -y \
+    git \
+    cmake \
+    build-essential \
+    libssl-dev \
+    liblttng-ust-dev \
+    libnuma-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Build MsQUIC v2.5.4 with logging disabled for Docker compatibility
+RUN git clone --depth 1 --branch v2.5.4 https://github.com/microsoft/msquic.git && \
+    cd msquic && \
+    git submodule update --init --recursive && \
+    mkdir build && \
+    cd build && \
+    cmake -G 'Unix Makefiles' \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DQUIC_BUILD_SHARED=ON \
+        -DQUIC_ENABLE_LOGGING=OFF \
+        .. && \
+    cmake --build . --config Release -j$(nproc) && \
+    cmake --install . --prefix /opt/msquic
+
+# Stage 4: Development environment
+FROM base AS development
+
+# Create developer user
+ARG USER_UID=1000
+ARG USER_GID=1000
+ARG USERNAME=dev
+
+# Create group and user, handling existing UIDs/GIDs
+RUN set -ex && \
+    # Create group if it doesn't exist
+    if ! getent group $USER_GID >/dev/null 2>&1; then \
+        groupadd --gid $USER_GID $USERNAME; \
+    fi && \
+    # Create user if it doesn't exist
+    if ! getent passwd $USER_UID >/dev/null 2>&1; then \
+        useradd --uid $USER_UID --gid $USER_GID -m -s /bin/bash $USERNAME; \
+    elif ! id $USERNAME >/dev/null 2>&1; then \
+        # User with that UID exists but different name, use different UID
+        useradd --gid $USER_GID -m -s /bin/bash $USERNAME; \
+    fi && \
+    # Setup sudo access
+    echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME && \
+    chmod 0440 /etc/sudoers.d/$USERNAME
+
+# Copy OpenSSL FIPS and MsQUIC from builders
+COPY --from=openssl-builder /opt/openssl-fips /opt/openssl-fips
+COPY --from=msquic-builder /opt/msquic /opt/msquic
+
+# Install Zig 0.15.1
+ARG ZIG_VERSION=0.15.1
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then \
+        ZIG_ARCH="aarch64"; \
+    else \
+        ZIG_ARCH="x86_64"; \
+    fi && \
+    echo "Installing Zig ${ZIG_VERSION} for ${ZIG_ARCH}-linux..." && \
+    curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz -o /tmp/zig.tar.xz && \
+    tar -xf /tmp/zig.tar.xz -C /opt && \
+    ln -s /opt/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
+    rm /tmp/zig.tar.xz && \
+    zig version && \
+    echo "Zig installed successfully!"
+
+# Install Python packages for geodetestlab
+RUN pip3 install --no-cache-dir --break-system-packages \
+    typer \
+    pydantic \
+    rich \
+    jmespath \
+    psutil \
+    keyring \
+    pyyaml \
+    pytest \
+    mypy \
+    black \
+    isort \
+    flake8 \
+    aioquic \
+    cryptography \
+    pyopenssl \
+    service-identity \
+    python-lsp-server \
+    setuptools \
+    wheel
+
+# Install Rust for client development
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable && \
+    . $HOME/.cargo/env && \
+    rustup component add clippy rustfmt && \
+    cargo install cargo-nextest cargo-audit && \
+    # Make Rust accessible to all users
+    chmod -R a+rX /root/.cargo /root/.rustup && \
+    chmod a+x /root
+
+# Add Rust to PATH for all users
+ENV PATH="/root/.cargo/bin:$PATH" \
+    RUSTUP_HOME="/root/.rustup" \
+    CARGO_HOME="/root/.cargo"
+
+# Install NVIDIA CUDA Toolkit (for GPU acceleration)
+# NOTE: CUDA packages not yet available for Ubuntu 24.04
+# Uncomment when NVIDIA publishes cuda-toolkit-12-4 for Ubuntu 24.04
+# or use: apt-get install -y cuda (installs latest available version)
+#
+# RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+#     dpkg -i cuda-keyring_1.1-1_all.deb && \
+#     apt-get update && \
+#     apt-get install -y \
+#         cuda-toolkit-12-4 \
+#         libnccl2 \
+#         libnccl-dev \
+#         libcudnn8 \
+#         libcudnn8-dev \
+#     && rm -rf /var/lib/apt/lists/* cuda-keyring_1.1-1_all.deb
+
+# Setup environment variables
+ENV PATH="/root/.cargo/bin:/opt/openssl-fips/bin:/usr/local/cuda/bin:$PATH" \
+    LD_LIBRARY_PATH="/opt/openssl-fips/lib64:/opt/msquic/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH" \
+    PKG_CONFIG_PATH="/opt/openssl-fips/lib64/pkgconfig:/opt/msquic/lib/pkgconfig:$PKG_CONFIG_PATH" \
+    OPENSSL_CONF=/opt/openssl-fips/ssl/openssl.cnf \
+    OPENSSL_DIR=/opt/openssl-fips \
+    OPENSSL_LIB_DIR=/opt/openssl-fips/lib64 \
+    OPENSSL_INCLUDE_DIR=/opt/openssl-fips/include \
+    FIPS_MODE=enabled \
+    CUDA_HOME=/usr/local/cuda \
+    CUDA_PATH=/usr/local/cuda \
+    VULKAN_SDK=/usr
+
+# Switch to developer user
+USER $USERNAME
+WORKDIR /workspace
+
+# Create workspace directories and Zig cache as developer user
+RUN mkdir -p /workspace/zig-cache /workspace/.zig-cache $HOME/.cache/zig && \
+    chmod 755 $HOME/.cache
+
+# Note: Rust is already installed system-wide (as root) and available via PATH
+# No need for per-user installation
+
+# Setup shell environment with dynamic Zig cache path
+RUN echo 'export PS1="\[\e[1;32m\]🐳 geode-dev\[\e[0m\] \[\e[1;34m\]\w\[\e[0m\] $ "' >> ~/.bashrc && \
+    echo 'export ZIG_GLOBAL_CACHE_DIR=$HOME/.cache/zig' >> ~/.bashrc && \
+    echo 'alias ll="ls -lah"' >> ~/.bashrc && \
+    echo 'alias zb="zig build"' >> ~/.bashrc && \
+    echo 'alias zbr="zig build -Doptimize=ReleaseSafe"' >> ~/.bashrc && \
+    echo 'alias zbt="zig build test"' >> ~/.bashrc && \
+    echo 'alias zbc="zig build check"' >> ~/.bashrc && \
+    echo 'export HISTSIZE=10000' >> ~/.bashrc && \
+    echo 'export HISTFILESIZE=20000' >> ~/.bashrc
+
+# Display welcome message
+RUN echo '#!/bin/bash' > ~/.welcome.sh && \
+    echo 'echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"' >> ~/.welcome.sh && \
+    echo 'echo "🚀 Geode Development Environment"' >> ~/.welcome.sh && \
+    echo 'echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"' >> ~/.welcome.sh && \
+    echo 'echo ""' >> ~/.welcome.sh && \
+    echo 'echo "📦 Development Tools:"' >> ~/.welcome.sh && \
+    echo 'echo "  • Zig $(zig version)"' >> ~/.welcome.sh && \
+    echo 'echo "  • Rust $(rustc --version 2>/dev/null | cut -d\" \" -f2 || echo \"not in PATH\")"' >> ~/.welcome.sh && \
+    echo 'echo "  • Go $(go version 2>/dev/null | cut -d\" \" -f3 || echo \"not found\")"' >> ~/.welcome.sh && \
+    echo 'echo "  • Python $(python3 --version 2>&1 | cut -d\" \" -f2)"' >> ~/.welcome.sh && \
+    echo 'echo "  • Node.js $(node --version 2>/dev/null || echo \"not found\")"' >> ~/.welcome.sh && \
+    echo 'echo "  • OpenSSL $(/opt/openssl-fips/bin/openssl version)"' >> ~/.welcome.sh && \
+    echo 'echo "  • MsQUIC v2.5.4 (FIPS compatible)"' >> ~/.welcome.sh && \
+    echo 'echo "  • CUDA $(nvcc --version 2>/dev/null | grep release | cut -d\" \" -f5-6 || echo \"not found\")"' >> ~/.welcome.sh && \
+    echo 'echo "  • Vulkan SDK enabled"' >> ~/.welcome.sh && \
+    echo 'echo ""' >> ~/.welcome.sh && \
+    echo 'echo "🔨 Quick Commands:"' >> ~/.welcome.sh && \
+    echo 'echo "  • zb        - zig build"' >> ~/.welcome.sh && \
+    echo 'echo "  • zbr       - zig build -Doptimize=ReleaseSafe"' >> ~/.welcome.sh && \
+    echo 'echo "  • zbt       - zig build test"' >> ~/.welcome.sh && \
+    echo 'echo "  • make test - Run geodetestlab tests"' >> ~/.welcome.sh && \
+    echo 'echo ""' >> ~/.welcome.sh && \
+    echo 'echo "📂 Workspace: /workspace (mounted to host)"' >> ~/.welcome.sh && \
+    echo 'echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"' >> ~/.welcome.sh && \
+    echo 'echo ""' >> ~/.welcome.sh && \
+    chmod +x ~/.welcome.sh && \
+    echo 'bash ~/.welcome.sh' >> ~/.bashrc
+
+# Default command
+CMD ["/bin/bash"]

@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+
+################################################################################
+# Docker-based direnv configuration for Geode development
+# Alternative to Nix-based .envrc for Docker development workflow
+################################################################################
+set -euo pipefail
+
+###############################################################################
+# Helper functions
+###############################################################################
+warn()  { printf '\e[33m%s\e[0m\n' "$*" >&2; }
+info()  { printf '\e[34m%s\e[0m\n' "$*" >&2; }
+success() { printf '\e[32m%s\e[0m\n' "$*" >&2; }
+fail()  { printf '\e[31m%s\e[0m\n' "$*" >&2; exit 1; }
+need()  { command -v "$1" &>/dev/null || return 1; }
+
+###############################################################################
+# Check Docker prerequisites
+###############################################################################
+if ! need docker; then
+  fail "Docker is not installed. Please install Docker to use the development environment."
+fi
+
+if ! need docker-compose && ! docker compose version &>/dev/null; then
+  fail "Docker Compose is not installed. Please install Docker Compose."
+fi
+
+# Check if Docker is running
+if ! docker info &>/dev/null; then
+  fail "Docker daemon is not running. Please start Docker."
+fi
+
+###############################################################################
+# Load environment from .env file if it exists
+###############################################################################
+if [ -f .env ]; then
+  info "Loading environment from .env file..."
+  # Export all variables from .env
+  set -a
+  # shellcheck source=.env
+  source .env
+  set +a
+else
+  warn "No .env file found. Using defaults from .env.docker-dev.example"
+  warn "Copy .env.docker-dev.example to .env and customize as needed:"
+  warn "  cp .env.docker-dev.example .env"
+fi
+
+###############################################################################
+# Set Docker development environment variables
+###############################################################################
+export GEODE_DEV_MODE="docker"
+export COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.dev.yml}"
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-geode-dev}"
+
+# Development settings
+export GEODE_ENV="${GEODE_ENV:-development}"
+export LOG_LEVEL="${LOG_LEVEL:-debug}"
+export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
+
+# User configuration (match host user to avoid permission issues)
+export USER_UID="${USER_UID:-$(id -u)}"
+export USER_GID="${USER_GID:-$(id -g)}"
+export USERNAME="${USERNAME:-$(whoami)}"
+
+# Service URLs (for development from host)
+export VAULT_ADDR="${VAULT_ADDR:-http://localhost:8200}"
+export VAULT_TOKEN="${VAULT_TOKEN:-geode-dev-token}"
+export REDIS_URL="${REDIS_URL:-redis://:geode-dev-password@localhost:6379}"
+export S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:9000}"
+export S3_ACCESS_KEY="${S3_ACCESS_KEY:-geode-dev-admin}"
+export S3_SECRET_KEY="${S3_SECRET_KEY:-geode-dev-secret-123}"
+export S3_BUCKET="${S3_BUCKET:-geode-dev-backups}"
+
+# FIPS mode
+export FIPS_MODE="${FIPS_MODE:-enabled}"
+
+# Build configuration
+export ZIG_VERSION="${ZIG_VERSION:-0.15.1}"
+export TARGETARCH="${TARGETARCH:-amd64}"
+
+###############################################################################
+# GitHub Token (if available)
+###############################################################################
+if [ -z "${GITHUB_TOKEN-}" ]; then
+  if need gh; then
+    GITHUB_TOKEN="$(gh auth token 2>/dev/null || true)"
+    if [ -n "$GITHUB_TOKEN" ]; then
+      export GITHUB_TOKEN
+      info "GitHub token loaded from GitHub CLI"
+    fi
+  fi
+fi
+
+###############################################################################
+# Add helper aliases
+###############################################################################
+# Function to execute commands in dev container
+dev-exec() {
+  docker exec -it geode-dev "$@"
+}
+export -f dev-exec
+
+# Function to build Geode in container
+dev-build() {
+  dev-exec zig build -Doptimize=ReleaseSafe "$@"
+}
+export -f dev-build
+
+# Function to run tests in container
+dev-test() {
+  dev-exec make test "$@"
+}
+export -f dev-test
+
+# Function to start Geode server in container
+dev-server() {
+  dev-exec ./zig-out/bin/geode serve "$@"
+}
+export -f dev-server
+
+###############################################################################
+# Display environment info
+###############################################################################
+success "🐳 Docker development environment configured!"
+info "Environment: $GEODE_ENV"
+info "User: $USERNAME (UID: $USER_UID, GID: $USER_GID)"
+info ""
+info "Quick commands:"
+info "  ./dev.sh start   - Start development environment"
+info "  ./dev.sh shell   - Open development shell"
+info "  ./dev.sh build   - Build Geode"
+info "  ./dev.sh test    - Run tests"
+info ""
+info "Helper functions available:"
+info "  dev-exec <cmd>   - Execute command in dev container"
+info "  dev-build        - Build Geode in container"
+info "  dev-test         - Run tests in container"
+info "  dev-server       - Start Geode server in container"
+info ""
+info "Services:"
+info "  Vault:  $VAULT_ADDR"
+info "  MinIO:  http://localhost:9001"
+info "  Redis:  localhost:6379"
+
+# End of .envrc.docker

@@ -79,6 +79,16 @@ help:
 	@echo "  make docker-down        - Stop all containers"
 	@echo "  make docker-test        - Run Docker tests"
 	@echo ""
+	@echo "Docker Development Environment:"
+	@echo "  make dev-start          - Start development environment"
+	@echo "  make dev-stop           - Stop development environment"
+	@echo "  make dev-shell          - Open development shell"
+	@echo "  make dev-build-geode    - Build Geode in container"
+	@echo "  make dev-test           - Run tests in container"
+	@echo "  make dev-logs           - View development logs"
+	@echo "  make dev-clean          - Clean development environment"
+	@echo "  make dev-monitoring     - Start with monitoring stack"
+	@echo ""
 	@echo "Utility targets:"
 	@echo "  make cert-gen    - Generate TLS certificates"
 	@echo "  make status-generate    - Generate docs/status.csv"
@@ -1008,6 +1018,73 @@ docker-quick-test:
 		(docker-compose -f docker-compose.test.yml down && exit 1)
 	@echo "Quick test passed!"
 	@docker-compose -f docker-compose.test.yml down
+
+# --- Docker Development Environment Targets ---
+.PHONY: dev-build dev-start dev-stop dev-restart dev-shell dev-status dev-logs dev-clean dev-rebuild dev-monitoring
+
+# Build Docker development environment
+dev-build:
+	@echo "Building Docker development environment..."
+	@./dev.sh rebuild
+
+# Start development environment
+dev-start:
+	@echo "Starting Docker development environment..."
+	@./dev.sh start
+
+# Stop development environment
+dev-stop:
+	@echo "Stopping Docker development environment..."
+	@./dev.sh stop
+
+# Restart development environment
+dev-restart:
+	@echo "Restarting Docker development environment..."
+	@./dev.sh restart
+
+# Open shell in development container
+dev-shell:
+	@echo "Opening development shell..."
+	@./dev.sh shell
+
+# Show development environment status
+dev-status:
+	@echo "Development environment status:"
+	@./dev.sh status
+
+# View development environment logs
+dev-logs:
+	@./dev.sh logs -f
+
+# Clean development environment
+dev-clean:
+	@echo "Cleaning Docker development environment..."
+	@./dev.sh down
+
+# Rebuild development environment from scratch
+dev-rebuild:
+	@echo "Rebuilding Docker development environment..."
+	@./dev.sh rebuild
+
+# Start with monitoring stack
+dev-monitoring:
+	@echo "Starting Docker development environment with monitoring..."
+	@./dev.sh monitoring
+
+# Build Geode inside dev container
+dev-build-geode:
+	@echo "Building Geode in development container..."
+	@docker exec -it geode-dev zig build -Doptimize=ReleaseSafe
+
+# Run tests inside dev container
+dev-test:
+	@echo "Running tests in development container..."
+	@docker exec -it geode-dev make test
+
+# Run client tests inside dev container
+dev-test-clients:
+	@echo "Running client tests in development container..."
+	@docker exec -it geode-dev make client-test-all
 
 # Client cross-compilation targets
 .PHONY: cross-clients cross-zig-clients cross-go-clients test-cross-clients

@@ -1,0 +1,211 @@
+# Geode Development Environment - Docker Compose
+# Complete development stack with all services and tools
+# Use: docker-compose -f docker-compose.dev.yml up -d
+
+version: '3.8'
+
+services:
+  # Main development container
+  geode-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        USER_UID: ${USER_UID:-1000}
+        USER_GID: ${USER_GID:-1000}
+        USERNAME: ${USERNAME:-dev}
+        ZIG_VERSION: "0.15.1"
+    image: geode-dev:latest
+    container_name: geode-dev
+    hostname: geode-dev
+    privileged: true  # Required for MsQUIC and some debugging tools
+    stdin_open: true
+    tty: true
+    volumes:
+      # Mount entire project directory
+      - .:/workspace:cached
+      # Separate cache directories for better performance
+      - zig-cache:/workspace/zig-cache
+      - zig-global-cache:/home/dev/.cache/zig
+      # Mount host SSH keys for git operations
+      - ~/.ssh:/home/dev/.ssh:ro
+      # Mount host git config
+      - ~/.gitconfig:/home/dev/.gitconfig:ro
+      # Share Docker socket for docker-in-docker operations
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Development environment
+      - GEODE_ENV=development
+      - LOG_LEVEL=debug
+      - RUST_BACKTRACE=1
+      # Service connections
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=geode-dev-token
+      - REDIS_URL=redis://:geode-dev-password@redis:6379
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=geode-dev-admin
+      - S3_SECRET_KEY=geode-dev-secret-123
+      - S3_BUCKET=geode-dev-backups
+      # FIPS mode
+      - FIPS_MODE=enabled
+      - OPENSSL_CONF=/opt/openssl-fips/ssl/openssl.cnf
+      # Build optimization
+      - ZIG_LOCAL_CACHE_DIR=/workspace/zig-cache
+      - ZIG_GLOBAL_CACHE_DIR=/home/dev/.cache/zig
+    networks:
+      - geode-dev-network
+    ports:
+      # Geode server ports
+      - "3141:3141/udp"   # QUIC
+      - "8443:8443/udp"   # QUIC TLS
+      - "9091:9091/tcp"   # Metrics
+      # Debug ports
+      - "9999:9999/tcp"   # Debug port
+      - "4000:4000/tcp"   # LSP server
+    depends_on:
+      vault:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: /bin/bash
+
+  # HashiCorp Vault - Development Mode
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: geode-dev-vault
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_ADDR: 'http://0.0.0.0:8200'
+      VAULT_DEV_ROOT_TOKEN_ID: 'geode-dev-token'
+      VAULT_DEV_LISTEN_ADDRESS: '0.0.0.0:8200'
+    cap_add:
+      - IPC_LOCK
+    command: server -dev
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - geode-dev-network
+
+  # MinIO - S3-Compatible Storage
+  minio:
+    image: minio/minio:latest
+    container_name: geode-dev-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    environment:
+      MINIO_ROOT_USER: geode-dev-admin
+      MINIO_ROOT_PASSWORD: geode-dev-secret-123
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    volumes:
+      - minio-dev-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - geode-dev-network
+
+  # Redis - Caching Layer
+  redis:
+    image: redis:7-alpine
+    container_name: geode-dev-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass geode-dev-password
+    volumes:
+      - redis-dev-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - geode-dev-network
+
+  # Prometheus - Metrics Collection (Optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: geode-dev-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus:/etc/prometheus:ro
+      - prometheus-dev-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--tries=1", "-O-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - geode-dev-network
+    profiles:
+      - monitoring
+
+  # Grafana - Visualization (Optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: geode-dev-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=geode-dev-password
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-dev-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--tries=1", "-O-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - geode-dev-network
+    profiles:
+      - monitoring
+    depends_on:
+      - prometheus
+
+volumes:
+  # Persistent data volumes
+  minio-dev-data:
+    driver: local
+  redis-dev-data:
+    driver: local
+  prometheus-dev-data:
+    driver: local
+  grafana-dev-data:
+    driver: local
+  # Build cache volumes (for performance)
+  zig-cache:
+    driver: local
+  zig-global-cache:
+    driver: local
+
+networks:
+  geode-dev-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
