@@ -8,13 +8,19 @@ The Geode Docker development environment now supports:
 
 - **VSCode Dev Containers** - Full IDE integration with all tools pre-installed
 - **Cursor IDE** - VSCode fork with native AI capabilities
-- **AI Assistants** - Automatic mounting and configuration of:
-  - GitHub Copilot
-  - Claude Desktop
+- **AI Assistant IDEs** - Automatic mounting and configuration of:
+  - GitHub Copilot (IDE + CLI)
+  - Claude Desktop (IDE + CLI)
   - Cursor AI
   - Crush
   - OpenCode
-  - Any other AI tools you have configured
+- **AI CLI Tools** - Command-line AI assistants:
+  - `copilot` - GitHub Copilot CLI (standalone tool)
+  - `claude` - Claude Code CLI (Anthropic's official CLI)
+  - `cursor-agent` - Cursor agent CLI
+  - `aider` - AI pair programming tool
+
+> **📖 For detailed AI CLI usage, see [AI_CLI_TOOLS.md](AI_CLI_TOOLS.md)**
 
 ## 📦 What's Included
 
@@ -35,6 +41,11 @@ When you open the project in a dev container, the following host directories are
 | OpenCode | `~/.config/opencode` | `/home/$USER/.config/opencode` | OpenCode settings |
 | Crush | `~/.config/crush` | `/home/$USER/.config/crush` | Crush settings |
 | Anthropic API | `~/.anthropic` | `/home/$USER/.anthropic` | Anthropic API keys |
+| **AI CLI Configs** | | | |
+| GitHub CLI | `~/.config/gh` | `/home/$USER/.config/gh` | GitHub Copilot CLI auth |
+| Aider Config | `~/.config/aider` | `/home/$USER/.config/aider` | Aider settings |
+| Aider Sessions | `~/.aider` | `/home/$USER/.aider` | Aider chat history |
+| **Git** | | | |
 | SSH Keys | `~/.ssh` | `/home/$USER/.ssh` | Git authentication (read-only) |
 | Git Config | `~/.gitconfig` | `/home/$USER/.gitconfig` | Git user config (read-only) |
 

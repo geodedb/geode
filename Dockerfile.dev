@@ -58,16 +58,26 @@ RUN apt-get update && apt-get install -y \
     pdftk \
     # Go language
     golang-go \
-    # Node.js and npm (for any JS clients)
+    # Node.js and npm (for any JS clients and CLI tools)
     nodejs \
     npm \
     # Rust dependencies
     libclang-dev \
+    # GitHub CLI for Copilot CLI extension
+    software-properties-common \
     # Utilities
     file \
     sudo \
     locales \
     && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y gh && \
+    rm -rf /var/lib/apt/lists/*
 
 # Setup locale
 RUN locale-gen en_US.UTF-8
@@ -200,6 +210,21 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     setuptools \
     wheel
 
+# Install AI Assistant CLIs (as root for system-wide availability)
+# Install GitHub Copilot CLI (standalone npm package)
+RUN npm install -g @github/copilot
+
+# Install Claude Code CLI (official Anthropic CLI)
+RUN npm install -g @anthropic-ai/claude-code || \
+    echo "Claude Code CLI installation skipped, will retry on container start"
+
+# Install Cursor agent CLI
+RUN curl https://cursor.com/install -fsSL | bash || \
+    echo "Cursor agent CLI installation skipped"
+
+# Install Aider (AI pair programming tool that works with Claude/GPT)
+RUN pip3 install --no-cache-dir --break-system-packages aider-chat
+
 # Install Rust for client development
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable && \
     . $HOME/.cargo/env && \
@@ -297,8 +322,15 @@ echo "  • zbt       - zig build test"
 echo "  • make test - Run geodetestlab tests"
 echo ""
 echo "🤖 AI Assistants:"
-echo "  • GitHub Copilot, Cursor AI, Claude - available via IDE"
-echo "  • All configs mounted from host system"
+echo "  • IDE: GitHub Copilot, Cursor AI, Claude - available via VSCode/Cursor"
+echo "  • CLI: copilot, claude, cursor-agent, aider"
+echo "  • All configs and sessions mounted from host system"
+echo ""
+echo "💬 AI CLI Quick Start:"
+echo "  • copilot                         - GitHub Copilot interactive session"
+echo "  • claude                          - Claude Code CLI (Anthropic)"
+echo "  • cursor-agent                    - Cursor agent CLI"
+echo "  • aider                           - AI pair programming session"
 echo ""
 echo "📂 Workspace: /workspace (mounted to host)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

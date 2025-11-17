@@ -40,12 +40,17 @@ services:
       - ~/.config/Code:/home/${USERNAME:-dev}/.config/Code:cached
       - ~/.config/Cursor:/home/${USERNAME:-dev}/.config/Cursor:cached
 
-      # AI Assistant configurations
+      # AI Assistant IDE configurations
       - ~/.config/Claude:/home/${USERNAME:-dev}/.config/Claude:cached
       - ~/.config/github-copilot:/home/${USERNAME:-dev}/.config/github-copilot:cached
       - ~/.config/opencode:/home/${USERNAME:-dev}/.config/opencode:cached
       - ~/.config/crush:/home/${USERNAME:-dev}/.config/crush:cached
+
+      # AI Assistant CLI configurations and sessions
       - ~/.anthropic:/home/${USERNAME:-dev}/.anthropic:cached
+      - ~/.config/gh:/home/${USERNAME:-dev}/.config/gh:cached
+      - ~/.aider:/home/${USERNAME:-dev}/.aider:cached
+      - ~/.config/aider:/home/${USERNAME:-dev}/.config/aider:cached
 
       # Share Docker socket for docker-in-docker operations
       - /var/run/docker.sock:/var/run/docker.sock

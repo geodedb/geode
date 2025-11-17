@@ -137,11 +137,15 @@
     "source=${localEnv:HOME}/.cursor,target=/home/${localEnv:USER}/.cursor,type=bind,consistency=cached",
     "source=${localEnv:HOME}/.cursor-server,target=/home/${localEnv:USER}/.cursor-server,type=bind,consistency=cached",
 
-    // Claude Desktop config (if exists)
+    // AI Assistant IDE configs
     "source=${localEnv:HOME}/.config/Claude,target=/home/${localEnv:USER}/.config/Claude,type=bind,consistency=cached",
-
-    // GitHub Copilot config
     "source=${localEnv:HOME}/.config/github-copilot,target=/home/${localEnv:USER}/.config/github-copilot,type=bind,consistency=cached",
+
+    // AI Assistant CLI configs and sessions
+    "source=${localEnv:HOME}/.anthropic,target=/home/${localEnv:USER}/.anthropic,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.config/gh,target=/home/${localEnv:USER}/.config/gh,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.aider,target=/home/${localEnv:USER}/.aider,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.config/aider,target=/home/${localEnv:USER}/.config/aider,type=bind,consistency=cached",
 
     // SSH keys (read-only for git operations)
     "source=${localEnv:HOME}/.ssh,target=/home/${localEnv:USER}/.ssh,type=bind,readonly,consistency=cached",
