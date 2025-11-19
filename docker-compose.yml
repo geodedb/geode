@@ -216,14 +216,15 @@ services:
       - "--key"
       - "/certs/server.key"
     privileged: true
+    network_mode: host
+    # Use host networking for MsQUIC compatibility
+    # Note: ports section is ignored when using host networking
     healthcheck:
       test: ["CMD", "geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:8443"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    networks:
-      - geode-network
     depends_on:
       vault:
         condition: service_healthy

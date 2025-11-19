@@ -150,6 +150,11 @@ COPY --from=builder /opt/openssl-fips /opt/openssl-fips
 # Copy MsQUIC from builder
 COPY --from=builder /opt/msquic /opt/msquic
 
+# Register MsQUIC and OpenSSL libraries with ldconfig
+RUN echo "/opt/msquic/lib" > /etc/ld.so.conf.d/msquic.conf && \
+    echo "/opt/openssl-fips/lib64" > /etc/ld.so.conf.d/openssl-fips.conf && \
+    ldconfig
+
 # Set environment variables for runtime
 ENV OPENSSL_ROOT_DIR=/opt/openssl-fips \
     OPENSSL_CONF=/opt/openssl-fips/ssl/openssl.cnf \

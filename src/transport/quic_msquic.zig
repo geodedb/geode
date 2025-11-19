@@ -106,13 +106,16 @@ pub const QuicTransport = struct {
             else => return err,
         };
 
+        // Use default provider for certificate generation to avoid FIPS restrictions
+        // Self-signed certificates don't need FIPS compliance - only runtime TLS operations do
         const result = try std.process.Child.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
-                "openssl", "req", "-x509", "-newkey", "rsa:4096",
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
                 "-keyout", self.key_path, "-out", self.cert_path, "-days",
                 "365", "-nodes", "-subj", "/C=US/ST=State/L=City/O=Geode/CN=localhost",
                 "-addext", "subjectAltName=DNS:localhost,DNS:geode.local,IP:127.0.0.1",
+                "-provider", "default", "-provider-path", "/opt/openssl-fips/lib64/ossl-modules",
             },
         });
         defer self.allocator.free(result.stdout);
