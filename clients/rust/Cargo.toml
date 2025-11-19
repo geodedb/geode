@@ -13,10 +13,10 @@ categories = ["database"]
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
 
-# QUIC support - using quiche (Cloudflare QUIC with BoringSSL)
-quiche = { path = "../../vendor/quic/forks/quiche/quiche" }
-ring = "0.17"
-mio = { version = "1.0", features = ["os-poll", "net"] }
+# QUIC support - using quinn (Pure Rust QUIC with rustls)
+quinn = "0.11"
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+rustls-pemfile = "2.0"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -56,6 +56,10 @@ path = "examples/advanced.rs"
 [[example]]
 name = "transactions"
 path = "examples/transactions.rs"
+
+[[example]]
+name = "test_quinn"
+path = "examples/test_quinn.rs"
 
 [lib]
 name = "geode_client"

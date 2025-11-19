@@ -51,10 +51,8 @@ impl ConnectionPool {
             Some(c) => c,
             None => {
                 let client = self.client.clone();
-                // Quiche is synchronous, use spawn_blocking
-                tokio::task::spawn_blocking(move || client.connect())
-                    .await
-                    .map_err(|e| Error::pool(format!("Task join error: {}", e)))??
+                // Quinn is async, directly await
+                client.connect().await?
             }
         };
 
