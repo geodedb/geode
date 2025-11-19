@@ -205,7 +205,7 @@ services:
     volumes:
       - geode-data:/data
       - geode-logs:/var/log/geode
-      - ./certs:/certs:ro
+      - ./certs:/certs
     command:
       - "--data-dir"
       - "/data"
@@ -239,7 +239,7 @@ services:
     entrypoint: ["/bin/sh"]
     command: ["-c", "sleep infinity"]
     volumes:
-      - ./certs:/certs:ro
+      - ./certs:/certs
     networks:
       - geode-network
     profiles:

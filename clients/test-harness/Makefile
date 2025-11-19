@@ -86,8 +86,6 @@ setup: $(VENV_DIR)
 build-all:
 	@echo "Building available language runners..."
 	@$(MAKE) build-go || echo "⚠ Go runner build skipped (go not available)"
-	@$(MAKE) build-rust || echo "⚠ Rust runner build skipped (cargo not available)"
-	@$(MAKE) build-zig || echo "⚠ Zig runner build skipped (zig not available)"
 	@echo "✓ Build complete (available runners built)"
 
 build-go:

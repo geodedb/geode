@@ -35,7 +35,7 @@ services:
     volumes:
       - geode-gpu-data:/data
       - geode-gpu-logs:/var/log/geode
-      - ./certs:/certs:ro
+      - ./certs:/certs
     command:
       - "serve"
       - "--data-dir"

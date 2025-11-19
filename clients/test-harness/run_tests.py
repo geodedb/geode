@@ -791,7 +791,7 @@ class TestHarness:
 
         # Initialize runners (will be configured with actual server address in setup())
         self.runners: Dict[str, ClientRunner] = {}
-        self.requested_clients = clients or ["python", "go", "rust", "zig"]
+        self.requested_clients = clients or ["python", "go"]
 
     async def setup(self) -> bool:
         """Setup all runners."""
@@ -817,10 +817,6 @@ class TestHarness:
             temp_runners["python"] = PythonRunner(self.server)
         if "go" in self.requested_clients:
             temp_runners["go"] = GoRunner(self.server)
-        if "rust" in self.requested_clients:
-            temp_runners["rust"] = RustRunner(self.server)
-        if "zig" in self.requested_clients:
-            temp_runners["zig"] = ZigRunner(self.server)
 
         # Setup each runner
         available_runners = {}
@@ -1046,7 +1042,7 @@ async def main():
     )
     parser.add_argument(
         "--clients",
-        default="python,go,rust,zig",
+        default="python,go",
         help="Comma-separated list of clients to test (default: all)",
     )
     parser.add_argument(

@@ -130,15 +130,15 @@ impl Connection {
         // Install default crypto provider for rustls
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-        // Build Quinn client config
+        // Build Quinn client config with TLS 1.3 explicitly (QUIC requires TLS 1.3)
         let mut client_crypto = if skip_verify {
             eprintln!("[QUINN] Skipping certificate verification (insecure)");
-            rustls::ClientConfig::builder()
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
                 .with_no_client_auth()
         } else {
-            rustls::ClientConfig::builder()
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_root_certificates(rustls::RootCertStore::empty())
                 .with_no_client_auth()
         };
@@ -169,9 +169,19 @@ impl Connection {
 
         eprintln!("[QUINN] Connecting to {}", server_addr);
 
+        // When skipping verification, don't use actual hostname for SNI
+        // This matches Python client behavior which avoids server_name when skip_verify=True
+        let server_name = if skip_verify {
+            "localhost"  // Use generic name when skipping verification
+        } else {
+            host
+        };
+
+        eprintln!("[QUINN] Using server name: {}", server_name);
+
         let conn = timeout(
             Duration::from_secs(10),
-            endpoint.connect(server_addr, host)
+            endpoint.connect(server_addr, server_name)
                 .map_err(|e| Error::connection(&format!("Connection failed: {}", e)))?
         )
         .await

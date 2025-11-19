@@ -15,7 +15,7 @@ services:
     volumes:
       - geode-leader-data:/data
       - geode-certs:/certs
-      - ./certs:/certs:ro
+      - ./certs:/certs
     environment:
       - NODE_ID=node-1
       - NODE_ROLE=leader
@@ -65,7 +65,7 @@ services:
     volumes:
       - geode-follower-1-data:/data
       - geode-certs:/certs
-      - ./certs:/certs:ro
+      - ./certs:/certs
     environment:
       - NODE_ID=node-2
       - NODE_ROLE=follower
@@ -115,7 +115,7 @@ services:
     volumes:
       - geode-follower-2-data:/data
       - geode-certs:/certs
-      - ./certs:/certs:ro
+      - ./certs:/certs
     environment:
       - NODE_ID=node-3
       - NODE_ROLE=follower

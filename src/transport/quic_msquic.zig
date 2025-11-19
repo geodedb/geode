@@ -99,7 +99,9 @@ pub const QuicTransport = struct {
     }
 
     fn generateSelfSignedCert(self: *QuicTransport) !void {
-        std.fs.cwd().makeDir("certs") catch |err| switch (err) {
+        // Extract directory from cert_path and create it
+        const cert_dir = std.fs.path.dirname(self.cert_path) orelse ".";
+        std.fs.cwd().makePath(cert_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
@@ -117,6 +119,7 @@ pub const QuicTransport = struct {
         defer self.allocator.free(result.stderr);
 
         if (result.term != .Exited or result.term.Exited != 0) {
+            std.debug.print("OpenSSL error: {s}\n", .{result.stderr});
             return QuicError.CertificateError;
         }
 
