@@ -1,5 +1,5 @@
 const std = @import("std");
-const MsQuic = @import("../../tools/zig-msquic/src/msquic_wrapper.zig");
+const MsQuic = @import("msquic_wrapper.zig");
 const QuicStatus = MsQuic.QuicStatus;
 
 // CANARY: REQ=REQ-ZIG-CLIENT-002; FEATURE="Zig Client v2"; ASPECT=ClientSideMsquic; STATUS=IMPL; OWNER=clients; UPDATED=2025-11-16
@@ -16,6 +16,10 @@ pub const GeodeClient = struct {
     host: []const u8,
     port: u16,
     insecure: bool,
+
+    // Connection state tracking
+    connection_established: bool = false,
+    connection_mutex: std.Thread.Mutex = .{},
 
     const alpn_name = "geode/1".*;
     const alpn = MsQuic.QUIC_BUFFER{
@@ -69,12 +73,15 @@ pub const GeodeClient = struct {
             settings.PeerBidiStreamCount = 100;
             settings.IsSet.flags.PeerBidiStreamCount = true;
 
-            if (QuicStatus.isError(self.msquic.?.ConfigurationOpen.?(self.registration.?, &alpn, 1, &settings, @sizeOf(@TypeOf(settings)), null, &configuration))) {
+            const alpn_array = [_]MsQuic.QUIC_BUFFER{alpn};
+            const settings_ptr: *const MsQuic.QUIC_SETTINGS = @ptrCast(&settings);
+            if (QuicStatus.isError(self.msquic.?.ConfigurationOpen.?(self.registration.?, &alpn_array, 1, settings_ptr, @sizeOf(@TypeOf(settings)), null, &configuration))) {
                 return error.ConfigurationFailed;
             }
 
             // Load client credentials
             var cred_config = std.mem.zeroes(MsQuic.QUIC_CREDENTIAL_CONFIG);
+            cred_config.Type = .QUIC_CREDENTIAL_TYPE_NONE;  // CRITICAL: Must set Type field for client mode
             cred_config.Flags = MsQuic.QUIC_CREDENTIAL_FLAG_CLIENT;
             if (self.insecure) {
                 cred_config.Flags |= MsQuic.QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
@@ -105,19 +112,37 @@ pub const GeodeClient = struct {
         }
 
         // Start connection to server
+        // MsQuic expects a null-terminated C string for the hostname
+        const host_z = try self.allocator.dupeZ(u8, self.host);
+        defer self.allocator.free(host_z);
+
         const conn_start_status = self.msquic.?.ConnectionStart.?(
             conn,
             self.configuration.?,
             MsQuic.QUIC_ADDRESS_FAMILY_UNSPEC,
-            @ptrCast(self.host.ptr),
+            @ptrCast(host_z.ptr),
             self.port,
         );
         if (QuicStatus.isError(conn_start_status)) {
             return error.ConnectionStartFailed;
         }
 
-        // Wait for connection to establish (basic wait, no stream yet)
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        // Wait for connection to establish (check the connection_established flag)
+        const timeout_ns: u64 = 30 * std.time.ns_per_s;
+        const start = std.time.nanoTimestamp();
+        while (std.time.nanoTimestamp() - start < timeout_ns) {
+            self.connection_mutex.lock();
+            const established = self.connection_established;
+            self.connection_mutex.unlock();
+
+            if (established) {
+                return; // Connection established successfully
+            }
+
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
+
+        return error.ConnectionTimeout;
     }
 
     pub fn openStream(self: *GeodeClient) !void {
@@ -132,7 +157,7 @@ pub const GeodeClient = struct {
         stream_ctx.allocator = self.allocator;
         stream_ctx.recv_buffer = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         stream_ctx.mutex = .{};
-        stream_ctx.connected = true;  // Connection already established
+        stream_ctx.connected = false;  // Will be set by connection callback
         self.stream_ctx = stream_ctx;
         errdefer {
             self.allocator.destroy(stream_ctx);
@@ -155,8 +180,7 @@ pub const GeodeClient = struct {
             return error.StreamStartFailed;
         }
 
-        // Give stream time to start (no need to wait for connection flag - already connected)
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        // Stream started successfully
     }
 
     pub fn sendMessage(self: *GeodeClient, message: []const u8) !void {
@@ -174,9 +198,10 @@ pub const GeodeClient = struct {
         };
 
         const msquic = self.msquic orelse return error.NotInitialized;
+        const buffer_array = [_]MsQuic.QUIC_BUFFER{buffer};
         const status = msquic.StreamSend.?(
             stream_ctx.handle,
-            &buffer,
+            &buffer_array,
             1,
             MsQuic.QUIC_SEND_FLAG_NONE,
             null,
@@ -313,12 +338,18 @@ pub const GeodeClient = struct {
     fn connectionCallback(
         connection: MsQuic.HQUIC,
         self_ptr: ?*anyopaque,
-        event: [*c]MsQuic.struct_QUIC_CONNECTION_EVENT,
+        event: *const MsQuic.struct_QUIC_CONNECTION_EVENT,
     ) callconv(.c) MsQuic.QUIC_STATUS {
         const self: *GeodeClient = @ptrCast(@alignCast(self_ptr));
 
         switch (event.*.Type) {
             MsQuic.QUIC_CONNECTION_EVENT_CONNECTED => {
+                // Set connection established flag
+                self.connection_mutex.lock();
+                self.connection_established = true;
+                self.connection_mutex.unlock();
+
+                // Also update stream context if it exists
                 if (self.stream_ctx) |ctx| {
                     ctx.mutex.lock();
                     ctx.connected = true;
@@ -352,9 +383,9 @@ pub const GeodeClient = struct {
         }
 
         fn streamCallback(
-            stream: MsQuic.HQUIC,
+            _: MsQuic.HQUIC,
             self_ptr: ?*anyopaque,
-            event: [*c]MsQuic.struct_QUIC_STREAM_EVENT,
+            event: *const MsQuic.struct_QUIC_STREAM_EVENT,
         ) callconv(.c) MsQuic.QUIC_STATUS {
             const self: *StreamContext = @ptrCast(@alignCast(self_ptr));
 
@@ -375,11 +406,8 @@ pub const GeodeClient = struct {
                         };
                     }
 
-                    // Tell MsQuic we consumed the data
-                    const total_len = event.*.unnamed_0.RECEIVE.TotalBufferLength;
-                    if (self.client.msquic) |msquic| {
-                        msquic.StreamReceiveComplete.?(stream, total_len);
-                    }
+                    // MsQuic automatically considers data consumed when callback returns success
+                    // DO NOT call StreamReceiveComplete - it causes assertion failures
                 },
                 MsQuic.QUIC_STREAM_EVENT_SEND_COMPLETE => {
                     // Send completed successfully

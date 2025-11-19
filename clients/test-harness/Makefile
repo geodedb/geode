@@ -27,7 +27,7 @@ help:
 	@echo "  setup            - Install dependencies and build all runners"
 	@echo "  build-all        - Build all language runners"
 	@echo "  build-go         - Build Go runner"
-	@echo "  build-rust       - Build Rust runner (requires Docker)"
+	@echo "  build-rust       - Build Rust runner"
 	@echo "  build-zig        - Build Zig runner"
 	@echo "  test             - Run basic tests on all clients"
 	@echo "  test-python      - Run tests on Python client only"
@@ -96,16 +96,17 @@ build-go:
 	@cd runners && go mod tidy && go build -o go_runner go_runner.go
 
 build-rust:
-	@echo "Building Rust runner via Docker (this may take a minute)..."
-	@command -v docker >/dev/null 2>&1 || { echo "Docker not found, skipping Rust runner build"; exit 1; }
-	@echo "Building Rust client library in Docker..."
-	@make -C ../.. rust-build-docker
-	@echo ""
-	@echo "Note: Rust test runner requires native cargo with BoringSSL support."
-	@echo "In Nix environments, this may fail. The Rust client library is available at:"
-	@echo "  ../../rust/target/docker-release/libgeode_client.rlib"
-	@echo ""
-	@echo "Skipping Rust test runner build (use Docker for Rust client testing)"
+	@echo "Building Rust runner..."
+	@command -v cargo >/dev/null 2>&1 || { \
+		cargo_path="$$HOME/.cargo/bin/cargo"; \
+		if [ ! -f "$$cargo_path" ]; then \
+			echo "Cargo not found, skipping Rust runner build"; \
+			exit 1; \
+		fi; \
+	}
+	@echo "Building Rust test runner..."
+	@cd runners/rust_runner && cargo build --release
+	@echo "Rust runner built successfully"
 
 build-zig:
 	@echo "Building Zig runner..."
@@ -147,13 +148,13 @@ test-connections: setup
 clean:
 	@echo "Cleaning build artifacts..."
 	rm -f runners/go_runner
+	rm -f runners/zig_runner
 	rm -rf runners/rust_runner/target
 	rm -rf runners/zig-out
+	rm -rf runners/.zig-cache
 	rm -rf reports/*.json
 	rm -rf reports/*.html
 	rm -rf $(VENV_DIR)
-	@echo "Cleaning Rust Docker build artifacts..."
-	@cd ../rust && rm -rf target/docker-release 2>/dev/null || true
 	@echo "Clean complete!"
 
 # Server management
@@ -211,7 +212,7 @@ analyze-coverage:
 test-with-coverage: setup
 	@echo "Running all tests with coverage analysis..."
 	@mkdir -p reports
-	$(RUN_PYTHON) run_tests.py --verbose --report-json reports/results.json
-	$(RUN_PYTHON) analyze_coverage.py reports/results.json --verbose --markdown reports/coverage_report.md
+	@$(RUN_PYTHON) run_tests.py --verbose --report-json reports/results.json
+	@$(RUN_PYTHON) analyze_coverage.py reports/results.json --verbose --markdown reports/coverage_report.md
 	@echo ""
 	@echo "Coverage report generated: reports/coverage_report.md"

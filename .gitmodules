@@ -13,3 +13,6 @@
 [submodule "specs/lsp/language-server-protocol"]
 	path = specs/lsp/language-server-protocol
 	url = git@github.com:microsoft/language-server-protocol.git
+[submodule "forks/msquic"]
+	path = forks/msquic
+	url = git@github.com:microsoft/msquic.git

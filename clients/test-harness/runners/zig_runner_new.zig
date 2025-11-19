@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const GeodeClient = @import("../../zig/geode_client").GeodeClient;
+const GeodeClient = @import("geode_client").GeodeClient;
 const yaml = @import("yaml");
 
 // CANARY: REQ=REQ-ZIG-RUNNER-001; FEATURE="Zig Test Runner"; ASPECT=MsquicClient; STATUS=IMPL; OWNER=test-harness; UPDATED=2025-11-15

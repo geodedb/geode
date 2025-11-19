@@ -6,6 +6,7 @@ use geode_client::{Client, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
@@ -128,7 +129,7 @@ struct Output {
 
 struct Runner {
     client: Client,
-    connection: Option<Connection>,
+    connection: Arc<Mutex<Option<Connection>>>,
     verbose: bool,
 }
 
@@ -142,14 +143,19 @@ impl Runner {
 
         Self {
             client,
-            connection: None,
+            connection: Arc::new(Mutex::new(None)),
             verbose,
         }
     }
 
     async fn ensure_connection(&mut self) -> Result<()> {
-        if self.connection.is_none() {
-            self.connection = Some(self.client.connect().await?);
+        let mut conn_guard = self.connection.lock().unwrap();
+        if conn_guard.is_none() {
+            let client = self.client.clone();
+            let connection = tokio::task::spawn_blocking(move || client.connect())
+                .await
+                .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
+            *conn_guard = Some(connection);
         }
         Ok(())
     }
@@ -158,8 +164,25 @@ impl Runner {
         for step in setup {
             if step.step_type == "query" && !step.text.is_empty() {
                 self.ensure_connection().await?;
-                if let Some(conn) = &mut self.connection {
-                    conn.query(&step.text, None).await?;
+
+                // Take connection out, use it, put it back
+                let mut conn_opt = {
+                    let mut guard = self.connection.lock().unwrap();
+                    guard.take()
+                };
+
+                if let Some(mut conn) = conn_opt {
+                    let query_text = step.text.clone();
+                    conn = tokio::task::spawn_blocking(move || {
+                        conn.query(&query_text, None)?;
+                        Ok::<_, anyhow::Error>(conn)
+                    })
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
+
+                    // Put connection back
+                    let mut guard = self.connection.lock().unwrap();
+                    *guard = Some(conn);
                 }
             }
         }
@@ -175,10 +198,38 @@ impl Runner {
                     }
                     continue;
                 }
-                if let Some(conn) = &mut self.connection {
-                    if let Err(e) = conn.query(&step.text, None).await {
-                        if self.verbose {
-                            eprintln!("Cleanup warning: {}", e);
+
+                // Take connection out, use it, put it back
+                let conn_opt = {
+                    let mut guard = self.connection.lock().unwrap();
+                    guard.take()
+                };
+
+                if let Some(mut conn) = conn_opt {
+                    let query_text = step.text.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        conn.query(&query_text, None)?;
+                        Ok::<_, anyhow::Error>(conn)
+                    })
+                    .await;
+
+                    match result {
+                        Ok(Ok(c)) => {
+                            // Put connection back
+                            let mut guard = self.connection.lock().unwrap();
+                            *guard = Some(c);
+                        }
+                        Ok(Err(e)) => {
+                            if self.verbose {
+                                eprintln!("Cleanup warning: {}", e);
+                            }
+                            // Connection is lost, don't put it back
+                        }
+                        Err(e) => {
+                            if self.verbose {
+                                eprintln!("Cleanup spawn error: {}", e);
+                            }
+                            // Connection is lost, don't put it back
                         }
                     }
                 }
@@ -290,10 +341,13 @@ impl Runner {
     ) -> Result<QueryResult> {
         self.ensure_connection().await?;
 
-        let conn = self
-            .connection
-            .as_mut()
-            .context("No active connection")?;
+        // Take connection out, use it, put it back
+        let mut conn_opt = {
+            let mut guard = self.connection.lock().unwrap();
+            guard.take()
+        };
+
+        let mut conn = conn_opt.context("No active connection")?;
 
         // Convert params to Option<HashMap<String, serde_json::Value>>
         let params_opt = if params.is_empty() {
@@ -302,7 +356,15 @@ impl Runner {
             Some(params.clone())
         };
 
-        let page = conn.query(query, params_opt).await?;
+        let query_str = query.to_string();
+        let (page, updated_conn) = tokio::task::spawn_blocking(move || {
+            let page = conn.query(&query_str, params_opt)?;
+            Ok::<_, anyhow::Error>((page, conn))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
+
+        conn = updated_conn;
 
         // Extract column names
         let columns: Vec<String> = page.columns.iter().map(|c| c.name.clone()).collect();
@@ -320,6 +382,10 @@ impl Runner {
             data.push(row_map);
         }
 
+        // Put connection back
+        let mut guard = self.connection.lock().unwrap();
+        *guard = Some(conn);
+
         Ok(QueryResult {
             rows: page.rows.len(),
             columns,
@@ -333,31 +399,84 @@ impl Runner {
 
             let result = match step.step_type.as_str() {
                 "connect" => {
-                    self.connection = Some(self.client.connect().await?);
+                    let client = self.client.clone();
+                    let connection = tokio::task::spawn_blocking(move || client.connect())
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
+
+                    let mut guard = self.connection.lock().unwrap();
+                    *guard = Some(connection);
                     Ok(())
                 }
                 "disconnect" => {
-                    if let Some(mut conn) = self.connection.take() {
-                        conn.close().await?;
+                    let conn_opt = {
+                        let mut guard = self.connection.lock().unwrap();
+                        guard.take()
+                    };
+
+                    if let Some(mut conn) = conn_opt {
+                        tokio::task::spawn_blocking(move || conn.close())
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
                     }
                     Ok(())
                 }
                 "begin" => {
                     self.ensure_connection().await?;
-                    if let Some(conn) = &mut self.connection {
-                        conn.begin().await?;
+
+                    let mut conn_opt = {
+                        let mut guard = self.connection.lock().unwrap();
+                        guard.take()
+                    };
+
+                    if let Some(mut conn) = conn_opt {
+                        conn = tokio::task::spawn_blocking(move || {
+                            conn.begin()?;
+                            Ok::<_, anyhow::Error>(conn)
+                        })
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
+
+                        let mut guard = self.connection.lock().unwrap();
+                        *guard = Some(conn);
                     }
                     Ok(())
                 }
                 "commit" => {
-                    if let Some(conn) = &mut self.connection {
-                        conn.commit().await?;
+                    let mut conn_opt = {
+                        let mut guard = self.connection.lock().unwrap();
+                        guard.take()
+                    };
+
+                    if let Some(mut conn) = conn_opt {
+                        conn = tokio::task::spawn_blocking(move || {
+                            conn.commit()?;
+                            Ok::<_, anyhow::Error>(conn)
+                        })
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
+
+                        let mut guard = self.connection.lock().unwrap();
+                        *guard = Some(conn);
                     }
                     Ok(())
                 }
                 "rollback" => {
-                    if let Some(conn) = &mut self.connection {
-                        conn.rollback().await?;
+                    let mut conn_opt = {
+                        let mut guard = self.connection.lock().unwrap();
+                        guard.take()
+                    };
+
+                    if let Some(mut conn) = conn_opt {
+                        conn = tokio::task::spawn_blocking(move || {
+                            conn.rollback()?;
+                            Ok::<_, anyhow::Error>(conn)
+                        })
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
+
+                        let mut guard = self.connection.lock().unwrap();
+                        *guard = Some(conn);
                     }
                     Ok(())
                 }

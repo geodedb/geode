@@ -14,17 +14,27 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Link msquic
-    runner.addLibraryPath(.{ .cwd_relative = "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/lib" });
+    // Link msquic (using system library from Ubuntu package)
+    runner.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu" });
     runner.linkSystemLibrary("msquic");
     runner.linkLibC();
 
-    // Create msquic wrapper module (using tools/zig-msquic)
+    // Create msquic wrapper module (now in clients/zig)
     const msquic_wrapper_mod = b.createModule(.{
-        .root_source_file = b.path("../../../tools/zig-msquic/src/msquic_wrapper.zig"),
+        .root_source_file = b.path("../../zig/msquic_wrapper.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    // Create msquic types module
+    const msquic_types_mod = b.createModule(.{
+        .root_source_file = b.path("../../zig/msquic_types.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add msquic_types as import to msquic_wrapper
+    msquic_wrapper_mod.addImport("msquic_types", msquic_types_mod);
 
     // Create GeodeClient v2 module with msquic dependencies
     const client_mod = b.createModule(.{
@@ -32,7 +42,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    client_mod.addImport("../../tools/zig-msquic/src/msquic_wrapper.zig", msquic_wrapper_mod);
+    client_mod.addImport("msquic_wrapper", msquic_wrapper_mod);
+    client_mod.addImport("msquic_types", msquic_types_mod);
 
     // Create YAML parser module
     const yaml_mod = b.createModule(.{
@@ -42,7 +53,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Add modules to the runner
-    runner.root_module.addImport("../../zig/geode_client", client_mod);
+    runner.root_module.addImport("geode_client", client_mod);
     runner.root_module.addImport("yaml", yaml_mod);
 
     b.installArtifact(runner);

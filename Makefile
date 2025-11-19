@@ -30,7 +30,7 @@ GO_BUILD_FLAGS ?= -trimpath
 GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 
 .PHONY: go-prep go-vendor-sync go-vendor-check go-matrix
-.PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset go-build go-test go-clean go-example fuzz bench tools doccheck clean cert-gen fmt ci help
+.PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset go-build go-test go-clean go-example fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test quic-test-msquic client-test-python client-test-go client-test-rust client-test-zig rust-build-docker rust-test-docker
@@ -38,6 +38,7 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 .PHONY: geodetestlab geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
 .PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
 .PHONY: client-test-harness client-test-setup client-test-basic client-test-all client-test-html client-test-coverage
+.PHONY: deps deps-check
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 all: sub build go-build test cross-test no-feature-flags status-generate
@@ -96,6 +97,63 @@ help:
 	@echo "  make ci          - Run CI pipeline"
 	@echo "  make help        - Show this help"
 	@echo ""
+	@echo "Dependency targets:"
+	@echo "  make deps        - Install all system dependencies (libmsquic, etc.)"
+	@echo "  make deps-check  - Verify all dependencies are installed"
+	@echo ""
+
+# Install all system dependencies
+deps:
+	@echo "=== Installing Geode Dependencies ==="
+	@bash scripts/install-deps.sh
+
+# Check if dependencies are installed
+deps-check:
+	@echo "=== Checking Geode Dependencies ==="
+	@echo -n "Checking libmsquic... "
+	@if ldconfig -p 2>/dev/null | grep -q libmsquic; then \
+		echo "✓ installed"; \
+	else \
+		echo "✗ missing"; \
+		echo "Run 'make deps' to install dependencies"; \
+		exit 1; \
+	fi
+	@echo -n "Checking Zig... "
+	@if command -v zig >/dev/null 2>&1; then \
+		echo "✓ $(shell zig version)"; \
+	else \
+		echo "✗ missing"; \
+		echo "Please install Zig from https://ziglang.org/download/"; \
+		exit 1; \
+	fi
+	@echo -n "Checking Rust... "
+	@if command -v rustc >/dev/null 2>&1; then \
+		echo "✓ $(shell rustc --version | cut -d' ' -f2)"; \
+	else \
+		echo "⚠ missing (optional for Rust client)"; \
+	fi
+	@echo -n "Checking Go... "
+	@if command -v go >/dev/null 2>&1; then \
+		echo "✓ $(shell go version | cut -d' ' -f3)"; \
+	else \
+		echo "⚠ missing (optional for Go client)"; \
+	fi
+	@echo -n "Checking Python... "
+	@if command -v python3 >/dev/null 2>&1; then \
+		echo "✓ $(shell python3 --version | cut -d' ' -f2)"; \
+	else \
+		echo "⚠ missing (optional for Python client)"; \
+	fi
+	@echo -n "Checking OpenSSL... "
+	@if command -v openssl >/dev/null 2>&1; then \
+		echo "✓ $(shell openssl version | cut -d' ' -f2)"; \
+	else \
+		echo "✗ missing"; \
+		echo "Run 'make deps' to install dependencies"; \
+		exit 1; \
+	fi
+	@echo ""
+	@echo "✓ All required dependencies are installed"
 
 wine-info:
 ifeq ($(WINE_AVAILABLE),1)
@@ -103,6 +161,24 @@ ifeq ($(WINE_AVAILABLE),1)
 else
 	@echo "Wine not available (wine64 or wine not found)"
 endif
+
+# Check for OpenSSL installation (required for QUIC client builds)
+check-openssl:
+	@echo "Checking OpenSSL installation..."
+	@command -v openssl >/dev/null 2>&1 || { \
+		echo "⚠ OpenSSL not found. Installing..."; \
+		if command -v apt-get >/dev/null 2>&1; then \
+			sudo apt-get update && sudo apt-get install -y openssl libssl-dev libapr1 pkg-config; \
+		elif command -v yum >/dev/null 2>&1; then \
+			sudo yum install -y openssl openssl-devel apr pkg-config; \
+		elif command -v brew >/dev/null 2>&1; then \
+			brew install openssl@3 pkg-config; \
+		else \
+			echo "❌ Package manager not detected. Please install OpenSSL manually."; \
+			exit 1; \
+		fi; \
+	}
+	@openssl version 2>/dev/null && echo "✓ OpenSSL installed" || echo "❌ OpenSSL check failed"
 
 sub:
 	git submodule update --init --recursive

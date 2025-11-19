@@ -84,8 +84,8 @@ pub const Parser = struct {
             return try self.parseMap(indent_level);
         }
 
-        // Parse scalar
-        return try self.parseScalar();
+        // Parse scalar (block context - commas not special)
+        return try self.parseScalar(false, indent_level);
     }
 
     fn parseList(self: *Parser, indent_level: usize) Error!Value {
@@ -237,8 +237,8 @@ pub const Parser = struct {
                     return err;
                 };
             } else blk: {
-                // Value is inline - parse it directly
-                break :blk self.parseScalar() catch |err| {
+                // Value is inline - parse it directly (block context, not flow)
+                break :blk self.parseScalar(false, indent_level) catch |err| {
                     self.allocator.free(key);
                     return err;
                 };
@@ -249,13 +249,22 @@ pub const Parser = struct {
                 value.deinit(self.allocator);
                 return err;
             };
-            // Note: Don't skip to next line here - let next iteration handle positioning
+
+            // After parsing inline value, skip any trailing content on the same line
+            // This prevents treating comments or formatting as the start of a new key
+            if (!is_multiline) {
+                // Skip to end of line to ensure we don't try to parse any trailing content as a key
+                while (self.pos < self.input.len and self.input[self.pos] != '\n' and self.input[self.pos] != '\r') {
+                    self.pos += 1;
+                }
+            }
+            // Note: Don't skip the newline itself - let next iteration handle positioning
         }
 
         return Value{ .map = map };
     }
 
-    fn parseScalar(self: *Parser) Error!Value {
+    fn parseScalar(self: *Parser, in_flow_context: bool, indent_level: usize) Error!Value {
         self.skipWhitespace();
 
         if (self.pos >= self.input.len) {
@@ -311,13 +320,77 @@ pub const Parser = struct {
         }
 
         // Parse unquoted scalar (number or string)
+        // In flow context (inside [] or {}), commas and brackets are delimiters
+        // In block context, only newlines and # are delimiters (but handle multi-line continuations)
+        var parts = try std.ArrayList(u8).initCapacity(self.allocator, 128);
+        defer parts.deinit(self.allocator);
+
         while (self.pos < self.input.len) {
-            const ch = self.input[self.pos];
-            if (ch == '\n' or ch == '\r' or ch == '#' or ch == ',' or ch == ']' or ch == '}') break;
-            self.pos += 1;
+            const line_start = self.pos;
+
+            // Parse until end of line or delimiter
+            while (self.pos < self.input.len) {
+                const ch = self.input[self.pos];
+                if (ch == '\n' or ch == '\r' or ch == '#') break;
+                if (in_flow_context and (ch == ',' or ch == ']' or ch == '}')) break;
+                self.pos += 1;
+            }
+
+            // Trim trailing whitespace from this line
+            const line_content = std.mem.trimRight(u8, self.input[line_start..self.pos], " \t");
+            try parts.appendSlice(self.allocator, line_content);
+
+            // If we hit a flow delimiter or comment, stop
+            if (self.pos < self.input.len) {
+                const ch = self.input[self.pos];
+                if (ch == '#' or (in_flow_context and (ch == ',' or ch == ']' or ch == '}'))) {
+                    break;
+                }
+            }
+
+            // Check if there's a continuation line (next line with more indentation)
+            if (!in_flow_context and self.pos < self.input.len and (self.input[self.pos] == '\n' or self.input[self.pos] == '\r')) {
+                const saved_pos = self.pos;
+                const saved_line = self.line;
+                const saved_col = self.col;
+
+                // Skip the newline
+                self.skipToNextLine();
+                self.skipWhitespaceAndComments();
+
+                if (self.pos >= self.input.len) {
+                    // End of input
+                    break;
+                }
+
+                // Check indentation of next line
+                const next_indent = self.getCurrentIndent();
+
+                // If next line has more indentation than our base, it's a continuation
+                if (next_indent > indent_level) {
+                    // Skip to the content (past indentation)
+                    while (self.pos < self.input.len and (self.input[self.pos] == ' ' or self.input[self.pos] == '\t')) {
+                        self.pos += 1;
+                    }
+                    // Add a space separator before continuation
+                    try parts.append(self.allocator, ' ');
+                    // Continue parsing from this line
+                    continue;
+                } else {
+                    // Next line at same or less indentation - not a continuation
+                    // Restore position to before the newline
+                    self.pos = saved_pos;
+                    self.line = saved_line;
+                    self.col = saved_col;
+                    break;
+                }
+            } else {
+                // No continuation possible
+                break;
+            }
         }
 
-        const raw = std.mem.trim(u8, self.input[start..self.pos], " \t");
+        const raw = std.mem.trim(u8, parts.items, " \t");
 
         if (raw.len == 0) {
             return Value{ .null_value = {} };

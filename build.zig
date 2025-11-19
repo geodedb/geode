@@ -128,8 +128,9 @@ pub fn build(b: *std.Build) void {
     }
     
     // Add msquic include and lib paths
-    const geode_msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/include";
-    const geode_msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/lib";
+    // Use local fork headers and system library (Ubuntu libmsquic package)
+    const geode_msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "forks/msquic/src/inc";
+    const geode_msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/usr/lib/x86_64-linux-gnu";
     geode_exe.addIncludePath(.{ .cwd_relative = geode_msquic_include });
     geode_exe.addLibraryPath(.{ .cwd_relative = geode_msquic_lib });
 
@@ -486,9 +487,10 @@ pub fn build(b: *std.Build) void {
         custom_tests.linkSystemLibrary("dl");
     }
     
-    // Add msquic include and lib paths from nix
-    const msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/include";
-    const msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/nix/store/wdyb7p8h2fpbrgli3i1czdxsib9bhfm5-libmsquic-2.5.4/lib";
+    // Add msquic include and lib paths
+    // Use local fork headers and system library (Ubuntu libmsquic package)
+    const msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "forks/msquic/src/inc";
+    const msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/usr/lib/x86_64-linux-gnu";
     custom_tests.addIncludePath(.{ .cwd_relative = msquic_include });
     custom_tests.addLibraryPath(.{ .cwd_relative = msquic_lib });
     const run_custom_tests = b.addRunArtifact(custom_tests);

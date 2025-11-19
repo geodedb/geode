@@ -14,30 +14,40 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Link msquic (check environment variable first, fall back to Nix path)
-    const msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/opt/msquic/lib";
-    test_exe.addLibraryPath(.{ .cwd_relative = msquic_lib });
-    test_exe.linkSystemLibrary("msquic");
+    // Link msquic and dependencies
     test_exe.linkLibC();
+    test_exe.linkSystemLibrary("msquic");
+    test_exe.linkSystemLibrary("ssl");
+    test_exe.linkSystemLibrary("crypto");
 
-    // Create GeodeClient module that imports zig-msquic wrapper
-    const client_mod = b.createModule(.{
-        .root_source_file = b.path("geode_client_v2.zig"),
+    if (target.result.os.tag == .linux) {
+        test_exe.linkSystemLibrary("dl");
+    }
+
+    // Add msquic include and lib paths (use environment variables or system defaults)
+    // Use local fork headers and system library (Ubuntu libmsquic package)
+    const msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "../../forks/msquic/src/inc";
+    const msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/usr/lib/x86_64-linux-gnu";
+
+    test_exe.addIncludePath(.{ .cwd_relative = msquic_include });
+    test_exe.addLibraryPath(.{ .cwd_relative = msquic_lib });
+
+    // Add msquic types and wrapper modules
+    const msquic_types_mod = b.createModule(.{
+        .root_source_file = b.path("msquic_types.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Add imports for the client module (zig-msquic wrapper)
     const msquic_wrapper_mod = b.createModule(.{
-        .root_source_file = b.path("../../tools/zig-msquic/src/msquic_wrapper.zig"),
+        .root_source_file = b.path("msquic_wrapper.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    client_mod.addImport("../../tools/zig-msquic/src/msquic_wrapper.zig", msquic_wrapper_mod);
-
-    // Add modules to the test executable
-    test_exe.root_module.addImport("geode_client_v2.zig", client_mod);
+    msquic_wrapper_mod.addImport("msquic_types", msquic_types_mod);
+    test_exe.root_module.addImport("msquic_wrapper", msquic_wrapper_mod);
+    test_exe.root_module.addImport("msquic_types", msquic_types_mod);
 
     b.installArtifact(test_exe);
 
