@@ -92,6 +92,10 @@ pub fn build(b: *std.Build) void {
     const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
     const enable_llvm_fuzzer = b.option(bool, "enable-llvm-fuzzer", "Enable LLVM libFuzzer fallback for fuzz tests") orelse false;
 
+    // Setup vendor/quic modules using vendor_setup.zig helper
+    const quic_vendor_setup = @import("vendor/quic/vendor_setup.zig");
+    const quic_modules = quic_vendor_setup.setupModules(b, "vendor/quic", target, optimize);
+
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
     build_opts.addOption(bool, "enable_llvm_fuzzer", enable_llvm_fuzzer);
@@ -118,21 +122,13 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addOptions("build_options", build_opts);
     geode_exe.root_module.addImport("geode", root_mod);
 
-    // Link with msquic and OpenSSL for QUIC transport
+    // Link with OpenSSL for vendor/quic crypto operations
     geode_exe.linkLibC();
-    geode_exe.linkSystemLibrary("msquic");
     geode_exe.linkSystemLibrary("ssl");
     geode_exe.linkSystemLibrary("crypto");
     if (target.result.os.tag == .linux) {
         geode_exe.linkSystemLibrary("dl");
     }
-    
-    // Add msquic include and lib paths
-    // Use local fork headers and system library (Ubuntu libmsquic package)
-    const geode_msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "forks/msquic/src/inc";
-    const geode_msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/usr/lib/x86_64-linux-gnu";
-    geode_exe.addIncludePath(.{ .cwd_relative = geode_msquic_include });
-    geode_exe.addLibraryPath(.{ .cwd_relative = geode_msquic_lib });
 
     // Add essential modules for server and client functionality
     // Note: transport_quic_mod is defined later after vendor_quic_mod is available
@@ -387,95 +383,13 @@ pub fn build(b: *std.Build) void {
     const transport_quic_msquic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic_msquic.zig"), .target = target, .optimize = optimize });
     transport_quic_msquic_mod.addImport("msquic_wrapper.zig", msquic_wrapper_mod);
     
-    // Legacy vendor QUIC (kept for backward compatibility)
+    // Vendor QUIC for tests - using vendor_setup.zig modules
     const transport_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
-    const vendor_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
+    transport_quic_mod_tests.addImport("vendor_quic", quic_modules.quic_api);
 
-    // Wire vendored QUIC submodules for the custom_tests variant
-    const vqct_tls_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/key_schedule.zig"), .target = target, .optimize = optimize });
-    const vqct_crypto_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/crypto_quic.zig"), .target = target, .optimize = optimize });
-    const vqct_packet_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/packet.zig"), .target = target, .optimize = optimize });
-    const vqct_varint_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/varint.zig"), .target = target, .optimize = optimize });
-    const vqct_frame_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/frame.zig"), .target = target, .optimize = optimize });
-    const vqct_recovery_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/recovery.zig"), .target = target, .optimize = optimize });
-    const vqct_conn_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/conn.zig"), .target = target, .optimize = optimize });
-    const vqct_config_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/config.zig"), .target = target, .optimize = optimize });
-    const vqct_loop_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/loop_backend.zig"), .target = target, .optimize = optimize });
-    const vqct_endpoint_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/endpoint.zig"), .target = target, .optimize = optimize });
-    const vqct_tls13_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/tls13.zig"), .target = target, .optimize = optimize });
-    const vqct_tp_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/transport_params.zig"), .target = target, .optimize = optimize });
-    const vqct_asn1_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/asn1.zig"), .target = target, .optimize = optimize });
-    const vqct_sig_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/sig.zig"), .target = target, .optimize = optimize });
-    const vqct_x509_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/x509.zig"), .target = target, .optimize = optimize });
-    const vqct_logger_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/logger.zig"), .target = target, .optimize = optimize });
-    const vqct_byteorder_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/byteorder/byteorder.zig"), .target = target, .optimize = optimize });
-
-    // Hook up submodule imports for custom_tests variant
-    vqct_packet_mod.addImport("quic_varint", vqct_varint_mod);
-    vqct_packet_mod.addImport("quic_tls", vqct_tls_mod);
-    vqct_packet_mod.addImport("quic_crypto", vqct_crypto_mod);
-    vqct_packet_mod.addImport("quic_logger", vqct_logger_mod);
-    vqct_tls13_mod.addImport("quic_tls", vqct_tls_mod);
-    vqct_tls13_mod.addImport("asn1", vqct_asn1_mod);
-    vqct_tls13_mod.addImport("sig", vqct_sig_mod);
-    vqct_tls13_mod.addImport("x509", vqct_x509_mod);
-    vqct_tls13_mod.addImport("quic_logger", vqct_logger_mod);
-    vqct_crypto_mod.addImport("quic_logger", vqct_logger_mod);
-    vqct_sig_mod.addImport("asn1", vqct_asn1_mod);
-    vqct_x509_mod.addImport("asn1", vqct_asn1_mod);
-    vqct_x509_mod.addImport("sig", vqct_sig_mod);
-    vqct_tp_mod.addImport("quic_varint", vqct_varint_mod);
-    vqct_frame_mod.addImport("quic_varint", vqct_varint_mod);
-    vqct_recovery_mod.addImport("quic_frame", vqct_frame_mod);
-    vqct_conn_mod.addImport("quic_packet", vqct_packet_mod);
-    vqct_conn_mod.addImport("quic_frame", vqct_frame_mod);
-    vqct_conn_mod.addImport("quic_recovery", vqct_recovery_mod);
-    vqct_conn_mod.addImport("quic_tls", vqct_tls_mod);
-    vqct_conn_mod.addImport("quic_tls13", vqct_tls13_mod);
-    vqct_conn_mod.addImport("quic_transport_params", vqct_tp_mod);
-    vqct_conn_mod.addImport("quic_logger", vqct_logger_mod);
-    vqct_conn_mod.addImport("byteorder", vqct_byteorder_mod);
-    vqct_endpoint_mod.addImport("quic_conn", vqct_conn_mod);
-    vqct_endpoint_mod.addImport("quic_packet", vqct_packet_mod);
-    vqct_endpoint_mod.addImport("quic_frame", vqct_frame_mod);
-    vqct_endpoint_mod.addImport("quic_tls", vqct_tls_mod);
-    vqct_endpoint_mod.addImport("quic_tls13", vqct_tls13_mod);
-    vqct_endpoint_mod.addImport("quic_crypto", vqct_crypto_mod);
-    vqct_endpoint_mod.addImport("quic_varint", vqct_varint_mod);
-    vqct_endpoint_mod.addImport("quic_recovery", vqct_recovery_mod);
-    vqct_endpoint_mod.addImport("quic_transport_params", vqct_tp_mod);
-    vqct_endpoint_mod.addImport("quic_logger", vqct_logger_mod);
-    vqct_endpoint_mod.addImport("byteorder", vqct_byteorder_mod);
-    vqct_crypto_mod.addImport("quic_tls", vqct_tls_mod);
-    vqct_endpoint_mod.addImport("config.zig", vqct_config_mod);
-    vqct_endpoint_mod.addImport("loop_backend.zig", vqct_loop_mod);
-    vqct_endpoint_mod.addImport("x509", vqct_x509_mod);
-    vqct_endpoint_mod.addImport("sig", vqct_sig_mod);
-    vqct_endpoint_mod.addImport("asn1", vqct_asn1_mod);
-    vqct_varint_mod.addImport("byteorder", vqct_byteorder_mod);
-
-    // Attach imports to vendor_quic_mod_tests
-    vendor_quic_mod_tests.addImport("quic_endpoint", vqct_endpoint_mod);
-    vendor_quic_mod_tests.addImport("quic_conn", vqct_conn_mod);
-    vendor_quic_mod_tests.addImport("quic_packet", vqct_packet_mod);
-    vendor_quic_mod_tests.addImport("quic_varint", vqct_varint_mod);
-    vendor_quic_mod_tests.addImport("quic_frame", vqct_frame_mod);
-    vendor_quic_mod_tests.addImport("quic_recovery", vqct_recovery_mod);
-    vendor_quic_mod_tests.addImport("quic_tls", vqct_tls_mod);
-    vendor_quic_mod_tests.addImport("quic_tls13", vqct_tls13_mod);
-    vendor_quic_mod_tests.addImport("quic_transport_params", vqct_tp_mod);
-    vendor_quic_mod_tests.addImport("quic_crypto", vqct_crypto_mod);
-    vendor_quic_mod_tests.addImport("config.zig", vqct_config_mod);
-    vendor_quic_mod_tests.addImport("loop_backend.zig", vqct_loop_mod);
-    vendor_quic_mod_tests.addImport("asn1", vqct_asn1_mod);
-    vendor_quic_mod_tests.addImport("sig", vqct_sig_mod);
-    vendor_quic_mod_tests.addImport("x509", vqct_x509_mod);
-    vendor_quic_mod_tests.addImport("byteorder", vqct_byteorder_mod);
-
-    transport_quic_mod_tests.addImport("vendor_quic", vendor_quic_mod_tests);
     custom_tests.root_module.addImport("transport/quic", transport_quic_mod_tests);
     custom_tests.root_module.addImport("transport/quic_msquic", transport_quic_msquic_mod);
-    custom_tests.root_module.addImport("vendor_quic", vendor_quic_mod_tests);
+    custom_tests.root_module.addImport("vendor_quic", quic_modules.quic_api);
     custom_tests.root_module.addImport("msquic_wrapper", msquic_wrapper_mod);
     
     // Link with msquic and OpenSSL
@@ -666,99 +580,17 @@ pub fn build(b: *std.Build) void {
     // Provide clients/zig client file as a module import path
     const zig_client_mod = b.createModule(.{ .root_source_file = b.path("clients/zig/client.zig"), .target = target, .optimize = optimize });
     zig_client_quic_test.root_module.addImport("clients/zig/client.zig", zig_client_mod);
-    // Recreate vendor_quic and transport/quic for this standalone test module
-    const vendor_quic_mod_for_test = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
-    // Wire vendored QUIC submodules for the test variant so api.zig can @import("quic_*")
-    const vqt_tls_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/key_schedule.zig"), .target = target, .optimize = optimize });
-    const vqt_crypto_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/crypto_quic.zig"), .target = target, .optimize = optimize });
-    const vqt_packet_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/packet.zig"), .target = target, .optimize = optimize });
-    const vqt_varint_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/varint.zig"), .target = target, .optimize = optimize });
-    const vqt_frame_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/frame.zig"), .target = target, .optimize = optimize });
-    const vqt_recovery_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/recovery.zig"), .target = target, .optimize = optimize });
-    const vqt_conn_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/conn.zig"), .target = target, .optimize = optimize });
-    const vqt_config_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/config.zig"), .target = target, .optimize = optimize });
-    const vqt_loop_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/loop_backend.zig"), .target = target, .optimize = optimize });
-    const vqt_endpoint_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/endpoint.zig"), .target = target, .optimize = optimize });
-    const vqt_tls13_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/tls13.zig"), .target = target, .optimize = optimize });
-    const vqt_tp_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/transport_params.zig"), .target = target, .optimize = optimize });
-    const vqt_asn1_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/asn1.zig"), .target = target, .optimize = optimize });
-    const vqt_sig_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/sig.zig"), .target = target, .optimize = optimize });
-    const vqt_x509_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/x509.zig"), .target = target, .optimize = optimize });
-    const vqt_logger_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/logger.zig"), .target = target, .optimize = optimize });
-    const vqt_byteorder_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/byteorder/byteorder.zig"), .target = target, .optimize = optimize });
-    // Hook up submodule imports
-    vqt_packet_mod.addImport("quic_varint", vqt_varint_mod);
-    vqt_packet_mod.addImport("quic_tls", vqt_tls_mod);
-    vqt_packet_mod.addImport("quic_crypto", vqt_crypto_mod);
-    vqt_packet_mod.addImport("quic_logger", vqt_logger_mod);
-    vqt_tls13_mod.addImport("quic_tls", vqt_tls_mod);
-    vqt_tls13_mod.addImport("asn1", vqt_asn1_mod);
-    vqt_tls13_mod.addImport("sig", vqt_sig_mod);
-    vqt_tls13_mod.addImport("x509", vqt_x509_mod);
-    vqt_tls13_mod.addImport("quic_logger", vqt_logger_mod);
-    vqt_crypto_mod.addImport("quic_logger", vqt_logger_mod);
-    vqt_sig_mod.addImport("asn1", vqt_asn1_mod);
-    // No longer need ed25519 import - using std.crypto.sign.Ed25519
-    vqt_x509_mod.addImport("asn1", vqt_asn1_mod);
-    vqt_x509_mod.addImport("sig", vqt_sig_mod);
-    // No longer need ed25519 import - using std.crypto.sign.Ed25519
-    vqt_tp_mod.addImport("quic_varint", vqt_varint_mod);
-    vqt_frame_mod.addImport("quic_varint", vqt_varint_mod);
-    vqt_recovery_mod.addImport("quic_frame", vqt_frame_mod);
-    vqt_conn_mod.addImport("quic_packet", vqt_packet_mod);
-    vqt_conn_mod.addImport("quic_frame", vqt_frame_mod);
-    vqt_conn_mod.addImport("quic_recovery", vqt_recovery_mod);
-    vqt_conn_mod.addImport("quic_tls", vqt_tls_mod);
-    vqt_conn_mod.addImport("quic_tls13", vqt_tls13_mod);
-    vqt_conn_mod.addImport("quic_transport_params", vqt_tp_mod);
-    vqt_conn_mod.addImport("quic_logger", vqt_logger_mod);
-    vqt_conn_mod.addImport("byteorder", vqt_byteorder_mod);
-    vqt_endpoint_mod.addImport("quic_conn", vqt_conn_mod);
-    vqt_endpoint_mod.addImport("quic_packet", vqt_packet_mod);
-    vqt_endpoint_mod.addImport("quic_frame", vqt_frame_mod);
-    vqt_endpoint_mod.addImport("quic_tls", vqt_tls_mod);
-    vqt_endpoint_mod.addImport("quic_tls13", vqt_tls13_mod);
-    vqt_endpoint_mod.addImport("quic_crypto", vqt_crypto_mod);
-    vqt_endpoint_mod.addImport("quic_varint", vqt_varint_mod);
-    vqt_endpoint_mod.addImport("quic_recovery", vqt_recovery_mod);
-    vqt_endpoint_mod.addImport("quic_transport_params", vqt_tp_mod);
-    vqt_endpoint_mod.addImport("quic_logger", vqt_logger_mod);
-    vqt_endpoint_mod.addImport("byteorder", vqt_byteorder_mod);
-    vqt_crypto_mod.addImport("quic_tls", vqt_tls_mod);
-    vqt_endpoint_mod.addImport("config.zig", vqt_config_mod);
-    vqt_endpoint_mod.addImport("loop_backend.zig", vqt_loop_mod);
-    vqt_endpoint_mod.addImport("x509", vqt_x509_mod);
-    vqt_endpoint_mod.addImport("sig", vqt_sig_mod);
-    vqt_endpoint_mod.addImport("asn1", vqt_asn1_mod);
-    vqt_varint_mod.addImport("byteorder", vqt_byteorder_mod);
-    // Attach imports to vendor_quic_mod_for_test
-    vendor_quic_mod_for_test.addImport("quic_endpoint", vqt_endpoint_mod);
-    vendor_quic_mod_for_test.addImport("quic_conn", vqt_conn_mod);
-    vendor_quic_mod_for_test.addImport("quic_packet", vqt_packet_mod);
-    vendor_quic_mod_for_test.addImport("quic_varint", vqt_varint_mod);
-    vendor_quic_mod_for_test.addImport("quic_frame", vqt_frame_mod);
-    vendor_quic_mod_for_test.addImport("quic_recovery", vqt_recovery_mod);
-    vendor_quic_mod_for_test.addImport("quic_tls", vqt_tls_mod);
-    vendor_quic_mod_for_test.addImport("quic_tls13", vqt_tls13_mod);
-    vendor_quic_mod_for_test.addImport("quic_transport_params", vqt_tp_mod);
-    vendor_quic_mod_for_test.addImport("quic_crypto", vqt_crypto_mod);
-    vendor_quic_mod_for_test.addImport("config.zig", vqt_config_mod);
-    vendor_quic_mod_for_test.addImport("loop_backend.zig", vqt_loop_mod);
-    vendor_quic_mod_for_test.addImport("asn1", vqt_asn1_mod);
-    vendor_quic_mod_for_test.addImport("sig", vqt_sig_mod);
-    vendor_quic_mod_for_test.addImport("x509", vqt_x509_mod);
-    vendor_quic_mod_for_test.addImport("byteorder", vqt_byteorder_mod);
-    // No longer need ed25519 import - using std.crypto.sign.Ed25519
-
+    // Vendor QUIC for zig client test - using vendor_setup.zig modules
     const transport_quic_mod_for_test = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
-    transport_quic_mod_for_test.addImport("vendor_quic", vendor_quic_mod_for_test);
+    transport_quic_mod_for_test.addImport("vendor_quic", quic_modules.quic_api);
+
     // Provide transport/quic dependency directly to the zig client module so its @import resolves
     zig_client_mod.addImport("transport/quic", transport_quic_mod_for_test);
-    // Also expose vendor_quic in case the client imports it transitively in the future
-    zig_client_mod.addImport("vendor_quic", vendor_quic_mod_for_test);
+    zig_client_mod.addImport("vendor_quic", quic_modules.quic_api);
+
     // Expose to the test root as well
     zig_client_quic_test.root_module.addImport("transport/quic", transport_quic_mod_for_test);
-    zig_client_quic_test.root_module.addImport("vendor_quic", vendor_quic_mod_for_test);
+    zig_client_quic_test.root_module.addImport("vendor_quic", quic_modules.quic_api);
 
     // MVCC Advanced tests (expanded)
     const mvcc_adv_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/transactions/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
@@ -897,102 +729,13 @@ pub fn build(b: *std.Build) void {
     //    const util_text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
     //    const server_txn_mvcc_mod = b.createModule(.{ .root_source_file = b.path("src/server/txn/mvcc.zig"), .target = target, .optimize = optimize });
 
-    const vendor_quic_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/lib.zig"), .target = target, .optimize = optimize });
-    // Wire vendored QUIC named imports to match its build.zig so api.zig can @import("quic_*") symbols
-    const vq_tls_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/key_schedule.zig"), .target = target, .optimize = optimize });
-    const vq_crypto_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/crypto_quic.zig"), .target = target, .optimize = optimize });
-    const vq_packet_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/packet.zig"), .target = target, .optimize = optimize });
-    const vq_varint_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/varint.zig"), .target = target, .optimize = optimize });
-    const vq_frame_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/frame.zig"), .target = target, .optimize = optimize });
-    const vq_recovery_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/recovery.zig"), .target = target, .optimize = optimize });
-    const vq_conn_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/conn.zig"), .target = target, .optimize = optimize });
-    const vq_config_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/config.zig"), .target = target, .optimize = optimize });
-    const vq_loop_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/loop_backend.zig"), .target = target, .optimize = optimize });
-    const vq_endpoint_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/endpoint.zig"), .target = target, .optimize = optimize });
-    const vq_tls13_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/tls13.zig"), .target = target, .optimize = optimize });
-    const vq_tp_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/transport_params.zig"), .target = target, .optimize = optimize });
-    const vq_asn1_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/asn1.zig"), .target = target, .optimize = optimize });
-    const vq_sig_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/sig.zig"), .target = target, .optimize = optimize });
-    const vq_x509_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/tls/x509.zig"), .target = target, .optimize = optimize });
-    const vq_logger_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/quic/logger.zig"), .target = target, .optimize = optimize });
-    const vq_byteorder_mod = b.createModule(.{ .root_source_file = b.path("vendor/quic/src/byteorder/byteorder.zig"), .target = target, .optimize = optimize });
-    // Hook up submodule imports
-    vq_packet_mod.addImport("quic_varint", vq_varint_mod);
-    vq_packet_mod.addImport("quic_tls", vq_tls_mod);
-    vq_packet_mod.addImport("quic_crypto", vq_crypto_mod);
-    vq_packet_mod.addImport("quic_logger", vq_logger_mod);
-    vq_tls13_mod.addImport("quic_tls", vq_tls_mod);
-    vq_tls13_mod.addImport("asn1", vq_asn1_mod);
-    vq_tls13_mod.addImport("sig", vq_sig_mod);
-    vq_tls13_mod.addImport("x509", vq_x509_mod);
-    vq_tls13_mod.addImport("quic_logger", vq_logger_mod);
-    vq_crypto_mod.addImport("quic_logger", vq_logger_mod);
-    vq_sig_mod.addImport("asn1", vq_asn1_mod);
-    // No longer need ed25519 import - using std.crypto.sign.Ed25519
-    vq_x509_mod.addImport("asn1", vq_asn1_mod);
-    vq_x509_mod.addImport("sig", vq_sig_mod);
-    // No longer need ed25519 import - using std.crypto.sign.Ed25519
-    vq_tp_mod.addImport("quic_varint", vq_varint_mod);
-    vq_frame_mod.addImport("quic_varint", vq_varint_mod);
-    vq_recovery_mod.addImport("quic_frame", vq_frame_mod);
-    vq_conn_mod.addImport("quic_packet", vq_packet_mod);
-    vq_conn_mod.addImport("quic_frame", vq_frame_mod);
-    vq_conn_mod.addImport("quic_recovery", vq_recovery_mod);
-    vq_conn_mod.addImport("quic_tls", vq_tls_mod);
-    vq_conn_mod.addImport("quic_tls13", vq_tls13_mod);
-    vq_conn_mod.addImport("quic_transport_params", vq_tp_mod);
-    vq_conn_mod.addImport("quic_logger", vq_logger_mod);
-    vq_conn_mod.addImport("byteorder", vq_byteorder_mod);
-    vq_endpoint_mod.addImport("quic_conn", vq_conn_mod);
-    vq_endpoint_mod.addImport("quic_packet", vq_packet_mod);
-    vq_endpoint_mod.addImport("quic_frame", vq_frame_mod);
-    vq_endpoint_mod.addImport("quic_tls", vq_tls_mod);
-    vq_endpoint_mod.addImport("quic_tls13", vq_tls13_mod);
-    vq_endpoint_mod.addImport("quic_crypto", vq_crypto_mod);
-    vq_endpoint_mod.addImport("quic_varint", vq_varint_mod);
-    vq_endpoint_mod.addImport("quic_recovery", vq_recovery_mod);
-    vq_endpoint_mod.addImport("quic_transport_params", vq_tp_mod);
-    vq_endpoint_mod.addImport("quic_logger", vq_logger_mod);
-    vq_endpoint_mod.addImport("byteorder", vq_byteorder_mod);
-    vq_crypto_mod.addImport("quic_tls", vq_tls_mod);
-    vq_endpoint_mod.addImport("config.zig", vq_config_mod);
-    vq_endpoint_mod.addImport("loop_backend.zig", vq_loop_mod);
-    vq_endpoint_mod.addImport("x509", vq_x509_mod);
-    vq_endpoint_mod.addImport("sig", vq_sig_mod);
-    vq_endpoint_mod.addImport("asn1", vq_asn1_mod);
-    vq_varint_mod.addImport("byteorder", vq_byteorder_mod);
-    // Finally attach imports to the public vendor_quic module so api.zig resolves named imports
-    vendor_quic_mod.addImport("quic_endpoint", vq_endpoint_mod);
-    vendor_quic_mod.addImport("quic_conn", vq_conn_mod);
-    vendor_quic_mod.addImport("quic_packet", vq_packet_mod);
-    vendor_quic_mod.addImport("quic_varint", vq_varint_mod);
-    vendor_quic_mod.addImport("quic_frame", vq_frame_mod);
-    vendor_quic_mod.addImport("quic_recovery", vq_recovery_mod);
-    vendor_quic_mod.addImport("quic_tls", vq_tls_mod);
-    vendor_quic_mod.addImport("quic_tls13", vq_tls13_mod);
-    vendor_quic_mod.addImport("quic_transport_params", vq_tp_mod);
-    vendor_quic_mod.addImport("quic_crypto", vq_crypto_mod);
-    vendor_quic_mod.addImport("config.zig", vq_config_mod);
-    vendor_quic_mod.addImport("loop_backend.zig", vq_loop_mod);
-    vendor_quic_mod.addImport("asn1", vq_asn1_mod);
-    vendor_quic_mod.addImport("sig", vq_sig_mod);
-    vendor_quic_mod.addImport("x509", vq_x509_mod);
-    vendor_quic_mod.addImport("byteorder", vq_byteorder_mod);
-    // No longer need ed25519 import - using std.crypto.sign.Ed25519
-
-    // Create transport QUIC module for unified binary - using msquic
-    const msquic_types_mod = b.createModule(.{ .root_source_file = b.path("src/transport/msquic_types.zig"), .target = target, .optimize = optimize });
-    const msquic_wrapper_main_mod = b.createModule(.{ .root_source_file = b.path("src/transport/msquic_wrapper.zig"), .target = target, .optimize = optimize });
-    msquic_wrapper_main_mod.addImport("msquic_types.zig", msquic_types_mod);
-    
-    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic_msquic.zig"), .target = target, .optimize = optimize });
-    transport_quic_mod.addImport("msquic_wrapper.zig", msquic_wrapper_main_mod);
+    // Create transport QUIC module for unified binary - using vendor/quic via vendor_setup.zig
+    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
+    transport_quic_mod.addImport("vendor_quic", quic_modules.quic_api);
 
     // Add transport modules to unified geode binary
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
-    geode_exe.root_module.addImport("transport/quic_msquic", transport_quic_mod);
-    // Keep vendor_quic available for compatibility (but not used in main code)
-    geode_exe.root_module.addImport("vendor_quic", vendor_quic_mod);
+    geode_exe.root_module.addImport("vendor_quic", quic_modules.quic_api);
 
     // Add audit CLI module for verification functionality
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
@@ -1001,7 +744,7 @@ pub fn build(b: *std.Build) void {
     // Remote KMS CANARY tests (generate, attest, privileged unwrap). Reuse transport/vendored QUIC modules.
     const remote_kms_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms.zig"), .target = target, .optimize = optimize }) });
     remote_kms_tests.root_module.addImport("transport/quic", transport_quic_mod);
-    remote_kms_tests.root_module.addImport("vendor_quic", vendor_quic_mod);
+    remote_kms_tests.root_module.addImport("vendor_quic", quic_modules.quic_api);
     // Expose kms_remote server/client module under alias security/kms_remote
     const kms_remote_mod = b.createModule(.{ .root_source_file = b.path("src/security/kms_remote.zig"), .target = target, .optimize = optimize });
     // kms_remote depends on transport/quic
@@ -1015,7 +758,7 @@ pub fn build(b: *std.Build) void {
     // Remote KMS hardening tests (negative auth matrix, expired attestation, concurrency stress & variance bench)
     const remote_kms_hardening_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms_hardening.zig"), .target = target, .optimize = optimize }) });
     remote_kms_hardening_tests.root_module.addImport("transport/quic", transport_quic_mod);
-    remote_kms_hardening_tests.root_module.addImport("vendor_quic", vendor_quic_mod);
+    remote_kms_hardening_tests.root_module.addImport("vendor_quic", quic_modules.quic_api);
     remote_kms_hardening_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     if (target.result.os.tag == .windows) {
         remote_kms_hardening_tests.linkLibC();
@@ -1025,7 +768,7 @@ pub fn build(b: *std.Build) void {
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
     const remote_kms_concurrency_bench = b.addExecutable(.{ .name = "bench_remote_kms_unwrap_concurrency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_remote_kms_unwrap_concurrency.zig"), .target = target, .optimize = optimize }) });
     remote_kms_concurrency_bench.root_module.addImport("transport/quic", transport_quic_mod);
-    remote_kms_concurrency_bench.root_module.addImport("vendor_quic", vendor_quic_mod);
+    remote_kms_concurrency_bench.root_module.addImport("vendor_quic", quic_modules.quic_api);
     remote_kms_concurrency_bench.root_module.addImport("security/kms_remote", kms_remote_mod);
     if (target.result.os.tag == .windows) {
         remote_kms_concurrency_bench.linkLibC();
