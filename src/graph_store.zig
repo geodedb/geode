@@ -12,35 +12,52 @@ const fle_integration = @import("fle_integration.zig");
 fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
     const builtin = @import("builtin");
 
+    // Helper to get fallback temp directory path
+    const getFallbackPath = struct {
+        fn get(alloc: std.mem.Allocator) ![]u8 {
+            if (builtin.os.tag == .windows) {
+                const temp = std.process.getEnvVarOwned(alloc, "TEMP") catch
+                    std.process.getEnvVarOwned(alloc, "TMP") catch {
+                    // Fallback to current directory if no temp env var
+                    return try alloc.dupe(u8, "geode_graph_store.dat");
+                };
+                defer alloc.free(temp);
+                return try std.fmt.allocPrint(alloc, "{s}\\geode_graph_store.dat", .{temp});
+            } else {
+                return try alloc.dupe(u8, "/tmp/geode_graph_store.dat");
+            }
+        }
+    }.get;
+
     // Check for GEODE_DATA_DIR environment variable
     const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| {
         // If not set or error, use platform-specific temp directory
         if (err == error.EnvironmentVariableNotFound) {
-            // On Windows, use TEMP directory; on Unix, use /tmp
-            if (builtin.os.tag == .windows) {
-                const temp = std.process.getEnvVarOwned(allocator, "TEMP") catch
-                    std.process.getEnvVarOwned(allocator, "TMP") catch {
-                    // Fallback to current directory if no temp env var
-                    return try allocator.dupe(u8, "geode_graph_store.dat");
-                };
-                defer allocator.free(temp);
-                return try std.fmt.allocPrint(allocator, "{s}\\geode_graph_store.dat", .{temp});
-            } else {
-                return try allocator.dupe(u8, "/tmp/geode_graph_store.dat");
-            }
+            return try getFallbackPath(allocator);
         }
         return err;
     };
     defer allocator.free(data_dir);
 
-    // Construct path: data_dir/graph_store.dat
-    // Ensure data_dir exists
+    // Try to create the directory - if it fails, fall back to temp directory
     std.fs.cwd().makePath(data_dir) catch |err| {
-        std.log.warn("Failed to create graph store directory '{s}' (storage may fail): {any}", .{ data_dir, err });
+        std.log.warn("Failed to create graph store directory '{s}', using temp directory instead: {any}", .{ data_dir, err });
+        return try getFallbackPath(allocator);
     };
 
-    // Use appropriate path separator for platform
+    // Verify we can actually write to the directory by creating a test file
     const sep = if (builtin.os.tag == .windows) "\\" else "/";
+    const test_path = try std.fmt.allocPrint(allocator, "{s}{s}.geode_write_test", .{ data_dir, sep });
+    defer allocator.free(test_path);
+
+    const test_file = std.fs.cwd().createFile(test_path, .{}) catch |err| {
+        std.log.warn("Cannot write to graph store directory '{s}', using temp directory instead: {any}", .{ data_dir, err });
+        return try getFallbackPath(allocator);
+    };
+    test_file.close();
+    std.fs.cwd().deleteFile(test_path) catch {};
+
+    // Directory is valid and writable, use it
     return try std.fmt.allocPrint(allocator, "{s}{s}graph_store.dat", .{ data_dir, sep });
 }
 

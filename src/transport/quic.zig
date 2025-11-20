@@ -359,6 +359,32 @@ pub const QuicClient = struct {
         self.connection = try quic.connect(self.endpoint.?, server_addr, address);
     }
 
+    pub fn connectEx(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {
+        // Create QUIC configuration for client with custom certificates
+        var quic_config = quic.QuicConfig{
+            .alpn = &[_][]const u8{"geode/1"},
+            .enable_datagram = false,
+            .enable_pacing = false,
+            .max_datagram_size = 1200,
+            .allow_insecure = false,
+            .max_idle_timeout_ms = 30000,
+            .ca_path = ca_cert_path,
+            .cert_path = client_cert_path,
+            .key_path = client_key_path,
+        };
+
+        // Initialize client endpoint (bind to any port)
+        var alloc = self.allocator;
+        self.endpoint = try quic.endpointInit(&alloc, "0.0.0.0:0", &quic_config);
+
+        // Create server address string
+        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
+        defer self.allocator.free(server_addr);
+
+        // Connect to server
+        self.connection = try quic.connect(self.endpoint.?, server_addr, address);
+    }
+
     pub fn waitForHandshake(self: *QuicClient, timeout_secs: u32) !void {
         if (self.endpoint == null or self.connection == null) {
             return QuicError.InvalidState;
