@@ -1,5 +1,5 @@
-# Multi-stage build for geode database with OpenSSL FIPS and MsQUIC support
-# Stage 1: Build OpenSSL 3.3.2 with FIPS module
+# Multi-stage build for geode database with OpenSSL and MsQUIC support
+# Stage 1: Build OpenSSL 3.3.2 (standard, no FIPS)
 FROM debian:bookworm-slim AS openssl-builder
 
 RUN apt-get update && apt-get install -y \
@@ -11,56 +11,51 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Download and build OpenSSL 3.3.2 with FIPS module
+# Download and build OpenSSL 3.3.2 (standard build)
 RUN curl -L https://www.openssl.org/source/openssl-3.3.2.tar.gz -o openssl-3.3.2.tar.gz && \
     tar xzf openssl-3.3.2.tar.gz && \
     cd openssl-3.3.2 && \
-    ./Configure enable-fips --prefix=/opt/openssl-fips --openssldir=/opt/openssl-fips/ssl && \
+    ./Configure --prefix=/opt/openssl --openssldir=/opt/openssl/ssl && \
     make -j$(nproc) && \
-    make install && \
-    # Generate FIPS module configuration
-    export LD_LIBRARY_PATH=/opt/openssl-fips/lib64:$LD_LIBRARY_PATH && \
-    /opt/openssl-fips/bin/openssl fipsinstall \
-        -out /opt/openssl-fips/ssl/fipsmodule.cnf \
-        -module /opt/openssl-fips/lib64/ossl-modules/fips.so && \
-    # Update openssl.cnf to include FIPS module
-    cat >> /opt/openssl-fips/ssl/openssl.cnf <<'EOF'
+    make install
 
-[openssl_init]
-providers = provider_sect
-
-[provider_sect]
-fips = fips_sect
-base = base_sect
-
-[base_sect]
-activate = 1
-
-[fips_sect]
-activate = 1
-EOF
-
-# Stage 2: Build MsQUIC (requires privileged mode for initialization)
+# Stage 2: Build MsQUIC with standard OpenSSL
 FROM debian:bookworm-slim AS msquic-builder
 
 RUN apt-get update && apt-get install -y \
     git \
     cmake \
     build-essential \
-    libssl-dev \
     liblttng-ust-dev \
     libnuma-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy OpenSSL from openssl-builder
+COPY --from=openssl-builder /opt/openssl /opt/openssl
+
+# Set OpenSSL environment for MsQUIC build
+ENV PKG_CONFIG_PATH=/opt/openssl/lib64/pkgconfig:$PKG_CONFIG_PATH \
+    LD_LIBRARY_PATH=/opt/openssl/lib64:$LD_LIBRARY_PATH \
+    PATH=/opt/openssl/bin:$PATH \
+    OPENSSL_ROOT_DIR=/opt/openssl
 
 WORKDIR /build
 
-# Clone and build MsQUIC v2.5.4 with logging disabled
+# Clone and build MsQUIC v2.5.4 with OpenSSL3 and logging enabled
 RUN git clone --depth 1 --branch v2.5.4 https://github.com/microsoft/msquic.git && \
     cd msquic && \
     git submodule update --init --recursive && \
     mkdir build && \
     cd build && \
-    cmake -G 'Unix Makefiles' -DCMAKE_BUILD_TYPE=Release -DQUIC_BUILD_SHARED=ON -DQUIC_ENABLE_LOGGING=OFF .. && \
+    cmake -G 'Unix Makefiles' \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DQUIC_BUILD_SHARED=ON \
+        -DQUIC_TLS_LIB=openssl \
+        -DQUIC_ENABLE_LOGGING=ON \
+        -DOPENSSL_ROOT_DIR=/opt/openssl \
+        -DCMAKE_PREFIX_PATH=/opt/openssl \
+        .. && \
     cmake --build . --config Release -j$(nproc) && \
     cmake --install . --prefix /opt/msquic
 
@@ -87,18 +82,18 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy OpenSSL FIPS from openssl-builder stage
-COPY --from=openssl-builder /opt/openssl-fips /opt/openssl-fips
+COPY --from=openssl-builder /opt/openssl /opt/openssl
 
 # Copy MsQUIC from msquic-builder stage
 COPY --from=msquic-builder /opt/msquic /opt/msquic
 
 # Set environment variables for OpenSSL FIPS and MsQUIC
-ENV OPENSSL_ROOT_DIR=/opt/openssl-fips \
-    OPENSSL_CONF=/opt/openssl-fips/ssl/openssl.cnf \
-    OPENSSL_MODULES=/opt/openssl-fips/lib64/ossl-modules \
-    PKG_CONFIG_PATH=/opt/openssl-fips/lib64/pkgconfig:/opt/msquic/lib/pkgconfig:$PKG_CONFIG_PATH \
-    LD_LIBRARY_PATH=/opt/openssl-fips/lib64:/opt/msquic/lib:$LD_LIBRARY_PATH \
-    PATH=/opt/openssl-fips/bin:$PATH
+ENV OPENSSL_ROOT_DIR=/opt/openssl \
+    OPENSSL_CONF=/opt/openssl/ssl/openssl.cnf \
+    OPENSSL_MODULES=/opt/openssl/lib64/ossl-modules \
+    PKG_CONFIG_PATH=/opt/openssl/lib64/pkgconfig:/opt/msquic/lib/pkgconfig:$PKG_CONFIG_PATH \
+    LD_LIBRARY_PATH=/opt/openssl/lib64:/opt/msquic/lib:$LD_LIBRARY_PATH \
+    PATH=/opt/openssl/bin:$PATH
 
 # Copy pre-downloaded Zig archive (avoids entropy issues in Docker build)
 COPY docker/zig/zig-x86_64-linux-0.15.1.tar.xz /tmp/zig.tar.xz
@@ -125,7 +120,7 @@ COPY . .
 RUN echo "Building with Zig $(zig version)..." && \
     zig build -Doptimize=ReleaseSafe \
       --search-prefix /opt/msquic \
-      --search-prefix /opt/openssl-fips \
+      --search-prefix /opt/openssl \
       --summary all 2>&1 | tee /tmp/build.log && \
     echo "✓ Build successful!" && \
     (zig build tools -Doptimize=ReleaseSafe --summary all 2>&1 || \
@@ -145,22 +140,22 @@ RUN apt-get update && apt-get install -y \
     chown -R geode:geode /data /certs /var/log/geode
 
 # Copy OpenSSL FIPS from builder
-COPY --from=builder /opt/openssl-fips /opt/openssl-fips
+COPY --from=builder /opt/openssl /opt/openssl
 
 # Copy MsQUIC from builder
 COPY --from=builder /opt/msquic /opt/msquic
 
 # Register MsQUIC and OpenSSL libraries with ldconfig
 RUN echo "/opt/msquic/lib" > /etc/ld.so.conf.d/msquic.conf && \
-    echo "/opt/openssl-fips/lib64" > /etc/ld.so.conf.d/openssl-fips.conf && \
+    echo "/opt/openssl/lib64" > /etc/ld.so.conf.d/openssl-fips.conf && \
     ldconfig
 
 # Set environment variables for runtime
-ENV OPENSSL_ROOT_DIR=/opt/openssl-fips \
-    OPENSSL_CONF=/opt/openssl-fips/ssl/openssl.cnf \
-    OPENSSL_MODULES=/opt/openssl-fips/lib64/ossl-modules \
-    LD_LIBRARY_PATH=/opt/openssl-fips/lib64:/opt/msquic/lib:$LD_LIBRARY_PATH \
-    PATH=/opt/openssl-fips/bin:$PATH
+ENV OPENSSL_ROOT_DIR=/opt/openssl \
+    OPENSSL_CONF=/opt/openssl/ssl/openssl.cnf \
+    OPENSSL_MODULES=/opt/openssl/lib64/ossl-modules \
+    LD_LIBRARY_PATH=/opt/openssl/lib64:/opt/msquic/lib:$LD_LIBRARY_PATH \
+    PATH=/opt/openssl/bin:$PATH
 
 # Copy all built binaries from builder
 COPY --from=builder /build/zig-out/bin/ /usr/local/bin/
