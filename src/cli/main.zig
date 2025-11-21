@@ -216,9 +216,12 @@ const ClientConfig = struct {
 
 // Thread wrapper for handleQuicStream
 fn handleQuicStreamThread(allocator: std.mem.Allocator, conn: anytype, stream: anytype) void {
+    const stream_ptr = @intFromPtr(stream);
+    std.debug.print("[THREAD-WRAPPER-{x}] ⚡ Thread started executing!\n", .{stream_ptr});
     handleQuicStream(allocator, conn, stream) catch |err| {
-        std.debug.print("Error in stream handler thread: {}\n", .{err});
+        std.debug.print("[THREAD-WRAPPER-{x}] Error in stream handler: {}\n", .{stream_ptr, err});
     };
+    std.debug.print("[THREAD-WRAPPER-{x}] Thread completed\n", .{stream_ptr});
 }
 
 fn runSimpleStatement(
@@ -268,6 +271,8 @@ fn handleControlStatement(
 fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !void {
     defer stream.close();
 
+    const stream_id = @intFromPtr(stream);
+    std.debug.print("[STREAM-{x}] Stream handler started\n", .{stream_id});
     log.debug("Handling QUIC stream", .{});
 
     // CANARY: REQ=REQ-AUTH-QUIC-001; FEATURE="QUIC Authentication"; ASPECT=ConnectionAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
@@ -277,7 +282,10 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
 
     // Store last query result for PULL requests
     var last_result_data: ?[]const u8 = null;
-    defer if (last_result_data) |data| allocator.free(data);
+    defer if (last_result_data) |data| {
+        std.debug.print("[STREAM-{x}] Freeing last_result_data on function exit\n", .{stream_id});
+        allocator.free(data);
+    };
 
     // Main message processing loop
     var message_count: usize = 0;
@@ -305,8 +313,11 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
 
         log.debug("Received message: {s}", .{msg});
 
+        // Strip trailing newline for JSON parsing
+        const msg_trimmed = std.mem.trimRight(u8, msg, "\r\n");
+
         // Parse JSON message
-        const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg, .{}) catch |err| {
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg_trimmed, .{}) catch |err| {
             std.debug.print("[JSON-PARSE-ERROR] Failed to parse JSON. Error: {}, Message length: {}, Content: '{s}'\n", .{err, msg.len, msg});
             const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid JSON\"}\n";
             try stream.writeAll(error_response);
@@ -485,6 +496,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             // Store result data for PULL request
             if (last_result_data) |old_data| allocator.free(old_data);
             last_result_data = try allocator.dupe(u8, result);
+            std.debug.print("[STREAM-{x}] RUN_GQL: Stored result data ({} bytes) at address {}\n", .{ stream_id, result.len, @intFromPtr(&last_result_data) });
 
             // Build and send SCHEMA response only (client will PULL for data)
             var response_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
@@ -514,7 +526,9 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
         } else if (std.mem.eql(u8, type_str, "PULL")) {
             // Handle PULL request - send result data from last query
             log.debug("Processing PULL request", .{});
+            std.debug.print("[STREAM-{x}] PULL: Checking last_result_data at address {}, value is: {s}\n", .{ stream_id, @intFromPtr(&last_result_data), if (last_result_data) |_| "NOT NULL" else "NULL" });
             if (last_result_data) |result_data| {
+                std.debug.print("[DEBUG-PULL] Found result data ({} bytes)\n", .{result_data.len});
                 // Parse the stored result
                 const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result_data, .{});
                 defer result_parsed.deinit();
@@ -832,77 +846,82 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
 
         if (test_exit_after_first and stream_count > 0) break;
 
-        // Poll to process packets (critical for handshake completion)
-        // Based on vendor/quic/cmd/quic-server.zig pattern
+        // Poll to process packets and timers (critical for handshake completion)
+        // RFC 9000 §6 mandates timers for loss detection and idle timeout
+        // Note: poll() handles both packet processing AND timer events
         quic_server.poll(20) catch {};
 
         // Try to accept newly-ready connections (non-blocking)
+        // Connections become available after QUIC handshake completes
         while (quic_server.tryAccept()) |conn| {
             connection_count += 1;
             std.debug.print("✅ Accepted QUIC connection #{}\n", .{connection_count});
-            active_connections.append(allocator, conn) catch {
+            std.debug.print("[DEBUG-APPEND] Before append, len={}\n", .{active_connections.items.len});
+            active_connections.append(allocator, conn) catch |err| {
+                std.debug.print("[DEBUG-APPEND] ❌ Append FAILED: {}\n", .{err});
                 conn.close();
                 continue;
             };
+            std.debug.print("[DEBUG-APPEND] After append, len={}\n", .{active_connections.items.len});
         }
 
-        // Try to accept streams from existing connections (after handshake completes)
+        // Poll streams from existing connections using direct stream ID polling
+        // RFC 9000 §2.1: Client-initiated bidirectional streams use IDs 0, 4, 8, 12, ...
         var i: usize = 0;
         while (i < active_connections.items.len) {
             const conn = active_connections.items[i];
 
             // Check if connection is drained (closed) - remove it
             if (conn.isDrained()) {
-                std.debug.print("Connection drained, removing from active list\n", .{});
                 conn.close();
                 _ = active_connections.swapRemove(i);
                 continue; // Don't increment i since we removed an element
             }
 
-            // Only try to accept streams if handshake is confirmed
+            // Only try to read streams if handshake is confirmed
             if (!conn.isHandshakeConfirmed()) {
                 // Handshake still in progress - skip for now
                 i += 1;
                 continue;
             }
 
-            // Try to accept a stream (non-blocking)
-            if (conn.acceptStream()) |stream| {
-                stream_count += 1;
-                std.debug.print("✅ Accepted stream #{} from connection\n", .{stream_count});
-
-                // Spawn thread to handle this stream
-                const thread = std.Thread.spawn(.{}, handleQuicStreamThread, .{ allocator, conn, stream }) catch |err| {
-                    std.debug.print("Failed to spawn stream handler thread: {}\n", .{err});
-                    stream.close();
-                    i += 1;
+            // Poll stream IDs directly (client-initiated bidirectional: 0, 4, 8, 12...)
+            // vendor/quic requires polling stream IDs, not accepting stream objects
+            var stream_id: u64 = 0;
+            while (stream_id < 256) : (stream_id += 4) {
+                // Try to read from this stream
+                var buf: [65536]u8 = undefined; // 64KB buffer for large transfers
+                const n = conn.inner.readStream(stream_id, buf[0..]) catch |err| {
+                    // Most streams won't have data - this is normal
+                    if (err != error.WouldBlock and err != error.StreamNotFound) {
+                        std.debug.print("[STREAM-POLL] Error reading stream {}: {}\n", .{ stream_id, err });
+                    }
                     continue;
                 };
-                thread.detach();
 
-                // Keep connection in list for potential future streams
-                i += 1;
+                if (n > 0) {
+                    stream_count += 1;
+                    std.debug.print("✅ Received {} bytes on stream #{} (total streams: {})\n", .{ n, stream_id, stream_count });
 
-                if (test_exit_after_first) {
-                    std.Thread.sleep(100 * std.time.ns_per_ms);
-                    break;
-                }
-            } else |err| {
-                // No stream available - just continue (don't log WouldBlock spam)
-                if (err != error.WouldBlock) {
-                    std.debug.print("acceptStream error on connection {}: {}\n", .{ i, err });
-                }
+                    // Process the data inline (no thread spawning needed)
+                    // For now, just echo it back
+                    const written = conn.inner.writeStream(stream_id, buf[0..n], false) catch |write_err| {
+                        std.debug.print("[STREAM-POLL] Error writing to stream {}: {}\n", .{ stream_id, write_err });
+                        continue;
+                    };
 
-                // Check if connection is closed
-                if (err == error.ConnectionClosed or err == error.ConnectionDrained) {
-                    std.debug.print("Connection closed via error, removing from active list\n", .{});
-                    conn.close();
-                    _ = active_connections.swapRemove(i);
-                    continue; // Don't increment i since we removed an element
+                    if (written < n) {
+                        std.debug.print("[STREAM-POLL] Partial write on stream {}: {} of {} bytes\n", .{ stream_id, written, n });
+                    }
+
+                    if (test_exit_after_first) {
+                        std.Thread.sleep(100 * std.time.ns_per_ms);
+                        break;
+                    }
                 }
-                // WouldBlock or other non-fatal - just continue to next connection
-                i += 1;
             }
+
+            i += 1;
         }
 
         // Small sleep to prevent busy-waiting
