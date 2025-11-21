@@ -168,6 +168,7 @@ pub fn handleQuicConnection(
         defer if (response.len > 0) gpa.free(response);
 
         if (response.len > 0) {
+            std.debug.print("[DEBUG-RESPONSE] Sending response (len={d}): {s}\n", .{ response.len, response });
             try stream.writeAll(response);
         }
     }

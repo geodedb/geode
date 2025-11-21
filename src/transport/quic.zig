@@ -256,6 +256,7 @@ pub const QuicConnection = struct {
 
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
         const stream_id = try api.acceptStream(self.inner);
+        std.debug.print("[WRAPPER-ACCEPT] wrapper_conn=0x{x} inner_conn=0x{x} stream_id={}\n", .{ @intFromPtr(self), @intFromPtr(self.inner), stream_id });
         const stream = try self.allocator.create(QuicStream);
         stream.* = QuicStream{
             .allocator = self.allocator,
@@ -303,6 +304,7 @@ pub const QuicStream = struct {
     }
 
     pub fn read(self: *QuicStream, buffer: []u8) !usize {
+        std.debug.print("[WRAPPER-READ] stream_conn=0x{x} stream_id={} buf_len={}\n", .{ @intFromPtr(self.connection), self.stream_id, buffer.len });
         return api.readStream(self.connection, self.stream_id, buffer);
     }
 
@@ -310,22 +312,41 @@ pub const QuicStream = struct {
         var temp_buf = try self.allocator.alloc(u8, max_size);
         defer self.allocator.free(temp_buf);
         var pos: usize = 0;
+        var retry_count: usize = 0;
+        const max_retries: usize = 100; // Max 100 retries = 500ms wait time
 
         while (pos < max_size) {
             var byte: [1]u8 = undefined;
             const n = self.read(&byte) catch |err| {
+                // If we haven't read anything yet, propagate WouldBlock
                 if (err == error.WouldBlock and pos == 0) return error.WouldBlock;
-                if (err == error.WouldBlock) break;
+                // If we've read some bytes but haven't found '\n' yet, keep trying
+                // This implements polling behavior for complete lines
+                if (err == error.WouldBlock) {
+                    retry_count += 1;
+                    if (retry_count > max_retries) {
+                        // After max retries, return partial data as error
+                        std.debug.print("[READLINE-TIMEOUT] Gave up after {} retries, pos={} bytes read\n", .{retry_count, pos});
+                        return error.UnexpectedEndOfStream;
+                    }
+                    std.Thread.sleep(5 * std.time.ns_per_ms); // Sleep 5ms before retrying (increased from 1ms)
+                    continue;
+                }
                 return err;
             };
 
             if (n == 0) {
-                if (pos == 0) return error.WouldBlock;
-                break;
+                // Stream ended - only return if we haven't read anything
+                if (pos == 0) return error.EndOfStream;
+                // If we've read partial data but no '\n', this is an error
+                // (client sent incomplete line before FIN)
+                std.debug.print("[READLINE-FIN] Stream ended with partial line, pos={} bytes\n", .{pos});
+                return error.UnexpectedEndOfStream;
             }
 
             temp_buf[pos] = byte[0];
             pos += 1;
+            retry_count = 0; // Reset retry count when we successfully read a byte
 
             if (byte[0] == '\n') break;
         }

@@ -306,7 +306,8 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
         log.debug("Received message: {s}", .{msg});
 
         // Parse JSON message
-        const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg, .{}) catch {
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg, .{}) catch |err| {
+            std.debug.print("[JSON-PARSE-ERROR] Failed to parse JSON. Error: {}, Message length: {}, Content: '{s}'\n", .{err, msg.len, msg});
             const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid JSON\"}\n";
             try stream.writeAll(error_response);
             continue;
