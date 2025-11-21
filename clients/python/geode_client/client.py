@@ -140,17 +140,21 @@ class GeodeProtocol(QuicConnectionProtocol):
         # because we use Queue instead of StreamReader
         if isinstance(event, StreamDataReceived):
             stream_id = event.stream_id
+            print(f"[DEBUG-QUIC] StreamDataReceived: stream_id={stream_id}, data_len={len(event.data)}, end_stream={event.end_stream}", file=sys.stderr)
 
             # Create queue if not exists
             if stream_id not in self._stream_readers:
+                print(f"[DEBUG-QUIC] Creating new queue for stream {stream_id}", file=sys.stderr)
                 self._stream_readers[stream_id] = asyncio.Queue()
 
             # Put data in queue
             if event.data:
+                print(f"[DEBUG-QUIC] Putting {len(event.data)} bytes into queue for stream {stream_id}", file=sys.stderr)
                 self._stream_readers[stream_id].put_nowait(event.data)
 
             # Mark end of stream
             if event.end_stream:
+                print(f"[DEBUG-QUIC] Marking end of stream {stream_id}", file=sys.stderr)
                 self._stream_readers[stream_id].put_nowait(None)
         elif isinstance(event, StreamReset):
             # Handle stream reset - mark stream as ended
@@ -254,7 +258,9 @@ class Connection:
             skip_verify: Skip TLS verification (insecure, dev only)
             server_name: SNI server name (defaults to host)
         """
-        self.host = host
+        # Normalize "localhost" to "127.0.0.1" to match vendor/quic examples
+        # This avoids IPv4/IPv6 resolution issues
+        self.host = "127.0.0.1" if host == "localhost" else host
         self.port = port
         self.page_size = page_size
         self.hello_name = hello_name
@@ -264,7 +270,8 @@ class Connection:
         self.client_cert = client_cert
         self.client_key = client_key
         self.skip_verify = skip_verify
-        self.server_name = server_name or host
+        # Use the normalized host for server_name to avoid SNI mismatch
+        self.server_name = server_name or self.host
 
         # Connection state
         self._protocol = None

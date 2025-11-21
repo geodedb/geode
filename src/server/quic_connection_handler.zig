@@ -3,7 +3,7 @@ const geode = @import("geode");
 const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
 const eval = geode.eval;
-const quic_transport = @import("transport/quic_msquic.zig");
+const quic_transport = @import("transport/quic.zig");
 const wal_mod = @import("wal");
 const query_plan_cache = @import("query_plan_cache.zig");
 const ServerState = @import("server_state.zig").ServerState;
@@ -70,9 +70,16 @@ pub fn handleQuicConnection(
     defer conn.close();
 
     // Poll the endpoint to process incoming STREAM frames before accepting
-    // This ensures that the client's initial stream creation is processed
-    // msquic uses event-driven callbacks, no polling needed
-    // Streams will be available when callback is invoked
+    // vendor/quic requires explicit polling to receive packets and populate stream queues
+    // Try polling with retries to ensure we receive the client's initial STREAM frame
+    var poll_attempts: usize = 0;
+    while (poll_attempts < 10) : (poll_attempts += 1) {
+        try transport.poll(50); // Poll for up to 50ms
+        if (conn.inner.hasIncomingStreams()) break;
+        if (poll_attempts > 0) {
+            std.debug.print("[POLL] Attempt {}/10: No streams yet, retrying...\n", .{poll_attempts + 1});
+        }
+    }
 
     // Accept a stream for the protocol communication
     log.debug("Attempting to accept stream", .{});
@@ -123,16 +130,36 @@ pub fn handleQuicConnection(
 
     // Process messages
     while (true) {
-        const line = stream.readLine(65536) catch |err| {
-            if (err == error.EndOfStream) break;
-            return err;
+        // Poll to ensure stream data is available before reading
+        // vendor/quic requires polling to receive packets into stream inboxes
+        var read_attempts: usize = 0;
+        const line = while (read_attempts < 20) : (read_attempts += 1) {
+            if (stream.readLine(65536)) |l| {
+                break l;
+            } else |err| {
+                if (err == error.EndOfStream) return;
+                if (err == error.WouldBlock) {
+                    // No data available yet, poll and retry
+                    try transport.poll(100);
+                    continue;
+                }
+                return err;
+            }
+        } else {
+            std.debug.print("[READ] Failed to read after 20 poll attempts\n", .{});
+            return error.Timeout;
         };
         defer gpa.free(line);
 
         if (line.len == 0) continue;
 
+        // DEBUG: Log exactly what we received
+        std.debug.print("[DEBUG-RECV] Received line (len={d}): '{s}'\n", .{ line.len, line });
+
         // Process the message and send response
         const response = processMessage(gpa, &state, line, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
+            std.debug.print("[DEBUG-ERROR] processMessage failed with error: {s}\n", .{@errorName(err)});
+            std.debug.print("[DEBUG-ERROR] Line that failed: '{s}'\n", .{line});
             const error_msg = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)});
             defer gpa.free(error_msg);
             try stream.writeAll(error_msg);

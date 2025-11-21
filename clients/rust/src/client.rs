@@ -342,11 +342,165 @@ impl Connection {
         Ok((page, cursor))
     }
 
+    /// Execute a query without parameters (synchronous-style blocking version for test runner)
+    pub fn query_sync(&mut self, gql: &str, params: Option<HashMap<String, serde_json::Value>>) -> Result<Page> {
+        // Use tokio runtime to block on async operation
+        let rt = tokio::runtime::Handle::try_current()
+            .or_else(|_| {
+                // Create a new runtime if we're not in a tokio context
+                tokio::runtime::Runtime::new()
+                    .map(|rt| rt.handle().clone())
+                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))
+            })?;
+
+        let params_map = params.unwrap_or_default();
+        let params_typed: HashMap<String, Value> = params_map
+            .into_iter()
+            .map(|(k, v)| {
+                let typed_val = crate::types::Value::from_json(v);
+                (k, typed_val)
+            })
+            .collect();
+
+        let (page, _cursor) = rt.block_on(self.query_with_params(gql, &params_typed))?;
+        Ok(page)
+    }
+
+    /// Begin a transaction
+    pub fn begin(&mut self) -> Result<()> {
+        let rt = tokio::runtime::Handle::try_current()
+            .or_else(|_| {
+                tokio::runtime::Runtime::new()
+                    .map(|rt| rt.handle().clone())
+                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))
+            })?;
+
+        rt.block_on(async {
+            let (mut send, mut recv) = self
+                .conn
+                .open_bi()
+                .await
+                .map_err(|e| Error::query(&format!("Failed to open stream: {}", e)))?;
+
+            let begin_msg = serde_json::json!({"type": "BEGIN"});
+            let begin_bytes = serde_json::to_vec(&begin_msg)
+                .map_err(|e| Error::query(&format!("Failed to serialize BEGIN: {}", e)))?;
+
+            send.write_all(&begin_bytes)
+                .await
+                .map_err(|e| Error::query(&format!("Failed to send BEGIN: {}", e)))?;
+            send.finish()
+                .map_err(|e| Error::query(&format!("Failed to finish BEGIN stream: {}", e)))?;
+
+            let response = timeout(Duration::from_secs(5), recv.read_to_end(1024))
+                .await
+                .map_err(|_| Error::query("BEGIN response timeout"))?
+                .map_err(|e| Error::query(&format!("Failed to read BEGIN response: {}", e)))?;
+
+            let response_json: serde_json::Value = serde_json::from_slice(&response)
+                .map_err(|e| Error::query(&format!("Invalid BEGIN response: {}", e)))?;
+
+            if response_json["type"] == "ERROR" {
+                let error_msg = response_json["error"].as_str().unwrap_or("Unknown error");
+                return Err(Error::query(error_msg));
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Commit a transaction
+    pub fn commit(&mut self) -> Result<()> {
+        let rt = tokio::runtime::Handle::try_current()
+            .or_else(|_| {
+                tokio::runtime::Runtime::new()
+                    .map(|rt| rt.handle().clone())
+                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))
+            })?;
+
+        rt.block_on(async {
+            let (mut send, mut recv) = self
+                .conn
+                .open_bi()
+                .await
+                .map_err(|e| Error::query(&format!("Failed to open stream: {}", e)))?;
+
+            let commit_msg = serde_json::json!({"type": "COMMIT"});
+            let commit_bytes = serde_json::to_vec(&commit_msg)
+                .map_err(|e| Error::query(&format!("Failed to serialize COMMIT: {}", e)))?;
+
+            send.write_all(&commit_bytes)
+                .await
+                .map_err(|e| Error::query(&format!("Failed to send COMMIT: {}", e)))?;
+            send.finish()
+                .map_err(|e| Error::query(&format!("Failed to finish COMMIT stream: {}", e)))?;
+
+            let response = timeout(Duration::from_secs(5), recv.read_to_end(1024))
+                .await
+                .map_err(|_| Error::query("COMMIT response timeout"))?
+                .map_err(|e| Error::query(&format!("Failed to read COMMIT response: {}", e)))?;
+
+            let response_json: serde_json::Value = serde_json::from_slice(&response)
+                .map_err(|e| Error::query(&format!("Invalid COMMIT response: {}", e)))?;
+
+            if response_json["type"] == "ERROR" {
+                let error_msg = response_json["error"].as_str().unwrap_or("Unknown error");
+                return Err(Error::query(error_msg));
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Rollback a transaction
+    pub fn rollback(&mut self) -> Result<()> {
+        let rt = tokio::runtime::Handle::try_current()
+            .or_else(|_| {
+                tokio::runtime::Runtime::new()
+                    .map(|rt| rt.handle().clone())
+                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))
+            })?;
+
+        rt.block_on(async {
+            let (mut send, mut recv) = self
+                .conn
+                .open_bi()
+                .await
+                .map_err(|e| Error::query(&format!("Failed to open stream: {}", e)))?;
+
+            let rollback_msg = serde_json::json!({"type": "ROLLBACK"});
+            let rollback_bytes = serde_json::to_vec(&rollback_msg)
+                .map_err(|e| Error::query(&format!("Failed to serialize ROLLBACK: {}", e)))?;
+
+            send.write_all(&rollback_bytes)
+                .await
+                .map_err(|e| Error::query(&format!("Failed to send ROLLBACK: {}", e)))?;
+            send.finish()
+                .map_err(|e| Error::query(&format!("Failed to finish ROLLBACK stream: {}", e)))?;
+
+            let response = timeout(Duration::from_secs(5), recv.read_to_end(1024))
+                .await
+                .map_err(|_| Error::query("ROLLBACK response timeout"))?
+                .map_err(|e| Error::query(&format!("Failed to read ROLLBACK response: {}", e)))?;
+
+            let response_json: serde_json::Value = serde_json::from_slice(&response)
+                .map_err(|e| Error::query(&format!("Invalid ROLLBACK response: {}", e)))?;
+
+            if response_json["type"] == "ERROR" {
+                let error_msg = response_json["error"].as_str().unwrap_or("Unknown error");
+                return Err(Error::query(error_msg));
+            }
+
+            Ok(())
+        })
+    }
+
     /// Close the connection
-    pub async fn close(self) {
+    pub fn close(&mut self) -> Result<()> {
         self.conn.close(0u32.into(), b"client closing");
-        // Wait a bit for the close to be sent
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Small delay for close to be sent
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        Ok(())
     }
 }
 

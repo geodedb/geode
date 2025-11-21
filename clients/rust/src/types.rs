@@ -334,6 +334,36 @@ impl Value {
             }
         }
     }
+
+    /// Create a Value from a serde_json::Value
+    pub fn from_json(json: serde_json::Value) -> Self {
+        match json {
+            serde_json::Value::Null => Self::null(),
+            serde_json::Value::Bool(b) => Self::bool(b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Self::int(i)
+                } else if let Some(f) = n.as_f64() {
+                    // Try to convert to decimal
+                    Self::string(f.to_string())
+                } else {
+                    Self::null()
+                }
+            }
+            serde_json::Value::String(s) => Self::string(s),
+            serde_json::Value::Array(arr) => {
+                let values: Vec<Value> = arr.into_iter().map(Self::from_json).collect();
+                Self::array(values)
+            }
+            serde_json::Value::Object(obj) => {
+                let mut map = HashMap::new();
+                for (k, v) in obj {
+                    map.insert(k, Self::from_json(v));
+                }
+                Self::object(map)
+            }
+        }
+    }
 }
 
 /// Decode a JSON value into a typed Value object

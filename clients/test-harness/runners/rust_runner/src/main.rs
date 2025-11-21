@@ -152,9 +152,8 @@ impl Runner {
         let mut conn_guard = self.connection.lock().unwrap();
         if conn_guard.is_none() {
             let client = self.client.clone();
-            let connection = tokio::task::spawn_blocking(move || client.connect())
-                .await
-                .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
+            // Connect is async, so call it directly
+            let connection = client.connect().await?;
             *conn_guard = Some(connection);
         }
         Ok(())
@@ -174,7 +173,7 @@ impl Runner {
                 if let Some(mut conn) = conn_opt {
                     let query_text = step.text.clone();
                     conn = tokio::task::spawn_blocking(move || {
-                        conn.query(&query_text, None)?;
+                        conn.query_sync(&query_text, None)?;
                         Ok::<_, anyhow::Error>(conn)
                     })
                     .await
@@ -208,7 +207,7 @@ impl Runner {
                 if let Some(mut conn) = conn_opt {
                     let query_text = step.text.clone();
                     let result = tokio::task::spawn_blocking(move || {
-                        conn.query(&query_text, None)?;
+                        conn.query_sync(&query_text, None)?;
                         Ok::<_, anyhow::Error>(conn)
                     })
                     .await;
@@ -358,7 +357,7 @@ impl Runner {
 
         let query_str = query.to_string();
         let (page, updated_conn) = tokio::task::spawn_blocking(move || {
-            let page = conn.query(&query_str, params_opt)?;
+            let page = conn.query_sync(&query_str, params_opt)?;
             Ok::<_, anyhow::Error>((page, conn))
         })
         .await
@@ -400,9 +399,7 @@ impl Runner {
             let result = match step.step_type.as_str() {
                 "connect" => {
                     let client = self.client.clone();
-                    let connection = tokio::task::spawn_blocking(move || client.connect())
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Spawn error: {}", e))??;
+                    let connection = client.connect().await?;
 
                     let mut guard = self.connection.lock().unwrap();
                     *guard = Some(connection);

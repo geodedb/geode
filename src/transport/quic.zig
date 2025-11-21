@@ -1,17 +1,14 @@
 const std = @import("std");
 
-// VENDOR QUIC MIGRATION COMPLETE - 2025-11-19
-// This module now uses the native Zig QUIC implementation from vendor/quic
-// Replaced Microsoft MsQuic with pure Zig implementation for:
-// - Zero C dependencies (pure Zig)
-// - Better cross-platform compatibility
-// - Cleaner integration with Zig ecosystem
-// - Full compatibility with Go, Python (aioquic), Rust (quinn), and Zig clients
+// VENDOR QUIC MIGRATION COMPLETE - 2025-11-20
+// This module now uses the vendor/quic library correctly
+// Following the pattern from vendor/quic/cmd/quic-server.zig
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2025-11-19
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2025-11-20
 
 // Import the vendor QUIC library
-const quic = @import("vendor_quic");
+const api = @import("vendor_quic");
+const pem = api.pem;
 
 // Re-export core types
 pub const QuicError = error{
@@ -36,10 +33,11 @@ inline fn debugLog(comptime fmt: []const u8, args: anytype) void {
 pub const QuicTransport = struct {
     allocator: std.mem.Allocator,
     config: Config,
-    endpoint: ?*quic.QuicEndpoint = null,
+    endpoint: ?*api.QuicEndpoint = null,
     connections: std.ArrayList(*QuicConnection),
-    cert_data: []const u8,
-    key_data: []const u8,
+    cert_der: ?[]const u8 = null,
+    key_der: ?[]const u8 = null,
+    alpn_storage: [1][]const u8 = undefined,
 
     pub const Config = struct {
         address: []const u8 = "0.0.0.0",
@@ -58,8 +56,6 @@ pub const QuicTransport = struct {
             .allocator = allocator,
             .config = config,
             .connections = try std.ArrayList(*QuicConnection).initCapacity(allocator, 0),
-            .cert_data = &.{},
-            .key_data = &.{},
         };
     }
 
@@ -71,15 +67,15 @@ pub const QuicTransport = struct {
         self.connections.deinit(self.allocator);
 
         if (self.endpoint) |ep| {
-            quic.endpointDeinit(ep);
+            api.endpointDeinit(ep);
             self.endpoint = null;
         }
 
-        if (self.cert_data.len > 0) {
-            self.allocator.free(self.cert_data);
+        if (self.cert_der) |cert| {
+            self.allocator.free(cert);
         }
-        if (self.key_data.len > 0) {
-            self.allocator.free(self.key_data);
+        if (self.key_der) |key| {
+            self.allocator.free(key);
         }
     }
 
@@ -101,38 +97,76 @@ pub const QuicTransport = struct {
             }
         };
 
-        // Create QUIC configuration with file paths (vendor/quic will load them)
-        var quic_config = quic.QuicConfig{
-            .alpn = &[_][]const u8{"geode/1"},
-            .enable_datagram = false,
-            .enable_pacing = false,
-            .max_datagram_size = 1200,
-            .cert_path = self.config.cert_path,
-            .key_path = self.config.key_path,
-            .ca_path = self.config.ca_path,
-            .max_idle_timeout_ms = @intCast(self.config.idle_timeout_ms),
+        // VENDOR QUIC PATTERN: Load and parse certificates from PEM to DER
+        // Following vendor/quic/cmd/quic-server.zig lines 39-96
+
+        // Load certificate file
+        const cert_file = try std.fs.cwd().openFile(self.config.cert_path, .{});
+        defer cert_file.close();
+        const cert_pem_data = try cert_file.readToEndAlloc(self.allocator, 1024 * 1024);
+        defer self.allocator.free(cert_pem_data);
+
+        // Parse PEM to DER
+        self.cert_der = pem.parseCertificate(self.allocator, cert_pem_data) catch |err| {
+            std.debug.print("{{\"level\":\"FATAL\",\"component\":\"transport\",\"msg\":\"Failed to parse certificate\",\"cert_path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.config.cert_path, err });
+            return QuicError.CertificateError;
         };
 
+        // Load private key file
+        const key_file = try std.fs.cwd().openFile(self.config.key_path, .{});
+        defer key_file.close();
+        const key_pem_data = try key_file.readToEndAlloc(self.allocator, 1024 * 1024);
+        defer self.allocator.free(key_pem_data);
+
+        // Parse PEM private key
+        self.key_der = pem.parsePrivateKey(self.allocator, key_pem_data) catch |err| {
+            std.debug.print("{{\"level\":\"FATAL\",\"component\":\"transport\",\"msg\":\"Failed to parse private key\",\"key_path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.config.key_path, err });
+            return QuicError.CertificateError;
+        };
+
+        // Create ALPN list in struct storage (must persist beyond listen() call!)
+        // The vendor QUIC library stores a pointer to this, so it can't be a local variable
+        self.alpn_storage[0] = "geode/1";
+
+        // Create QUIC configuration with inline DER data (NOT file paths!)
+        // This is the key difference - vendor library expects pre-parsed DER bytes
+        var quic_config = api.QuicConfig{
+            .inline_server_cert_der = self.cert_der,
+            .inline_server_priv_p256 = self.key_der,
+            .alpn = &self.alpn_storage,
+            .allow_insecure = false,
+            .max_idle_timeout_ms = @intCast(self.config.idle_timeout_ms),
+            .max_udp_payload = 1350,
+            .enable_datagram = false,
+        };
+
+        // Normalize "localhost" to "127.0.0.1" to match vendor/quic examples
+        // This avoids IPv4/IPv6 resolution issues
+        const bind_address = if (std.mem.eql(u8, self.config.address, "localhost"))
+            "127.0.0.1"
+        else
+            self.config.address;
+
         // Create bind address string
-        const bind_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ self.config.address, self.config.port });
+        const bind_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ bind_address, self.config.port });
         defer self.allocator.free(bind_addr);
 
-        // Initialize endpoint
+        // Initialize endpoint with vendor/quic API
         var alloc = self.allocator;
-        self.endpoint = try quic.endpointInit(&alloc, bind_addr, &quic_config);
+        self.endpoint = try api.endpointInit(&alloc, bind_addr, &quic_config);
 
-        std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"true\",\"port\":{d},\"library\":\"vendor/quic\",\"status\":\"listening\"}}\n", .{self.config.port});
+        std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"true\",\"port\":{d},\"library\":\"vendor/quic\",\"status\":\"listening\",\"cert_der_bytes\":{d},\"key_der_bytes\":{d}}}\n", .{ self.config.port, self.cert_der.?.len, self.key_der.?.len });
     }
 
     pub fn poll(self: *QuicTransport, timeout_ms: u32) !void {
         if (self.endpoint) |ep| {
-            try quic.poll(ep, @intCast(timeout_ms));
+            try api.poll(ep, @intCast(timeout_ms));
         }
     }
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
         if (self.endpoint) |ep| {
-            const conn = try quic.accept(ep);
+            const conn = try api.accept(ep);
             const wrapper = try self.allocator.create(QuicConnection);
             wrapper.* = QuicConnection{
                 .allocator = self.allocator,
@@ -147,7 +181,7 @@ pub const QuicTransport = struct {
 
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
         if (self.endpoint) |ep| {
-            const conn = quic.tryAccept(ep) orelse return null;
+            const conn = api.tryAccept(ep) orelse return null;
             const wrapper = self.allocator.create(QuicConnection) catch return null;
             wrapper.* = QuicConnection{
                 .allocator = self.allocator,
@@ -201,14 +235,14 @@ pub const QuicTransport = struct {
 
 pub const QuicConnection = struct {
     allocator: std.mem.Allocator,
-    inner: *quic.QuicConnection,
+    inner: *api.QuicConnection,
     streams: std.ArrayList(*QuicStream),
 
     pub fn openStream(self: *QuicConnection, bidirectional: bool) !*QuicStream {
         const stream_id = if (bidirectional)
-            try quic.openStream(self.inner)
+            try api.openStream(self.inner, true)
         else
-            try quic.openUni(self.inner);
+            try api.openStream(self.inner, false);
 
         const stream = try self.allocator.create(QuicStream);
         stream.* = QuicStream{
@@ -221,7 +255,7 @@ pub const QuicConnection = struct {
     }
 
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
-        const stream_id = try quic.acceptStream(self.inner);
+        const stream_id = try api.acceptStream(self.inner);
         const stream = try self.allocator.create(QuicStream);
         stream.* = QuicStream{
             .allocator = self.allocator,
@@ -233,11 +267,11 @@ pub const QuicConnection = struct {
     }
 
     pub fn isDrained(self: *QuicConnection) bool {
-        return quic.isDrained(self.inner);
+        return api.isDrained(self.inner);
     }
 
     pub fn isHandshakeConfirmed(self: *QuicConnection) bool {
-        return quic.isHandshakeConfirmed(self.inner);
+        return api.isHandshakeConfirmed(self.inner);
     }
 
     pub fn close(self: *QuicConnection) void {
@@ -246,17 +280,17 @@ pub const QuicConnection = struct {
             self.allocator.destroy(stream);
         }
         self.streams.deinit(self.allocator);
-        quic.closeConnection(self.inner, 0) catch {};
+        api.closeConnection(self.inner, 0) catch {};
     }
 };
 
 pub const QuicStream = struct {
     allocator: std.mem.Allocator,
-    connection: *quic.QuicConnection,
+    connection: *api.QuicConnection,
     stream_id: u64,
 
     pub fn write(self: *QuicStream, data: []const u8) !usize {
-        return quic.writeStream(self.connection, self.stream_id, data, false);
+        return api.writeStream(self.connection, self.stream_id, data, false);
     }
 
     pub fn writeAll(self: *QuicStream, data: []const u8) !void {
@@ -269,7 +303,7 @@ pub const QuicStream = struct {
     }
 
     pub fn read(self: *QuicStream, buffer: []u8) !usize {
-        return quic.readStream(self.connection, self.stream_id, buffer);
+        return api.readStream(self.connection, self.stream_id, buffer);
     }
 
     pub fn readLine(self: *QuicStream, max_size: usize) ![]u8 {
@@ -304,31 +338,33 @@ pub const QuicStream = struct {
     }
 
     pub fn close(self: *QuicStream) void {
-        quic.closeStream(self.connection, self.stream_id, 0) catch {};
+        api.closeStream(self.connection, self.stream_id, 0) catch {};
     }
 
     pub fn finish(self: *QuicStream) !void {
-        _ = try quic.writeStream(self.connection, self.stream_id, &.{}, true);
+        _ = try api.writeStream(self.connection, self.stream_id, &.{}, true);
     }
 };
 
 pub const QuicClient = struct {
     allocator: std.mem.Allocator,
-    endpoint: ?*quic.QuicEndpoint = null,
-    connection: ?*quic.QuicConnection = null,
+    endpoint: ?*api.QuicEndpoint = null,
+    connection: ?*api.QuicConnection = null,
+    alpn_storage: [1][]const u8 = undefined,
 
     pub fn init(allocator: std.mem.Allocator) QuicClient {
         return QuicClient{
             .allocator = allocator,
+            .alpn_storage = [_][]const u8{"geode/1"},
         };
     }
 
     pub fn deinit(self: *QuicClient) void {
         if (self.connection) |conn| {
-            quic.closeConnection(conn, 0) catch {};
+            api.closeConnection(conn, 0) catch {};
         }
         if (self.endpoint) |ep| {
-            quic.endpointDeinit(ep);
+            api.endpointDeinit(ep);
         }
     }
 
@@ -337,35 +373,35 @@ pub const QuicClient = struct {
     }
 
     pub fn connectInsecure(self: *QuicClient, address: []const u8, port: u16, allow_insecure: bool) !void {
+        // ALPN is stored in struct field to persist beyond this function call
         // Create QUIC configuration for client
-        var quic_config = quic.QuicConfig{
-            .alpn = &[_][]const u8{"geode/1"},
+        var quic_config = api.QuicConfig{
+            .alpn = &self.alpn_storage,
             .enable_datagram = false,
-            .enable_pacing = false,
-            .max_datagram_size = 1200,
+            .max_udp_payload = 1350,
             .allow_insecure = allow_insecure,
             .max_idle_timeout_ms = 30000,
         };
 
         // Initialize client endpoint (bind to any port)
         var alloc = self.allocator;
-        self.endpoint = try quic.endpointInit(&alloc, "0.0.0.0:0", &quic_config);
+        self.endpoint = try api.endpointInit(&alloc, "0.0.0.0:0", &quic_config);
 
         // Create server address string
         const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
         defer self.allocator.free(server_addr);
 
         // Connect to server
-        self.connection = try quic.connect(self.endpoint.?, server_addr, address);
+        self.connection = try api.connect(self.endpoint.?, server_addr, address);
     }
 
     pub fn connectEx(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {
+        // ALPN is stored in struct field to persist beyond this function call
         // Create QUIC configuration for client with custom certificates
-        var quic_config = quic.QuicConfig{
-            .alpn = &[_][]const u8{"geode/1"},
+        var quic_config = api.QuicConfig{
+            .alpn = &self.alpn_storage,
             .enable_datagram = false,
-            .enable_pacing = false,
-            .max_datagram_size = 1200,
+            .max_udp_payload = 1350,
             .allow_insecure = false,
             .max_idle_timeout_ms = 30000,
             .ca_path = ca_cert_path,
@@ -375,14 +411,14 @@ pub const QuicClient = struct {
 
         // Initialize client endpoint (bind to any port)
         var alloc = self.allocator;
-        self.endpoint = try quic.endpointInit(&alloc, "0.0.0.0:0", &quic_config);
+        self.endpoint = try api.endpointInit(&alloc, "0.0.0.0:0", &quic_config);
 
         // Create server address string
         const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
         defer self.allocator.free(server_addr);
 
         // Connect to server
-        self.connection = try quic.connect(self.endpoint.?, server_addr, address);
+        self.connection = try api.connect(self.endpoint.?, server_addr, address);
     }
 
     pub fn waitForHandshake(self: *QuicClient, timeout_secs: u32) !void {
@@ -394,8 +430,8 @@ pub const QuicClient = struct {
         const start = std.time.nanoTimestamp();
 
         while (std.time.nanoTimestamp() - start < timeout_ns) {
-            try quic.poll(self.endpoint.?, 10);
-            if (quic.isHandshakeConfirmed(self.connection.?)) {
+            try api.poll(self.endpoint.?, 10);
+            if (api.isHandshakeConfirmed(self.connection.?)) {
                 return;
             }
             std.Thread.sleep(10 * std.time.ns_per_ms);
@@ -407,7 +443,7 @@ pub const QuicClient = struct {
     pub fn openStream(self: *QuicClient, bidirectional: bool) !*QuicClientStream {
         if (self.connection == null) return QuicError.InvalidState;
 
-        const stream_id = try quic.openStream(self.connection.?, bidirectional);
+        const stream_id = try api.openStream(self.connection.?, bidirectional);
 
         const stream = try self.allocator.create(QuicClientStream);
         stream.* = QuicClientStream{
@@ -424,18 +460,18 @@ pub const QuicClient = struct {
 
     pub fn poll(self: *QuicClient, timeout_ms: u32) !void {
         if (self.endpoint) |ep| {
-            try quic.poll(ep, @intCast(timeout_ms));
+            try api.poll(ep, @intCast(timeout_ms));
         }
     }
 };
 
 pub const QuicClientStream = struct {
     allocator: std.mem.Allocator,
-    connection: *quic.QuicConnection,
+    connection: *api.QuicConnection,
     stream_id: u64,
 
     pub fn write(self: *QuicClientStream, data: []const u8) !usize {
-        return quic.writeStream(self.connection, self.stream_id, data, false);
+        return api.writeStream(self.connection, self.stream_id, data, false);
     }
 
     pub fn writeAll(self: *QuicClientStream, data: []const u8) !void {
@@ -448,7 +484,7 @@ pub const QuicClientStream = struct {
     }
 
     pub fn read(self: *QuicClientStream, buffer: []u8) !usize {
-        return quic.readStream(self.connection, self.stream_id, buffer);
+        return api.readStream(self.connection, self.stream_id, buffer);
     }
 
     pub fn readLine(self: *QuicClientStream, max_size: usize) ![]u8 {
@@ -483,7 +519,7 @@ pub const QuicClientStream = struct {
     }
 
     pub fn close(self: *QuicClientStream) void {
-        quic.closeStream(self.connection, self.stream_id, 0) catch {};
+        api.closeStream(self.connection, self.stream_id, 0) catch {};
         self.allocator.destroy(self);
     }
 
@@ -492,6 +528,6 @@ pub const QuicClientStream = struct {
     }
 
     pub fn finish(self: *QuicClientStream) !void {
-        _ = try quic.writeStream(self.connection, self.stream_id, &.{}, true);
+        _ = try api.writeStream(self.connection, self.stream_id, &.{}, true);
     }
 };

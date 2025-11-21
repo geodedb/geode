@@ -326,6 +326,9 @@ class PythonRunner(ClientRunner):
     def __init__(self, server: str):
         super().__init__("python", server)
         self.runner_path = Path(__file__).parent / "runners" / "python_runner.py"
+        # Use venv Python if available
+        venv_python = Path(__file__).parent.parent / "python" / "venv" / "bin" / "python3"
+        self.python_exe = str(venv_python) if venv_python.exists() else sys.executable
 
     async def run_test(self, spec: Dict[str, Any], test: Dict[str, Any]) -> TestResult:
         start_time = time.time()
@@ -336,9 +339,9 @@ class PythonRunner(ClientRunner):
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
             test_file.write_text(yaml.dump(test_spec, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False))
 
-            # Run Python runner using the same Python interpreter
+            # Run Python runner using venv Python
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
+                self.python_exe,
                 str(self.runner_path),
                 "--spec",
                 str(test_file),
@@ -781,17 +784,19 @@ class TestHarness:
         verbose: bool = False,
         fail_fast: bool = False,
         manage_server: bool = True,
+        restart_server_between_tests: bool = True,
     ):
         self.server = server
         self.verbose = verbose
         self.fail_fast = fail_fast
         self.parallel = parallel
         self.manage_server = manage_server
+        self.restart_server_between_tests = restart_server_between_tests
         self.server_manager: Optional[GeodeServerManager] = None
 
         # Initialize runners (will be configured with actual server address in setup())
         self.runners: Dict[str, ClientRunner] = {}
-        self.requested_clients = clients or ["python", "go"]
+        self.requested_clients = clients or ["python", "go", "rust", "zig"]
 
     async def setup(self) -> bool:
         """Setup all runners."""
@@ -817,6 +822,10 @@ class TestHarness:
             temp_runners["python"] = PythonRunner(self.server)
         if "go" in self.requested_clients:
             temp_runners["go"] = GoRunner(self.server)
+        if "rust" in self.requested_clients:
+            temp_runners["rust"] = RustRunner(self.server)
+        if "zig" in self.requested_clients:
+            temp_runners["zig"] = ZigRunner(self.server)
 
         # Setup each runner
         available_runners = {}
@@ -858,6 +867,30 @@ class TestHarness:
                 if self.verbose:
                     print(f"Error stopping server: {e}", file=sys.stderr)
 
+    async def restart_server(self):
+        """Restart the managed server to ensure clean state between tests."""
+        if not self.server_manager:
+            return
+
+        if self.verbose:
+            print("    Restarting server for clean test isolation...")
+
+        # Stop current server
+        await self.server_manager.stop()
+
+        # Small delay to ensure port is released
+        await asyncio.sleep(0.5)
+
+        # Start new server (reuses same port allocation)
+        self.server = await self.server_manager.start()
+
+        # Update all runners with new server address
+        for runner in self.runners.values():
+            runner.server = self.server
+
+        if self.verbose:
+            print(f"    Server restarted at {self.server}")
+
     async def run_spec(self, spec_path: Path) -> List[TestResult]:
         """Run a test specification file."""
         # Load spec
@@ -886,6 +919,10 @@ class TestHarness:
                         )
                     )
                 continue
+
+            # Restart server between tests if enabled
+            if self.restart_server_between_tests and self.manage_server:
+                await self.restart_server()
 
             if self.verbose:
                 print(f"\n  Test: {test['name']}")
@@ -1042,8 +1079,8 @@ async def main():
     )
     parser.add_argument(
         "--clients",
-        default="python,go",
-        help="Comma-separated list of clients to test (default: all)",
+        default="python,go,rust,zig",
+        help="Comma-separated list of clients to test (default: python,go,rust,zig)",
     )
     parser.add_argument(
         "--parallel",
@@ -1077,6 +1114,7 @@ async def main():
         verbose=args.verbose,
         fail_fast=args.fail_fast,
         manage_server=manage_server,
+        restart_server_between_tests=False,  # Disabled: Server restart has issues
     )
 
     try:

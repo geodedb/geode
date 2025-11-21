@@ -444,10 +444,15 @@ pub fn buildErrorLineWithFlagsCustomStatus(allocator: std.mem.Allocator, code: [
 }
 
 pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !ClientMessage {
+    std.debug.print("[DEBUG-PARSE] Parsing line (len={d}): '{s}'\n", .{ line.len, line });
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
     defer parsed.deinit();
     const root = parsed.value;
-    if (root != .object) return error.Invalid;
+    std.debug.print("[DEBUG-PARSE] Parsed JSON successfully, checking if object...\n", .{});
+    if (root != .object) {
+        std.debug.print("[DEBUG-PARSE] ERROR: root is not an object!\n", .{});
+        return error.Invalid;
+    }
     const obj = root.object;
     const typ_val = obj.get("type") orelse return error.Invalid;
     if (typ_val != .string) return error.Invalid;

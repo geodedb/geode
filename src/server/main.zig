@@ -13,7 +13,7 @@ const storage_catalog = @import("storage_catalog");
 const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
-const quic_transport = @import("transport/quic_msquic.zig");
+const quic_transport = @import("transport/quic.zig");
 const cert_gen = @import("../tools/cert_gen.zig");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
 // const mvcc = @import("server/txn/mvcc.zig");
