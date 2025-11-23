@@ -193,10 +193,6 @@ pub const GeodeClient = struct {
             std.Thread.sleep(5 * std.time.ns_per_ms);
         }
 
-        if (self.recv_buffer.items.len > 0) {
-            std.debug.print("[RECV] timeout with {d} buffered bytes\n", .{self.recv_buffer.items.len});
-            std.debug.print("[RECV] buffer preview: {s}\n", .{self.recv_buffer.items});
-        }
         return error.ReceiveTimeout;
     }
 

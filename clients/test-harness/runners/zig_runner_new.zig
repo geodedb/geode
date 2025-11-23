@@ -84,6 +84,19 @@ const QueryResult = struct {
     }
 };
 
+const RunnerConfig = struct {
+    spec_path: []const u8,
+    host: []const u8,
+    port: u16,
+    json_output: bool,
+    verbose: bool,
+
+    fn deinit(self: RunnerConfig, allocator: Allocator) void {
+        allocator.free(self.spec_path);
+        allocator.free(self.host);
+    }
+};
+
 fn freeJsonValue(allocator: Allocator, value: *JsonValue) void {
     switch (value.*) {
         .string => |s| allocator.free(s),
@@ -530,6 +543,49 @@ fn getTypeString(obj: JsonObject) []const u8 {
     return "";
 }
 
+fn parseServer(allocator: Allocator, server: []const u8) !struct { host: []const u8, port: u16 } {
+    var host_port = std.mem.splitScalar(u8, server, ':');
+    const host_part = host_port.next() orelse "localhost";
+    const port_part = host_port.next() orelse "8443";
+    const port = std.fmt.parseInt(u16, port_part, 10) catch 8443;
+    const host = try allocator.dupe(u8, host_part);
+    return .{ .host = host, .port = port };
+}
+
+fn parseArgs(allocator: Allocator) !RunnerConfig {
+    var args = std.process.args();
+    _ = args.next(); // program name
+
+    var spec_path_opt: ?[]const u8 = null;
+    var server: []const u8 = "localhost:8443";
+    var json_output = false;
+    var verbose = false;
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--spec")) {
+            spec_path_opt = args.next() orelse return error.MissingSpecValue;
+        } else if (std.mem.eql(u8, arg, "--server")) {
+            server = args.next() orelse return error.MissingServerValue;
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            json_output = true;
+        } else if (std.mem.eql(u8, arg, "--verbose")) {
+            verbose = true;
+        }
+    }
+
+    const spec_path = spec_path_opt orelse return error.MissingSpec;
+    const server_parts = try parseServer(allocator, server);
+    const spec_copy = try allocator.dupe(u8, spec_path);
+
+    return RunnerConfig{
+        .spec_path = spec_copy,
+        .host = server_parts.host,
+        .port = server_parts.port,
+        .json_output = json_output,
+        .verbose = verbose,
+    };
+}
+
 const ClientContext = struct {
     allocator: Allocator,
     host: []const u8,
@@ -874,52 +930,24 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Parse command-line arguments
-    var args = try std.process.argsWithAllocator(allocator);
-    defer args.deinit();
-
-    _ = args.next(); // program name
-
-    var spec_path: ?[]const u8 = null;
-    var server: []const u8 = "localhost:8443";
-    var json_output = false;
-    var verbose = false;
-
-    while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--spec")) {
-            spec_path = args.next() orelse {
-                try getStdErr().writeAll("ERROR: --spec requires a value\n");
-                std.process.exit(2);
-            };
-        } else if (std.mem.eql(u8, arg, "--server")) {
-            server = args.next() orelse {
-                try getStdErr().writeAll("ERROR: --server requires a value\n");
-                std.process.exit(2);
-            };
-        } else if (std.mem.eql(u8, arg, "--json")) {
-            json_output = true;
-        } else if (std.mem.eql(u8, arg, "--verbose")) {
-            verbose = true;
+    var config = parseArgs(allocator) catch |err| {
+        switch (err) {
+            error.MissingSpec => try getStdErr().writeAll("ERROR: --spec is required\n"),
+            error.MissingSpecValue => try getStdErr().writeAll("ERROR: --spec requires a value\n"),
+            error.MissingServerValue => try getStdErr().writeAll("ERROR: --server requires a value\n"),
+            else => try getStdErr().writeAll("ERROR: failed to parse arguments\n"),
         }
-    }
-
-    if (spec_path == null) {
-        try getStdErr().writeAll("ERROR: --spec is required\n");
         std.process.exit(2);
-    }
+    };
+    defer config.deinit(allocator);
 
-    // Parse server
-    var host_port = std.mem.splitScalar(u8, server, ':');
-    const host = host_port.next() orelse "localhost";
-    const port_str = host_port.next() orelse "8443";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch 8443;
-
-    if (verbose) {
-        std.debug.print("Zig runner: Loading spec from {s}\n", .{spec_path.?});
-        std.debug.print("Server: {s}:{d}\n", .{ host, port });
+    if (config.verbose) {
+        std.debug.print("Zig runner: Loading spec from {s}\n", .{config.spec_path});
+        std.debug.print("Server: {s}:{d}\n", .{ config.host, config.port });
     }
 
     // Load spec file
-    const spec_file = try std.fs.cwd().openFile(spec_path.?, .{});
+    const spec_file = try std.fs.cwd().openFile(config.spec_path, .{});
     defer spec_file.close();
 
     const spec_content = try spec_file.readToEndAlloc(allocator, 10 * 1024 * 1024);
@@ -928,15 +956,11 @@ pub fn main() !void {
     const spec = try parseSpec(allocator, spec_content);
     defer freeSpec(allocator, spec);
 
-    var ctx = ClientContext{
-        .allocator = allocator,
-        .host = host,
-        .port = port,
-    };
+    var ctx = ClientContext{ .allocator = allocator, .host = config.host, .port = config.port };
     defer ctx.close();
 
     // Run setup
-    runSetup(allocator, &ctx, spec.setup, verbose);
+    runSetup(allocator, &ctx, spec.setup, config.verbose);
 
     var results = try std.ArrayList(TestResult).initCapacity(allocator, spec.tests.len);
     defer {
@@ -956,16 +980,16 @@ pub fn main() !void {
             continue;
         }
 
-        if (verbose) {
+        if (config.verbose) {
             std.debug.print("Running test: {s}\n", .{test_case.name});
         }
 
-        const res = runTest(allocator, &ctx, test_case, verbose);
+        const res = runTest(allocator, &ctx, test_case, config.verbose);
         try results.append(allocator, res);
     }
 
     // Run cleanup
-    runCleanup(allocator, &ctx, spec.cleanup, verbose);
+    runCleanup(allocator, &ctx, spec.cleanup, config.verbose);
 
     // Summary
     var summary = Summary{
@@ -988,7 +1012,7 @@ pub fn main() !void {
         }
     }
 
-    if (json_output) {
+    if (config.json_output) {
         try outputJson(allocator, summary, results.items);
     } else {
         try outputText(summary, results.items);
