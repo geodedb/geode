@@ -335,7 +335,11 @@ class PythonRunner(ClientRunner):
 
         try:
             # Create temporary test file
-            test_spec = {"tests": [test]}
+            test_spec = {
+                "setup": spec.get("setup", []),
+                "tests": [test],
+                "cleanup": spec.get("cleanup", []),
+            }
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
             test_file.write_text(yaml.dump(test_spec, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False))
 
@@ -425,7 +429,11 @@ class GoRunner(ClientRunner):
 
         try:
             # Create temporary test file
-            test_spec = {"tests": [test]}
+            test_spec = {
+                "setup": spec.get("setup", []),
+                "tests": [test],
+                "cleanup": spec.get("cleanup", []),
+            }
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
             test_file.write_text(yaml.dump(test_spec, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False))
 
@@ -565,7 +573,11 @@ class RustRunner(ClientRunner):
 
         try:
             # Create temporary test file
-            test_spec = {"tests": [test]}
+            test_spec = {
+                "setup": spec.get("setup", []),
+                "tests": [test],
+                "cleanup": spec.get("cleanup", []),
+            }
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
             test_file.write_text(yaml.dump(test_spec, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False))
 
@@ -685,7 +697,11 @@ class ZigRunner(ClientRunner):
 
         try:
             # Create temporary test file
-            test_spec = {"tests": [test]}
+            test_spec = {
+                "setup": spec.get("setup", []),
+                "tests": [test],
+                "cleanup": spec.get("cleanup", []),
+            }
             test_file = Path("/tmp") / f"test_{test['name']}.yaml"
             test_file.write_text(yaml.dump(test_spec, Dumper=IndentedDumper, default_flow_style=False, sort_keys=False))
 

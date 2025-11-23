@@ -37,11 +37,11 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 .PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
 .PHONY: geodetestlab geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
 .PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
-.PHONY: client-test-harness client-test-setup client-test-basic client-test-all client-test-html client-test-coverage
+.PHONY: client-test-harness client-test-setup client-test-basic client-test-all client-test-html client-test-coverage client-test-comprehensive
 .PHONY: deps deps-check
 
 # Default target - build everything including cross-compilation checks (non-blocking)
-all: sub build go-build test cross-test no-feature-flags status-generate
+all: sub build go-build test cross-test no-feature-flags status-generate client-test-comprehensive geodetestlab
 
 # Help target - show all available targets
 help:
@@ -432,7 +432,7 @@ load-dataset: build
 	fi
 
 # Geodetestlab test suite targets
-geodetestlab: build geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
+geodetestlab: build geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25 client-test-comprehensive
 	@echo "All geodetestlab tests complete"
 
 # Run comprehensive geodetestlab test suite
@@ -593,6 +593,10 @@ client-test-basic: client-test-setup
 client-test-all: client-test-setup
 	@echo "==> Running all client library test suites..."
 	@cd $(CLIENT_TEST_DIR) && $(MAKE) test-all
+
+client-test-comprehensive:
+	@echo "==> Running comprehensive client library test suites..."
+	@cd $(CLIENT_TEST_DIR) && $(MAKE) test-comprehensive
 
 client-test-html: client-test-setup
 	@echo "==> Running client tests with HTML dashboard..."

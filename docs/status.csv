@@ -1665,5 +1665,4 @@ REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001,Vector Index Population Integration,
 REQ-XXX-NNN,Feature Name,Category,TESTED,TestName,,team,YYYY-MM-DD,CONTRIBUTING.md
 REQ-ZIG-CLIENT-001,Zig Client,MsquicIntegration,IMPL,,,clients,2025-11-15,clients/zig/geode_client.zig
 REQ-ZIG-CLIENT-002,Zig Client v2,VendorQuicClient,IMPL,,,clients,2025-11-21,clients/zig/geode_client_v2.zig
-REQ-ZIG-RUNNER-001,Zig Test Runner,MsquicClient,IMPL,,,test-harness,2025-11-15,clients/test-harness/runners/zig_runner_new.zig
 identifier,name,component,IMPL,test_name,bench_name,team,2025-09-29,docs/archive/GROUND_TRUTH.md
