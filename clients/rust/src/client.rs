@@ -5,8 +5,9 @@ use quinn::{ClientConfig, Endpoint};
 use rustls::pki_types::{CertificateDer, ServerName as RustlsServerName};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::time::{timeout, Duration};
 
 use crate::error::{Error, Result};
@@ -113,10 +114,53 @@ impl Client {
 pub struct Connection {
     conn: quinn::Connection,
     page_size: usize,
+    send: quinn::SendStream,
+    reader: BufReader<quinn::RecvStream>,
+    next_request_id: u64,
 }
 
 impl Connection {
     async fn new(
+        host: &str,
+        port: u16,
+        skip_verify: bool,
+        page_size: usize,
+        hello_name: &str,
+        hello_ver: &str,
+        conformance: &str,
+    ) -> Result<Self> {
+        let mut last_err: Option<Error> = None;
+
+        for attempt in 1..=3 {
+            match Self::connect_once(
+                host,
+                port,
+                skip_verify,
+                page_size,
+                hello_name,
+                hello_ver,
+                conformance,
+            )
+            .await
+            {
+                Ok(conn) => return Ok(conn),
+                Err(e) => {
+                    last_err = Some(e);
+                    if attempt < 3 {
+                        eprintln!(
+                            "[QUINN] Connection attempt {} failed, retrying...",
+                            attempt
+                        );
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| Error::connection("Failed to connect")))
+    }
+
+    async fn connect_once(
         host: &str,
         port: u16,
         skip_verify: bool,
@@ -162,10 +206,14 @@ impl Connection {
             .map_err(|e| Error::connection(&format!("Failed to create endpoint: {}", e)))?;
         endpoint.set_default_client_config(client_config);
 
-        // Connect to server
-        let server_addr: SocketAddr = format!("{}:{}", host, port)
-            .parse()
-            .map_err(|e| Error::connection(&format!("Invalid address: {}", e)))?;
+        // Resolve server address (supports hostnames as well as IP literals)
+        let mut resolved_addrs = format!("{}:{}", host, port)
+            .to_socket_addrs()
+            .map_err(|e| Error::connection(&format!("Failed to resolve address {}:{} - {}", host, port, e)))?;
+
+        let server_addr: SocketAddr = resolved_addrs
+            .find(|addr| matches!(addr, SocketAddr::V4(_) | SocketAddr::V6(_)))
+            .ok_or_else(|| Error::connection("Invalid address: could not resolve host"))?;
 
         eprintln!("[QUINN] Connecting to {}", server_addr);
 
@@ -190,114 +238,90 @@ impl Connection {
 
         eprintln!("[QUINN] ✓ Connection established!");
 
-        // Open bidirectional stream for HELLO
-        let (mut send, mut recv) = conn
+        // Open a single bidirectional stream used for the entire session.
+        let (mut send, recv) = conn
             .open_bi()
             .await
             .map_err(|e| Error::connection(&format!("Failed to open stream: {}", e)))?;
 
-        // Send HELLO message
+        // Send HELLO message following Python/Go clients (newline-delimited JSON)
         let hello_msg = serde_json::json!({
             "type": "HELLO",
             "client_name": hello_name,
-            "client_version": hello_ver,
-            "conformance": conformance,
+            "client_ver": hello_ver,
+            "wanted_conformance": conformance,
         });
 
-        let hello_bytes = serde_json::to_vec(&hello_msg)
+        let mut hello_line = serde_json::to_string(&hello_msg)
             .map_err(|e| Error::connection(&format!("Failed to serialize HELLO: {}", e)))?;
+        hello_line.push('\n');
 
-        send.write_all(&hello_bytes)
+        send.write_all(hello_line.as_bytes())
             .await
             .map_err(|e| Error::connection(&format!("Failed to send HELLO: {}", e)))?;
-        send.finish()
-            .map_err(|e| Error::connection(&format!("Failed to finish HELLO stream: {}", e)))?;
 
-        eprintln!("[QUINN] Sent HELLO message");
+        // Wait for HELLO response (line-delimited JSON)
+        let mut reader = BufReader::new(recv);
+        let mut response_line = String::new();
+        let read_len = timeout(Duration::from_secs(5), reader.read_line(&mut response_line))
+            .await
+            .map_err(|_| Error::connection("HELLO response timeout"))?
+            .map_err(|e| Error::connection(&format!("Failed to read HELLO response: {}", e)))?;
 
-        // Wait for HELLO response
-        let response = timeout(
-            Duration::from_secs(5),
-            recv.read_to_end(1024 * 1024)
-        )
-        .await
-        .map_err(|_| Error::connection("HELLO response timeout"))?
-        .map_err(|e| Error::connection(&format!("Failed to read HELLO response: {}", e)))?;
+        if read_len == 0 {
+            return Err(Error::connection("Connection closed before HELLO response"));
+        }
 
-        let _hello_response: serde_json::Value = serde_json::from_slice(&response)
+        let hello_response: serde_json::Value = serde_json::from_str(&response_line)
             .map_err(|e| Error::connection(&format!("Invalid HELLO response: {}", e)))?;
+
+        if hello_response.get("type").and_then(|t| t.as_str()) != Some("HELLO") {
+            eprintln!("[QUINN] Unexpected HELLO response: {}", hello_response);
+        }
 
         eprintln!("[QUINN] ✓ HELLO handshake complete");
 
-        Ok(Self { conn, page_size })
+        Ok(Self {
+            conn,
+            page_size,
+            send,
+            reader,
+            next_request_id: 1,
+        })
     }
 
-    /// Execute a GQL query
-    pub async fn query(&self, gql: &str) -> Result<(Page, Option<String>)> {
-        self.query_with_params(gql, &HashMap::new()).await
+    async fn send_json_line(&mut self, msg: &serde_json::Value) -> Result<()> {
+        let mut line = serde_json::to_string(msg)
+            .map_err(|e| Error::connection(&format!("Failed to serialize message: {}", e)))?;
+        line.push('\n');
+        self.send
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| Error::connection(&format!("Failed to send message: {}", e)))?;
+        Ok(())
     }
 
-    /// Execute a GQL query with parameters
-    pub async fn query_with_params(
-        &self,
-        gql: &str,
-        params: &HashMap<String, Value>,
-    ) -> Result<(Page, Option<String>)> {
-        // Open bidirectional stream
-        let (mut send, mut recv) = self
-            .conn
-            .open_bi()
+    async fn read_json_line(&mut self, timeout_secs: u64) -> Result<serde_json::Value> {
+        let mut line = String::new();
+        let n = timeout(Duration::from_secs(timeout_secs), self.reader.read_line(&mut line))
             .await
-            .map_err(|e| Error::query(&format!("Failed to open stream: {}", e)))?;
+            .map_err(|_| Error::timeout())?
+            .map_err(|e| Error::connection(&format!("Failed to read response: {}", e)))?;
 
-        // Convert parameters to serde_json::Value
-        let params_json: serde_json::Map<String, serde_json::Value> = params
-            .iter()
-            .map(|(k, v)| (k.clone(), v.to_json()))
-            .collect();
-
-        // Send QUERY message
-        let query_msg = serde_json::json!({
-            "type": "QUERY",
-            "query": gql,
-            "parameters": params_json,
-            "page_size": self.page_size,
-        });
-
-        let query_bytes = serde_json::to_vec(&query_msg)
-            .map_err(|e| Error::query(&format!("Failed to serialize query: {}", e)))?;
-
-        send.write_all(&query_bytes)
-            .await
-            .map_err(|e| Error::query(&format!("Failed to send query: {}", e)))?;
-        send.finish()
-            .map_err(|e| Error::query(&format!("Failed to finish query stream: {}", e)))?;
-
-        // Read response
-        let response = timeout(
-            Duration::from_secs(30),
-            recv.read_to_end(10 * 1024 * 1024)
-        )
-        .await
-        .map_err(|_| Error::query("Query response timeout"))?
-        .map_err(|e| Error::query(&format!("Failed to read query response: {}", e)))?;
-
-        let response_json: serde_json::Value = serde_json::from_slice(&response)
-            .map_err(|e| Error::query(&format!("Invalid query response: {}", e)))?;
-
-        // Parse response
-        if response_json["type"] == "ERROR" {
-            let error_msg = response_json["error"]
-                .as_str()
-                .unwrap_or("Unknown error");
-            return Err(Error::query(error_msg));
+        if n == 0 {
+            return Err(Error::connection("Connection closed"));
         }
 
-        let columns: Vec<Column> = serde_json::from_value(response_json["columns"].clone())
-            .map_err(|e| Error::query(&format!("Failed to parse columns: {}", e)))?;
+        serde_json::from_str(&line)
+            .map_err(|e| Error::connection(&format!("Invalid JSON response: {}", e)))
+    }
 
-        // Parse rows using column types
-        let rows_array = response_json["rows"]
+    fn parse_rows(
+        &self,
+        rows_value: &serde_json::Value,
+        columns: &[Column],
+    ) -> Result<Vec<HashMap<String, Value>>> {
+        let rows_array = rows_value
             .as_array()
             .ok_or_else(|| Error::query("Response rows is not an array"))?;
 
@@ -309,7 +333,6 @@ impl Connection {
 
             let mut row = HashMap::new();
             for (col_name, col_value) in row_obj {
-                // Find column type
                 let col_type = columns
                     .iter()
                     .find(|c| &c.name == col_name)
@@ -322,37 +345,216 @@ impl Connection {
             rows.push(row);
         }
 
-        let page = Page {
-            columns,
-            rows,
-            ordered: response_json["ordered"].as_bool().unwrap_or(false),
-            order_keys: response_json["order_keys"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            final_page: response_json["final_page"].as_bool().unwrap_or(true),
+        Ok(rows)
+    }
+
+    async fn send_control(&mut self, msg_type: &str) -> Result<()> {
+        let msg = serde_json::json!({ "type": msg_type });
+        self.send_json_line(&msg).await?;
+
+        // Control frames typically echo back a STATUS/ACK result; treat ERROR specially.
+        let resp = self.read_json_line(5).await?;
+        if let Some(result) = resp.get("result") {
+            if result
+                .get("type")
+                .and_then(|t| t.as_str())
+                == Some("ERROR")
+            {
+                let code = result
+                    .get("code")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("UNKNOWN");
+                let message = result
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("Command failed");
+                return Err(Error::Query {
+                    code: code.to_string(),
+                    message: message.to_string(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Execute a GQL query
+    pub async fn query(&mut self, gql: &str) -> Result<(Page, Option<String>)> {
+        self.query_with_params(gql, &HashMap::new()).await
+    }
+
+    /// Execute a GQL query with parameters
+    pub async fn query_with_params(
+        &mut self,
+        gql: &str,
+        params: &HashMap<String, Value>,
+    ) -> Result<(Page, Option<String>)> {
+        let params_json: serde_json::Map<String, serde_json::Value> = params
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_json()))
+            .collect();
+
+        let run_msg = if params_json.is_empty() {
+            serde_json::json!({
+                "type": "RUN_GQL",
+                "text": gql,
+            })
+        } else {
+            serde_json::json!({
+                "type": "RUN_GQL",
+                "text": gql,
+                "params": params_json,
+            })
         };
 
-        let cursor = response_json["cursor"].as_str().map(String::from);
+        self.send_json_line(&run_msg)
+            .await
+            .map_err(|e| Error::query(format!("{}", e)))?;
 
-        Ok((page, cursor))
+        let schema_frame = self.read_json_line(10).await?;
+        let result = schema_frame
+            .get("result")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        let res_type = result
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+
+        if res_type == "ERROR" {
+            let code = result.get("code").and_then(|c| c.as_str()).unwrap_or("UNKNOWN");
+            let msg = result
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Query failed");
+            return Err(Error::Query {
+                code: code.to_string(),
+                message: msg.to_string(),
+            });
+        }
+
+        if res_type != "SCHEMA" {
+            return Err(Error::protocol(format!(
+                "Unexpected first frame: {}",
+                res_type
+            )));
+        }
+
+        let columns: Vec<Column> = serde_json::from_value(
+            result
+                .get("columns")
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::Array(vec![])),
+        )
+        .map_err(|e| Error::protocol(&format!("Failed to parse columns: {}", e)))?;
+
+        if std::env::var("GEODE_RUST_DEBUG").is_ok() {
+            eprintln!("[QUINN] Columns: {:?}", columns);
+        }
+
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
+
+        let pull_msg = serde_json::json!({
+            "type": "PULL",
+            "request_id": request_id,
+            "page_size": self.page_size,
+        });
+        self.send_json_line(&pull_msg)
+            .await
+            .map_err(|e| Error::query(format!("{}", e)))?;
+
+        let mut all_rows: Vec<HashMap<String, Value>> = Vec::new();
+        let mut ordered = false;
+        let mut order_keys: Vec<String> = Vec::new();
+        let mut final_page = true;
+
+        loop {
+            let frame = self.read_json_line(30).await?;
+            let result = frame
+                .get("result")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            let r#type = result
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+
+            match r#type {
+                "BINDINGS" => {
+                    ordered = result
+                        .get("ordered")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    order_keys = result
+                        .get("order_keys")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    let rows = self.parse_rows(
+                        result
+                            .get("rows")
+                            .unwrap_or(&serde_json::Value::Array(vec![])),
+                        &columns,
+                    )?;
+                    all_rows.extend(rows);
+
+                    final_page = result
+                        .get("final")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if final_page {
+                        break;
+                    }
+
+                    self.send_json_line(&pull_msg)
+                        .await
+                        .map_err(|e| Error::query(format!("{}", e)))?;
+                }
+                "RESULT" | "STATUS" | "PROFILE" => {
+                    final_page = true;
+                    break;
+                }
+                "ERROR" => {
+                    let msg = result
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Query failed");
+                    let code = result
+                        .get("code")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("UNKNOWN");
+                    return Err(Error::Query {
+                        code: code.to_string(),
+                        message: msg.to_string(),
+                    });
+                }
+                other => {
+                    return Err(Error::protocol(format!("Unexpected frame type: {}", other)));
+                }
+            }
+        }
+
+        let page = Page {
+            columns,
+            rows: all_rows,
+            ordered,
+            order_keys,
+            final_page,
+        };
+
+        Ok((page, None))
     }
 
     /// Execute a query without parameters (synchronous-style blocking version for test runner)
     pub fn query_sync(&mut self, gql: &str, params: Option<HashMap<String, serde_json::Value>>) -> Result<Page> {
-        // Use tokio runtime to block on async operation
-        let rt = tokio::runtime::Handle::try_current()
-            .or_else(|_| {
-                // Create a new runtime if we're not in a tokio context
-                tokio::runtime::Runtime::new()
-                    .map(|rt| rt.handle().clone())
-                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))
-            })?;
-
         let params_map = params.unwrap_or_default();
         let params_typed: HashMap<String, Value> = params_map
             .into_iter()
@@ -362,137 +564,54 @@ impl Connection {
             })
             .collect();
 
-        let (page, _cursor) = rt.block_on(self.query_with_params(gql, &params_typed))?;
-        Ok(page)
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let (page, _cursor) = handle.block_on(self.query_with_params(gql, &params_typed))?;
+                Ok(page)
+            }
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))?;
+                let (page, _cursor) = rt.block_on(self.query_with_params(gql, &params_typed))?;
+                Ok(page)
+            }
+        }
     }
 
     /// Begin a transaction
     pub fn begin(&mut self) -> Result<()> {
-        let rt = tokio::runtime::Handle::try_current()
-            .or_else(|_| {
-                tokio::runtime::Runtime::new()
-                    .map(|rt| rt.handle().clone())
-                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))
-            })?;
-
-        rt.block_on(async {
-            let (mut send, mut recv) = self
-                .conn
-                .open_bi()
-                .await
-                .map_err(|e| Error::query(&format!("Failed to open stream: {}", e)))?;
-
-            let begin_msg = serde_json::json!({"type": "BEGIN"});
-            let begin_bytes = serde_json::to_vec(&begin_msg)
-                .map_err(|e| Error::query(&format!("Failed to serialize BEGIN: {}", e)))?;
-
-            send.write_all(&begin_bytes)
-                .await
-                .map_err(|e| Error::query(&format!("Failed to send BEGIN: {}", e)))?;
-            send.finish()
-                .map_err(|e| Error::query(&format!("Failed to finish BEGIN stream: {}", e)))?;
-
-            let response = timeout(Duration::from_secs(5), recv.read_to_end(1024))
-                .await
-                .map_err(|_| Error::query("BEGIN response timeout"))?
-                .map_err(|e| Error::query(&format!("Failed to read BEGIN response: {}", e)))?;
-
-            let response_json: serde_json::Value = serde_json::from_slice(&response)
-                .map_err(|e| Error::query(&format!("Invalid BEGIN response: {}", e)))?;
-
-            if response_json["type"] == "ERROR" {
-                let error_msg = response_json["error"].as_str().unwrap_or("Unknown error");
-                return Err(Error::query(error_msg));
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(self.send_control("BEGIN")),
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(self.send_control("BEGIN"))
             }
-
-            Ok(())
-        })
+        }
     }
 
     /// Commit a transaction
     pub fn commit(&mut self) -> Result<()> {
-        let rt = tokio::runtime::Handle::try_current()
-            .or_else(|_| {
-                tokio::runtime::Runtime::new()
-                    .map(|rt| rt.handle().clone())
-                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))
-            })?;
-
-        rt.block_on(async {
-            let (mut send, mut recv) = self
-                .conn
-                .open_bi()
-                .await
-                .map_err(|e| Error::query(&format!("Failed to open stream: {}", e)))?;
-
-            let commit_msg = serde_json::json!({"type": "COMMIT"});
-            let commit_bytes = serde_json::to_vec(&commit_msg)
-                .map_err(|e| Error::query(&format!("Failed to serialize COMMIT: {}", e)))?;
-
-            send.write_all(&commit_bytes)
-                .await
-                .map_err(|e| Error::query(&format!("Failed to send COMMIT: {}", e)))?;
-            send.finish()
-                .map_err(|e| Error::query(&format!("Failed to finish COMMIT stream: {}", e)))?;
-
-            let response = timeout(Duration::from_secs(5), recv.read_to_end(1024))
-                .await
-                .map_err(|_| Error::query("COMMIT response timeout"))?
-                .map_err(|e| Error::query(&format!("Failed to read COMMIT response: {}", e)))?;
-
-            let response_json: serde_json::Value = serde_json::from_slice(&response)
-                .map_err(|e| Error::query(&format!("Invalid COMMIT response: {}", e)))?;
-
-            if response_json["type"] == "ERROR" {
-                let error_msg = response_json["error"].as_str().unwrap_or("Unknown error");
-                return Err(Error::query(error_msg));
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(self.send_control("COMMIT")),
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(self.send_control("COMMIT"))
             }
-
-            Ok(())
-        })
+        }
     }
 
     /// Rollback a transaction
     pub fn rollback(&mut self) -> Result<()> {
-        let rt = tokio::runtime::Handle::try_current()
-            .or_else(|_| {
-                tokio::runtime::Runtime::new()
-                    .map(|rt| rt.handle().clone())
-                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))
-            })?;
-
-        rt.block_on(async {
-            let (mut send, mut recv) = self
-                .conn
-                .open_bi()
-                .await
-                .map_err(|e| Error::query(&format!("Failed to open stream: {}", e)))?;
-
-            let rollback_msg = serde_json::json!({"type": "ROLLBACK"});
-            let rollback_bytes = serde_json::to_vec(&rollback_msg)
-                .map_err(|e| Error::query(&format!("Failed to serialize ROLLBACK: {}", e)))?;
-
-            send.write_all(&rollback_bytes)
-                .await
-                .map_err(|e| Error::query(&format!("Failed to send ROLLBACK: {}", e)))?;
-            send.finish()
-                .map_err(|e| Error::query(&format!("Failed to finish ROLLBACK stream: {}", e)))?;
-
-            let response = timeout(Duration::from_secs(5), recv.read_to_end(1024))
-                .await
-                .map_err(|_| Error::query("ROLLBACK response timeout"))?
-                .map_err(|e| Error::query(&format!("Failed to read ROLLBACK response: {}", e)))?;
-
-            let response_json: serde_json::Value = serde_json::from_slice(&response)
-                .map_err(|e| Error::query(&format!("Invalid ROLLBACK response: {}", e)))?;
-
-            if response_json["type"] == "ERROR" {
-                let error_msg = response_json["error"].as_str().unwrap_or("Unknown error");
-                return Err(Error::query(error_msg));
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(self.send_control("ROLLBACK")),
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| Error::query(&format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(self.send_control("ROLLBACK"))
             }
-
-            Ok(())
-        })
+        }
     }
 
     /// Close the connection

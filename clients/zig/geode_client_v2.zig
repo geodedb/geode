@@ -1,31 +1,19 @@
 const std = @import("std");
-const MsQuic = @import("msquic_wrapper.zig");
-const QuicStatus = MsQuic.QuicStatus;
+const quic = @import("vendor_quic");
 
-// CANARY: REQ=REQ-ZIG-CLIENT-002; FEATURE="Zig Client v2"; ASPECT=ClientSideMsquic; STATUS=IMPL; OWNER=clients; UPDATED=2025-11-16
-// Zig client using proper client-side msquic patterns from tools/zig-msquic
+// CANARY: REQ=REQ-ZIG-CLIENT-002; FEATURE="Zig Client v2"; ASPECT=VendorQuicClient; STATUS=IMPL; OWNER=clients; UPDATED=2025-11-21
+// Zig client now uses the shared vendor/quic transport for full compatibility with the server.
 
 pub const GeodeClient = struct {
     allocator: std.mem.Allocator,
-    msquic: ?*MsQuic.QUIC_API_TABLE = null,
-    registration: ?MsQuic.HQUIC = null,
-    configuration: ?MsQuic.HQUIC = null,
-    connection: ?MsQuic.HQUIC = null,
-    stream_ctx: ?*StreamContext = null,
-
     host: []const u8,
     port: u16,
     insecure: bool,
 
-    // Connection state tracking
-    connection_established: bool = false,
-    connection_mutex: std.Thread.Mutex = .{},
-
-    const alpn_name = "geode/1".*;
-    const alpn = MsQuic.QUIC_BUFFER{
-        .Length = @sizeOf(@TypeOf(alpn_name)) - 1,
-        .Buffer = @constCast(alpn_name[0..].ptr),
-    };
+    endpoint: ?*quic.QuicEndpoint = null,
+    conn: ?*quic.Connection = null,
+    stream_id: ?u64 = null,
+    recv_buffer: std.ArrayList(u8),
 
     pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16, insecure: bool) GeodeClient {
         return .{
@@ -33,112 +21,74 @@ pub const GeodeClient = struct {
             .host = host,
             .port = port,
             .insecure = insecure,
+            .endpoint = null,
+            .conn = null,
+            .stream_id = null,
+            .recv_buffer = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable,
         };
     }
 
+    pub fn deinit(self: *GeodeClient) void {
+        self.recv_buffer.deinit(self.allocator);
+        if (self.conn) |c| {
+            quic.closeConnection(c, 0) catch {};
+            if (self.endpoint) |ep| quic.destroy(ep, c);
+            self.conn = null;
+        }
+        if (self.endpoint) |ep| {
+            quic.endpointDeinit(ep);
+            self.endpoint = null;
+        }
+    }
+
+    fn ensureEndpoint(self: *GeodeClient) !void {
+        if (self.endpoint != null) return;
+
+        var cfg = quic.QuicConfig{
+            .version = .v1,
+            .alpn = &[_][]const u8{"geode/1"},
+            .cc = .cubic,
+            .enable_datagram = false,
+            .enable_spin_bit = false,
+            .grease = true,
+            .compatible_vn = false,
+            .enable_retry = false,
+            .token_secret = null,
+            .token_expiry_ms = 60000,
+            .enable_pacing = false,
+            .max_datagram_size = 1200,
+            .max_idle_timeout_ms = 30000,
+            .max_udp_payload = 1350,
+            .cert_path = null,
+            .key_path = null,
+            .ca_path = null,
+            .allow_insecure = self.insecure,
+            .aead_confidentiality_limit_override = null,
+            .aead_integrity_limit_override = null,
+            .inline_server_cert_der = null,
+            .inline_server_priv_p256 = null,
+        };
+
+        self.endpoint = try quic.endpointInit(&self.allocator, "0.0.0.0:0", &cfg);
+    }
+
     pub fn connect(self: *GeodeClient) !void {
-        // Lazy initialization of MsQuic API
-        if (self.msquic == null) {
-            // Open MsQuic API
-            var msquic: *MsQuic.QUIC_API_TABLE = undefined;
-            const msquic_ptr: [*c]?*const anyopaque = @ptrCast(&msquic);
-            if (QuicStatus.isError(MsQuic.MsQuicOpenVersion(MsQuic.QUIC_API_VERSION_2, msquic_ptr))) {
-                return error.MsQuicOpenFailed;
-            }
-            self.msquic = msquic;
-        }
+        try self.ensureEndpoint();
+        const ep = self.endpoint.?;
 
-        // Lazy initialization of registration
-        if (self.registration == null) {
-            const app_name: [:0]const u8 = "geode-zig-client";
-            const reg_config = MsQuic.QUIC_REGISTRATION_CONFIG{
-                .AppName = @ptrCast(app_name.ptr),
-                .ExecutionProfile = MsQuic.QUIC_EXECUTION_PROFILE_LOW_LATENCY,
-            };
-            var registration: MsQuic.HQUIC = undefined;
-            if (QuicStatus.isError(self.msquic.?.RegistrationOpen.?(&reg_config, &registration))) {
-                return error.RegistrationFailed;
-            }
-            self.registration = registration;
-        }
+        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ self.host, self.port });
+        defer self.allocator.free(server_addr);
 
-        // Lazy initialization of configuration
-        if (self.configuration == null) {
-            var configuration: MsQuic.HQUIC = undefined;
-            var settings = std.mem.zeroes(MsQuic.QuicSettings);
+        // When skipping verification, empty server_name is acceptable; otherwise pass host for SNI.
+        // Always provide SNI; allow_insecure disables verification when requested.
+        self.conn = try quic.connect(ep, server_addr, self.host);
 
-            settings.IdleTimeoutMs = 30000;
-            settings.IsSet.flags.IdleTimeoutMs = true;
-
-            settings.PeerBidiStreamCount = 100;
-            settings.IsSet.flags.PeerBidiStreamCount = true;
-
-            const alpn_array = [_]MsQuic.QUIC_BUFFER{alpn};
-            const settings_ptr: *const MsQuic.QUIC_SETTINGS = @ptrCast(&settings);
-            if (QuicStatus.isError(self.msquic.?.ConfigurationOpen.?(self.registration.?, &alpn_array, 1, settings_ptr, @sizeOf(@TypeOf(settings)), null, &configuration))) {
-                return error.ConfigurationFailed;
-            }
-
-            // Load client credentials
-            var cred_config = std.mem.zeroes(MsQuic.QUIC_CREDENTIAL_CONFIG);
-            cred_config.Type = .QUIC_CREDENTIAL_TYPE_NONE;  // CRITICAL: Must set Type field for client mode
-            cred_config.Flags = MsQuic.QUIC_CREDENTIAL_FLAG_CLIENT;
-            if (self.insecure) {
-                cred_config.Flags |= MsQuic.QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
-            }
-
-            const status = self.msquic.?.ConfigurationLoadCredential.?(configuration, &cred_config);
-            if (QuicStatus.isError(status)) {
-                return error.ConfigurationLoadCredentialFailed;
-            }
-
-            self.configuration = configuration;
-        }
-
-        // Open connection
-        var conn: MsQuic.HQUIC = undefined;
-        if (QuicStatus.isError(self.msquic.?.ConnectionOpen.?(
-            self.registration.?,
-            connectionCallback,
-            self,
-            &conn,
-        ))) {
-            return error.ConnectionOpenFailed;
-        }
-        self.connection = conn;
-        errdefer {
-            self.msquic.?.ConnectionShutdown.?(conn, MsQuic.QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
-            self.connection = null;
-        }
-
-        // Start connection to server
-        // MsQuic expects a null-terminated C string for the hostname
-        const host_z = try self.allocator.dupeZ(u8, self.host);
-        defer self.allocator.free(host_z);
-
-        const conn_start_status = self.msquic.?.ConnectionStart.?(
-            conn,
-            self.configuration.?,
-            MsQuic.QUIC_ADDRESS_FAMILY_UNSPEC,
-            @ptrCast(host_z.ptr),
-            self.port,
-        );
-        if (QuicStatus.isError(conn_start_status)) {
-            return error.ConnectionStartFailed;
-        }
-
-        // Wait for connection to establish (check the connection_established flag)
+        // Wait for handshake confirmation
         const timeout_ns: u64 = 30 * std.time.ns_per_s;
         const start = std.time.nanoTimestamp();
         while (std.time.nanoTimestamp() - start < timeout_ns) {
-            self.connection_mutex.lock();
-            const established = self.connection_established;
-            self.connection_mutex.unlock();
-
-            if (established) {
-                return; // Connection established successfully
-            }
-
+            quic.poll(ep, 10) catch {};
+            if (quic.isHandshakeConfirmed(self.conn.?)) return;
             std.Thread.sleep(10 * std.time.ns_per_ms);
         }
 
@@ -146,125 +96,121 @@ pub const GeodeClient = struct {
     }
 
     pub fn openStream(self: *GeodeClient) !void {
-        if (self.connection == null) {
-            return error.NotConnected;
+        if (self.conn == null) return error.NotConnected;
+        if (self.stream_id != null) return;
+
+        const sid = try quic.openStream(self.conn.?, true);
+        self.stream_id = sid;
+    }
+
+    fn poll(self: *GeodeClient, timeout_ms: u32) void {
+        if (self.endpoint) |ep| {
+            quic.poll(ep, @intCast(timeout_ms)) catch {};
+        }
+    }
+
+    fn writeAll(self: *GeodeClient, data: []const u8, fin: bool) !void {
+        if (self.conn == null or self.stream_id == null) return error.NoStream;
+        var written: usize = 0;
+        var attempts: usize = 0;
+        const max_attempts: usize = 2000;
+
+        while (written < data.len or (fin and data.len == 0 and attempts < max_attempts)) : (attempts += 1) {
+            const slice = data[written..];
+            const n = quic.writeStream(self.conn.?, self.stream_id.?, slice, fin and written + slice.len == data.len) catch |err| switch (err) {
+                error.KeysNotReady, error.FlowControlBlocked, error.WouldBlock, error.OutOfStreams => blk: {
+                    self.poll(10);
+                    std.Thread.sleep(1 * std.time.ns_per_ms);
+                    break :blk 0;
+                },
+                else => return err,
+            };
+
+            if (n == 0) {
+                self.poll(10);
+                std.Thread.sleep(1 * std.time.ns_per_ms);
+                continue;
+            }
+
+            written += n;
+            if (written >= data.len) break;
         }
 
-        // Create stream context
-        var stream_ctx = try self.allocator.create(StreamContext);
-        stream_ctx.client = self;
-        stream_ctx.handle = undefined;
-        stream_ctx.allocator = self.allocator;
-        stream_ctx.recv_buffer = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-        stream_ctx.mutex = .{};
-        stream_ctx.connected = false;  // Will be set by connection callback
-        self.stream_ctx = stream_ctx;
-        errdefer {
-            self.allocator.destroy(stream_ctx);
-            self.stream_ctx = null;
-        }
-
-        const stream_status = self.msquic.?.StreamOpen.?(
-            self.connection.?,
-            MsQuic.QUIC_STREAM_OPEN_FLAG_NONE,
-            StreamContext.streamCallback,
-            stream_ctx,
-            &stream_ctx.handle,
-        );
-        if (QuicStatus.isError(stream_status)) {
-            return error.StreamOpenFailed;
-        }
-
-        const start_status = self.msquic.?.StreamStart.?(stream_ctx.handle, MsQuic.QUIC_STREAM_START_FLAG_NONE);
-        if (QuicStatus.isError(start_status)) {
-            return error.StreamStartFailed;
-        }
-
-        // Stream started successfully
+        if (attempts >= max_attempts and written < data.len) return error.WriteError;
     }
 
     pub fn sendMessage(self: *GeodeClient, message: []const u8) !void {
-        const stream_ctx = self.stream_ctx orelse return error.NoStream;
+        if (self.stream_id == null) try self.openStream();
 
-        // Allocate buffer with newline
-        const data = try self.allocator.alloc(u8, message.len + 1);
-        defer self.allocator.free(data);
-        @memcpy(data[0..message.len], message);
-        data[message.len] = '\n';
+        const payload = try self.allocator.alloc(u8, message.len + 1);
+        defer self.allocator.free(payload);
+        @memcpy(payload[0..message.len], message);
+        payload[payload.len - 1] = '\n';
 
-        const buffer = MsQuic.QUIC_BUFFER{
-            .Length = @intCast(data.len),
-            .Buffer = data.ptr,
-        };
-
-        const msquic = self.msquic orelse return error.NotInitialized;
-        const buffer_array = [_]MsQuic.QUIC_BUFFER{buffer};
-        const status = msquic.StreamSend.?(
-            stream_ctx.handle,
-            &buffer_array,
-            1,
-            MsQuic.QUIC_SEND_FLAG_NONE,
-            null,
-        );
-
-        if (QuicStatus.isError(status)) {
-            return error.SendFailed;
-        }
-
-        // Give time for send to complete
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        try self.writeAll(payload, false);
     }
 
-    pub fn receiveMessage(self: *GeodeClient) ![]u8 {
-        const stream_ctx = self.stream_ctx orelse return error.NoStream;
+    pub fn receiveMessage(self: *GeodeClient, timeout_ms: u64) ![]u8 {
+        if (self.conn == null or self.stream_id == null) return error.NoStream;
 
-        const timeout_ns: u64 = 30 * std.time.ns_per_s;
+        const timeout_ns: u64 = timeout_ms * std.time.ns_per_ms;
         const start = std.time.nanoTimestamp();
 
+        var temp_buf: [4096]u8 = undefined;
         while (std.time.nanoTimestamp() - start < timeout_ns) {
-            stream_ctx.mutex.lock();
+            const n = quic.readStream(self.conn.?, self.stream_id.?, temp_buf[0..]) catch |err| switch (err) {
+                error.WouldBlock => blk: {
+                    self.poll(10);
+                    std.Thread.sleep(5 * std.time.ns_per_ms);
+                    break :blk 0;
+                },
+                error.InvalidStream => return error.NoStream,
+                else => return err,
+            };
 
-            // Look for newline in buffer
-            for (stream_ctx.recv_buffer.items, 0..) |byte, i| {
-                if (byte == '\n') {
-                    // Found complete message
-                    const msg = try self.allocator.alloc(u8, i);
-                    @memcpy(msg, stream_ctx.recv_buffer.items[0..i]);
-
-                    // Remove from buffer
-                    if (i + 1 < stream_ctx.recv_buffer.items.len) {
-                        std.mem.copyForwards(
-                            u8,
-                            stream_ctx.recv_buffer.items,
-                            stream_ctx.recv_buffer.items[i + 1 ..],
-                        );
-                    }
-                    const new_len = stream_ctx.recv_buffer.items.len - i - 1;
-                    stream_ctx.recv_buffer.shrinkRetainingCapacity(new_len);
-
-                    stream_ctx.mutex.unlock();
-                    return msg;
-                }
+            if (n > 0) {
+                try self.recv_buffer.appendSlice(self.allocator, temp_buf[0..n]);
             }
 
-            stream_ctx.mutex.unlock();
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            if (std.mem.indexOfScalar(u8, self.recv_buffer.items, '\n')) |idx| {
+                const msg_len = idx;
+                const msg = try self.allocator.alloc(u8, msg_len);
+                @memcpy(msg, self.recv_buffer.items[0..msg_len]);
+
+                // remove consumed data + newline
+                const remaining = self.recv_buffer.items.len - (msg_len + 1);
+                if (remaining > 0) {
+                    std.mem.copyForwards(u8, self.recv_buffer.items[0..remaining], self.recv_buffer.items[msg_len + 1 ..]);
+                    self.recv_buffer.items = self.recv_buffer.items[0..remaining];
+                } else {
+                    self.recv_buffer.items = self.recv_buffer.items[0..0];
+                }
+
+                return msg;
+            }
+
+            self.poll(10);
+            std.Thread.sleep(5 * std.time.ns_per_ms);
         }
 
+        if (self.recv_buffer.items.len > 0) {
+            std.debug.print("[RECV] timeout with {d} buffered bytes\n", .{self.recv_buffer.items.len});
+            std.debug.print("[RECV] buffer preview: {s}\n", .{self.recv_buffer.items});
+        }
         return error.ReceiveTimeout;
     }
 
     pub fn sendHello(self: *GeodeClient, client_name: []const u8, client_version: []const u8) !void {
         const msg = try std.fmt.allocPrint(
             self.allocator,
-            "{{\"type\":\"HELLO\",\"client_name\":\"{s}\",\"client_ver\":\"{s}\",\"wanted_conformance\":\"minimum\"}}",
+            "{{\"type\":\"HELLO\",\"client_name\":\"{s}\",\"client_ver\":\"{s}\",\"wanted_conformance\":\"min\"}}",
             .{ client_name, client_version },
         );
         defer self.allocator.free(msg);
         try self.sendMessage(msg);
     }
 
-    pub fn sendRunGql(self: *GeodeClient, request_id: []const u8, query: []const u8, params: ?std.json.Value) !void {
+    pub fn sendRunGql(self: *GeodeClient, request_id: u64, query: []const u8, params: ?std.json.Value) !void {
         const params_json = if (params) |p|
             try std.json.Stringify.valueAlloc(self.allocator, p, .{})
         else
@@ -273,17 +219,17 @@ pub const GeodeClient = struct {
 
         const msg = try std.fmt.allocPrint(
             self.allocator,
-            "{{\"type\":\"RUN_GQL\",\"request_id\":\"{s}\",\"text\":\"{s}\",\"params\":{s}}}",
+            "{{\"type\":\"RUN_GQL\",\"request_id\":{d},\"text\":\"{s}\",\"params\":{s}}}",
             .{ request_id, query, params_json },
         );
         defer self.allocator.free(msg);
         try self.sendMessage(msg);
     }
 
-    pub fn sendPull(self: *GeodeClient, request_id: []const u8, page_size: usize) !void {
+    pub fn sendPull(self: *GeodeClient, request_id: u64, page_size: usize) !void {
         const msg = try std.fmt.allocPrint(
             self.allocator,
-            "{{\"type\":\"PULL\",\"request_id\":\"{s}\",\"page_size\":{d}}}",
+            "{{\"type\":\"PULL\",\"request_id\":{d},\"page_size\":{d}}}",
             .{ request_id, page_size },
         );
         defer self.allocator.free(msg);
@@ -301,129 +247,6 @@ pub const GeodeClient = struct {
     pub fn sendRollback(self: *GeodeClient) !void {
         try self.sendMessage("{\"type\":\"ROLLBACK\"}");
     }
-
-    pub fn deinit(self: *GeodeClient) void {
-        if (self.stream_ctx) |ctx| {
-            ctx.deinit();
-            self.stream_ctx = null;
-        }
-
-        if (self.connection) |conn| {
-            if (self.msquic) |msquic| {
-                msquic.ConnectionShutdown.?(conn, MsQuic.QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
-            }
-            self.connection = null;
-        }
-
-        if (self.configuration) |config| {
-            if (self.msquic) |msquic| {
-                msquic.ConfigurationClose.?(config);
-            }
-            self.configuration = null;
-        }
-
-        if (self.registration) |reg| {
-            if (self.msquic) |msquic| {
-                msquic.RegistrationClose.?(reg);
-            }
-            self.registration = null;
-        }
-
-        if (self.msquic) |msquic| {
-            MsQuic.MsQuicClose(msquic);
-            self.msquic = null;
-        }
-    }
-
-    fn connectionCallback(
-        connection: MsQuic.HQUIC,
-        self_ptr: ?*anyopaque,
-        event: *const MsQuic.struct_QUIC_CONNECTION_EVENT,
-    ) callconv(.c) MsQuic.QUIC_STATUS {
-        const self: *GeodeClient = @ptrCast(@alignCast(self_ptr));
-
-        switch (event.*.Type) {
-            MsQuic.QUIC_CONNECTION_EVENT_CONNECTED => {
-                // Set connection established flag
-                self.connection_mutex.lock();
-                self.connection_established = true;
-                self.connection_mutex.unlock();
-
-                // Also update stream context if it exists
-                if (self.stream_ctx) |ctx| {
-                    ctx.mutex.lock();
-                    ctx.connected = true;
-                    ctx.mutex.unlock();
-                }
-            },
-            MsQuic.QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE => {
-                if (!event.*.unnamed_0.SHUTDOWN_COMPLETE.AppCloseInProgress) {
-                    if (self.msquic) |msquic| {
-                        msquic.ConnectionClose.?(connection);
-                    }
-                }
-            },
-            else => {},
-        }
-
-        return 0;
-    }
-
-    const StreamContext = struct {
-        client: *GeodeClient,
-        handle: MsQuic.HQUIC,
-        allocator: std.mem.Allocator,
-        recv_buffer: std.ArrayList(u8),
-        mutex: std.Thread.Mutex = .{},
-        connected: bool = false,
-
-        pub fn deinit(self: *StreamContext) void {
-            self.recv_buffer.deinit(self.allocator);
-            self.allocator.destroy(self);
-        }
-
-        fn streamCallback(
-            _: MsQuic.HQUIC,
-            self_ptr: ?*anyopaque,
-            event: *const MsQuic.struct_QUIC_STREAM_EVENT,
-        ) callconv(.c) MsQuic.QUIC_STATUS {
-            const self: *StreamContext = @ptrCast(@alignCast(self_ptr));
-
-            switch (event.*.Type) {
-                MsQuic.QUIC_STREAM_EVENT_RECEIVE => {
-                    const buffer_count = event.*.unnamed_0.RECEIVE.BufferCount;
-                    const buffers = event.*.unnamed_0.RECEIVE.Buffers;
-
-                    self.mutex.lock();
-                    defer self.mutex.unlock();
-
-                    var i: u32 = 0;
-                    while (i < buffer_count) : (i += 1) {
-                        const buf = buffers[i];
-                        const data = buf.Buffer[0..buf.Length];
-                        self.recv_buffer.appendSlice(self.allocator, data) catch {
-                            return MsQuic.QUIC_STATUS_OUT_OF_MEMORY;
-                        };
-                    }
-
-                    // MsQuic automatically considers data consumed when callback returns success
-                    // DO NOT call StreamReceiveComplete - it causes assertion failures
-                },
-                MsQuic.QUIC_STREAM_EVENT_SEND_COMPLETE => {
-                    // Send completed successfully
-                },
-                MsQuic.QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN => {
-                    // Peer closed send side
-                },
-                MsQuic.QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE => {
-                    // Stream shutdown complete
-                },
-                else => {},
-            }
-
-            return 0;
-        }
-    };
 };
 
 /// Helper function to execute a query
@@ -434,26 +257,26 @@ pub fn executeQuery(
     query: []const u8,
     params: ?std.json.Value,
     insecure: bool,
-) !std.json.Parsed(std.json.Value) {
-    var client = try GeodeClient.init(allocator, host, port, insecure);
-    defer client.deinit();
+    ) !std.json.Parsed(std.json.Value) {
+        var client = GeodeClient.init(allocator, host, port, insecure);
+        defer client.deinit();
 
     try client.connect();
 
     // Send HELLO
     try client.sendHello("geode-zig-client", "2.0.0");
-    const hello_response = try client.receiveMessage();
+    const hello_response = try client.receiveMessage(2000);
     defer allocator.free(hello_response);
 
     // Send query
-    const request_id = "req_1";
-    try client.sendRunGql(request_id, query, params);
-    const schema_response = try client.receiveMessage();
-    defer allocator.free(schema_response);
+        const request_id: u64 = 1;
+        try client.sendRunGql(request_id, query, params);
+        const schema_response = try client.receiveMessage(3000);
+        defer allocator.free(schema_response);
 
     // Pull results
-    try client.sendPull(request_id, 1000);
-    const bindings_response = try client.receiveMessage();
+        try client.sendPull(request_id, 1000);
+    const bindings_response = try client.receiveMessage(3000);
 
     // Parse and return
     return try std.json.parseFromSlice(

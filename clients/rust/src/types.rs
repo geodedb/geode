@@ -378,12 +378,21 @@ pub fn decode_value(raw: &serde_json::Value, type_name: &str) -> Result<Value> {
         "INT" => {
             if let Some(n) = raw.as_i64() {
                 Ok(Value::int(n))
+            } else if let Some(s) = raw.as_str() {
+                if let Ok(n) = s.parse::<i64>() {
+                    Ok(Value::int(n))
+                } else {
+                    Ok(Value::string(s))
+                }
             } else {
                 Ok(Value::string(raw.to_string()))
             }
         }
         "DECIMAL" => {
-            let s = raw.as_str().unwrap_or("");
+            let s = raw
+                .as_str()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| raw.to_string());
             if let Ok(dec) = s.parse::<Decimal>() {
                 Ok(Value::decimal(dec))
             } else {
@@ -393,6 +402,15 @@ pub fn decode_value(raw: &serde_json::Value, type_name: &str) -> Result<Value> {
         "BOOL" => {
             if let Some(b) = raw.as_bool() {
                 Ok(Value::bool(b))
+            } else if let Some(s) = raw.as_str() {
+                let lower = s.to_ascii_lowercase();
+                if lower == "true" {
+                    Ok(Value::bool(true))
+                } else if lower == "false" {
+                    Ok(Value::bool(false))
+                } else {
+                    Ok(Value::string(s))
+                }
             } else {
                 Ok(Value::string(raw.to_string()))
             }
@@ -484,6 +502,17 @@ pub fn decode_value(raw: &serde_json::Value, type_name: &str) -> Result<Value> {
                     map.insert(k.clone(), decode_value(v, "")?);
                 }
                 Ok(Value::object(map))
+            } else if let Some(b) = raw.as_bool() {
+                Ok(Value::bool(b))
+            } else if let Some(n) = raw.as_i64() {
+                Ok(Value::int(n))
+            } else if let Some(f) = raw.as_f64() {
+                let s = f.to_string();
+                if let Ok(dec) = s.parse::<Decimal>() {
+                    Ok(Value::decimal(dec))
+                } else {
+                    Ok(Value::string(s))
+                }
             } else if let Some(s) = raw.as_str() {
                 Ok(Value::string(s))
             } else {

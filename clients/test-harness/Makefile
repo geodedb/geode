@@ -1,4 +1,4 @@
-.PHONY: help setup test test-python test-go test-rust test-zig test-all clean build-all build-go build-rust build-zig report-html test-all-html test-auth test-perf analyze-perf analyze-coverage test-with-coverage
+.PHONY: help setup test test-python test-go test-rust test-zig test-all test-comprehensive clean build-all build-go build-rust build-zig report-html test-all-html test-auth test-perf analyze-perf analyze-coverage test-with-coverage
 
 # Python virtual environment settings
 VENV_DIR := .venv
@@ -35,6 +35,7 @@ help:
 	@echo "  test-rust        - Run tests on Rust client only"
 	@echo "  test-zig         - Run tests on Zig client only"
 	@echo "  test-all         - Run all test suites on all clients (JSON report)"
+	@echo "  test-comprehensive - Alias for test-all (full suite)"
 	@echo "  test-all-html    - Run all tests and generate HTML report"
 	@echo "  test-auth        - Run authentication tests"
 	@echo "  test-perf        - Run performance benchmarks"
@@ -134,6 +135,8 @@ test-zig: setup
 test-all: setup
 	@echo "Running all test suites on all clients..."
 	$(RUN_PYTHON) run_tests.py --verbose --report-json reports/results.json
+
+test-comprehensive: test-all
 
 test-transactions: setup
 	@echo "Running transaction tests..."

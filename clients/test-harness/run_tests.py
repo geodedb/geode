@@ -785,6 +785,7 @@ class TestHarness:
         fail_fast: bool = False,
         manage_server: bool = True,
         restart_server_between_tests: bool = True,
+        restart_server_between_clients: bool = True,
     ):
         self.server = server
         self.verbose = verbose
@@ -792,6 +793,7 @@ class TestHarness:
         self.parallel = parallel
         self.manage_server = manage_server
         self.restart_server_between_tests = restart_server_between_tests
+        self.restart_server_between_clients = restart_server_between_clients
         self.server_manager: Optional[GeodeServerManager] = None
 
         # Initialize runners (will be configured with actual server address in setup())
@@ -939,6 +941,23 @@ class TestHarness:
             else:
                 # Run clients sequentially
                 for name, runner in self.runners.items():
+                    if self.manage_server and self.restart_server_between_clients:
+                        # Tear down any existing client state and restart the server for isolation
+                        try:
+                            await runner.teardown()
+                        except Exception:
+                            # Ignore teardown errors during isolation
+                            pass
+
+                        await self.restart_server()
+
+                        # Clear cached connections on runners that maintain them
+                        if hasattr(runner, "connection"):
+                            try:
+                                runner.connection = None
+                            except Exception:
+                                pass
+
                     if self.verbose:
                         print(f"    Running {name}...", end=" ", flush=True)
 
@@ -1115,6 +1134,7 @@ async def main():
         fail_fast=args.fail_fast,
         manage_server=manage_server,
         restart_server_between_tests=False,  # Disabled: Server restart has issues
+        restart_server_between_clients=False,
     )
 
     try:

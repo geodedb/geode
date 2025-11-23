@@ -75,6 +75,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	// quic-go will return an error if the UDP receive buffer cannot be increased.
+	// In constrained CI environments this is expected, so disable the fatal check.
+	_ = os.Setenv("QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING", "true")
+
 	// Load spec
 	data, err := ioutil.ReadFile(*specPath)
 	if err != nil {

@@ -23,25 +23,25 @@ pub fn main() !void {
     std.debug.print("✓ HELLO sent!\n", .{});
 
     std.debug.print("Receiving HELLO response...\n", .{});
-    const hello_response = try client.receiveMessage();
+    const hello_response = try client.receiveMessage(2000);
     defer allocator.free(hello_response);
     std.debug.print("✓ HELLO response: {s}\n", .{hello_response});
 
     std.debug.print("Sending test query...\n", .{});
-    try client.sendRunGql("req_1", "RETURN 1 AS x", null);
+    try client.sendRunGql(1, "RETURN 1 AS x", null);
     std.debug.print("✓ Query sent!\n", .{});
 
     std.debug.print("Receiving SCHEMA response...\n", .{});
-    const schema_response = try client.receiveMessage();
+    const schema_response = try client.receiveMessage(3000);
     defer allocator.free(schema_response);
     std.debug.print("✓ SCHEMA response: {s}\n", .{schema_response});
 
     std.debug.print("Sending PULL...\n", .{});
-    try client.sendPull("req_1", 1000);
+    try client.sendPull(1, 1000);
     std.debug.print("✓ PULL sent!\n", .{});
 
     std.debug.print("Receiving BINDINGS response...\n", .{});
-    const bindings_response = try client.receiveMessage();
+    const bindings_response = try client.receiveMessage(3000);
     defer allocator.free(bindings_response);
     std.debug.print("✓ BINDINGS response: {s}\n", .{bindings_response});
 

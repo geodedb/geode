@@ -78,6 +78,7 @@ REQ-AUTH-POLICY-010,CLI Password Policy Validation,Security,IMPL,TestCANARY_REQ_
 REQ-AUTH-POLICY-011,Pre-Authentication Policy Check,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_011_PreAuthValidation,,security,2025-09-30,src/cli/main.zig
 REQ-AUTH-QUIC-001,QUIC Authentication,ConnectionAuth,IMPL,,,cli,2025-10-25,src/cli/main.zig
 REQ-AUTH-QUIC-003,QUIC Authentication,QueryAuth,IMPL,,,cli,2025-10-25,src/cli/main.zig
+REQ-AUTH-QUIC-003,QUIC Authentication,QueryAuth,IMPL,,,cli,2025-10-25,src/cli/main.zig
 REQ-AUTH-SESSION-001,LocalSessionStorage,SECURITY,IMPL,TestCANARY_REQ_AUTH_SESSION_001,,security,2025-10-14,src/cli/security/session_storage.zig
 REQ-AUTH-SESSION-002,SaveSessionToken,IMPL,IMPL,TestCANARY_REQ_AUTH_SESSION_002,,security,2025-10-14,src/cli/security/session_storage.zig
 REQ-AUTH-SESSION-003,LoadSessionToken,IMPL,IMPL,TestCANARY_REQ_AUTH_SESSION_003,,security,2025-10-14,src/cli/security/session_storage.zig
@@ -843,7 +844,7 @@ REQ-GQL-074,Network Transport,QUICClientConnect,TESTED,TestCANARY_REQ_GQL_074_QU
 REQ-GQL-074,Network Transport,QUICConnectionMigration,TESTED,TestCANARY_REQ_GQL_074_QUICConnectionMigration,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICConnectionParams,TESTED,TestCANARY_REQ_GQL_074_QUICConnectionParams,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICConnectionRecovery,TESTED,TestCANARY_REQ_GQL_074_QUICConnectionRecovery,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
-REQ-GQL-074,Network Transport,QUICCore,TESTED,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-11-19,src/transport/quic.zig
+REQ-GQL-074,Network Transport,QUICCore,TESTED,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-11-21,src/transport/quic.zig
 REQ-GQL-074,Network Transport,QUICCore,IMPL,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-11-14,src/transport/quic_msquic.zig
 REQ-GQL-074,Network Transport,QUICCore,TESTED,TestCANARY_REQ_GQL_074_QUICCore,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICErrorHandling,TESTED,TestCANARY_REQ_GQL_074_QUICErrorHandling,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
@@ -1663,6 +1664,6 @@ REQ-VECTOR-INDEX-POPULATION-003,Vector Index Population,JSONSerialization,TESTED
 REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001,Vector Index Population Integration,IntegrationTesting,IMPL,TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001,,claude,2025-01-05,tests/test_vector_index_population_integration.zig
 REQ-XXX-NNN,Feature Name,Category,TESTED,TestName,,team,YYYY-MM-DD,CONTRIBUTING.md
 REQ-ZIG-CLIENT-001,Zig Client,MsquicIntegration,IMPL,,,clients,2025-11-15,clients/zig/geode_client.zig
-REQ-ZIG-CLIENT-002,Zig Client v2,ClientSideMsquic,IMPL,,,clients,2025-11-16,clients/zig/geode_client_v2.zig
+REQ-ZIG-CLIENT-002,Zig Client v2,VendorQuicClient,IMPL,,,clients,2025-11-21,clients/zig/geode_client_v2.zig
 REQ-ZIG-RUNNER-001,Zig Test Runner,MsquicClient,IMPL,,,test-harness,2025-11-15,clients/test-harness/runners/zig_runner_new.zig
 identifier,name,component,IMPL,test_name,bench_name,team,2025-09-29,docs/archive/GROUND_TRUTH.md

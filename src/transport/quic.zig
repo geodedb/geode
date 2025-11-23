@@ -37,8 +37,8 @@ pub const QuicTransport = struct {
     config: Config,
     endpoint: ?Endpoint = null,
     connections: std.ArrayList(*QuicConnection),
-    cert_pem: ?[]const u8 = null,
-    key_pem: ?[]const u8 = null,
+    cert_der: ?[]u8 = null,
+    key_der: ?[]u8 = null,
 
     pub const Config = struct {
         address: []const u8 = "0.0.0.0",
@@ -72,10 +72,10 @@ pub const QuicTransport = struct {
             self.endpoint = null;
         }
 
-        if (self.cert_pem) |cert| {
+        if (self.cert_der) |cert| {
             self.allocator.free(cert);
         }
-        if (self.key_pem) |key| {
+        if (self.key_der) |key| {
             self.allocator.free(key);
         }
     }
@@ -98,15 +98,25 @@ pub const QuicTransport = struct {
             }
         };
 
-        // Load certificate file (keep PEM format for native API)
+        // Load and parse certificate file (convert to DER for inline TLS material)
         const cert_file = try std.fs.cwd().openFile(self.config.cert_path, .{});
         defer cert_file.close();
-        self.cert_pem = try cert_file.readToEndAlloc(self.allocator, 1024 * 1024);
+        const cert_pem = try cert_file.readToEndAlloc(self.allocator, 1024 * 1024);
+        defer self.allocator.free(cert_pem);
+        self.cert_der = api.pem.parseCertificate(self.allocator, cert_pem) catch |err| {
+            std.debug.print("{{\"component\":\"transport\",\"level\":\"ERROR\",\"msg\":\"failed to parse certificate\",\"path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.config.cert_path, err });
+            return QuicError.CertificateError;
+        };
 
-        // Load private key file (keep PEM format for native API)
+        // Load and parse private key (DER inline for TLS)
         const key_file = try std.fs.cwd().openFile(self.config.key_path, .{});
         defer key_file.close();
-        self.key_pem = try key_file.readToEndAlloc(self.allocator, 1024 * 1024);
+        const key_pem = try key_file.readToEndAlloc(self.allocator, 1024 * 1024);
+        defer self.allocator.free(key_pem);
+        self.key_der = api.pem.parsePrivateKey(self.allocator, key_pem) catch |err| {
+            std.debug.print("{{\"component\":\"transport\",\"level\":\"ERROR\",\"msg\":\"failed to parse private key\",\"path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.config.key_path, err });
+            return QuicError.CertificateError;
+        };
 
         // Create QUIC configuration using simplified public API
         // Note: Detailed RFC 9000 parameters (max_streams_bidi, max_stream_data_*, etc.)
@@ -132,8 +142,8 @@ pub const QuicTransport = struct {
             .allow_insecure = false,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
-            .inline_server_cert_der = null,
-            .inline_server_priv_p256 = null,
+            .inline_server_cert_der = self.cert_der,
+            .inline_server_priv_p256 = self.key_der,
         };
 
         // Normalize "localhost" to "127.0.0.1"
