@@ -101,7 +101,7 @@ Intelligent fuzzy matching for history search.
 #### Features:
 - **Levenshtein Distance**: Edit distance calculation
 - **Smart Scoring**: Multiple scoring factors
-  - Exact match: 1000 points
+  - Exact match: 5000 points
   - Starts with: 500 points
   - Contains: 300 points
   - Consecutive matches: Bonus points
@@ -111,7 +111,7 @@ Intelligent fuzzy matching for history search.
 - **Interactive Finder**: Real-time filtering
 
 #### Scoring Algorithm:
-1. Exact match bonus: +1000
+1. Exact match bonus: +5000
 2. Starts with bonus: +500
 3. Contains substring: +300 - (2 × position)
 4. All characters matched: +200
@@ -261,7 +261,7 @@ New meta commands for advanced features:
 
 ### Unit Tests
 
-**File**: `tests/test_repl_advanced_features.zig`
+**File**: `src/client/repl/test_repl_advanced_features.zig`
 
 Coverage:
 - ✅ Syntax highlighting (9 tests)
@@ -270,7 +270,7 @@ Coverage:
 - ✅ Session state (4 tests)
 - ✅ Integration tests (2 tests)
 
-Total: **26 comprehensive tests**
+Total: **44 tests including module self-tests**
 
 ### Test Categories:
 
@@ -311,7 +311,7 @@ Total: **26 comprehensive tests**
 
 ```bash
 # Run all advanced feature tests
-zig test tests/test_repl_advanced_features.zig
+zig test src/client/repl/test_repl_advanced_features.zig
 
 # Run specific module tests
 zig test src/client/repl/syntax_highlighter.zig
@@ -326,7 +326,7 @@ zig test src/client/repl/session_state.zig
 2. `src/client/repl/result_pager.zig` - Result pagination system
 3. `src/client/repl/fuzzy_search.zig` - Fuzzy search and matching
 4. `src/client/repl/session_state.zig` - Session persistence
-5. `tests/test_repl_advanced_features.zig` - Comprehensive test suite
+5. `src/client/repl/test_repl_advanced_features.zig` - Comprehensive test suite
 6. `REPL_ADVANCED_FEATURES.md` - This documentation
 
 ## User Guide

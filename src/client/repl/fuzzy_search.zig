@@ -70,7 +70,7 @@ pub fn fuzzyScore(allocator: std.mem.Allocator, query: []const u8, text: []const
 
     // Exact match bonus
     if (std.mem.eql(u8, query_lower, text_lower)) {
-        return 1000;
+        return 5000;
     }
 
     // Starts with bonus
@@ -132,13 +132,13 @@ pub fn fuzzySearch(
     candidates: []const []const u8,
     max_results: usize,
 ) ![]FuzzyMatch {
-    var matches = std.ArrayList(FuzzyMatch).init(allocator);
-    defer matches.deinit();
+    var matches = std.ArrayList(FuzzyMatch){};
+    defer matches.deinit(allocator);
 
     for (candidates, 0..) |text, i| {
         const score = try fuzzyScore(allocator, query, text);
         if (score > -500) { // Only include reasonable matches
-            try matches.append(.{
+            try matches.append(allocator, .{
                 .text = text,
                 .score = score,
                 .index = i,
@@ -169,17 +169,17 @@ pub const FuzzyFinder = struct {
         return .{
             .allocator = allocator,
             .candidates = candidates,
-            .query = std.ArrayList(u8).init(allocator),
+            .query = std.ArrayList(u8){},
         };
     }
 
     pub fn deinit(self: *FuzzyFinder) void {
-        self.query.deinit();
+        self.query.deinit(self.allocator);
     }
 
     pub fn updateQuery(self: *FuzzyFinder, query: []const u8) !void {
         self.query.clearRetainingCapacity();
-        try self.query.appendSlice(query);
+        try self.query.appendSlice(self.allocator, query);
         self.selected_index = 0;
     }
 
@@ -306,13 +306,13 @@ test "FuzzyFinder basic workflow" {
     defer finder.deinit();
 
     // Initial state - no query
-    var matches = try finder.getMatches();
+    const matches = try finder.getMatches();
     defer allocator.free(matches);
     try std.testing.expect(matches.len > 0);
 
     // Update query
     try finder.updateQuery("match");
-    var new_matches = try finder.getMatches();
+    const new_matches = try finder.getMatches();
     defer allocator.free(new_matches);
 
     // Should find MATCH query

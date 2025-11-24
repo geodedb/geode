@@ -82,8 +82,9 @@ pub fn highlight(allocator: std.mem.Allocator, input: []const u8, use_colors: bo
         return allocator.dupe(u8, input);
     }
 
-    var result = std.ArrayList(u8).init(allocator);
-    errdefer result.deinit();
+    const alloc = allocator;
+    var result = std.ArrayList(u8){};
+    errdefer result.deinit(alloc);
 
     var i: usize = 0;
     while (i < input.len) {
@@ -91,55 +92,54 @@ pub fn highlight(allocator: std.mem.Allocator, input: []const u8, use_colors: bo
 
         // Meta commands (starting with backslash)
         if (c == '\\') {
-            try result.appendSlice(Color.bright_magenta);
-            const start = i;
+            try result.appendSlice(alloc, Color.bright_magenta);
             while (i < input.len and !std.ascii.isWhitespace(input[i])) : (i += 1) {
-                try result.append(input[i]);
+                try result.append(alloc, input[i]);
             }
-            try result.appendSlice(Color.reset);
+            try result.appendSlice(alloc, Color.reset);
             continue;
         }
 
         // Comments (-- or //)
         if (i + 1 < input.len and ((c == '-' and input[i + 1] == '-') or (c == '/' and input[i + 1] == '/'))) {
-            try result.appendSlice(Color.dim);
-            try result.appendSlice(Color.bright_black);
+            try result.appendSlice(alloc, Color.dim);
+            try result.appendSlice(alloc, Color.bright_black);
             while (i < input.len and input[i] != '\n') : (i += 1) {
-                try result.append(input[i]);
+                try result.append(alloc, input[i]);
             }
-            try result.appendSlice(Color.reset);
+            try result.appendSlice(alloc, Color.reset);
             continue;
         }
 
         // String literals (single or double quoted)
         if (c == '\'' or c == '"') {
             const quote = c;
-            try result.appendSlice(Color.green);
-            try result.append(c);
+            try result.appendSlice(alloc, Color.green);
+            try result.append(alloc, c);
             i += 1;
             while (i < input.len) : (i += 1) {
                 const ch = input[i];
-                try result.append(ch);
+                try result.append(alloc, ch);
                 if (ch == quote) {
                     i += 1;
                     break;
                 }
                 if (ch == '\\' and i + 1 < input.len) {
                     i += 1;
-                    try result.append(input[i]);
+                    try result.append(alloc, input[i]);
                 }
             }
-            try result.appendSlice(Color.reset);
+            try result.appendSlice(alloc, Color.reset);
             continue;
         }
 
         // Numbers
         if (std.ascii.isDigit(c)) {
-            try result.appendSlice(Color.cyan);
+            try result.appendSlice(alloc, Color.cyan);
             while (i < input.len and (std.ascii.isDigit(input[i]) or input[i] == '.')) : (i += 1) {
-                try result.append(input[i]);
+                try result.append(alloc, input[i]);
             }
-            try result.appendSlice(Color.reset);
+            try result.appendSlice(alloc, Color.reset);
             continue;
         }
 
@@ -150,53 +150,53 @@ pub fn highlight(allocator: std.mem.Allocator, input: []const u8, use_colors: bo
             const word = input[start..i];
 
             if (isKeyword(word)) {
-                try result.appendSlice(Color.bold);
-                try result.appendSlice(Color.blue);
-                try result.appendSlice(word);
-                try result.appendSlice(Color.reset);
+                try result.appendSlice(alloc, Color.bold);
+                try result.appendSlice(alloc, Color.blue);
+                try result.appendSlice(alloc, word);
+                try result.appendSlice(alloc, Color.reset);
             } else {
                 // Regular identifier
-                try result.appendSlice(Color.white);
-                try result.appendSlice(word);
-                try result.appendSlice(Color.reset);
+                try result.appendSlice(alloc, Color.white);
+                try result.appendSlice(alloc, word);
+                try result.appendSlice(alloc, Color.reset);
             }
             continue;
         }
 
         // Operators
         if (isOperatorChar(c)) {
-            try result.appendSlice(Color.yellow);
+            try result.appendSlice(alloc, Color.yellow);
             while (i < input.len and isOperatorChar(input[i])) : (i += 1) {
-                try result.append(input[i]);
+                try result.append(alloc, input[i]);
             }
-            try result.appendSlice(Color.reset);
+            try result.appendSlice(alloc, Color.reset);
             continue;
         }
 
         // Parentheses and brackets
         if (c == '(' or c == ')' or c == '{' or c == '}' or c == '[' or c == ']') {
-            try result.appendSlice(Color.bright_yellow);
-            try result.append(c);
-            try result.appendSlice(Color.reset);
+            try result.appendSlice(alloc, Color.bright_yellow);
+            try result.append(alloc, c);
+            try result.appendSlice(alloc, Color.reset);
             i += 1;
             continue;
         }
 
         // Special characters (semicolon, comma, colon, dot)
         if (c == ';' or c == ',' or c == ':' or c == '.') {
-            try result.appendSlice(Color.bright_white);
-            try result.append(c);
-            try result.appendSlice(Color.reset);
+            try result.appendSlice(alloc, Color.bright_white);
+            try result.append(alloc, c);
+            try result.appendSlice(alloc, Color.reset);
             i += 1;
             continue;
         }
 
         // Default: just append the character
-        try result.append(c);
+        try result.append(alloc, c);
         i += 1;
     }
 
-    return result.toOwnedSlice();
+    return result.toOwnedSlice(alloc);
 }
 
 /// Highlight a single line of input as it's being typed
@@ -206,8 +206,8 @@ pub fn highlightInputLine(allocator: std.mem.Allocator, line: []const u8, use_co
 
 /// Strip ANSI color codes from text
 pub fn stripColors(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
-    var result = std.ArrayList(u8).init(allocator);
-    errdefer result.deinit();
+    var result = std.ArrayList(u8){};
+    errdefer result.deinit(allocator);
 
     var in_escape = false;
     for (text) |c| {
@@ -218,11 +218,11 @@ pub fn stripColors(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
                 in_escape = false;
             }
         } else {
-            try result.append(c);
+            try result.append(allocator, c);
         }
     }
 
-    return result.toOwnedSlice();
+    return result.toOwnedSlice(allocator);
 }
 
 test "isKeyword identifies GQL keywords" {

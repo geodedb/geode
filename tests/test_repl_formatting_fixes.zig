@@ -8,17 +8,19 @@ const Format = enum { table, csv, json };
 
 // Test helper to capture stdout output
 const OutputCapture = struct {
+    allocator: std.mem.Allocator,
     buffer: std.ArrayList(u8),
     sync_called: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) OutputCapture {
         return .{
-            .buffer = std.ArrayList(u8).init(allocator),
+            .allocator = allocator,
+            .buffer = std.ArrayList(u8){},
         };
     }
 
     pub fn deinit(self: *OutputCapture) void {
-        self.buffer.deinit();
+        self.buffer.deinit(self.allocator);
     }
 
     pub fn writer(self: *OutputCapture) Writer {
@@ -29,7 +31,7 @@ const OutputCapture = struct {
         context: *OutputCapture,
 
         pub fn writeAll(self: Writer, bytes: []const u8) !void {
-            try self.context.buffer.appendSlice(bytes);
+            try self.context.buffer.appendSlice(self.context.allocator, bytes);
         }
 
         pub fn sync(self: Writer) !void {
@@ -323,7 +325,7 @@ test "Welcome message formatting consistency" {
     // Should start with newline
     try testing.expect(output[0] == '\n');
     // Should have proper box structure
-    const lines = std.mem.split(u8, output, "\n");
+    const lines = std.mem.splitSequence(u8, output, "\n");
     var line_count: usize = 0;
     var line_iter = lines;
     while (line_iter.next()) |line| {
@@ -462,7 +464,7 @@ test "Large table output consistency" {
 
     // Should have proper table structure throughout
     var line_count: usize = 0;
-    var lines = std.mem.split(u8, output, "\n");
+    var lines = std.mem.splitSequence(u8, output, "\n");
     while (lines.next()) |line| {
         if (line.len > 0) {
             // Each non-empty line should start with '|'

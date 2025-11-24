@@ -11,6 +11,8 @@ pub const PagerConfig = struct {
     threshold: usize = 50,   // Auto-enable threshold
 };
 
+pub const Format = enum { table, csv, json };
+
 /// Pager state for managing result display
 pub const ResultPager = struct {
     allocator: std.mem.Allocator,
@@ -44,7 +46,7 @@ pub const ResultPager = struct {
         writer: anytype,
         parsed_result: std.json.Value,
         page: usize,
-        format: anytype,
+        format: Format,
     ) !bool {
         const root = parsed_result.object;
         const columns_value = root.get("columns") orelse return error.MissingColumns;
@@ -66,11 +68,11 @@ pub const ResultPager = struct {
         const page_rows = all_rows.items[start_row..end_row];
 
         // Create a temporary JSON structure for this page
-        var page_data = std.ArrayList(std.json.Value).init(self.allocator);
-        defer page_data.deinit();
+        var page_data = std.ArrayList(std.json.Value){};
+        defer page_data.deinit(self.allocator);
 
         for (page_rows) |row| {
-            try page_data.append(row);
+            try page_data.append(self.allocator, row);
         }
 
         // Display using the selected format
@@ -88,10 +90,8 @@ pub const ResultPager = struct {
         writer: anytype,
         columns: std.json.Array,
         rows: []std.json.Value,
-        format: anytype,
+        format: Format,
     ) !void {
-        _ = self;
-
         switch (format) {
             .table => try displayAsTable(writer, self.allocator, columns, rows),
             .csv => try displayAsCsv(writer, columns, rows),
@@ -271,52 +271,52 @@ fn displayAsCsv(writer: anytype, columns: std.json.Array, rows: []std.json.Value
 
 fn displayAsJson(writer: anytype, allocator: std.mem.Allocator, columns: std.json.Array, rows: []std.json.Value) !void {
     // Create a JSON object with columns and data
-    var output = std.ArrayList(u8).init(allocator);
-    defer output.deinit();
+    var output = std.ArrayList(u8){};
+    defer output.deinit(allocator);
 
-    try output.appendSlice("{\"columns\":[");
+    try output.appendSlice(allocator, "{\"columns\":[");
     for (columns.items, 0..) |col, i| {
-        if (i > 0) try output.appendSlice(",");
-        try output.appendSlice("\"");
-        try output.appendSlice(col.string);
-        try output.appendSlice("\"");
+        if (i > 0) try output.appendSlice(allocator, ",");
+        try output.appendSlice(allocator, "\"");
+        try output.appendSlice(allocator, col.string);
+        try output.appendSlice(allocator, "\"");
     }
-    try output.appendSlice("],\"data\":[");
+    try output.appendSlice(allocator, "],\"data\":[");
 
     for (rows, 0..) |row, row_idx| {
-        if (row_idx > 0) try output.appendSlice(",");
-        try output.appendSlice("[");
+        if (row_idx > 0) try output.appendSlice(allocator, ",");
+        try output.appendSlice(allocator, "[");
         const row_array = row.array;
         for (row_array.items, 0..) |cell, i| {
-            if (i > 0) try output.appendSlice(",");
+            if (i > 0) try output.appendSlice(allocator, ",");
             switch (cell) {
                 .string => |s| {
-                    try output.appendSlice("\"");
-                    try output.appendSlice(s);
-                    try output.appendSlice("\"");
+                    try output.appendSlice(allocator, "\"");
+                    try output.appendSlice(allocator, s);
+                    try output.appendSlice(allocator, "\"");
                 },
                 .integer => |n| {
                     var buf: [32]u8 = undefined;
                     const str = try std.fmt.bufPrint(&buf, "{d}", .{n});
-                    try output.appendSlice(str);
+                    try output.appendSlice(allocator, str);
                 },
                 .float => |f| {
                     var buf: [32]u8 = undefined;
                     const str = try std.fmt.bufPrint(&buf, "{d}", .{f});
-                    try output.appendSlice(str);
+                    try output.appendSlice(allocator, str);
                 },
                 .bool => |b| {
-                    try output.appendSlice(if (b) "true" else "false");
+                    try output.appendSlice(allocator, if (b) "true" else "false");
                 },
                 .null => {
-                    try output.appendSlice("null");
+                    try output.appendSlice(allocator, "null");
                 },
                 else => {},
             }
         }
-        try output.appendSlice("]");
+        try output.appendSlice(allocator, "]");
     }
-    try output.appendSlice("]}");
+    try output.appendSlice(allocator, "]}");
 
     try writer.writeAll(output.items);
 }

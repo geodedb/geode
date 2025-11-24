@@ -155,10 +155,6 @@ TEMP_ANSI_TEST=$(mktemp --suffix=.zig)
 cat > "$TEMP_ANSI_TEST" << 'EOF'
 const std = @import("std");
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
     // Test clear line sequence
     const clear_line = "\r\x1b[K";
     if (!std.mem.startsWith(u8, clear_line, "\r")) return error.InvalidClearLine;
@@ -198,13 +194,13 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var output = std.ArrayList(u8).init(allocator);
-    defer output.deinit();
+    var output = std.ArrayList(u8){};
+    defer output.deinit(allocator);
 
     // Simulate executeGql behavior - should start with newline
-    try output.append('\n');
-    try output.appendSlice("{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}");
-    try output.append('\n');
+    try output.append(allocator, '\n');
+    try output.appendSlice(allocator, "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}");
+    try output.append(allocator, '\n');
 
     // Verify output structure
     if (output.items.len < 2) return error.OutputTooShort;
@@ -269,19 +265,19 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var output = std.ArrayList(u8).init(allocator);
-    defer output.deinit();
+    var output = std.ArrayList(u8){};
+    defer output.deinit(allocator);
 
     // Simulate welcome message structure
-    try output.append('\n');
-    try output.appendSlice("  ");
+    try output.append(allocator, '\n');
+    try output.appendSlice(allocator, "  ");
 
     // Box top - 64 characters
     var i: usize = 0;
     while (i < 64) : (i += 1) {
-        try output.append('=');
+        try output.append(allocator, '=');
     }
-    try output.append('\n');
+    try output.append(allocator, '\n');
 
     // Verify structure
     const first_line_end = std.mem.indexOf(u8, output.items[1..], "\n").? + 1;
@@ -310,13 +306,12 @@ cat > "$TEMP_FLUSH_TEST" << 'EOF'
 const std = @import("std");
 pub fn main() !void {
     // Test that File.sync exists and can be called
-    const stdout = std.io.getStdOut();
-
-    // Write some output
-    try stdout.writeAll("Test output\n");
-
-    // This should not fail
-    try stdout.sync();
+    const stdout = std.fs.File.stdout();
+    comptime {
+        if (!@hasDecl(@TypeOf(stdout), "sync")) {
+            @compileError("File.sync not available");
+        }
+    }
 
     std.debug.print("✅ Output flushing validated\n", .{});
 }

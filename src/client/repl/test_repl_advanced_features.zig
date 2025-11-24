@@ -4,10 +4,10 @@ const testing = std.testing;
 // CANARY: REQ=REQ-REPL-ADVANCED-001; FEATURE="REPL Advanced Features"; ASPECT=Testing; STATUS=TESTED; TEST=test_repl_advanced_features; OWNER=repl; UPDATED=2025-11-17
 
 // Import the modules (adjust paths as needed in actual build)
-const syntax_highlighter = @import("../src/client/repl/syntax_highlighter.zig");
-const fuzzy_search = @import("../src/client/repl/fuzzy_search.zig");
-const result_pager = @import("../src/client/repl/result_pager.zig");
-const session_state = @import("../src/client/repl/session_state.zig");
+const syntax_highlighter = @import("syntax_highlighter.zig");
+const fuzzy_search = @import("fuzzy_search.zig");
+const result_pager = @import("result_pager.zig");
+const session_state = @import("session_state.zig");
 
 // ============================================================================
 // Syntax Highlighting Tests
@@ -189,13 +189,13 @@ test "fuzzy search: FuzzyFinder workflow" {
     defer finder.deinit();
 
     // No query - should return all
-    var matches = try finder.getMatches();
+    const matches = try finder.getMatches();
     defer testing.allocator.free(matches);
     try testing.expect(matches.len > 0);
 
     // Update query
     try finder.updateQuery("match");
-    var filtered = try finder.getMatches();
+    const filtered = try finder.getMatches();
     defer testing.allocator.free(filtered);
 
     // Should find MATCH queries
@@ -274,15 +274,15 @@ test "result pager: page out of bounds returns false" {
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json_data, .{});
     defer parsed.deinit();
 
-    var output = std.ArrayList(u8).init(testing.allocator);
-    defer output.deinit();
+    var output = std.ArrayList(u8){};
+    defer output.deinit(testing.allocator);
 
     // Page 0 should succeed
-    const result0 = try pager.displayPage(output.writer(), parsed.value, 0, .table);
+    const result0 = try pager.displayPage(output.writer(testing.allocator), parsed.value, 0, .table);
     try testing.expect(result0);
 
     // Page 10 (out of bounds) should fail
-    const result10 = try pager.displayPage(output.writer(), parsed.value, 10, .table);
+    const result10 = try pager.displayPage(output.writer(testing.allocator), parsed.value, 10, .table);
     try testing.expect(!result10);
 }
 
@@ -291,7 +291,7 @@ test "result pager: page out of bounds returns false" {
 // ============================================================================
 
 test "session state: save and load roundtrip" {
-    var tmp_dir = try testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const tmp_path = try tmp_dir.dir.realpathAlloc(testing.allocator, ".");
@@ -331,7 +331,7 @@ test "session state: save and load roundtrip" {
 }
 
 test "session state: handles null/missing fields" {
-    var tmp_dir = try testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const tmp_path = try tmp_dir.dir.realpathAlloc(testing.allocator, ".");

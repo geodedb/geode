@@ -279,6 +279,12 @@ pub fn build(b: *std.Build) void {
     decimal_tests.root_module.addImport("geode", root_mod);
     const run_decimal_tests = b.addRunArtifact(decimal_tests);
 
+    // REPL advanced feature coverage (syntax highlighting, fuzzy search, pager, session state)
+    const repl_advanced_tests = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/client/repl/test_repl_advanced_features.zig"), .target = target, .optimize = optimize }),
+    });
+    const run_repl_advanced_tests = b.addRunArtifact(repl_advanced_tests);
+
     const integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_integration.zig"), .target = target, .optimize = optimize }) });
     integration_tests.root_module.addImport("geode", root_mod);
     const run_integration_tests = b.addRunArtifact(integration_tests);
@@ -421,6 +427,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_graph_algo_tests.step);
     test_step.dependOn(&run_match_call_tests.step);
     test_step.dependOn(&run_decimal_tests.step);
+    test_step.dependOn(&run_repl_advanced_tests.step);
     test_step.dependOn(&run_integration_tests.step);
 
     // Extended built-ins CANARY adapter + decimal formatter tests

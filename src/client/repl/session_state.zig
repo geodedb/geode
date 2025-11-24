@@ -50,26 +50,26 @@ pub const SessionState = struct {
     /// Save session state to file
     pub fn save(self: *const SessionState, allocator: std.mem.Allocator, path: []const u8) !void {
         // Create JSON representation
-        var json = std.ArrayList(u8).init(allocator);
-        defer json.deinit();
+        var json = std.ArrayList(u8){};
+        defer json.deinit(allocator);
 
-        try json.appendSlice("{\n");
+        try json.appendSlice(allocator, "{\n");
 
         // Database
-        try json.appendSlice("  \"database\": ");
+        try json.appendSlice(allocator, "  \"database\": ");
         if (self.database) |db| {
-            try json.appendSlice("\"");
-            try json.appendSlice(db);
-            try json.appendSlice("\"");
+            try json.appendSlice(allocator, "\"");
+            try json.appendSlice(allocator, db);
+            try json.appendSlice(allocator, "\"");
         } else {
-            try json.appendSlice("null");
+            try json.appendSlice(allocator, "null");
         }
-        try json.appendSlice(",\n");
+        try json.appendSlice(allocator, ",\n");
 
         // Transaction state
         var buf: [256]u8 = undefined;
         const txn_line = try std.fmt.bufPrint(&buf, "  \"in_transaction\": {s},\n", .{if (self.in_transaction) "true" else "false"});
-        try json.appendSlice(txn_line);
+        try json.appendSlice(allocator, txn_line);
 
         // Format
         const format_str = switch (self.format) {
@@ -78,11 +78,11 @@ pub const SessionState = struct {
             .json => "json",
         };
         const format_line = try std.fmt.bufPrint(&buf, "  \"format\": \"{s}\",\n", .{format_str});
-        try json.appendSlice(format_line);
+        try json.appendSlice(allocator, format_line);
 
         // Timing
         const timing_line = try std.fmt.bufPrint(&buf, "  \"show_timing\": {s},\n", .{if (self.show_timing) "true" else "false"});
-        try json.appendSlice(timing_line);
+        try json.appendSlice(allocator, timing_line);
 
         // Keymap
         const keymap_str = switch (self.keymap) {
@@ -90,35 +90,35 @@ pub const SessionState = struct {
             .vi => "vi",
         };
         const keymap_line = try std.fmt.bufPrint(&buf, "  \"keymap\": \"{s}\",\n", .{keymap_str});
-        try json.appendSlice(keymap_line);
+        try json.appendSlice(allocator, keymap_line);
 
         // Last server
-        try json.appendSlice("  \"last_server\": ");
+        try json.appendSlice(allocator, "  \"last_server\": ");
         if (self.last_server) |server| {
-            try json.appendSlice("\"");
-            try json.appendSlice(server);
-            try json.appendSlice("\"");
+            try json.appendSlice(allocator, "\"");
+            try json.appendSlice(allocator, server);
+            try json.appendSlice(allocator, "\"");
         } else {
-            try json.appendSlice("null");
+            try json.appendSlice(allocator, "null");
         }
-        try json.appendSlice(",\n");
+        try json.appendSlice(allocator, ",\n");
 
         // Variables
-        try json.appendSlice("  \"variables\": {\n");
+        try json.appendSlice(allocator, "  \"variables\": {\n");
         var it = self.variables.iterator();
         var first = true;
         while (it.next()) |entry| {
-            if (!first) try json.appendSlice(",\n");
+            if (!first) try json.appendSlice(allocator, ",\n");
             first = false;
-            try json.appendSlice("    \"");
-            try json.appendSlice(entry.key_ptr.*);
-            try json.appendSlice("\": \"");
-            try json.appendSlice(entry.value_ptr.*);
-            try json.appendSlice("\"");
+            try json.appendSlice(allocator, "    \"");
+            try json.appendSlice(allocator, entry.key_ptr.*);
+            try json.appendSlice(allocator, "\": \"");
+            try json.appendSlice(allocator, entry.value_ptr.*);
+            try json.appendSlice(allocator, "\"");
         }
-        try json.appendSlice("\n  }\n");
+        try json.appendSlice(allocator, "\n  }\n");
 
-        try json.appendSlice("}\n");
+        try json.appendSlice(allocator, "}\n");
 
         // Write to file
         const file = try std.fs.cwd().createFile(path, .{});
@@ -217,7 +217,7 @@ pub const SessionState = struct {
 test "SessionState save and load" {
     const allocator = std.testing.allocator;
 
-    var tmp_dir = try std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
@@ -262,7 +262,7 @@ test "SessionState save and load" {
 test "SessionState handles missing fields" {
     const allocator = std.testing.allocator;
 
-    var tmp_dir = try std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
