@@ -349,6 +349,7 @@ pub const fle_commands = @import("admin/fle_commands.zig");
 
 // User management and authentication
 pub const user_management = @import("security/user_management.zig");
+pub const auth_state = @import("security/auth_state.zig");
 
 // QUIC algorithms and connection management
 pub const algorithms = @import("algorithms.zig");

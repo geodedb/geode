@@ -34,6 +34,7 @@ pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8 {
 // Query execution with authentication context
 pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, options: QueryOptions) ![]u8 {
     @setEvalBranchQuota(2000);
+    execution.initEvaluator();
 
     // Parse the query using the actual GQL parser
     // Note: The lexer properly distinguishes between -- comments and -- in patterns like (n)--()
