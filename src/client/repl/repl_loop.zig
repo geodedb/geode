@@ -180,6 +180,9 @@ fn renderPrompt(state: *ReplState) !void {
     var buf: [32]u8 = undefined;
     const cursor_str = try std.fmt.bufPrint(&buf, "\r\x1b[{d}C", .{cursor_pos});
     try stdout_file.writeAll(cursor_str);
+
+    // CRITICAL FIX: Flush stdout to ensure prompt is displayed immediately
+    try stdout_file.sync();
 }
 
 fn processInput(state: *ReplState) !void {
@@ -594,31 +597,39 @@ fn printWelcomeMessage() !void {
 
     try stdout.writeAll("\n");
 
+    // FIXED: Improved box formatting with consistent spacing
     // Box top
     try stdout.writeAll(green);
-    try stdout.writeAll("    ");
+    try stdout.writeAll("  ");
     var i: usize = 0;
-    while (i < 60) : (i += 1) {
+    while (i < 64) : (i += 1) {
         try stdout.writeAll("=");
     }
     try stdout.writeAll("\n");
 
-    // Title lines with proper spacing
-    try stdout.writeAll("    ");
+    // Title lines with proper centered spacing
+    try stdout.writeAll("  ");
     try stdout.writeAll(bold);
-    try stdout.writeAll("            Welcome to Geode Shell v0.18.0");
+    try stdout.writeAll("          Welcome to Geode Shell v0.18.0");
     try stdout.writeAll(reset);
     try stdout.writeAll(green);
+    // Pad to match box width
+    const title_len = 42; // "          Welcome to Geode Shell v0.18.0".len
+    const padding = 64 - title_len;
+    var j: usize = 0;
+    while (j < padding) : (j += 1) {
+        try stdout.writeAll(" ");
+    }
     try stdout.writeAll("\n");
 
-    try stdout.writeAll("    ");
-    try stdout.writeAll("    Interactive GQL REPL (ISO/IEC 39075:2024 compliant)");
+    try stdout.writeAll("  ");
+    try stdout.writeAll("      Interactive GQL REPL (ISO/IEC 39075:2024 compliant)");
     try stdout.writeAll("\n");
 
     // Box bottom
-    try stdout.writeAll("    ");
+    try stdout.writeAll("  ");
     i = 0;
-    while (i < 60) : (i += 1) {
+    while (i < 64) : (i += 1) {
         try stdout.writeAll("=");
     }
     try stdout.writeAll(reset);
@@ -673,4 +684,7 @@ fn printWelcomeMessage() !void {
     try stdout.writeAll(reset);
     try stdout.writeAll(" for more information.\n");
     try stdout.writeAll("\n");
+
+    // CRITICAL FIX: Flush stdout after welcome message
+    try stdout.sync();
 }
