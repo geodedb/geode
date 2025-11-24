@@ -483,6 +483,10 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "delete")) {
+        if (hasHelpFlag(argv, start_idx + 2)) {
+            printOut("Usage: geode role delete <rolename>\nDelete role by name\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
         if (start_idx + 2 >= argv.len) {
             std.debug.print("Error: role delete requires <rolename>\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));

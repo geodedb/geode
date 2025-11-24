@@ -10,6 +10,7 @@ Features:
 - Enable per-scenario and per-test debugging
 """
 
+import copy
 import subprocess
 import yaml
 import sys
@@ -49,6 +50,32 @@ class SpecResult:
     skipped: int
     execution_time_ms: int
     test_results: List[TestResult]
+
+
+@dataclass
+class Scenario:
+    """Represents a single execution scenario (embedded or server)."""
+
+    name: str
+    server_enabled: bool
+    client_mode: str  # "embedded" or "server"
+    client_default_flags: List[str]
+    server_default_flags: Optional[List[str]] = None
+
+    def expanded_client_flags(self, server_address: Optional[str]) -> List[str]:
+        """Expand default client flags with server address placeholders."""
+        expanded: List[str] = []
+        for flag in self.client_default_flags or []:
+            if "${server_address}" in flag:
+                if server_address:
+                    expanded.append(flag.replace("${server_address}", server_address))
+            elif "${server:port}" in flag or "${server:host}" in flag:
+                if server_address:
+                    host, _, port = server_address.partition(":")
+                    expanded.append(flag.replace("${server:host}", host).replace("${server:port}", port))
+            else:
+                expanded.append(flag)
+        return expanded
 
 class PortAllocator:
     """Thread-safe port allocation manager for parallel test execution."""
@@ -132,6 +159,9 @@ class ParallelTestRunner:
         self.log_dir = log_dir
         self.max_workers = max_workers
         self.test_timeout = test_timeout
+        self.project_root = Path(__file__).resolve().parents[2]
+        self.default_cert = str(self.project_root / "certs" / "server.crt")
+        self.default_key = str(self.project_root / "certs" / "server.key")
 
         # Initialize thread-safe port allocator
         self.port_allocator = PortAllocator(start_port=10000, end_port=20000)
@@ -153,12 +183,102 @@ class ParallelTestRunner:
         print(f"Test run started at {self.run_timestamp}")
         print(f"Logs will be written to: {self.run_dir}")
 
-    def process_args(self, args: List[str], server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> List[str]:
+    def default_scenario_configs(self) -> List[Dict]:
+        """Default scenarios to ensure both embedded and server coverage."""
+        return [
+            {
+                "name": "embedded",
+                "roles": {
+                    "server": {"enabled": False},
+                    "client": {"mode": "embedded", "default_flags": ["--embedded"]},
+                },
+            },
+            {
+                "name": "server",
+                "roles": {
+                    "server": {"enabled": True, "default_flags": ["--cert", self.default_cert, "--key", self.default_key]},
+                    "client": {"mode": "server", "default_flags": ["--server", "${server_address}", "--insecure"]},
+                },
+            },
+        ]
+
+    def build_scenarios(self, spec: Dict) -> List[Scenario]:
+        """Build execution scenarios from a spec, falling back to defaults."""
+        scenarios_config = spec.get("scenarios")
+        if not isinstance(scenarios_config, list) or not scenarios_config:
+            scenarios_config = self.default_scenario_configs()
+
+        scenarios: List[Scenario] = []
+        for entry in scenarios_config:
+            if not isinstance(entry, dict):
+                continue
+            roles = entry.get("roles", {}) or {}
+            server_role = roles.get("server", {}) or {}
+            client_role = roles.get("client", {}) or {}
+
+            server_mode = server_role.get("mode")
+            server_enabled = server_role.get("enabled")
+            if server_enabled is None:
+                if server_mode == "embedded":
+                    server_enabled = False
+                elif server_mode == "server":
+                    server_enabled = True
+                else:
+                    server_enabled = True
+
+            client_mode = client_role.get("mode") or ("server" if server_enabled else "embedded")
+            client_flags = client_role.get("default_flags")
+            if not isinstance(client_flags, list):
+                client_flags = None
+            if client_flags is None:
+                client_flags = ["--server", "${server_address}", "--insecure"] if client_mode == "server" else ["--embedded"]
+            elif client_mode == "server" and "--server" in client_flags and "--insecure" not in client_flags:
+                client_flags.append("--insecure")
+
+            server_flags = server_role.get("default_flags")
+            if server_flags is not None and not isinstance(server_flags, list):
+                server_flags = None
+            if server_flags is None:
+                server_flags = []
+            if "--cert" not in server_flags and Path(self.default_cert).exists():
+                server_flags.extend(["--cert", self.default_cert])
+            if "--key" not in server_flags and Path(self.default_key).exists():
+                server_flags.extend(["--key", self.default_key])
+
+            scenarios.append(
+                Scenario(
+                    name=entry.get("name", client_mode),
+                    server_enabled=bool(server_enabled),
+                    client_mode=client_mode,
+                    client_default_flags=client_flags,
+                    server_default_flags=server_flags,
+                )
+            )
+
+        if not scenarios:
+            scenarios = [
+                Scenario(
+                    name="embedded",
+                    server_enabled=False,
+                    client_mode="embedded",
+                    client_default_flags=["--embedded"],
+                ),
+                Scenario(
+                    name="server",
+                    server_enabled=True,
+                    client_mode="server",
+                    client_default_flags=["--server", "${server_address}"],
+                ),
+            ]
+
+        return scenarios
+
+    def process_args(self, args: List[str], scenario: Scenario, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> List[str]:
         """Process test arguments, handling variable substitution and server mode."""
         processed_args = []
         skip_next = False
 
-        for i, arg in enumerate(args):
+        for arg in args:
             if skip_next:
                 skip_next = False
                 continue
@@ -169,13 +289,23 @@ class ParallelTestRunner:
                     skip_next = True  # Skip the next argument (server address)
                     continue
 
+                # Ignore embedded/no-quic flags - scenarios control connection mode
+                if arg in ("--embedded", "--no-quic"):
+                    continue
+
+                # In server mode, drop any client-side data-dir references
+                if scenario.client_mode == "server" and arg in ("--data-dir", "--db-file"):
+                    skip_next = True
+                    continue
+
                 # Replace server variables with actual server address if provided
                 elif "${server" in arg:
                     if server_address:
-                        # Replace with actual server address
+                        host, _, port = server_address.partition(":")
                         processed_arg = arg.replace("${server_address}", server_address)
+                        processed_arg = processed_arg.replace("${server:host}", host).replace("${server:port}", port)
                         processed_args.append(processed_arg)
-                    # Skip if no server address provided (will use --no-quic instead)
+                    # Skip if no server address provided
                     continue
                 # Replace instance_id for parallel tests
                 elif "${instance_id}" in arg and instance_id is not None:
@@ -207,27 +337,30 @@ class ParallelTestRunner:
             is_query_like = any(command.upper().startswith(kw) for kw in gql_keywords)
             is_query_command = command == "query" or is_query_like
             is_shell_command = command == "shell"
+            # Only attach connection flags to commands that support them
+            should_attach_flags = is_query_command or is_shell_command
 
-            if is_query_command:
-                if server_address and "--no-quic" not in processed_args and "--server" not in processed_args and "--embedded" not in processed_args:
-                    # Use server mode (only if not using embedded or no-quic mode)
-                    processed_args.extend(["--server", server_address])
-                elif not server_address and "--embedded" not in processed_args and "--server" not in processed_args:
-                    # No server address provided - use embedded mode with --embedded and --no-quic flags
-                    # Insert after the command (at position 1)
-                    processed_args.insert(1, "--embedded")
-                    processed_args.insert(2, "--no-quic")
-            elif is_shell_command:
-                # Shell doesn't support --no-quic, remove it if present
-                if "--no-quic" in processed_args:
-                    processed_args = [arg for arg in processed_args if arg != "--no-quic"]
-                # Add --server if server_address is provided and not already present
-                if server_address and "--server" not in processed_args:
-                    processed_args.extend(["--server", server_address])
-                elif not server_address and "--embedded" not in processed_args and "--server" not in processed_args:
-                    # No server address - use embedded mode for shell
-                    processed_args.insert(1, "--embedded")
-                    processed_args.insert(2, "--no-quic")
+            if should_attach_flags:
+                default_flags = scenario.expanded_client_flags(server_address)
+                if not default_flags:
+                    if scenario.client_mode == "server":
+                        default_flags = ["--server", server_address] if server_address else ["--embedded"]
+                    elif scenario.client_mode == "embedded":
+                        default_flags = ["--embedded"]
+
+                insert_pos = 1 if len(processed_args) > 0 else 0
+                for flag in default_flags:
+                    if flag not in processed_args:
+                        processed_args.insert(insert_pos, flag)
+                        insert_pos += 1
+            else:
+                # Some management commands support --server but not --embedded
+                server_capable_commands = {"auth", "user", "role", "policy", "grant", "revoke", "backup", "restore", "migrate"}
+                if scenario.client_mode == "server" and command in server_capable_commands and server_address:
+                    if "--server" not in processed_args:
+                        insert_pos = 2 if len(processed_args) >= 2 else len(processed_args)
+                        processed_args.insert(insert_pos, "--server")
+                        processed_args.insert(insert_pos + 1, server_address)
 
         return processed_args
 
@@ -249,7 +382,7 @@ class ParallelTestRunner:
             except:
                 pass  # Ignore cleanup errors
 
-    def run_single_test(self, test_case: Dict, spec_name: str, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None, data_dir: Optional[str] = None) -> TestResult:
+    def run_single_test(self, test_case: Dict, spec_name: str, scenario: Scenario, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None, data_dir: Optional[str] = None) -> TestResult:
         """Run a single test case and return the result."""
         test_name = test_case.get("name", "unnamed")
 
@@ -270,7 +403,7 @@ class ParallelTestRunner:
         else:
             args = []
 
-        args = self.process_args(args, server_address=server_address, instance_id=instance_id, loop_index=loop_index)
+        args = self.process_args(args, scenario, server_address=server_address, instance_id=instance_id, loop_index=loop_index)
         expect = test_case.get("expect", {})
         stdin_input = test_case.get("stdin", None)
 
@@ -290,11 +423,20 @@ class ParallelTestRunner:
                         # Parse string as command-line arguments
                         setup_args = shlex.split(setup_item)
                     else:
-                        # Dict format with "args" key
+                        # Dict format with "args"/command/query" keys
                         setup_args = setup_item.get("args", [])
+                        setup_command = setup_item.get("command")
+                        setup_query = setup_item.get("query")
+                        if setup_query and (not setup_args or setup_args[0] != "query"):
+                            setup_args = ["query", setup_query] + setup_args
+                        if setup_command:
+                            if isinstance(setup_command, list):
+                                setup_args = setup_command + setup_args
+                            elif isinstance(setup_command, str) and (not setup_args or setup_args[0] != setup_command):
+                                setup_args = [setup_command] + setup_args
 
                     # Process setup args (will use server or embedded persistent mode)
-                    processed_setup_args = self.process_args(setup_args, server_address=server_address)
+                    processed_setup_args = self.process_args(setup_args, scenario, server_address=server_address)
                     subprocess.run(
                         [self.binary] + processed_setup_args,
                         capture_output=True,
@@ -464,46 +606,56 @@ class ParallelTestRunner:
         
         return True, "PASSED"
 
-    def run_spec_file(self, spec_file: Path) -> SpecResult:
-        """Run all tests in a specification file."""
+    def run_spec_file(self, spec_file: Path, scenario: Scenario, loaded_spec: Optional[Dict] = None) -> SpecResult:
+        """Run all tests in a specification file for a specific scenario."""
         spec_start_time = time.time()
+        spec_label = f"{spec_file.name} [{scenario.name}]"
 
-        try:
-            with open(spec_file, "r") as f:
-                spec = yaml.safe_load(f)
-        except Exception as e:
-            spec_end_time = time.time()
-            return SpecResult(
-                spec_file=spec_file.name,
-                total_tests=0,
-                passed=0,
-                failed=1,
-                skipped=0,
-                execution_time_ms=int((spec_end_time - spec_start_time) * 1000),
-                test_results=[TestResult(
-                    spec_file=spec_file.name,
-                    test_name="YAML_PARSE",
-                    success=False,
-                    message=f"Invalid YAML: {str(e)}",
-                    execution_time_ms=0
-                )]
-            )
+        spec = copy.deepcopy(loaded_spec) if loaded_spec is not None else None
+        if spec is None:
+            try:
+                with open(spec_file, "r") as f:
+                    spec = yaml.safe_load(f)
+            except Exception as e:
+                spec_end_time = time.time()
+                return SpecResult(
+                    spec_file=spec_label,
+                    total_tests=0,
+                    passed=0,
+                    failed=1,
+                    skipped=0,
+                    execution_time_ms=int((spec_end_time - spec_start_time) * 1000),
+                    test_results=[TestResult(
+                        spec_file=spec_label,
+                        test_name="YAML_PARSE",
+                        success=False,
+                        message=f"Invalid YAML: {str(e)}",
+                        execution_time_ms=0
+                    )]
+                )
+
+        if spec is None:
+            spec = {}
 
         # Check if server mode is needed
-        server_config = spec.get("cli", {}).get("server", {})
-        server_enabled = server_config.get("enabled", False)
+        server_config = (spec.get("cli", {}) or {}).get("server", {}) or {}
+        server_enabled = scenario.server_enabled
+        server_args_override = scenario.server_default_flags if scenario.server_default_flags is not None else server_config.get("args", [])
+        if not isinstance(server_args_override, list):
+            server_args_override = []
+        server_env_overrides = server_config.get("env", {}) or {}
 
         # Allocate unique port for this spec from the port pool
         port = None
         if server_enabled:
             port = self.port_allocator.allocate_port()
             if port is None:
-                self.log_progress(f"Failed to allocate port for {spec_file.name} - no ports available")
+                self.log_progress(f"Failed to allocate port for {spec_label} - no ports available")
                 server_enabled = False
 
         # Create per-spec data directory for isolation with timestamp to ensure uniqueness
         import time as time_module
-        unique_id = f"{spec_file.stem}_{port if port else 'noport'}_{int(time_module.time() * 1000)}"
+        unique_id = f"{spec_file.stem}_{scenario.name}_{port if port else 'noport'}_{int(time_module.time() * 1000)}"
         spec_data_dir = self.run_dir / f"data_{unique_id}"
         spec_data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -517,17 +669,20 @@ class ParallelTestRunner:
 
                 # Start server with data directory isolation
                 server_args = [self.binary, "serve", "--listen", f"0.0.0.0:{port}", "--data-dir", str(spec_data_dir)]
-                server_extra_args = server_config.get("args", [])
+                server_extra_args = server_args_override or []
                 if server_extra_args:
                     server_args.extend(server_extra_args)
 
                 # Log server startup
-                self.log_progress(f"Starting server for {spec_file.name} on port {port}")
+                self.log_progress(f"Starting server for {spec_label} on port {port}")
 
+                server_env = os.environ.copy()
+                server_env.update({k: str(v) for k, v in server_env_overrides.items()})
                 server_process = subprocess.Popen(
                     server_args,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                    stderr=subprocess.PIPE,
+                    env=server_env
                 )
 
                 # Wait for server to be ready with health check
@@ -547,7 +702,7 @@ class ParallelTestRunner:
                     # Check if server process is still alive
                     if server_process.poll() is not None:
                         stdout, stderr = server_process.communicate()
-                        self.log_progress(f"Server process for {spec_file.name} died: {stderr.decode()[:200]}")
+                        self.log_progress(f"Server process for {spec_label} died: {stderr.decode()[:200]}")
                         break
 
                     # Check if UDP port is bound (QUIC uses UDP)
@@ -565,7 +720,7 @@ class ParallelTestRunner:
                             # Port is bound, give server a bit more time to fully initialize
                             if (time.time() - start_time) > 5.0:  # At least 5 seconds uptime
                                 server_ready = True
-                                self.log_progress(f"Server ready for {spec_file.name} on port {port}")
+                                self.log_progress(f"Server ready for {spec_label} on port {port}")
                                 break
                     except subprocess.TimeoutExpired:
                         pass  # Continue trying
@@ -573,7 +728,7 @@ class ParallelTestRunner:
                         # Fallback: if netstat fails, just check process uptime
                         if (time.time() - start_time) > 8.0:  # At least 8 seconds uptime
                             server_ready = True
-                            self.log_progress(f"Server ready for {spec_file.name} on port {port} (fallback)")
+                            self.log_progress(f"Server ready for {spec_label} on port {port} (fallback)")
                             break
 
                     # Use exponential backoff for retries
@@ -584,7 +739,7 @@ class ParallelTestRunner:
                         time.sleep(2.0)  # Continue with 2s delay after initial retries
 
                 if not server_ready:
-                    self.log_progress(f"Server for {spec_file.name} did not become ready in {max_wait}s")
+                    self.log_progress(f"Server for {spec_label} did not become ready in {max_wait}s")
                     if server_process:
                         server_process.terminate()
                         try:
@@ -595,7 +750,7 @@ class ParallelTestRunner:
                     server_enabled = False
                     server_address = None
             except Exception as e:
-                self.log_progress(f"Failed to start server for {spec_file.name}: {str(e)}")
+                self.log_progress(f"Failed to start server for {spec_label}: {str(e)}")
                 server_enabled = False
                 server_address = None
             finally:
@@ -613,11 +768,14 @@ class ParallelTestRunner:
 
         # Log progress
         mode_str = "server" if server_enabled else "embedded"
-        self.log_progress(f"Running {spec_file.name} ({len(tests)} tests) [{mode_str}]")
+        self.log_progress(f"Running {spec_label} ({len(tests)} tests) [{mode_str}]")
 
         # Handle spec-level setup
         setup_commands = spec.get("setup", [])
-        if setup_commands and server_address:
+        if setup_commands:
+            setup_env = os.environ.copy()
+            if not server_address:
+                setup_env["GEODE_DATA_DIR"] = str(spec_data_dir)
             for setup_item in setup_commands:
                 try:
                     # Handle both string and dict setup items
@@ -625,20 +783,30 @@ class ParallelTestRunner:
                         # Parse string as command-line arguments
                         setup_args = shlex.split(setup_item)
                     else:
-                        # Dict format with "args" key
+                        # Dict format with "args"/command/query" keys
                         setup_args = setup_item.get("args", [])
+                        setup_command = setup_item.get("command")
+                        setup_query = setup_item.get("query")
+                        if setup_query and (not setup_args or setup_args[0] != "query"):
+                            setup_args = ["query", setup_query] + setup_args
+                        if setup_command:
+                            if isinstance(setup_command, list):
+                                setup_args = setup_command + setup_args
+                            elif isinstance(setup_command, str) and (not setup_args or setup_args[0] != setup_command):
+                                setup_args = [setup_command] + setup_args
 
-                    processed_args = self.process_args(setup_args, server_address=server_address)
+                    processed_args = self.process_args(setup_args, scenario, server_address=server_address)
                     result = subprocess.run(
                         [self.binary] + processed_args,
                         capture_output=True,
                         text=True,
-                        timeout=self.test_timeout
+                        timeout=self.test_timeout,
+                        env=setup_env
                     )
                     if result.returncode != 0:
-                        self.log_progress(f"Setup failed for {spec_file.name}: {result.stderr}")
+                        self.log_progress(f"Setup failed for {spec_label}: {result.stderr}")
                 except Exception as e:
-                    self.log_progress(f"Setup error for {spec_file.name}: {str(e)}")
+                    self.log_progress(f"Setup error for {spec_label}: {str(e)}")
 
         try:
             for test in tests:
@@ -654,7 +822,7 @@ class ParallelTestRunner:
                 if test.get("isolated", False):
                     test_data_dir = spec_data_dir / f"test_{test.get('name', 'unnamed')}"
                     test_data_dir.mkdir(parents=True, exist_ok=True)
-                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address, data_dir=str(test_data_dir))
+                    test_result = self.run_single_test(test, spec_label, scenario, server_address=server_address, data_dir=str(test_data_dir))
                     test_results.append(test_result)
 
                     if test_result.success:
@@ -670,7 +838,7 @@ class ParallelTestRunner:
                     for instance in range(test["instances"]):
                         instance_data_dir = test_data_dir / f"instance_{instance}"
                         instance_data_dir.mkdir(parents=True, exist_ok=True)
-                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, instance_id=instance, data_dir=str(instance_data_dir))
+                        test_result = self.run_single_test(test, spec_label, scenario, server_address=server_address, instance_id=instance, data_dir=str(instance_data_dir))
                         test_results.append(test_result)
 
                         if test_result.success:
@@ -686,7 +854,7 @@ class ParallelTestRunner:
                     for i in range(test["loop"]):
                         loop_data_dir = test_data_dir / f"loop_{i}"
                         loop_data_dir.mkdir(parents=True, exist_ok=True)
-                        test_result = self.run_single_test(test, spec_file.name, server_address=server_address, loop_index=i, data_dir=str(loop_data_dir))
+                        test_result = self.run_single_test(test, spec_label, scenario, server_address=server_address, loop_index=i, data_dir=str(loop_data_dir))
                         test_results.append(test_result)
 
                         if test_result.success:
@@ -696,7 +864,7 @@ class ParallelTestRunner:
 
                 # Handle normal tests (share spec data directory for catalog persistence)
                 else:
-                    test_result = self.run_single_test(test, spec_file.name, server_address=server_address, data_dir=str(spec_data_dir))
+                    test_result = self.run_single_test(test, spec_label, scenario, server_address=server_address, data_dir=str(spec_data_dir))
                     test_results.append(test_result)
 
                     if test_result.success:
@@ -717,12 +885,12 @@ class ParallelTestRunner:
             # Release allocated port back to the pool
             if port is not None:
                 self.port_allocator.release_port(port)
-                self.log_progress(f"Released port {port} for {spec_file.name}")
+                self.log_progress(f"Released port {port} for {spec_label}")
 
         spec_end_time = time.time()
         
         return SpecResult(
-            spec_file=spec_file.name,
+            spec_file=spec_label,
             total_tests=len(tests),
             passed=passed,
             failed=failed,
@@ -880,10 +1048,43 @@ class ParallelTestRunner:
         
         # Run spec files in parallel
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_spec = {executor.submit(self.run_spec_file, spec_file): spec_file for spec_file in spec_files}
+            future_to_spec = {}
+
+            for spec_file in spec_files:
+                try:
+                    with open(spec_file, "r") as f:
+                        spec_data = yaml.safe_load(f) or {}
+                    if not isinstance(spec_data, dict):
+                        spec_data = {}
+                except Exception as e:
+                    error_result = SpecResult(
+                        spec_file=f"{spec_file.name} [parse]",
+                        total_tests=0,
+                        passed=0,
+                        failed=1,
+                        skipped=0,
+                        execution_time_ms=0,
+                        test_results=[
+                            TestResult(
+                                spec_file=f"{spec_file.name} [parse]",
+                                test_name="YAML_PARSE",
+                                success=False,
+                                message=f"Invalid YAML: {str(e)}",
+                                execution_time_ms=0,
+                            )
+                        ],
+                    )
+                    all_results.append(error_result)
+                    continue
+
+                if "scenarios" not in spec_data or not spec_data.get("scenarios"):
+                    spec_data["scenarios"] = self.default_scenario_configs()
+
+                for scenario in self.build_scenarios(spec_data):
+                    future_to_spec[executor.submit(self.run_spec_file, spec_file, scenario, copy.deepcopy(spec_data))] = (spec_file, scenario)
             
             for future in as_completed(future_to_spec):
-                spec_file = future_to_spec[future]
+                spec_file, scenario = future_to_spec[future]
                 try:
                     spec_result = future.result()
                     all_results.append(spec_result)
@@ -896,7 +1097,7 @@ class ParallelTestRunner:
                     self.log_progress(f"Completed {spec_result.spec_file}: {spec_result.passed}P/{spec_result.failed}F/{spec_result.skipped}S")
                     
                 except Exception as e:
-                    self.log_progress(f"Error running {spec_file.name}: {str(e)}")
+                    self.log_progress(f"Error running {spec_file.name} [{scenario.name}]: {str(e)}")
         
         # Analyze results
         analysis = self.analyze_failures(all_results)

@@ -513,6 +513,7 @@ pub const QuicClient = struct {
             .allocator = self.allocator,
             .connection = self.connection.?,
             .stream_id = stream_id,
+            .endpoint = &self.endpoint.?,
         };
         return stream;
     }
@@ -532,6 +533,7 @@ pub const QuicClientStream = struct {
     allocator: std.mem.Allocator,
     connection: *Connection,
     stream_id: u64,
+    endpoint: *Endpoint,
 
     pub fn write(self: *QuicClientStream, data: []const u8) !usize {
         return self.connection.writeStream(self.stream_id, data, false);
@@ -547,7 +549,18 @@ pub const QuicClientStream = struct {
     }
 
     pub fn read(self: *QuicClientStream, buffer: []u8) !usize {
-        return self.connection.readStream(self.stream_id, buffer);
+        const result = self.connection.readStream(self.stream_id, buffer) catch |err| {
+            if (err == error.WouldBlock) {
+                // Drive the endpoint to allow incoming packets
+                self.endpoint.poll(10) catch {};
+                return 0;
+            }
+            return err;
+        };
+        if (result == 0) {
+            self.endpoint.poll(10) catch {};
+        }
+        return result;
     }
 
     pub fn readLine(self: *QuicClientStream, max_size: usize) ![]u8 {

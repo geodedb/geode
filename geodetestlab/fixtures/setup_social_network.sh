@@ -62,7 +62,7 @@ execute_migration() {
 
             if [ -n "$current_statement" ]; then
                 # Execute the statement
-                if ! echo "$current_statement" | "$GEODE_BIN" query --no-quic - 2>&1 | grep -q "status_class\":\"00000"; then
+                if ! echo "$current_statement" | "$GEODE_BIN" query --embedded - 2>&1 | grep -q "status_class\":\"00000"; then
                     echo "WARNING: Statement may have failed (line ~$line_count): ${current_statement:0:80}..."
                 fi
             fi
@@ -74,7 +74,7 @@ execute_migration() {
     # Execute remaining statement if exists (no semicolon at end)
     if [ -n "${current_statement// }" ]; then
         current_statement=$(echo "$current_statement" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        if ! echo "$current_statement" | "$GEODE_BIN" query --no-quic - 2>&1 | grep -q "status_class\":\"00000"; then
+        if ! echo "$current_statement" | "$GEODE_BIN" query --embedded - 2>&1 | grep -q "status_class\":\"00000"; then
             echo "WARNING: Final statement may have failed: ${current_statement:0:80}..."
         fi
     fi
@@ -96,11 +96,11 @@ echo
 
 # Verify data was loaded
 echo ">>> Checking node counts..."
-NODE_COUNT=$("$GEODE_BIN" query --no-quic "MATCH (n) RETURN count(n) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
+NODE_COUNT=$("$GEODE_BIN" query --embedded "MATCH (n) RETURN count(n) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
 echo "    Total nodes: $NODE_COUNT"
 
 echo ">>> Checking relationship counts..."
-REL_COUNT=$("$GEODE_BIN" query --no-quic "MATCH ()-[r]->() RETURN count(r) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
+REL_COUNT=$("$GEODE_BIN" query --embedded "MATCH ()-[r]->() RETURN count(r) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
 echo "    Total relationships: $REL_COUNT"
 
 echo

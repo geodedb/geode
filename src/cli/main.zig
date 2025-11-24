@@ -2486,9 +2486,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
 
-    // Always prefer embedded execution for CLI/testing to avoid QUIC timeouts.
-    embedded = true;
-
     if (query_text == null) {
         std.debug.print("Error: query text required\n", .{});
         std.debug.print("Example: geode query \"MATCH (n) RETURN n LIMIT 10\"\n", .{});
@@ -2834,16 +2831,56 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8) !void {
-    _ = server_addr;
-    _ = insecure;
-    _ = timeout_secs;
-    _ = retry_count;
+    const stderr = std.fs.File{ .handle = getStderrHandle() };
+    _ = insecure; // Using insecure connect by default for test friendliness
 
-    // Tests run in single-binary mode; route QUIC invocations through the embedded path to avoid network flakiness.
-    return try executeEmbeddedQuery(allocator, query_text, format, null, username, password, null);
+    var addr_port = std.mem.splitSequence(u8, server_addr, ":");
+    const host = addr_port.next() orelse "127.0.0.1";
+    const port_str = addr_port.next() orelse "3141";
+    const port = std.fmt.parseInt(u16, port_str, 10) catch {
+        _ = stderr.writeAll("Error: Invalid port number in server address\n") catch {};
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
+    var attempts: u32 = 0;
+    const max_attempts = retry_count + 1;
+    var last_error: ?[]const u8 = null;
+
+    while (attempts < max_attempts) : (attempts += 1) {
+        var quic_client = quic.QuicClient.init(allocator);
+        defer quic_client.deinit();
+
+        // Prefer insecure connect for local test environments to avoid cert validation issues.
+        const connect_err = quic_client.connectInsecure(host, port, true);
+
+        if (connect_err) |_| {
+            const handshake_timeout = @max(1, timeout_secs);
+            const handshake_err = quic_client.waitForHandshake(handshake_timeout);
+            if (handshake_err) |_| {
+                // Handshake successful, proceed with query execution
+                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password);
+            } else |_| {
+                last_error = "connection timeout";
+            }
+        } else |err| {
+            last_error = @errorName(err);
+            // If refused, stop retrying and fall back immediately
+            if (std.mem.indexOf(u8, last_error.?, "ConnectionRefused") != null) {
+                break;
+            }
+        }
+    }
+
+    if (last_error) |le| {
+        _ = stderr.writeAll(le) catch {};
+        _ = stderr.writeAll("\n") catch {};
+    }
+
+    std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
-fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8) !void {
+fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8) !void {
+    _ = format;
 
     // Get a stream for communication
     var stream = quic_client.getStream() catch |err| {
@@ -2866,7 +2903,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, 
     };
 
     // Read HELLO response
-    const hello_response = stream.readLine(65536) catch |err| {
+    const hello_response = readLineWithPoll(quic_client, stream, 65536, 5000) catch |err| {
         std.debug.print("Error: Failed to receive HELLO response: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -2896,7 +2933,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, 
 
     // Receive first response (SCHEMA line)
     log.debug("Client waiting for schema response", .{});
-    const schema_response = stream.readLine(65536) catch |err| {
+    const schema_response = readLineWithPoll(quic_client, stream, 65536, 5000) catch |err| {
         std.debug.print("Error: Failed to receive schema response: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -2910,69 +2947,50 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: anytype, 
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // Receive second response (RESULT line or additional data)
-    var result_data = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
-    defer result_data.deinit(allocator);
+    // Request first page of results (server expects PULL after schema)
+    const pull_msg = "{\"type\":\"PULL\",\"page_size\":1000}\n";
+    stream.writeAll(pull_msg) catch |err| {
+        std.debug.print("Error: Failed to send PULL: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 
-    // Read all remaining lines until stream ends
-    while (true) {
-        log.debug("Client trying to read next line", .{});
-        const result_line = stream.readLine(65536) catch |err| {
-            if (err == error.EndOfStream) {
-                log.debug("Client hit EndOfStream", .{});
-                break;
-            }
-            std.debug.print("Error: Failed to receive result response: {}\n", .{err});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-        defer allocator.free(result_line);
+    log.debug("Client waiting for result page", .{});
+    const result_line = readLineWithPoll(quic_client, stream, 65536, 5000) catch |err| {
+        std.debug.print("Error: Failed to receive result response: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer allocator.free(result_line);
+    log.debug("Client received line: {s}", .{result_line});
 
-        log.debug("Client received line: {s}", .{result_line});
-
-        if (result_line.len == 0) break;
-
-        try result_data.appendSlice(allocator, result_line);
-
-        // Check if this is the end of the response (typically RESULT line ends the response)
-        if (std.mem.indexOf(u8, result_line, "\"type\":\"RESULT\"") != null) {
-            break;
-        }
+    if (result_line.len == 0) {
+        std.debug.print("Error: No result received from server\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // Output response in requested format
-    // For now, we output the raw protocol responses
-    // Future enhancement: Parse JSON and format as table/csv
-    if (std.mem.eql(u8, format, "json")) {
-        // Output schema line
-        std.debug.print("{s}", .{schema_response});
-        if (schema_response.len > 0 and schema_response[schema_response.len - 1] != '\n') {
-            std.debug.print("\n", .{});
-        }
+    // Output schema then first page of results
+    var stdout_file = std.fs.File{ .handle = getStdoutHandle() };
+    _ = stdout_file.writeAll(schema_response) catch {};
+    if (schema_response.len > 0 and schema_response[schema_response.len - 1] != '\n') {
+        _ = stdout_file.writeAll("\n") catch {};
+    }
+    _ = stdout_file.writeAll(result_line) catch {};
+}
 
-        // Output result lines if any
-        if (result_data.items.len > 0) {
-            std.debug.print("{s}", .{result_data.items});
-            if (result_data.items.len > 0 and result_data.items[result_data.items.len - 1] != '\n') {
-                std.debug.print("\n", .{});
+fn readLineWithPoll(quic_client: *quic.QuicClient, stream: *quic.QuicClientStream, max_size: usize, timeout_ms: u64) ![]u8 {
+    const start = std.time.milliTimestamp();
+    while (true) {
+        const line = stream.readLine(max_size) catch |err| {
+            if (err == error.WouldBlock or err == error.EndOfStream) {
+                // If we've waited long enough, propagate the timeout/EOF
+                if (std.time.milliTimestamp() - start >= timeout_ms) return err;
+                // Poll transport and retry
+                quic_client.poll(50) catch {};
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+                continue;
             }
-        }
-    } else if (std.mem.eql(u8, format, "table")) {
-        // For now, just output the JSON (table formatting would need JSON parsing)
-        std.debug.print("{s}", .{schema_response});
-        if (result_data.items.len > 0) {
-            std.debug.print("{s}", .{result_data.items});
-        }
-    } else if (std.mem.eql(u8, format, "csv")) {
-        // For now, just output the JSON (CSV formatting would need JSON parsing)
-        std.debug.print("{s}", .{schema_response});
-        if (result_data.items.len > 0) {
-            std.debug.print("{s}", .{result_data.items});
-        }
-    } else {
-        std.debug.print("{s}", .{schema_response});
-        if (result_data.items.len > 0) {
-            std.debug.print("{s}", .{result_data.items});
-        }
+            return err;
+        };
+        return line;
     }
 }
 

@@ -26,7 +26,7 @@ execute_query() {
     local description="$2"
 
     echo ">>> $description"
-    if echo "$query" | "$GEODE_BIN" query --no-quic - 2>&1 | grep -q "status_class\":\"00000"; then
+    if echo "$query" | "$GEODE_BIN" query --embedded - 2>&1 | grep -q "status_class\":\"00000"; then
         echo "    ✓ Success"
     else
         echo "    ⚠ May have failed (this might be expected)"
@@ -131,22 +131,22 @@ echo
 
 # Verify data was loaded
 echo ">>> Checking node counts..."
-NODE_COUNT=$("$GEODE_BIN" query --no-quic "MATCH (n) RETURN count(n) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
+NODE_COUNT=$("$GEODE_BIN" query --embedded "MATCH (n) RETURN count(n) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
 echo "    Total nodes: $NODE_COUNT"
 
 echo ">>> Checking relationship counts..."
-REL_COUNT=$("$GEODE_BIN" query --no-quic "MATCH ()-[r]->() RETURN count(r) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
+REL_COUNT=$("$GEODE_BIN" query --embedded "MATCH ()-[r]->() RETURN count(r) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
 echo "    Total relationships: $REL_COUNT"
 
 echo ">>> Sample queries..."
 echo -n "    Users in San Francisco: "
-"$GEODE_BIN" query --no-quic "MATCH (u:User)-[:LOCATED_IN]->(l:Location {name: 'San Francisco'}) RETURN count(u) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
+"$GEODE_BIN" query --embedded "MATCH (u:User)-[:LOCATED_IN]->(l:Location {name: 'San Francisco'}) RETURN count(u) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
 
 echo -n "    Posts by Alice: "
-"$GEODE_BIN" query --no-quic "MATCH (u:User {username: 'alice_tech'})-[:POSTED]->(p:Post) RETURN count(p) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
+"$GEODE_BIN" query --embedded "MATCH (u:User {username: 'alice_tech'})-[:POSTED]->(p:Post) RETURN count(p) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
 
 echo -n "    TechCorp employees: "
-"$GEODE_BIN" query --no-quic "MATCH (u:User)-[:WORKS_AT]->(c:Company {name: 'TechCorp Industries'}) RETURN count(u) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
+"$GEODE_BIN" query --embedded "MATCH (u:User)-[:WORKS_AT]->(c:Company {name: 'TechCorp Industries'}) RETURN count(u) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
 
 echo
 if [ "$NODE_COUNT" -gt 0 ]; then

@@ -17,6 +17,15 @@ fn hasHelpFlag(argv: [][:0]u8, start_idx: usize) bool {
     return false;
 }
 
+fn isLikelyServerAddress(arg: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, arg, ':')) |idx| {
+        const port_part = arg[idx + 1 ..];
+        _ = std.fmt.parseInt(u16, port_part, 10) catch return false;
+        return true;
+    }
+    return false;
+}
+
 // CANARY: REQ=REQ-M4.2-AUTH-CLI-001; FEATURE="CLI Modularization"; ASPECT=AuthCommands; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.2: Extract authentication and policy commands (cmdPolicy, cmdGrant, cmdRevoke) from cli/main.zig
 
@@ -154,7 +163,11 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         } else if (std.mem.eql(u8, argv[i], "--resource") and i + 1 < argv.len) {
             resource = argv[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--server") and i + 1 < argv.len) {
+            // Skip global server flag and its value
+            i += 1;
         } else if (!std.mem.startsWith(u8, argv[i], "--")) {
+            if (isLikelyServerAddress(argv[i])) continue;
             positional.append(allocator, argv[i]) catch {};
         }
     }
@@ -219,7 +232,10 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         } else if (std.mem.eql(u8, argv[i], "--resource") and i + 1 < argv.len) {
             resource = argv[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--server") and i + 1 < argv.len) {
+            i += 1;
         } else if (!std.mem.startsWith(u8, argv[i], "--")) {
+            if (isLikelyServerAddress(argv[i])) continue;
             positional.append(allocator, argv[i]) catch {};
         }
     }
