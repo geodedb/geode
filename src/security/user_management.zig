@@ -259,8 +259,9 @@ pub fn hasUsers() bool {
 /// Create default admin user if no users exist
 pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
     if (!hasUsers()) {
-        // Create default admin user with well-known credentials for testing
-        try createUser(allocator, "admin", "admin", "admin@geode.dev", .Admin);
-        try createUser(allocator, "testuser", "testpass", "test@geode.dev", .User);
+        // Create default users with standard test credentials
+        // These match the test harness secret substitution values
+        try createUser(allocator, "admin", "admin123", "admin@geode.dev", .Admin);
+        try createUser(allocator, "testuser", "password123", "test@geode.dev", .User);
     }
 }
