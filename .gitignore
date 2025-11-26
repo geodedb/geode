@@ -18,6 +18,7 @@ core
 /data_*/
 tests/data_*/
 
+**/.venv/*
 # Audit test output files
 /audit_*.json
 /audit_*.jsonl

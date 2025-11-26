@@ -72,7 +72,7 @@ pub const QuicTransport = struct {
             } else |err| {
                 std.debug.print("{{\"level\":\"FATAL\",\"component\":\"transport\",\"msg\":\"TLS certificates not found and generation failed\",\"cert_path\":\"{s}\",\"key_path\":\"{s}\",\"error\":\"{}\"}}\n", .{ self.cert_path, self.key_path, err });
                 std.debug.print("SECURITY: Refusing to start without TLS. Generate certificates manually:\n", .{});
-                std.debug.print("  openssl req -x509 -newkey rsa:2048 -nodes -keyout {s} -out {s} -days 365\n", .{ self.key_path, self.cert_path });
+                std.debug.print("  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout {s} -out {s} -days 365\n", .{ self.key_path, self.cert_path });
                 return QuicError.CertificateError;
             }
         }
@@ -106,11 +106,13 @@ pub const QuicTransport = struct {
             else => return err,
         };
 
-        // Generate self-signed certificate with standard OpenSSL
+        // Generate self-signed ECDSA P-256 certificate with standard OpenSSL
+        // Using ECDSA P-256 for compatibility with TLS 1.3 signature schemes
         const result = try std.process.Child.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
-                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "openssl", "req", "-x509", "-newkey", "ec",
+                "-pkeyopt", "ec_paramgen_curve:prime256v1",
                 "-keyout", self.key_path, "-out", self.cert_path, "-days",
                 "365", "-nodes", "-subj", "/C=US/ST=State/L=City/O=Geode/CN=localhost",
                 "-addext", "subjectAltName=DNS:localhost,DNS:geode.local,IP:127.0.0.1",
