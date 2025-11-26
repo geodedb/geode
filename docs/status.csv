@@ -59,7 +59,6 @@ REQ-AUTH-001,AuthenticationLogin,RealImplementation,IMPL,TestCANARY_REQ_AUTH_001
 REQ-AUTH-001,UserManagement,Authentication,IMPLEMENTED,,,security,2025-10-14,src/security/user_management.zig
 REQ-AUTH-002,Argon2idHashing,PasswordSecurity,IMPLEMENTED,,,security,2025-10-14,docs/ARGON2ID_IMPLEMENTATION.md
 REQ-AUTH-002,AuthenticationLogout,RealImplementation,IMPL,TestCANARY_REQ_AUTH_002_RealLogout,,cli,2025-09-30,src/cli/main.zig
-REQ-AUTH-CLI-001,CLI Authentication,EmbeddedAuth,IMPL,,,cli,2025-10-26,src/cli/main.zig
 REQ-AUTH-CLI-001,CLIUserManagement,FileStorage,IMPL,,,cli,2025-10-26,src/cli/user_storage_simple.zig
 REQ-AUTH-CLI-001,CLIUserManagement,SecureStorage,IMPL,,,cli,2025-10-26,src/cli/user_storage_secure.zig
 REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy,,security,2025-09-30,src/security/auth.zig

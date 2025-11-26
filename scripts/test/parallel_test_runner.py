@@ -498,6 +498,7 @@ class ParallelTestRunner:
             for setup_item in setup_commands:
                 try:
                     # Handle both string and dict setup items
+                    setup_stdin = None
                     if isinstance(setup_item, str):
                         # Parse string as command-line arguments
                         setup_args = shlex.split(setup_item)
@@ -506,6 +507,7 @@ class ParallelTestRunner:
                         setup_args = setup_item.get("args", [])
                         setup_command = setup_item.get("command")
                         setup_query = setup_item.get("query")
+                        setup_stdin = setup_item.get("stdin")  # Extract stdin content
                         if setup_query and (not setup_args or setup_args[0] != "query"):
                             setup_args = ["query", setup_query] + setup_args
                         if setup_command:
@@ -523,6 +525,7 @@ class ParallelTestRunner:
 
                     subprocess.run(
                         cmd,
+                        input=setup_stdin,  # Pass stdin content to subprocess
                         capture_output=True,
                         text=True,
                         timeout=self.test_timeout,
@@ -864,6 +867,7 @@ class ParallelTestRunner:
             for setup_item in setup_commands:
                 try:
                     # Handle both string and dict setup items
+                    setup_stdin = None
                     if isinstance(setup_item, str):
                         # Parse string as command-line arguments
                         setup_args = shlex.split(setup_item)
@@ -872,6 +876,7 @@ class ParallelTestRunner:
                         setup_args = setup_item.get("args", [])
                         setup_command = setup_item.get("command")
                         setup_query = setup_item.get("query")
+                        setup_stdin = setup_item.get("stdin")  # Extract stdin content
                         if setup_query and (not setup_args or setup_args[0] != "query"):
                             setup_args = ["query", setup_query] + setup_args
                         if setup_command:
@@ -889,6 +894,7 @@ class ParallelTestRunner:
 
                     result = subprocess.run(
                         cmd,
+                        input=setup_stdin,  # Pass stdin content to subprocess
                         capture_output=True,
                         text=True,
                         timeout=self.test_timeout,
