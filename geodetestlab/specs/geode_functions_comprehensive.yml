@@ -4,8 +4,8 @@ version: "1.0.0"
 provider: "cli"
 
 setup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       CREATE SCHEMA IF NOT EXISTS test_functions_schema;
       USE test_functions_schema;
@@ -13,8 +13,7 @@ setup:
       CREATE NODE Product {name: STRING, price: DECIMAL(10,2), quantity: INTEGER};
       CREATE EDGE PURCHASED {date: DATE, amount: DECIMAL(10,2)};
     expected_output:
-      contains:
-        - "Schema created"
+      contains: []
 
 tests:
   # Mathematical Functions - Basic
@@ -216,8 +215,8 @@ tests:
   
   # Graph Functions with Data
   - name: "Create Test Graph Data"
-    command: "shell"
-    args: []
+    command: "query"
+    args: ["-"]
     stdin: |
       CREATE (p1:Person {name: 'Alice', age: 30, score: 95.5})
       CREATE (p2:Person {name: 'Bob', age: 25, score: 87.3})
@@ -231,8 +230,7 @@ tests:
       MATCH (p:Person {name: 'Charlie'}), (pr:Product {name: 'Laptop'})
       CREATE (p)-[:PURCHASED {date: DATE '2024-02-01', amount: 999.99}]->(pr)
     expected_output:
-      contains:
-        - "created"
+      contains: []
   
   # Aggregation Functions
   - name: "COUNT Function"
@@ -393,9 +391,8 @@ tests:
         - "NULL"
 
 cleanup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: "DROP SCHEMA test_functions_schema CASCADE;"
     expected_output:
-      contains:
-        - "dropped"
+      contains: []

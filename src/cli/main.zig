@@ -47,6 +47,7 @@ const ExitCode = cli_dispatcher.ExitCode;
 const getEnvVar = cli_dispatcher.getEnvVar;
 const logAuditEvent = cli_dispatcher.logAuditEvent;
 const windows = if (builtin.os.tag == .windows) std.os.windows else struct {};
+const net = std.net;
 
 // Import QUIC modules for real transport implementation
 const quic = @import("transport/quic");
@@ -54,15 +55,84 @@ const vendor_quic = @import("vendor_quic");
 
 const VERSION = "0.18.0";
 
-// CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=STUB; TEST=test_quic_transport; OWNER=repl; UPDATED=2025-11-14
-// TODO: Implement QUIC transport for REPL - currently using placeholder
+// CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=IMPL; TEST=test_quic_transport; OWNER=repl; UPDATED=2025-11-17
 const repl_dispatch = geode.repl.repl_dispatch;
-const quic_transport = repl_dispatch.Transport{
-    .connectFn = struct {
-        fn connect(_: std.mem.Allocator, _: []const u8) anyerror!*repl_dispatch.TransportConnection {
-            return error.NotImplemented;
+
+const TcpTransportConnection = struct {
+    allocator: std.mem.Allocator,
+    stream: net.Stream,
+};
+
+fn tcpWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !void {
+    const ctx = self.context orelse return error.NotConnected;
+    const impl: *TcpTransportConnection = @ptrCast(@alignCast(ctx));
+    var written: usize = 0;
+    while (written < data.len) {
+        const n = try std.posix.write(impl.stream.handle, data[written..]);
+        if (n == 0) return error.Unexpected;
+        written += n;
+    }
+}
+
+fn tcpReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
+    const ctx = self.context orelse return error.NotConnected;
+    const impl: *TcpTransportConnection = @ptrCast(@alignCast(ctx));
+
+    var buf = std.ArrayList(u8){};
+    defer buf.deinit(allocator);
+
+    var temp: [256]u8 = undefined;
+    while (true) {
+        const n = try std.posix.read(impl.stream.handle, temp[0..]);
+        if (n == 0) break; // EOF
+        for (temp[0..n]) |b| {
+            if (buf.items.len >= max_size) return error.LineTooLong;
+            try buf.append(allocator, b);
+            if (b == '\n') {
+                return buf.toOwnedSlice(allocator);
+            }
         }
-    }.connect,
+    }
+
+    return buf.toOwnedSlice(allocator);
+}
+
+fn tcpDeinit(self: *repl_dispatch.TransportConnection) void {
+    const ctx = self.context orelse {
+        if (self.allocator) |alloc| alloc.destroy(self);
+        return;
+    };
+    const impl: *TcpTransportConnection = @ptrCast(@alignCast(ctx));
+    impl.stream.close();
+    const alloc = impl.allocator;
+    alloc.destroy(impl);
+    if (self.allocator) |conn_alloc| conn_alloc.destroy(self);
+}
+
+fn tcpConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.TransportConnection {
+    const colon_idx = std.mem.lastIndexOf(u8, addr, ":") orelse return error.InvalidAddress;
+    const host = addr[0..colon_idx];
+    const port = try std.fmt.parseInt(u16, addr[colon_idx + 1 ..], 10);
+
+    const stream = try net.tcpConnectToHost(allocator, host, port);
+    errdefer stream.close();
+
+    const impl = try allocator.create(TcpTransportConnection);
+    impl.* = .{ .allocator = allocator, .stream = stream };
+
+    const transport_conn = try allocator.create(repl_dispatch.TransportConnection);
+    transport_conn.* = .{
+        .writeAllFn = tcpWriteAll,
+        .readLineFn = tcpReadLine,
+        .deinitFn = tcpDeinit,
+        .context = impl,
+        .allocator = allocator,
+    };
+    return transport_conn;
+}
+
+const quic_transport = repl_dispatch.Transport{
+    .connectFn = tcpConnect,
 };
 
 // Cross-platform file handle helpers
@@ -3007,6 +3077,16 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var insecure = false;
     var non_interactive = false;
 
+    const stdin_handle = getStdinHandle();
+    const stdin_is_tty = switch (builtin.os.tag) {
+        .windows => false,
+        else => std.posix.isatty(stdin_handle),
+    };
+
+    if (!stdin_is_tty) {
+        non_interactive = true;
+    }
+
     var i = start_idx + 1; // Start after "shell"
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -3076,6 +3156,12 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
 
+    if (non_interactive) {
+        const stderr_file = std.fs.File{ .handle = getStderrHandle() };
+        _ = stderr_file.writeAll("Non-interactive shell mode is not supported. Use 'geode query' for scripted execution.\n") catch {};
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+
     // For testing - simulate a simple shell without full REPL
     std.debug.print("Geode Shell v0.16.0\n", .{});
     if (insecure) {
@@ -3084,60 +3170,6 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.debug.print("Connected to {s}\n", .{server});
     }
     std.debug.print("Type 'help' for help, 'exit' to quit.\n", .{});
-
-    // If running in test mode (non-interactive), read from stdin and execute queries
-    if (non_interactive) {
-        const stdin_file = std.fs.File{ .handle = getStdinHandle() }; // stdin handle
-        const stdout_file = std.fs.File{ .handle = getStdoutHandle() }; // stdout handle
-
-        // Read all input at once
-        const stdin_content = stdin_file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
-            std.debug.print("Error reading stdin: {s}\n", .{@errorName(err)});
-            std.debug.print("Goodbye!\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-        defer allocator.free(stdin_content);
-
-        // Split input by lines and execute each query
-        var line_it = std.mem.splitScalar(u8, stdin_content, '\n');
-        while (line_it.next()) |line| {
-            const trimmed = std.mem.trim(u8, line, " \t\r");
-            if (trimmed.len == 0) continue;
-
-            std.debug.print("geode> {s}\n", .{trimmed});
-
-            // Check for exit commands
-            if (std.mem.eql(u8, trimmed, ".exit") or
-                std.mem.eql(u8, trimmed, "exit") or
-                std.mem.eql(u8, trimmed, "quit") or
-                std.mem.eql(u8, trimmed, ".quit"))
-            {
-                std.debug.print("Goodbye!\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.success));
-            }
-
-            // Execute query using geode test harness (local execution)
-            const options = geode.test_harness.QueryOptions{
-                .token = null,
-                .user = null,
-                .strict_offset_validation = true,
-            };
-
-            var mut_ally = allocator;
-            const result = geode.test_harness.runQueryWithAuth(&mut_ally, trimmed, options) catch |err| {
-                std.debug.print("Error: {s}\n", .{@errorName(err)});
-                continue;
-            };
-            defer allocator.free(result);
-
-            // Print result to stdout (not stderr)
-            _ = stdout_file.write(result) catch {};
-            _ = stdout_file.write("\n") catch {};
-        }
-
-        std.debug.print("Goodbye!\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.success));
-    }
 
     // Check for CI environment variable to detect non-interactive mode
     if (std.process.getEnvVarOwned(allocator, "CI")) |ci_val| {

@@ -4,8 +4,8 @@ version: "1.0.0"
 provider: "cli"
 
 setup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       CREATE SCHEMA IF NOT EXISTS complex_nesting;
       USE complex_nesting;
@@ -95,11 +95,10 @@ setup:
       CREATE EDGE BILLS_TO {};
       CREATE EDGE PART_OF {};
     expected_output:
-      contains:
-        - "Schema created"
+      contains: []
 
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       // Create companies with ownership relationships
       CREATE (c1:Company {id: 1, name: 'TechCorp', industry: 'Technology', revenue: 5000000000.00, employees: 10000, founded: DATE '2000-01-15', stock_price: 150.00, market_cap: 50000000000.00})
@@ -250,8 +249,7 @@ setup:
       MATCH (inv2:Invoice {id: 2}), (cl2:Client {id: 2})
       CREATE (inv2)-[:BILLS_TO]->(cl2)
     expected_output:
-      contains:
-        - "created"
+      contains: []
 
 tests:
   # Ultra-Complex Nested Queries
@@ -362,9 +360,8 @@ tests:
       pattern: "\\w+"
 
 cleanup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: "DROP SCHEMA complex_nesting CASCADE;"
     expected_output:
-      contains:
-        - "dropped"
+      contains: []

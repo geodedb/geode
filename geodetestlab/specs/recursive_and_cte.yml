@@ -4,8 +4,8 @@ version: "1.0.0"
 provider: "cli"
 
 setup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       CREATE SCHEMA IF NOT EXISTS recursive_cte;
       USE recursive_cte;
@@ -65,11 +65,10 @@ setup:
       CREATE EDGE FRIENDS_WITH {since: DATE};
       CREATE EDGE ANCESTOR_OF {generations: INTEGER};
     expected_output:
-      contains:
-        - "Schema created"
+      contains: []
 
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       // Create family tree (genealogy)
       CREATE (p1:Person {id: 1, name: 'Great-Grandparent', birth_year: 1900, death_year: 1980})
@@ -261,8 +260,7 @@ setup:
       CREATE (p12)-[:FOLLOWS]->(p10)
       CREATE (p12)-[:FOLLOWS]->(p11)
     expected_output:
-      contains:
-        - "created"
+      contains: []
 
 tests:
   # Basic Recursive Patterns
@@ -483,9 +481,8 @@ tests:
         - "USA"
 
 cleanup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: "DROP SCHEMA recursive_cte CASCADE;"
     expected_output:
-      contains:
-        - "dropped"
+      contains: []

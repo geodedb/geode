@@ -1,4 +1,6 @@
 const std = @import("std");
+
+// Symlink to the authoritative vendor_setup.zig from vendor/quic/vendor_setup.zig
 const quic_vendor_setup = @import("vendor_quic_setup.zig");
 
 pub fn build(b: *std.Build) void {
@@ -22,6 +24,7 @@ pub fn build(b: *std.Build) void {
         test_exe.linkSystemLibrary("dl");
     }
 
+    // Setup QUIC modules from vendored library
     const quic_modules = quic_vendor_setup.setupModules(b, "../../vendor/quic", target, optimize);
     test_exe.root_module.addImport("vendor_quic", quic_modules.quic_api);
 

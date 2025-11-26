@@ -34,8 +34,8 @@ class ServerManager:
         self.timeout_ms = timeout_ms
         self.verbose = verbose
         
-        # Use embedded server to avoid QUIC response hang issues
-        self._use_embedded = True
+        # Always start a real server; do not rely on embedded fallback
+        self._use_embedded = False
         self.process = None
         self.temp_dir = None
         

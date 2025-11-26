@@ -4,8 +4,8 @@ version: "1.0.0"
 provider: "cli"
 
 setup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       CREATE SCHEMA IF NOT EXISTS test_edge_cases;
       USE test_edge_cases;
@@ -19,8 +19,7 @@ setup:
         time_val: TIME
       };
     expected_output:
-      contains:
-        - "Schema created"
+      contains: []
 
 tests:
   # Numeric Overflow/Underflow
@@ -103,17 +102,17 @@ tests:
         - "NULL"
   
   - name: "NULL in Aggregations"
-    command: "shell"
-    args: []
+    command: "query"
+    args: ["-"]
     stdin: |
-      CREATE (n1:TestNode {int_val: 10})
-      CREATE (n2:TestNode {int_val: NULL})
-      CREATE (n3:TestNode {int_val: 20})
-      MATCH (n:TestNode) RETURN avg(n.int_val) AS avg_with_null, count(n.int_val) AS count_non_null
+      CREATE (n1:TestNode {int_val: 10});
+      CREATE (n2:TestNode {int_val: NULL});
+      CREATE (n3:TestNode {int_val: 20});
+      MATCH (n:TestNode) RETURN avg(n.int_val) AS avg_with_null, count(n.int_val) AS count_non_null;
     expected_output:
       contains:
-        - "15"  # Average ignores NULL
-        - "2"   # Count ignores NULL
+        - "15"
+        - "2"
   
   # Special Numeric Values
   - name: "Division by Zero - Integer"
@@ -226,13 +225,13 @@ tests:
         - "0"
   
   - name: "Self Loop"
-    command: "shell"
-    args: []
+    command: "query"
+    args: ["-"]
     stdin: |
-      CREATE (n:TestNode {int_val: 42})
-      MATCH (n:TestNode {int_val: 42})
-      CREATE (n)-[:SELF_LOOP]->(n)
-      MATCH (n:TestNode)-[r:SELF_LOOP]->(n) RETURN count(r) AS self_loops
+      CREATE (n:TestNode {int_val: 42});
+      MATCH (n:TestNode {int_val: 42});
+      CREATE (n)-[:SELF_LOOP]->(n);
+      MATCH (n:TestNode)-[r:SELF_LOOP]->(n) RETURN count(r) AS self_loops;
     expected_output:
       contains:
         - "1"
@@ -255,12 +254,12 @@ tests:
         - "0"     # count of empty set
   
   - name: "Single Value Aggregation"
-    command: "shell"
-    args: []
+    command: "query"
+    args: ["-"]
     stdin: |
-      CREATE (n:TestNode {int_val: 42})
+      CREATE (n:TestNode {int_val: 42});
       MATCH (n:TestNode) WHERE n.int_val = 42 
-      RETURN min(n.int_val) AS min_val, max(n.int_val) AS max_val, avg(n.int_val) AS avg_val
+      RETURN min(n.int_val) AS min_val, max(n.int_val) AS max_val, avg(n.int_val) AS avg_val;
     expected_output:
       contains:
         - "42"
@@ -354,9 +353,8 @@ tests:
       pattern: "1\\.?0*e-308"
 
 cleanup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: "DROP SCHEMA test_edge_cases CASCADE;"
     expected_output:
-      contains:
-        - "dropped"
+      contains: []

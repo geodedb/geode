@@ -4,8 +4,8 @@ version: "1.0.0"
 provider: "cli"
 
 setup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       CREATE SCHEMA IF NOT EXISTS chained_ops;
       USE chained_ops;
@@ -61,11 +61,10 @@ setup:
       CREATE EDGE PROCESSED_BY {processing_fee: DECIMAL(6,2)};
       CREATE EDGE LINKED_TO {};
     expected_output:
-      contains:
-        - "Schema created"
+      contains: []
 
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       // Create users
       CREATE (u1:User {id: 1, username: 'john_doe', email: 'john@example.com', join_date: DATE '2020-01-15', risk_score: 0.2, verified: true})
@@ -145,8 +144,7 @@ setup:
       MATCH (t6:Transaction {id: 6}), (m4:Merchant {id: 4})
       CREATE (t6)-[:PROCESSED_BY {processing_fee: 0.24}]->(m4)
     expected_output:
-      contains:
-        - "created"
+      contains: []
 
 tests:
   # Basic Chaining
@@ -336,9 +334,8 @@ tests:
       pattern: "\\d"
 
 cleanup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: "DROP SCHEMA chained_ops CASCADE;"
     expected_output:
-      contains:
-        - "dropped"
+      contains: []

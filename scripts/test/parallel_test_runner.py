@@ -10,6 +10,7 @@ Features:
 - Enable per-scenario and per-test debugging
 """
 
+import atexit
 import copy
 import subprocess
 import yaml
@@ -162,6 +163,9 @@ class ParallelTestRunner:
         self.project_root = Path(__file__).resolve().parents[2]
         self.default_cert = str(self.project_root / "certs" / "server.crt")
         self.default_key = str(self.project_root / "certs" / "server.key")
+        self.child_procs: List[subprocess.Popen] = []
+        self.child_lock = threading.Lock()
+        atexit.register(self._cleanup_children)
 
         # Initialize thread-safe port allocator
         self.port_allocator = PortAllocator(start_port=10000, end_port=20000)
@@ -183,6 +187,38 @@ class ParallelTestRunner:
         print(f"Test run started at {self.run_timestamp}")
         print(f"Logs will be written to: {self.run_dir}")
 
+    def _register_child(self, proc: subprocess.Popen) -> None:
+        """Track a child process for cleanup on exit."""
+        with self.child_lock:
+            self.child_procs.append(proc)
+
+    def _unregister_child(self, proc: Optional[subprocess.Popen]) -> None:
+        """Remove a child process from tracking."""
+        if proc is None:
+            return
+        with self.child_lock:
+            try:
+                self.child_procs.remove(proc)
+            except ValueError:
+                pass
+
+    def _cleanup_children(self) -> None:
+        """Best-effort cleanup of any lingering child servers."""
+        with self.child_lock:
+            procs = list(self.child_procs)
+            self.child_procs.clear()
+
+        for proc in procs:
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+
     def default_scenario_configs(self) -> List[Dict]:
         """Default scenarios to ensure both embedded and server coverage."""
         return [
@@ -201,6 +237,69 @@ class ParallelTestRunner:
                 },
             },
         ]
+
+    def is_geode_command(self, args: List[str]) -> bool:
+        """Heuristic to decide whether a command should be run via the geode binary."""
+        if not args:
+            return False
+
+        first = args[0]
+        # Absolute/relative invocation of geode
+        if isinstance(first, str) and first.endswith("/geode"):
+            return True
+
+        geode_commands = {
+            "query",
+            "shell",
+            "serve",
+            "auth",
+            "user",
+            "role",
+            "policy",
+            "grant",
+            "revoke",
+            "backup",
+            "restore",
+            "migrate",
+            "lsp",
+        }
+        gql_keywords = [
+            "MATCH",
+            "RETURN",
+            "CREATE",
+            "DELETE",
+            "MERGE",
+            "WITH",
+            "UNWIND",
+            "CALL",
+            "INSERT",
+            "SHOW",
+            "EXPLAIN",
+            "PROFILE",
+            "USE",
+            "SET",
+            "BEGIN",
+            "COMMIT",
+            "ROLLBACK",
+            "START",
+            "SELECT",
+            "OPTIONAL",
+            "DROP",
+            "ALTER",
+            "GRANT",
+            "REVOKE",
+        ]
+
+        if isinstance(first, str):
+            if first.startswith("-"):
+                # Treat leading flags as geode CLI options (e.g. --format)
+                return True
+            if first in geode_commands:
+                return True
+            if any(first.upper().startswith(kw) for kw in gql_keywords):
+                return True
+
+        return False
 
     def build_scenarios(self, spec: Dict) -> List[Scenario]:
         """Build execution scenarios from a spec, falling back to defaults."""
@@ -436,9 +535,14 @@ class ParallelTestRunner:
                                 setup_args = [setup_command] + setup_args
 
                     # Process setup args (will use server or embedded persistent mode)
-                    processed_setup_args = self.process_args(setup_args, scenario, server_address=server_address)
+                    if self.is_geode_command(setup_args):
+                        processed_setup_args = self.process_args(setup_args, scenario, server_address=server_address)
+                        cmd = [self.binary] + processed_setup_args
+                    else:
+                        cmd = setup_args
+
                     subprocess.run(
-                        [self.binary] + processed_setup_args,
+                        cmd,
                         capture_output=True,
                         text=True,
                         timeout=self.test_timeout,
@@ -684,6 +788,7 @@ class ParallelTestRunner:
                     stderr=subprocess.PIPE,
                     env=server_env
                 )
+                self._register_child(server_process)
 
                 # Wait for server to be ready with health check
                 # Enforce minimum 60 seconds to handle QUIC startup under parallel load
@@ -795,9 +900,15 @@ class ParallelTestRunner:
                             elif isinstance(setup_command, str) and (not setup_args or setup_args[0] != setup_command):
                                 setup_args = [setup_command] + setup_args
 
-                    processed_args = self.process_args(setup_args, scenario, server_address=server_address)
+                    if self.is_geode_command(setup_args):
+                        processed_args = self.process_args(setup_args, scenario, server_address=server_address)
+                        cmd = [self.binary] + processed_args
+                    else:
+                        # Run external setup commands (e.g., rm, mkdir) directly
+                        cmd = setup_args
+
                     result = subprocess.run(
-                        [self.binary] + processed_args,
+                        cmd,
                         capture_output=True,
                         text=True,
                         timeout=self.test_timeout,
@@ -881,6 +992,7 @@ class ParallelTestRunner:
                     server_process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     server_process.kill()
+                self._unregister_child(server_process)
 
             # Release allocated port back to the pool
             if port is not None:

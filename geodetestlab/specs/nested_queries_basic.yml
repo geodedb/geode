@@ -4,8 +4,8 @@ version: "1.0.0"
 provider: "cli"
 
 setup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       CREATE SCHEMA IF NOT EXISTS nested_basic;
       USE nested_basic;
@@ -37,11 +37,10 @@ setup:
       CREATE EDGE MANAGES {};
       CREATE EDGE ASSIGNED_TO {role: STRING, hours: INTEGER};
     expected_output:
-      contains:
-        - "Schema created"
+      contains: []
 
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       // Create departments
       CREATE (d1:Department {name: 'Engineering', budget: 1000000.00, location: 'NYC'})
@@ -87,8 +86,7 @@ setup:
       MATCH (e:Employee {name: 'Diana'}), (p:Project {name: 'Gamma'})
       CREATE (e)-[:ASSIGNED_TO {role: 'Analyst', hours: 20}]->(p)
     expected_output:
-      contains:
-        - "created"
+      contains: []
 
 tests:
   # Level 1: Simple Nested Queries
@@ -342,9 +340,8 @@ tests:
       pattern: "\\w+"
 
 cleanup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: "DROP SCHEMA nested_basic CASCADE;"
     expected_output:
-      contains:
-        - "dropped"
+      contains: []

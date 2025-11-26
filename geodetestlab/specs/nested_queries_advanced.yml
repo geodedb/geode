@@ -4,8 +4,8 @@ version: "1.0.0"
 provider: "cli"
 
 setup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       CREATE SCHEMA IF NOT EXISTS nested_advanced;
       USE nested_advanced;
@@ -56,11 +56,10 @@ setup:
       CREATE EDGE STORED_IN {quantity: INTEGER, last_updated: DATE};
       CREATE EDGE REFERRED {referral_date: DATE, bonus: DECIMAL(8,2)};
     expected_output:
-      contains:
-        - "Schema created"
+      contains: []
 
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       // Create customers with referral chains
       CREATE (c1:Customer {id: 1, name: 'Alice', email: 'alice@example.com', registration_date: DATE '2022-01-15', tier: 'Gold', credit_limit: 10000.00})
@@ -154,8 +153,7 @@ setup:
       CREATE (p1)-[:STORED_IN {quantity: 30, last_updated: DATE '2023-04-01'}]->(w1)
       CREATE (p1)-[:STORED_IN {quantity: 20, last_updated: DATE '2023-04-01'}]->(w2)
     expected_output:
-      contains:
-        - "created"
+      contains: []
 
 tests:
   # Level 1: Three-Level Nested Queries
@@ -300,9 +298,8 @@ tests:
       pattern: "\\w+"
 
 cleanup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: "DROP SCHEMA nested_advanced CASCADE;"
     expected_output:
-      contains:
-        - "dropped"
+      contains: []

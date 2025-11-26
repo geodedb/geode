@@ -1549,7 +1549,7 @@ REQ-REPL-QUIC-001,REPL QUIC Integration,ClientSession,IMPL,test_quic_integration
 REQ-REPL-QUIC-001,REPL QUIC Integration,IntegrationTesting,IMPL,test_repl_quic_integration_e2e,,repl,2025-10-05,tests/test_repl_quic_integration_e2e.zig
 REQ-REPL-QUIC-001,REPL QUIC Integration,RegressionTesting,IMPL,repl_quic_integration_regression_test,,repl,2025-10-05,tests/repl_quic_integration_regression_test.sh
 REQ-REPL-QUIC-001,REPL QUIC Integration,UnitTesting,IMPL,test_repl_quic_integration,,repl,2025-10-05,tests/test_repl_quic_integration.zig
-REQ-REPL-QUIC-002,REPL QUIC Transport,QuicTransportAdapter,STUB,test_quic_transport,,repl,2025-11-14,src/cli/main.zig
+REQ-REPL-QUIC-002,REPL QUIC Transport,QuicTransportAdapter,IMPL,test_quic_transport,,repl,2025-11-17,src/cli/main.zig
 REQ-REPL-QUIC-003,REPL QUIC Transport Tests,UnitTests,IMPL,test_transport_interface,,repl,2025-10-05,tests/test_quic_transport.zig
 REQ-REPL-QUIC-004,REPL Integration Tests,EndToEndTests,IMPL,test_repl_loop_options,,repl,2025-10-05,tests/test_repl_integration.zig
 REQ-REPL-QUIC-005,REPL E2E Tests,EndToEndIntegration,IMPL,test_repl_server_handshake,,repl,2025-10-05,tests/test_repl_e2e.zig

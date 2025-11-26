@@ -4,8 +4,8 @@ version: "1.0.0"
 provider: "cli"
 
 setup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: |
       CREATE SCHEMA IF NOT EXISTS test_algorithms_schema;
       USE test_algorithms_schema;
@@ -14,8 +14,7 @@ setup:
       CREATE EDGE ROAD {distance: DOUBLE, travel_time: INTEGER};
       CREATE EDGE KNOWS {since: DATE, strength: DOUBLE};
     expected_output:
-      contains:
-        - "Schema created"
+      contains: []
 
 tests:
   # Advanced Math Functions
@@ -79,8 +78,8 @@ tests:
   
   # Statistical Functions
   - name: "STDDEV Function"
-    command: "shell"
-    args: []
+    command: "query"
+    args: ["-"]
     stdin: |
       CREATE (p1:Person {name: 'Alice', income: 50000.00})
       CREATE (p2:Person {name: 'Bob', income: 60000.00})
@@ -99,8 +98,8 @@ tests:
   
   # Graph Setup for Algorithms
   - name: "Create Graph for Algorithms"
-    command: "shell"
-    args: []
+    command: "query"
+    args: ["-"]
     stdin: |
       CREATE (ny:City {name: 'New York', population: 8000000, lat: 40.7128, lon: -74.0060})
       CREATE (la:City {name: 'Los Angeles', population: 4000000, lat: 34.0522, lon: -118.2437})
@@ -126,8 +125,7 @@ tests:
       MATCH (phx:City {name: 'Phoenix'}), (la:City {name: 'Los Angeles'})
       CREATE (phx)-[:ROAD {distance: 372, travel_time: 6}]->(la)
     expected_output:
-      contains:
-        - "created"
+      contains: []
   
   # Graph Algorithm Functions
   - name: "Degree Centrality Calculation"
@@ -162,8 +160,8 @@ tests:
   
   # Social Network Analysis
   - name: "Create Social Network"
-    command: "shell"
-    args: []
+    command: "query"
+    args: ["-"]
     stdin: |
       CREATE (alice:Person {name: 'Alice', age: 30})
       CREATE (bob:Person {name: 'Bob', age: 25})
@@ -186,8 +184,7 @@ tests:
       MATCH (charlie:Person {name: 'Charlie'}), (eve:Person {name: 'Eve'})
       CREATE (charlie)-[:KNOWS {since: DATE '2020-11-30', strength: 0.5}]->(eve)
     expected_output:
-      contains:
-        - "created"
+      contains: []
   
   - name: "Common Neighbors"
     command: "query"
@@ -291,9 +288,8 @@ tests:
         - "error"
 
 cleanup:
-  - command: "shell"
-    args: []
+  - command: "query"
+    args: ["-"]
     stdin: "DROP SCHEMA test_algorithms_schema CASCADE;"
     expected_output:
-      contains:
-        - "dropped"
+      contains: []

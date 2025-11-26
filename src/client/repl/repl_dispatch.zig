@@ -22,6 +22,8 @@ pub const TransportConnection = struct {
     writeAllFn: *const fn (self: *TransportConnection, data: []const u8) anyerror!void,
     readLineFn: *const fn (self: *TransportConnection, allocator: std.mem.Allocator, max_size: usize) anyerror![]u8,
     deinitFn: *const fn (self: *TransportConnection) void,
+    context: ?*anyopaque = null,
+    allocator: ?std.mem.Allocator = null,
 
     pub fn writeAll(self: *TransportConnection, data: []const u8) !void {
         return self.writeAllFn(self, data);
@@ -54,8 +56,12 @@ const MockTransportConnection = struct {
     }
 
     pub fn deinit(self: *TransportConnection) void {
-        _ = self;
-        // Mock implementation - do nothing
+        const alloc = self.allocator orelse return;
+        if (self.context) |ctx| {
+            const mock: *MockTransportConnection = @ptrCast(@alignCast(ctx));
+            alloc.destroy(mock);
+        }
+        alloc.destroy(self);
     }
 };
 
@@ -70,6 +76,8 @@ fn mockConnectFn(allocator: std.mem.Allocator, addr: []const u8) !*TransportConn
         .writeAllFn = MockTransportConnection.writeAll,
         .readLineFn = MockTransportConnection.readLine,
         .deinitFn = MockTransportConnection.deinit,
+        .context = mock,
+        .allocator = allocator,
     };
     return transport_conn;
 }
