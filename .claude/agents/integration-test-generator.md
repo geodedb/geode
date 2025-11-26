@@ -99,7 +99,7 @@ Every integration test must include appropriate CANARY markers:
 
 ### Test Execution
 - Tests must run via `python3 extended_test_runner.py`
-- Support both QUIC and --no-quic modes
+- All tests use QUIC server mode
 - Clean up resources after each test
 - Verify no memory leaks
 
@@ -168,7 +168,7 @@ Before completing, verify:
 - [ ] Performance expectations documented
 - [ ] Error cases covered
 - [ ] Resource cleanup verified
-- [ ] Tests pass in both QUIC and --no-quic modes
+- [ ] Tests pass in QUIC server mode
 - [ ] Documentation updated
 
 ## Escalation

@@ -8,9 +8,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 GEODE_BIN="${GEODE_BIN:-$PROJECT_ROOT/zig-out/bin/geode}"
+GEODE_SERVER="${GEODE_SERVER:-127.0.0.1:3141}"
 
 echo "=== Basic Social Network Test Fixture Setup ==="
 echo "Geode Binary: $GEODE_BIN"
+echo "Geode Server: $GEODE_SERVER"
 echo
 
 # Check if geode binary exists
@@ -26,7 +28,7 @@ execute_query() {
     local description="$2"
 
     echo ">>> $description"
-    if echo "$query" | "$GEODE_BIN" query --embedded - 2>&1 | grep -q "status_class\":\"00000"; then
+    if echo "$query" | "$GEODE_BIN" query --server "$GEODE_SERVER" --insecure - 2>&1 | grep -q "status_class\":\"00000"; then
         echo "    ✓ Success"
     else
         echo "    ⚠ May have failed (this might be expected)"
@@ -131,22 +133,22 @@ echo
 
 # Verify data was loaded
 echo ">>> Checking node counts..."
-NODE_COUNT=$("$GEODE_BIN" query --embedded "MATCH (n) RETURN count(n) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
+NODE_COUNT=$("$GEODE_BIN" query --server "$GEODE_SERVER" --insecure "MATCH (n) RETURN count(n) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
 echo "    Total nodes: $NODE_COUNT"
 
 echo ">>> Checking relationship counts..."
-REL_COUNT=$("$GEODE_BIN" query --embedded "MATCH ()-[r]->() RETURN count(r) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
+REL_COUNT=$("$GEODE_BIN" query --server "$GEODE_SERVER" --insecure "MATCH ()-[r]->() RETURN count(r) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0")
 echo "    Total relationships: $REL_COUNT"
 
 echo ">>> Sample queries..."
 echo -n "    Users in San Francisco: "
-"$GEODE_BIN" query --embedded "MATCH (u:User)-[:LOCATED_IN]->(l:Location {name: 'San Francisco'}) RETURN count(u) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
+"$GEODE_BIN" query --server "$GEODE_SERVER" --insecure "MATCH (u:User)-[:LOCATED_IN]->(l:Location {name: 'San Francisco'}) RETURN count(u) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
 
 echo -n "    Posts by Alice: "
-"$GEODE_BIN" query --embedded "MATCH (u:User {username: 'alice_tech'})-[:POSTED]->(p:Post) RETURN count(p) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
+"$GEODE_BIN" query --server "$GEODE_SERVER" --insecure "MATCH (u:User {username: 'alice_tech'})-[:POSTED]->(p:Post) RETURN count(p) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
 
 echo -n "    TechCorp employees: "
-"$GEODE_BIN" query --embedded "MATCH (u:User)-[:WORKS_AT]->(c:Company {name: 'TechCorp Industries'}) RETURN count(u) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
+"$GEODE_BIN" query --server "$GEODE_SERVER" --insecure "MATCH (u:User)-[:WORKS_AT]->(c:Company {name: 'TechCorp Industries'}) RETURN count(u) AS total" 2>/dev/null | grep -o '"rows":\[\[[0-9]*\]\]' | grep -o '[0-9]*' || echo "0"
 
 echo
 if [ "$NODE_COUNT" -gt 0 ]; then

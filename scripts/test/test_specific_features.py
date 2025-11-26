@@ -6,7 +6,7 @@ import sys
 
 def run_query(query, user=None, password=None):
     """Run a query and return stdout."""
-    cmd = ["./zig-out/bin/geode", "query", "--no-quic", "--format", "json", "-"]
+    cmd = ["./zig-out/bin/geode", "query", "--server 127.0.0.1:3141 --insecure", "--format", "json", "-"]
     if user:
         cmd.extend(["--user", user, "--password", password or ""])
 
@@ -95,7 +95,7 @@ def test_auth_system():
 
     # Start server with auth enabled
     server = subprocess.Popen(
-        ["./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:9999", "--no-quic", "--enable-auth"],
+        ["./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:9999", "--server 127.0.0.1:3141 --insecure", "--enable-auth"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
     )
@@ -108,9 +108,9 @@ def test_auth_system():
         print("  Testing unauthenticated access...")
         code, stdout, stderr = run_query("RETURN 1")
 
-        # Note: In --no-quic mode without server, auth isn't enforced
+        # Note: In --server 127.0.0.1:3141 --insecure mode without server, auth isn't enforced
         # We need to test with actual server mode
-        print("  ⊘ Auth tests require server mode (skipped in --no-quic)")
+        print("  ⊘ Auth tests require server mode (skipped in --server 127.0.0.1:3141 --insecure)")
 
         return None  # Skipped
 

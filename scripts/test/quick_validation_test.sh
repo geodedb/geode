@@ -10,7 +10,7 @@ GEODE_BIN="./zig-out/bin/geode"
 # Test 1: Unauthorized access returns exit code 3
 echo "Test 1: Unauthorized access"
 set +e
-$GEODE_BIN query --user unauthorized --no-quic "MATCH (n) RETURN count(n)" >/dev/null 2>&1
+$GEODE_BIN query --user unauthorized --server 127.0.0.1:3141 --insecure "MATCH (n) RETURN count(n)" >/dev/null 2>&1
 exit_code=$?
 set -e
 if [[ $exit_code -eq 3 ]]; then
@@ -22,7 +22,7 @@ fi
 
 # Test 2: Token auth returns exit code 0
 echo "Test 2: Token authentication"
-$GEODE_BIN query --token test_token --no-quic "RETURN current_user() AS user" >/dev/null 2>&1
+$GEODE_BIN query --token test_token --server 127.0.0.1:3141 --insecure "RETURN current_user() AS user" >/dev/null 2>&1
 exit_code=$?
 if [[ $exit_code -eq 0 ]]; then
     echo "PASS: Token auth returns exit code 0"
@@ -46,7 +46,7 @@ fi
 
 # Test 4: Complex query with modified syntax
 echo "Test 4: Complex query syntax"
-$GEODE_BIN query --no-quic "MATCH (n:TestNode) WHERE n.category IN ['A', 'B'] WITH n.category AS cat, count(n) AS node_count RETURN cat, node_count ORDER BY node_count DESC" >/dev/null 2>&1
+$GEODE_BIN query --server 127.0.0.1:3141 --insecure "MATCH (n:TestNode) WHERE n.category IN ['A', 'B'] WITH n.category AS cat, count(n) AS node_count RETURN cat, node_count ORDER BY node_count DESC" >/dev/null 2>&1
 exit_code=$?
 if [[ $exit_code -eq 0 ]]; then
     echo "PASS: Complex query executes successfully"

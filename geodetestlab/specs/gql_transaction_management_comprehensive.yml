@@ -23,7 +23,7 @@ tests:
   
   - name: "basic-start-transaction"
     description: "Test basic START TRANSACTION command"
-    args: ["query", "--embedded", "START TRANSACTION"]
+    args: ["query", "START TRANSACTION"]
     expect:
       exit_code: 0
     tags: ["transaction", "start", "basic"]
@@ -31,8 +31,8 @@ tests:
   - name: "basic-commit"
     description: "Test basic COMMIT command"
     setup:
-      - "query --embedded \"START TRANSACTION\""
-    args: ["query", "--embedded", "COMMIT"]
+      - "query \"START TRANSACTION\""
+    args: ["query", "COMMIT"]
     expect:
       exit_code: 0
     tags: ["transaction", "commit", "basic"]
@@ -40,8 +40,8 @@ tests:
   - name: "basic-rollback"
     description: "Test basic ROLLBACK command"
     setup:
-      - "query --embedded \"START TRANSACTION\""
-    args: ["query", "--embedded", "ROLLBACK"]
+      - "query \"START TRANSACTION\""
+    args: ["query", "ROLLBACK"]
     expect:
       exit_code: 0
     tags: ["transaction", "rollback", "basic"]
@@ -52,14 +52,14 @@ tests:
   
   - name: "transaction-read-only"
     description: "Test START TRANSACTION READ ONLY"
-    args: ["query", "--embedded", "START TRANSACTION READ ONLY"]
+    args: ["query", "START TRANSACTION READ ONLY"]
     expect:
       exit_code: 0
     tags: ["transaction", "read-only", "characteristics"]
 
   - name: "transaction-read-write"
     description: "Test START TRANSACTION READ WRITE"
-    args: ["query", "--embedded", "START TRANSACTION READ WRITE"]
+    args: ["query", "START TRANSACTION READ WRITE"]
     expect:
       exit_code: 0
     tags: ["transaction", "read-write", "characteristics"]
@@ -72,7 +72,6 @@ tests:
     description: "Complete transaction workflow with data modification and commit"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         CREATE (n:TestNode {id: 1, name: 'transaction_test'});
@@ -85,7 +84,6 @@ tests:
     description: "Complete transaction workflow with data modification and rollback"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         CREATE (n:TestNode {id: 2, name: 'rollback_test'});
@@ -97,10 +95,9 @@ tests:
   - name: "transaction-read-only-workflow"
     description: "Read-only transaction workflow"
     setup:
-      - "query --embedded \"CREATE (n:ReadTestNode {id: 1, value: 'test'})\""
+      - "query \"CREATE (n:ReadTestNode {id: 1, value: 'test'})\""
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION READ ONLY;
         MATCH (n:ReadTestNode) RETURN n.id AS id, n.value AS value;
@@ -120,7 +117,6 @@ tests:
     description: "Test transaction with nested procedure specification"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION {
           CREATE (n:NestedNode {id: 1, type: 'nested'});
@@ -141,7 +137,6 @@ tests:
     description: "Test transaction isolation - changes visible after commit"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         CREATE (n:IsolationTest {id: 1, status: 'committed'});
@@ -161,7 +156,6 @@ tests:
     description: "Test transaction isolation - changes not visible after rollback"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         CREATE (n:IsolationTest {id: 2, status: 'rolled_back'});
@@ -185,7 +179,6 @@ tests:
     description: "Transaction with multiple CREATE, SET, and DELETE operations"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         CREATE (a:MultiOp {id: 1, name: 'first'}),
@@ -205,7 +198,6 @@ tests:
     description: "Transaction with node and relationship creation"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         CREATE (a:TxNode {id: 1, name: 'source'}),
@@ -227,7 +219,7 @@ tests:
   
   - name: "commit-without-transaction"
     description: "Test COMMIT without active transaction"
-    args: ["query", "--embedded", "COMMIT"]
+    args: ["query", "COMMIT"]
     expect:
       exit_code: 0
       geode_query:
@@ -236,7 +228,7 @@ tests:
 
   - name: "rollback-without-transaction"
     description: "Test ROLLBACK without active transaction"
-    args: ["query", "--embedded", "ROLLBACK"]
+    args: ["query", "ROLLBACK"]
     expect:
       exit_code: 0
       geode_query:
@@ -247,14 +239,13 @@ tests:
     description: "Test starting transaction within transaction (should error)"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         START TRANSACTION
     expect:
       exit_code: 1
     cleanup:
-      - "query --embedded \"ROLLBACK\""
+      - "query \"ROLLBACK\""
     tags: ["transaction", "error", "nested"]
 
   # ===============================
@@ -265,7 +256,6 @@ tests:
     description: "Verify transaction state after successful commit"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         CREATE (n:StateTest {id: 1, state: 'committed'});
@@ -285,7 +275,6 @@ tests:
     description: "Verify transaction state after rollback"
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         CREATE (n:StateTest {id: 2, state: 'rolled_back'});
@@ -310,7 +299,6 @@ tests:
     timeout_ms: 30000
     args:
       - "query"
-      - "--embedded"
       - |
         START TRANSACTION;
         CREATE (n1:PerfTest {id: 1, batch: 'large'}),
@@ -343,7 +331,6 @@ tests:
     description: "Clean up all test data created during transaction tests"
     args:
       - "query"
-      - "--embedded"
       - "MATCH (n) WHERE n:TestNode OR n:ReadTestNode OR n:NestedNode OR n:IsolationTest OR n:MultiOp OR n:TxNode OR n:StateTest OR n:PerfTest DETACH DELETE n"
     expect:
       exit_code: 0

@@ -8,7 +8,7 @@ tests:
   # ===============================
   - name: "transaction-start-basic"
     description: "Test basic START TRANSACTION"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "START TRANSACTION"
     expect:
       exit_code: 0
@@ -19,7 +19,7 @@ tests:
 
   - name: "transaction-start-create-commit"
     description: "Test START TRANSACTION followed by CREATE and COMMIT"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (n:Test {id: 1})
@@ -32,7 +32,7 @@ tests:
 
   - name: "transaction-start-create-rollback"
     description: "Test START TRANSACTION followed by CREATE and ROLLBACK"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (n:Test {id: 2})
@@ -48,7 +48,7 @@ tests:
   # ===============================
   - name: "transaction-multiple-creates"
     description: "Test multiple CREATE operations in one transaction"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (p:Person {name: 'Alice'})
@@ -62,7 +62,7 @@ tests:
 
   - name: "transaction-create-match-update"
     description: "Test CREATE, MATCH, UPDATE in transaction"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (p:Person {name: 'Bob', age: 25})
@@ -79,7 +79,7 @@ tests:
   # ===============================
   - name: "transaction-no-active-error"
     description: "Test COMMIT without active transaction returns error"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "COMMIT"
     expect:
       exit_code: 0
@@ -89,7 +89,7 @@ tests:
 
   - name: "transaction-rollback-no-active-error"
     description: "Test ROLLBACK without active transaction returns error"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "ROLLBACK"
     expect:
       exit_code: 0
@@ -102,7 +102,7 @@ tests:
   # ===============================
   - name: "transaction-state-cleanup-after-commit"
     description: "Test transaction state is cleaned up after COMMIT"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (n:Test {id: 100})
@@ -118,7 +118,7 @@ tests:
 
   - name: "transaction-state-cleanup-after-rollback"
     description: "Test transaction state is cleaned up after ROLLBACK"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (n:Test {id: 300})
@@ -137,7 +137,7 @@ tests:
   # ===============================
   - name: "transaction-full-lifecycle"
     description: "Test complete transaction lifecycle"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (p:Person {name: 'Charlie', status: 'pending'})
@@ -154,7 +154,7 @@ tests:
 
   - name: "transaction-with-merge"
     description: "Test MERGE within transaction"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       MERGE (p:Person {email: 'tx@example.com'})
@@ -168,7 +168,7 @@ tests:
 
   - name: "transaction-with-delete"
     description: "Test DELETE within transaction"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       CREATE (n:TempNode {id: 999})
       START TRANSACTION
@@ -185,7 +185,7 @@ tests:
   # ===============================
   - name: "transaction-nested-patterns"
     description: "Test transaction with nested graph patterns"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (p:Person {name: 'Dave'})
@@ -200,7 +200,7 @@ tests:
 
   - name: "transaction-multiple-commits"
     description: "Test multiple separate transactions in sequence"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (n1:Node {id: 1})
@@ -219,7 +219,7 @@ tests:
 
   - name: "transaction-rollback-verification"
     description: "Verify ROLLBACK doesn't persist changes"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       START TRANSACTION
       CREATE (n:ShouldNotExist {id: 12345})

@@ -45,9 +45,9 @@ echo
 
 # Test 1: Process mode (stdio)
 echo "=== Process Mode Tests ==="
-run_test "Basic query" "./zig-out/bin/geode query 'RETURN 1 AS x ORDER BY x LIMIT 1' --no-quic"
-run_test "Error handling" "./zig-out/bin/geode query 'MATCH (n:InvalidLabel--)' --no-quic 2>&1 | grep -qi 'error'"
-run_test "Set operations" "./zig-out/bin/geode query 'RETURN 1 AS x UNION RETURN 1 AS x' --no-quic"
+run_test "Basic query" "./zig-out/bin/geode query 'RETURN 1 AS x ORDER BY x LIMIT 1' --server 127.0.0.1:3141 --insecure"
+run_test "Error handling" "./zig-out/bin/geode query 'MATCH (n:InvalidLabel--)' --server 127.0.0.1:3141 --insecure 2>&1 | grep -qi 'error'"
+run_test "Set operations" "./zig-out/bin/geode query 'RETURN 1 AS x UNION RETURN 1 AS x' --server 127.0.0.1:3141 --insecure"
 echo
 
 # Test 2: QUIC mode (temporarily disabled due to certificate validation issues)

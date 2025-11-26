@@ -11,20 +11,20 @@ def test_batch_update_properties():
 
     # Clean database
     subprocess.run(
-        ["./zig-out/bin/geode", "query", "--no-quic", "MATCH (n) DELETE n"],
+        ["./zig-out/bin/geode", "query", "--server 127.0.0.1:3141 --insecure", "MATCH (n) DELETE n"],
         capture_output=True
     )
 
     # Setup: Create users
     subprocess.run(
-        ["./zig-out/bin/geode", "query", "--no-quic", "--format", "json",
+        ["./zig-out/bin/geode", "query", "--server 127.0.0.1:3141 --insecure", "--format", "json",
          "CREATE (:User {name: 'Alice'}), (:User {name: 'Bob', age: 25})"],
         capture_output=True
     )
 
     # Execute the batch update query
     result = subprocess.run(
-        ["./zig-out/bin/geode", "query", "--no-quic", "--format", "json",
+        ["./zig-out/bin/geode", "query", "--server 127.0.0.1:3141 --insecure", "--format", "json",
          "MATCH (u:User) WHERE u.age IS NULL SET u.age = 0 RETURN count(u)"],
         capture_output=True,
         text=True

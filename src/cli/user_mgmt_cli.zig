@@ -51,17 +51,14 @@ fn findSubcommandStart(argv: [][:0]u8, start_idx: usize) usize {
     var idx = start_idx + 1;
     while (idx < argv.len) : (idx += 1) {
         const arg = argv[idx];
-        if (std.mem.eql(u8, arg, "--embedded") or
-            std.mem.eql(u8, arg, "--no-quic") or
-            std.mem.eql(u8, arg, "--enable-auth") or
+        if (std.mem.eql(u8, arg, "--enable-auth") or
             std.mem.eql(u8, arg, "--audit"))
         {
             continue;
         }
         if (std.mem.eql(u8, arg, "--server") or
             std.mem.eql(u8, arg, "--audit-file") or
-            std.mem.eql(u8, arg, "--audit-syslog") or
-            std.mem.eql(u8, arg, "--embedded-data-dir"))
+            std.mem.eql(u8, arg, "--audit-syslog"))
         {
             idx += 1;
             continue;

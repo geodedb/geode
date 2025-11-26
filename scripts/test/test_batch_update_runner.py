@@ -13,10 +13,10 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode")
     args = test_case.get("args", [])
     expect = test_case.get("expect", {})
 
-    # Add --no-quic if not present
-    if "query" in args and "--no-quic" not in args:
+    # Add --server 127.0.0.1:3141 --insecure if not present
+    if "query" in args and "--server 127.0.0.1:3141 --insecure" not in args:
         args = args.copy()
-        args.insert(args.index("query") + 1, "--no-quic")
+        args.insert(args.index("query") + 1, "--server 127.0.0.1:3141 --insecure")
 
     # Run setup commands if present
     setup_commands = test_case.get("setup", [])
@@ -25,9 +25,9 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode")
         for cmd_str in setup_commands:
             try:
                 setup_args = shlex.split(cmd_str)
-                # Add --no-quic to setup commands
-                if "query" in setup_args and "--no-quic" not in setup_args:
-                    setup_args.insert(setup_args.index("query") + 1, "--no-quic")
+                # Add --server 127.0.0.1:3141 --insecure to setup commands
+                if "query" in setup_args and "--server 127.0.0.1:3141 --insecure" not in setup_args:
+                    setup_args.insert(setup_args.index("query") + 1, "--server 127.0.0.1:3141 --insecure")
                 subprocess.run(
                     [binary] + setup_args,
                     capture_output=True,

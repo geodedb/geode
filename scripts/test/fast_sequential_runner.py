@@ -49,11 +49,11 @@ def run_test(test_case, spec_name):
     if test_case.get("parallel") or test_case.get("loop"):
         return None, "skipped (parallel/loop)"
 
-    # Add --no-quic for query commands
+    # Add --server 127.0.0.1:3141 --insecure for query commands
     modified_args = args[:]
     if len(args) > 0 and args[0] == "query":
-        if not any("--server" in str(arg) for arg in args) and not any("--no-quic" in str(arg) for arg in args):
-            modified_args = ["query", "--no-quic"] + args[1:]
+        if not any("--server" in str(arg) for arg in args) and not any("--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args):
+            modified_args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
 
     stdin_content = test_case.get("stdin", None)
 

@@ -224,8 +224,6 @@ fn printQueryUsage() void {
         "  --begin                Start transaction\n" ++
         "  --commit               Commit transaction\n" ++
         "  --rollback             Rollback transaction\n" ++
-        "  --embedded             Use embedded database\n" ++
-        "  --embedded-data-dir <dir>  Data directory for embedded mode (default: ./data_embedded)\n" ++
         "  -U, --user <username>  Authenticate as user\n" ++
         "  -P, --password <pass>  Authentication password\n" ++
         "  --no-saved-session     Don't auto-load saved session token\n" ++
@@ -247,12 +245,10 @@ fn printQueryUsage() void {
         "  geode query --json-param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
         "  geode query --server remote:3141 --timeout 5 --retry 3 \"RETURN 1 AS x\"\n" ++
         "  echo \"RETURN 1 AS x\" | geode query -\n" ++
-        "  geode query --embedded \"RETURN 1 AS x\"\n" ++
-        "  geode query --embedded --embedded-data-dir /tmp/mydb \"RETURN 1 AS x\"\n" ++
         "\n", .{});
 }
 
-// Server configuration structure for embedded server
+// Server configuration structure
 const ServerConfig = struct {
     data_dir: ?[]const u8 = null,
     listen_quic: ?[]const u8 = null,
@@ -267,7 +263,7 @@ const ServerConfig = struct {
     test_exit_after_first: bool = false,
 };
 
-// Client configuration structure for embedded client
+// Client configuration structure
 const ClientConfig = struct {
     query_text: []const u8,
     server: []const u8 = "127.0.0.1:3141",
@@ -279,8 +275,6 @@ const ClientConfig = struct {
     commit: bool = false,
     rollback: bool = false,
     process_path: ?[]const u8 = null,
-    embedded: bool = false,
-    embedded_data_dir: ?[]const u8 = null,
     insecure: bool = false,
     server_args: [][]const u8 = &.{},
     json_params: std.StringHashMap([]const u8) = undefined,
@@ -1599,14 +1593,6 @@ fn runEmbeddedClient(allocator: std.mem.Allocator, config: ClientConfig) !void {
         try client_args.append(allocator, process_path);
     }
 
-    if (config.embedded) {
-        try client_args.append(allocator, "--embedded");
-        if (config.embedded_data_dir) |dir| {
-            try client_args.append(allocator, "--embedded-data-dir");
-            try client_args.append(allocator, dir);
-        }
-    }
-
     // Add server arguments
     for (config.server_args) |server_arg| {
         try client_args.append(allocator, "--server-arg");
@@ -2447,8 +2433,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var server: ?[]const u8 = null; // null means not explicitly set
     var format: []const u8 = "json";
     var insecure = false;
-    var embedded = false;
-    var embedded_data_dir: ?[]const u8 = null;
     var user: ?[]const u8 = null;
     var password: ?[]const u8 = null;
     var token: ?[]const u8 = null;
@@ -2456,7 +2440,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var timeout_secs: u32 = 10; // Default 10 second timeout
     var retry_count: u32 = 0; // Default no retries
     var use_saved_session = true; // Auto-load saved session by default
-    var enable_auth = false; // Enable authentication for embedded mode
 
     i = start_idx + 1;
     while (i < argv.len) : (i += 1) {
@@ -2479,20 +2462,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             i += 1;
         } else if (std.mem.eql(u8, arg, "--insecure")) {
             insecure = true;
-        } else if (std.mem.eql(u8, arg, "--embedded")) {
-            embedded = true;
-        } else if (std.mem.eql(u8, arg, "--embedded-data-dir")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --embedded-data-dir requires a directory path\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            embedded_data_dir = argv[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, arg, "--no-quic")) {
-            // Legacy compatibility
-            embedded = true;
-        } else if (std.mem.eql(u8, arg, "--enable-auth")) {
-            enable_auth = true;
         } else if (std.mem.eql(u8, arg, "--user") or std.mem.eql(u8, arg, "-U")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --user requires a username\n", .{});
@@ -2650,197 +2619,12 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.process.exit(3);
     }
 
-    // Handle --embedded mode (embedded database for testing, edge deployment, offline use)
-    if (embedded) {
-        // Enable authentication if requested
-        if (enable_auth) {
-            const user_mgmt = geode.user_management;
-            user_mgmt.initUserStore(allocator) catch |err| {
-                std.debug.print("Failed to initialize user store: {}\n", .{err});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            };
-            user_mgmt.setAuthEnabled(true);
-            // Don't call ensureDefaultUser here - tests should create users explicitly
-            // Auto-creating users on every query command causes timeouts due to password hashing
-        }
-
-        // Execute query directly using embedded database
-        try executeEmbeddedQuery(allocator, query_text.?, format, token, user, password, embedded_data_dir);
-        std.process.exit(@intFromEnum(ExitCode.success));
-    }
-
     // Determine execution mode based on --server flag
-    // Default to connecting to localhost:3141 if neither --server nor --embedded specified
+    // Default to connecting to localhost:3141 if no --server specified
     const server_addr = server orelse "127.0.0.1:3141";
 
     // Execute query via QUIC connection to server
     try executeQuicQuery(allocator, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password);
-}
-
-/// Execute query in embedded mode (embedded database for testing, edge deployments, offline environments)
-/// Supports optional persistent data directory for production edge deployments
-fn executeEmbeddedQuery(allocator: std.mem.Allocator, query_text: []const u8, format: []const u8, token: ?[]const u8, user: ?[]const u8, password: ?[]const u8, data_dir: ?[]const u8) !void {
-    _ = format;
-
-    // Handle empty queries
-    if (query_text.len == 0) {
-        const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-        _ = try stderr_fd.writeAll("Error: empty query provided\n");
-        std.process.exit(1);
-    }
-
-    // Log embedded mode initialization for visibility
-    if (data_dir != null) {
-        std.debug.print("{{\"mode\":\"embedded\",\"persistent\":true,\"data_dir\":\"{s}\"}}\n", .{data_dir.?});
-    }
-
-    // Use the geode module to execute the query via test harness
-
-    // CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI Authentication"; ASPECT=EmbeddedAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-26
-    // Validate authentication if auth is enabled
-    var persisted_auth_state = try auth_state.State.load(allocator);
-    defer {
-        persisted_auth_state.save() catch {};
-        persisted_auth_state.deinit();
-    }
-    try persisted_auth_state.ensureDefaults();
-    _ = persisted_auth_state.save() catch {};
-
-    // Default to enabling auth when credentials are provided or the flag/env is set
-    const auth_enabled = geode.user_management.isAuthEnabled() or
-        (std.process.hasEnvVar(allocator, "AUTH_ENABLED") catch false) or
-        (user != null) or (password != null);
-
-    var effective_user = user;
-    if (token != null and effective_user == null) {
-        // Ensure token-based auth still has a principal for downstream logic
-        effective_user = "token_user";
-    }
-
-    var resolved_password = password;
-    // If password not supplied but user exists in state, reuse stored password
-    if (auth_enabled and effective_user != null and (resolved_password == null or resolved_password.?.len == 0)) {
-        if (persisted_auth_state.getUser(effective_user.?)) |u| {
-            resolved_password = u.password;
-        }
-    }
-
-    if (auth_enabled) {
-        if (token) |_| {
-            // Token auth is accepted as-is in embedded mode
-        } else if (effective_user != null and resolved_password != null) {
-            if (!persisted_auth_state.validateCredentials(effective_user.?, resolved_password.?)) {
-                const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-                const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
-                _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
-                _ = try stderr_fd.writeAll("Authentication failed\n");
-                std.process.exit(1);
-            }
-        } else {
-            const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-            const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
-            _ = try stdout_fd.writeAll("{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}\n");
-            _ = try stderr_fd.writeAll("Authentication failed\n");
-            std.process.exit(1);
-        }
-    }
-
-
-    // Execute query using the test harness with authentication
-    var mut_ally = allocator;
-
-    // Prepare authentication options
-    // NOTE: If auth was already validated above, don't pass credentials to test harness
-    // to avoid double authentication
-    const options = geode.test_harness.QueryOptions{
-        .token = if (auth_enabled) null else token,
-        .user = if (auth_enabled) null else effective_user,
-        .password = if (auth_enabled) null else resolved_password,
-        .strict_offset_validation = false, // Allow SKIP without ORDER BY (results in undefined order)
-    };
-
-    // Execute the entire query as-is - the parser handles semicolons as statement separators
-    // This preserves transaction state across multiple statements
-    const trimmed_query = std.mem.trim(u8, query_text, " \t\r\n");
-
-    // Skip empty queries
-    if (trimmed_query.len == 0) {
-        const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
-        _ = try stdout_fd.writeAll("{\"status_class\":\"00000\",\"columns\":[],\"rows\":[],\"flagger_findings\":[]}\n");
-        return;
-    }
-
-    // Enforce basic permission model: block CREATE for non-admin roles when auth is enabled
-    if (auth_enabled and effective_user != null) {
-        const u = persisted_auth_state.getUser(effective_user.?) orelse null;
-        const role_name = if (u) |usr| usr.role else "user";
-        var lowered = try allocator.alloc(u8, trimmed_query.len);
-        defer allocator.free(lowered);
-        for (trimmed_query, 0..) |c, idx| lowered[idx] = std.ascii.toLower(c);
-        if (!std.ascii.eqlIgnoreCase(role_name, "admin") and std.mem.indexOf(u8, lowered, "create") != null) {
-            const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-            _ = try stderr_fd.writeAll("Permission denied: read-only role\n");
-            std.process.exit(1);
-        }
-    }
-
-    const result = geode.test_harness.runQueryWithAuth(&mut_ally, trimmed_query, options) catch |err| {
-        // Handle specific test cases that should go to stderr
-        if (std.mem.indexOf(u8, trimmed_query, "bad_json") != null) {
-            const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-            _ = try stderr_fd.writeAll("Error: malformed JSON parameter in query\n");
-        } else if (std.mem.eql(u8, trimmed_query, "unauthorized")) {
-            const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-            _ = try stderr_fd.writeAll("Error: unauthorized access denied\n");
-            std.process.exit(3);
-        }
-
-        // Re-throw the error (usually OutOfMemory)
-        return err;
-    };
-    defer allocator.free(result);
-
-    // Write result to stdout
-    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
-    _ = try stdout_fd.writeAll(result);
-    // Add newline to ensure Python TextIOWrapper detects end of output
-    _ = try stdout_fd.writeAll("\n");
-
-    // Check if we should exit with code 1 for error status codes
-    // Only exit 0 for successful status codes (00xxx, 01xxx warnings, 02xxx no data)
-    // Exit 1 for all error conditions
-    if (std.mem.indexOf(u8, result, "\"status_class\":\"")) |status_start| {
-        const value_start = status_start + "\"status_class\":\"".len;
-        if (value_start + 2 <= result.len) {
-            const status_category = result[value_start .. value_start + 2];
-
-            // Check if this is an error status - anything not 00xxx, 01xxx, or 02xxx
-            const is_success = std.mem.eql(u8, status_category, "00") or
-                std.mem.eql(u8, status_category, "01") or // warnings
-                std.mem.eql(u8, status_category, "02"); // no data
-
-            if (!is_success) {
-                // Write error message to stderr
-                const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
-                if (std.mem.indexOf(u8, result, "\"error\":\"")) |error_start| {
-                    const error_value_start = error_start + "\"error\":\"".len;
-                    if (std.mem.indexOfPos(u8, result, error_value_start, "\"")) |error_end| {
-                        const error_msg = result[error_value_start..error_end];
-                        _ = stderr_fd.writeAll(error_msg) catch {};
-                        _ = stderr_fd.writeAll("\n") catch {};
-                    }
-                } else if (std.mem.indexOf(u8, result, "\"message\":\"")) |message_start| {
-                    const message_value_start = message_start + "\"message\":\"".len;
-                    if (std.mem.indexOfPos(u8, result, message_value_start, "\"")) |message_end| {
-                        const message_msg = result[message_value_start..message_end];
-                        _ = stderr_fd.writeAll(message_msg) catch {};
-                        _ = stderr_fd.writeAll("\n") catch {};
-                    }
-                }
-                std.process.exit(1);
-            }
-        }
-    }
 }
 
 /// Escape a string for safe embedding in JSON
@@ -3142,13 +2926,6 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             verbose = true;
         } else if (std.mem.eql(u8, argv[i], "--non-interactive")) {
             non_interactive = true;
-        } else if (std.mem.eql(u8, argv[i], "--embedded") or std.mem.eql(u8, argv[i], "--no-quic")) {
-            // Accept --embedded/--no-quic for test compatibility but ignore (shell mode is always embedded)
-        } else if (std.mem.eql(u8, argv[i], "--embedded-data-dir")) {
-            // Skip the data directory argument
-            if (i + 1 < argv.len) {
-                i += 1;
-            }
         } else {
             std.debug.print("Error: unknown option '{s}'\n", .{argv[i]});
             std.debug.print("Run 'geode shell --help' to see available options\n", .{});

@@ -245,7 +245,7 @@ tests:
   # Access control testing
   - name: "test-read-only-access"
     description: "Test read-only access restrictions"
-    args: ["query", "--embedded", "--user", "testuser", "--password", "${secret:user_password}", "CREATE (n:Forbidden) RETURN n"]
+    args: ["query", "--user", "testuser", "--password", "${secret:user_password}", "CREATE (n:Forbidden) RETURN n"]
     expect:
       exit_code: 1  # Should fail due to insufficient permissions
     tags: ["auth", "access", "readonly"]

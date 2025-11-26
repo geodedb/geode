@@ -14,10 +14,10 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode")
     args = test_case.get("args", [])
     expect = test_case.get("expect", {})
 
-    # Add --no-quic if not present for query commands
-    if "query" in args and "--no-quic" not in args:
+    # Add --server 127.0.0.1:3141 --insecure if not present for query commands
+    if "query" in args and "--server 127.0.0.1:3141 --insecure" not in args:
         args = args.copy()
-        args.insert(args.index("query") + 1, "--no-quic")
+        args.insert(args.index("query") + 1, "--server 127.0.0.1:3141 --insecure")
 
     cmd = [binary] + args
 

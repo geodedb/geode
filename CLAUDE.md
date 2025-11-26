@@ -182,7 +182,7 @@ Based on [TODO.md](docs/TODO.md), all major development priorities have been suc
 **Complete Migration Achieved**:
 - ✅ **Single Binary**: `./zig-out/bin/geode` (unified architecture)
 - ✅ **Zero Subprocess Calls**: Eliminated geodec/geoded spawning
-- ✅ **Test Compatibility**: --no-quic mode for integration tests
+- ✅ **Server-Only Mode**: All operations require QUIC server connection
 - ✅ **74.5% Test Pass Rate**: Improved from 62.7% (38/51 tests passing)
 
 ---

@@ -215,7 +215,6 @@ pub fn main() !void {
             "  --commit                Commit transaction\n" ++
             "  --rollback              Rollback transaction\n" ++
             "  --process <path>        Use stdio with server process\n" ++
-            "  --no-quic               Disable QUIC, use stdio process mode\n" ++
             "  --server-arg <arg>      Pass argument to server (repeatable)\n" ++
             "  --ca-cert <path>        PEM trust root to verify server (TLS)\n" ++
             "  --client-cert <path>    Client certificate (PEM) for mTLS\n" ++
@@ -287,10 +286,6 @@ pub fn main() !void {
             use_stdio = true;
             use_quic = false;
             i += 1;
-        } else if (std.mem.eql(u8, argv[i], "--no-quic")) {
-            // Disable QUIC transport, use stdio process mode
-            use_stdio = true;
-            use_quic = false;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             // Allow insecure QUIC connections (for testing)
             allow_insecure = true;

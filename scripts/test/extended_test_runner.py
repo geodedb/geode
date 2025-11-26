@@ -155,7 +155,7 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
             try:
                 # Handle both string and dict formats
                 if isinstance(cmd_item, dict):
-                    # Dict format: {"args": ["query", "...", "--no-quic"]} or {"command": "shell", "args": [], "stdin": "..."}
+                    # Dict format: {"args": ["query", "..."]} or {"command": "shell", "args": [], "stdin": "..."}
                     setup_command = cmd_item.get("command", None)
                     setup_args = cmd_item.get("args", [])
                     setup_stdin = cmd_item.get("stdin", None)
@@ -170,7 +170,7 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                             if len(setup_args) == 0 or setup_args[0] != setup_command:
                                 setup_args = [setup_command] + setup_args
                 else:
-                    # String format: "geode query '...' --no-quic"
+                    # String format: "geode query '...'"
                     setup_args = shlex.split(cmd_item)
                     setup_stdin = None
 
@@ -227,9 +227,8 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                         # It's a GQL statement, so we need to add "query" command
                         setup_processed = ["query"] + setup_processed
 
-                # Add --embedded for query commands in setup (same as main test command)
+                # For query commands in setup, ensure server connection
                 if len(setup_processed) > 0 and setup_processed[0] == "query":
-                    has_embedded = any("--embedded" in arg for arg in setup_processed)
                     has_server = any("--server" in arg for arg in setup_processed)
                     # Check if spec explicitly enables server mode
                     spec_server_enabled = False
@@ -239,31 +238,14 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                             server_config = cli_config.get("server", {})
                             if isinstance(server_config, dict):
                                 spec_server_enabled = server_config.get("enabled", False)
-                    if not has_embedded and not has_server and not spec_server_enabled:
-                        setup_processed.insert(1, "--embedded")
-
-                # Add --embedded and --no-quic for shell commands (for compatibility)
-                if len(setup_processed) > 0 and setup_processed[0] == "shell":
-                    has_embedded = any("--embedded" in arg for arg in setup_processed)
-                    has_no_quic = any("--no-quic" in arg for arg in setup_processed)
-                    if not has_embedded:
-                        setup_processed.insert(1, "--embedded")
-                    if not has_no_quic:
-                        # Insert after --embedded if it was added
-                        insert_pos = 2 if setup_processed[1] == "--embedded" else 1
-                        setup_processed.insert(insert_pos, "--no-quic")
+                    # Server mode is now the default - no need to inject unless spec requires it
+                    # If spec has server enabled, the test harness will start one
 
                 # Add --non-interactive for shell commands when stdin is used
                 if len(setup_processed) > 0 and setup_processed[0] == "shell" and setup_stdin:
                     has_non_interactive = any("--non-interactive" in arg for arg in setup_processed)
                     if not has_non_interactive:
-                        # Find position after --embedded and --no-quic
-                        insert_pos = 1
-                        if len(setup_processed) > 1 and setup_processed[1] == "--embedded":
-                            insert_pos = 2
-                        if len(setup_processed) > insert_pos and setup_processed[insert_pos] == "--no-quic":
-                            insert_pos += 1
-                        setup_processed.insert(insert_pos, "--non-interactive")
+                        setup_processed.insert(1, "--non-interactive")
 
                 # Inject --data-dir for setup commands if spec_data_dir is provided
                 if spec_data_dir and len(setup_processed) > 0:
@@ -313,65 +295,23 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                 spec_server_enabled = server_config.get("enabled", False)
                 spec_server_args = server_config.get("args", [])
 
-    # Add --embedded if query command and no server specified (default is now server mode)
+    # Process args for server mode
     modified_args = args[:]
 
-    # For now, only inject --server for query commands
-    # (other commands like user/role/etc may handle server mode differently)
     is_query_command = len(args) > 0 and args[0] == "query"
 
     if is_query_command:
         has_server = any("--server" in arg for arg in args)
-        has_no_quic = any("--no-quic" in arg for arg in args)
-        has_embedded = any("--embedded" in arg for arg in args)
 
-        # If spec enables server mode and test doesn't already have --server or --embedded,
+        # If spec enables server mode and test doesn't already have --server,
         # inject --server and --insecure flags to connect to the running server
-        if spec_server_enabled and not has_server and not has_embedded:
+        if spec_server_enabled and not has_server:
             # Insert --server ${server} after the command
             modified_args.insert(1, "--server")
             modified_args.insert(2, "${server}")
             # Add --insecure flag (test servers use self-signed certs)
             modified_args.insert(3, "--insecure")
             has_server = True
-
-        # If no server specified, not already embedded, AND spec doesn't explicitly enable server mode,
-        # force embedded mode for query commands only (since default is now server mode which would try to connect to a non-existent server)
-        if is_query_command and not has_server and not has_embedded and not spec_server_enabled:
-            # Insert --embedded after "query"
-            modified_args.insert(1, "--embedded")
-            has_embedded = True
-
-        # Also add --no-quic for embedded mode for compatibility
-        if has_embedded and not has_no_quic:
-            # Find position after --embedded
-            insert_pos = 2 if len(modified_args) > 1 and modified_args[1] == "--embedded" else 1
-            modified_args.insert(insert_pos, "--no-quic")
-
-        # If using embedded mode and spec requires auth, inject --enable-auth
-        # (Note: other enterprise flags like --audit are global and handled separately before command execution)
-        if has_embedded and spec_server_args:
-            if "--enable-auth" in spec_server_args and "--enable-auth" not in modified_args:
-                # Determine insert position (after "query" and "--no-quic" if present)
-                insert_pos = 1
-                if len(modified_args) > 1 and modified_args[1] == "--no-quic":
-                    insert_pos = 2
-                modified_args.insert(insert_pos, "--enable-auth")
-
-        # If using embedded mode with auth and spec has data directory, inject --data-dir for query commands
-        # This ensures query commands with --user flag can find the users in the correct data directory
-        if has_embedded and spec_data_dir:
-            has_user_flag = any("--user" in str(arg) for arg in modified_args)
-            has_data_dir = any("--data-dir" in str(arg) for arg in modified_args)
-            if has_user_flag and not has_data_dir:
-                # Find position to insert --data-dir (before first optional flag or at end)
-                insert_pos = len(modified_args)  # Default: append at end
-                for i, arg in enumerate(modified_args):
-                    if str(arg).startswith('-') and i > 0:
-                        insert_pos = i
-                        break
-                modified_args.insert(insert_pos, "--data-dir")
-                modified_args.insert(insert_pos + 1, spec_data_dir)
 
     # Get stdin content if present
     stdin_content = test_case.get("stdin", None)
@@ -396,29 +336,12 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
         for old, new in replacements.items():
             stdin_content = stdin_content.replace(old, new)
 
-    # Add --embedded and --no-quic for shell commands (for compatibility)
-    is_shell_command = len(modified_args) > 0 and modified_args[0] == "shell"
-    if is_shell_command:
-        has_embedded = any("--embedded" in arg for arg in modified_args)
-        has_no_quic = any("--no-quic" in arg for arg in modified_args)
-        if not has_embedded:
-            modified_args.insert(1, "--embedded")
-        if not has_no_quic:
-            # Insert after --embedded if it was added
-            insert_pos = 2 if modified_args[1] == "--embedded" else 1
-            modified_args.insert(insert_pos, "--no-quic")
-
     # Add --non-interactive for shell commands when stdin is used
+    is_shell_command = len(modified_args) > 0 and modified_args[0] == "shell"
     if is_shell_command and stdin_content:
         has_non_interactive = any("--non-interactive" in arg for arg in modified_args)
         if not has_non_interactive:
-            # Find position after --embedded and --no-quic
-            insert_pos = 1
-            if len(modified_args) > 1 and modified_args[1] == "--embedded":
-                insert_pos = 2
-            if len(modified_args) > insert_pos and modified_args[insert_pos] == "--no-quic":
-                insert_pos += 1
-            modified_args.insert(insert_pos, "--non-interactive")
+            modified_args.insert(1, "--non-interactive")
 
     # Inject --data-dir for user/role/auth commands if spec_data_dir is provided
     if spec_data_dir and len(modified_args) > 0:
@@ -444,24 +367,6 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
 
     # Build command with global flags (must come before subcommand)
     global_flags = []
-    if is_query_command and has_embedded and spec_server_args:
-        # Extract global flags from spec server args
-        i = 0
-        while i < len(spec_server_args):
-            arg = spec_server_args[i]
-            # Global enterprise feature flags
-            if arg == "--audit":
-                global_flags.append(arg)
-                i += 1
-            elif arg in ["--audit-file", "--audit-syslog", "--audit-eventlog"]:
-                if i + 1 < len(spec_server_args):
-                    global_flags.append(arg)
-                    global_flags.append(spec_server_args[i + 1])
-                    i += 2
-                else:
-                    i += 1
-            else:
-                i += 1
 
     try:
         # Construct command: binary + global_flags + subcommand_args

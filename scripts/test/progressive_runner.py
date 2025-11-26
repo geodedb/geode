@@ -22,10 +22,10 @@ def run_test_simple(test_case):
     if test_case.get("parallel") or test_case.get("loop"):
         return None, "skipped"
 
-    # Add --no-quic for query
+    # Add --server 127.0.0.1:3141 --insecure for query
     if len(args) > 0 and args[0] == "query":
-        if not any("--server" in str(arg) for arg in args) and not any("--no-quic" in str(arg) for arg in args):
-            args = ["query", "--no-quic"] + args[1:]
+        if not any("--server" in str(arg) for arg in args) and not any("--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args):
+            args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
 
     try:
         result = subprocess.run(

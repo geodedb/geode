@@ -20,7 +20,7 @@ tests:
   # Test 1: Vector Index Creation with Statistics Initialization
   - name: "vector_index_statistics_initialization"
     description: "Test vector index creation initializes statistics correctly"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE INDEX embedding_stats_idx ON Document (embedding) USING vector_f32
     expected_patterns:
@@ -32,7 +32,7 @@ tests:
   # Test 2: HNSW Index Creation with Dimension Tracking
   - name: "hnsw_index_dimension_tracking"
     description: "Test HNSW index creation with proper dimension parameter tracking"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE INDEX hnsw_128d_idx ON Document (embedding) USING vector_hnsw
     expected_patterns:
@@ -44,7 +44,7 @@ tests:
   # Test 3: Vector Query Cost Estimation Test
   - name: "vector_query_cost_estimation"
     description: "Test EXPLAIN output shows vector query cost estimation"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE (doc1:Document {title: 'Test Doc 1', embedding: vectorf32('[0.1, 0.2, 0.3, 0.4]')})
       CREATE (doc2:Document {title: 'Test Doc 2', embedding: vectorf32('[0.5, 0.6, 0.7, 0.8]')})
@@ -62,7 +62,7 @@ tests:
   # Test 4: Distance Metric Cost Factor Verification
   - name: "distance_metric_cost_factors"
     description: "Test that different distance metrics show different cost estimates"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE (v1:Vector {data: vectorf32('[1.0, 2.0, 3.0, 4.0]')})
       CREATE (v2:Vector {data: vectorf32('[2.0, 3.0, 4.0, 5.0]')})
@@ -79,7 +79,7 @@ tests:
   # Test 5: K-NN Query Optimization Test
   - name: "knn_query_optimization"
     description: "Test K-NN query optimization with EXPLAIN output"
-    command: ["geode", "query", "--embedded"] 
+    command: ["geode", "query"] 
     input: |
       CREATE (item1:Item {features: vectorf32('[0.1, 0.2, 0.3]')})
       CREATE (item2:Item {features: vectorf32('[0.4, 0.5, 0.6]')})
@@ -101,7 +101,7 @@ tests:
   # Test 6: Vector Index vs Sequential Scan Decision
   - name: "vector_index_vs_sequential_decision"
     description: "Test optimizer chooses between vector index and sequential scan"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE INDEX opt_test_idx ON TestVector (data) USING vector_f32;
       CREATE (tv1:TestVector {data: vectorf32('[1.0, 1.0]')})
@@ -119,7 +119,7 @@ tests:
   # Test 7: Multiple Distance Metrics in Single Query
   - name: "multiple_distance_metrics_optimization"
     description: "Test optimization with multiple distance metrics in one query"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE (multi:MultiVector {
         dense: vectorf32('[0.8, 0.6, 0.4]'),
@@ -139,7 +139,7 @@ tests:
   # Test 8: Vector Aggregation Query Optimization
   - name: "vector_aggregation_optimization"
     description: "Test optimization of queries with vector aggregation operations"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE (agg1:AggTest {group: 'A', vec: vectorf32('[1.0, 1.0]')})
       CREATE (agg2:AggTest {group: 'A', vec: vectorf32('[1.1, 0.9]')})
@@ -159,7 +159,7 @@ tests:
   # Test 9: Vector Index Statistics Recording
   - name: "vector_index_statistics_recording"
     description: "Test that vector queries record statistics for optimization"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE INDEX stats_tracking_idx ON StatsTest (vector_data) USING vector_f32;
       CREATE (st1:StatsTest {id: 1, vector_data: vectorf32('[0.1, 0.2, 0.3]')})
@@ -179,7 +179,7 @@ tests:
   # Test 10: Vector Query Performance Scaling
   - name: "vector_query_performance_scaling"
     description: "Test vector query performance with increasing dataset size"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE (scale1:ScaleTest {id: 1, vec: vectorf32('[0.1, 0.1, 0.1]')})
       CREATE (scale2:ScaleTest {id: 2, vec: vectorf32('[0.2, 0.2, 0.2]')})
@@ -203,7 +203,7 @@ tests:
   # Test 11: Mixed Vector and Non-Vector Query Optimization
   - name: "mixed_vector_nonvector_optimization"
     description: "Test optimization of queries mixing vector and traditional operations"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE (mixed1:MixedTest {
         name: 'Item A',
@@ -232,7 +232,7 @@ tests:
   # Test 12: Vector Index Recommendation System
   - name: "vector_index_recommendations"
     description: "Test vector index usage recommendations based on query patterns"
-    command: ["geode", "query", "--embedded"]
+    command: ["geode", "query"]
     input: |
       CREATE INDEX rec_test_idx ON RecommendTest (embedding) USING vector_hnsw;
       CREATE (rec1:RecommendTest {item: 'A', embedding: vectorf32('[0.9, 0.1, 0.5]')})

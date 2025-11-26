@@ -5,7 +5,7 @@ description: "Comprehensive tests for recently implemented features including gr
 setup:
   - name: "clear-data"
     description: "Clear any existing test data"
-    args: ["query", "--embedded", "MATCH (n) DETACH DELETE n"]
+    args: ["query", "MATCH (n) DETACH DELETE n"]
     expect:
       exit_code: 0
 
@@ -16,7 +16,7 @@ tests:
   
   - name: "test-pagerank-empty-graph"
     description: "Test PageRank on empty graph"
-    args: ["query", "--embedded", "CALL algo.pageRank.stream() YIELD nodeId, score RETURN nodeId, score"]
+    args: ["query", "CALL algo.pageRank.stream() YIELD nodeId, score RETURN nodeId, score"]
     expect:
       exit_code: 0
       geode_query:
@@ -25,7 +25,7 @@ tests:
 
   - name: "test-pagerank-setup-data"
     description: "Create test graph for PageRank"
-    args: ["query", "--embedded", "CREATE (a:Page {name: 'A'}) CREATE (b:Page {name: 'B'}) CREATE (c:Page {name: 'C'}) CREATE (d:Page {name: 'D'}) CREATE (a)-[:LINKS_TO]->(b) CREATE (b)-[:LINKS_TO]->(c) CREATE (c)-[:LINKS_TO]->(a) CREATE (d)-[:LINKS_TO]->(c) RETURN count(*) as nodes"]
+    args: ["query", "CREATE (a:Page {name: 'A'}) CREATE (b:Page {name: 'B'}) CREATE (c:Page {name: 'C'}) CREATE (d:Page {name: 'D'}) CREATE (a)-[:LINKS_TO]->(b) CREATE (b)-[:LINKS_TO]->(c) CREATE (c)-[:LINKS_TO]->(a) CREATE (d)-[:LINKS_TO]->(c) RETURN count(*) as nodes"]
     expect:
       exit_code: 0
       geode_query:
@@ -34,7 +34,7 @@ tests:
 
   - name: "test-pagerank-with-data"
     description: "Test PageRank on graph with nodes and edges"
-    args: ["query", "--embedded", "CALL algo.pageRank.stream() YIELD nodeId, score RETURN nodeId, score"]
+    args: ["query", "CALL algo.pageRank.stream() YIELD nodeId, score RETURN nodeId, score"]
     expect:
       exit_code: 0
       geode_query:
@@ -44,7 +44,7 @@ tests:
   - name: "test-degree-centrality"
     description: "Test degree centrality algorithm"
     skip: true  # algo.degreeCentrality.stream not yet implemented
-    args: ["query", "--embedded", "CALL algo.degreeCentrality.stream() YIELD nodeId, score RETURN nodeId, score"]
+    args: ["query", "CALL algo.degreeCentrality.stream() YIELD nodeId, score RETURN nodeId, score"]
     expect:
       exit_code: 0
       geode_query:
@@ -54,7 +54,7 @@ tests:
   - name: "test-betweenness-centrality"
     description: "Test betweenness centrality algorithm"
     skip: true  # algo.betweennessCentrality.stream not yet implemented
-    args: ["query", "--embedded", "CALL algo.betweennessCentrality.stream() YIELD nodeId, score RETURN nodeId, score"]
+    args: ["query", "CALL algo.betweennessCentrality.stream() YIELD nodeId, score RETURN nodeId, score"]
     expect:
       exit_code: 0
       geode_query:
@@ -64,7 +64,7 @@ tests:
   - name: "test-closeness-centrality"
     description: "Test closeness centrality algorithm"
     skip: true  # algo.closenessCentrality.stream not yet implemented
-    args: ["query", "--embedded", "CALL algo.closenessCentrality.stream() YIELD nodeId, score RETURN nodeId, score"]
+    args: ["query", "CALL algo.closenessCentrality.stream() YIELD nodeId, score RETURN nodeId, score"]
     expect:
       exit_code: 0
       geode_query:
@@ -77,7 +77,7 @@ tests:
   
   - name: "test-substring-basic"
     description: "Test substring function"
-    args: ["query", "--embedded", "RETURN substring('hello world', 0, 5) AS result"]
+    args: ["query", "RETURN substring('hello world', 0, 5) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -87,7 +87,7 @@ tests:
 
   - name: "test-substring-nested"
     description: "Test nested substring with other string functions"
-    args: ["query", "--embedded", "RETURN substring(upper('hello'), 1, 3) AS result"]
+    args: ["query", "RETURN substring(upper('hello'), 1, 3) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -97,7 +97,7 @@ tests:
 
   - name: "test-replace-function"
     description: "Test replace function"
-    args: ["query", "--embedded", "RETURN replace('hello world', 'world', 'geode') AS result"]
+    args: ["query", "RETURN replace('hello world', 'world', 'geode') AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -107,7 +107,7 @@ tests:
 
   - name: "test-trim-function"
     description: "Test trim function"
-    args: ["query", "--embedded", "RETURN trim('  hello  ') AS result"]
+    args: ["query", "RETURN trim('  hello  ') AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -117,7 +117,7 @@ tests:
 
   - name: "test-upper-lower-functions"
     description: "Test upper and lower functions"
-    args: ["query", "--embedded", "RETURN upper('hello') AS u, lower('WORLD') AS l"]
+    args: ["query", "RETURN upper('hello') AS u, lower('WORLD') AS l"]
     expect:
       exit_code: 0
       geode_query:
@@ -127,7 +127,7 @@ tests:
 
   - name: "test-complex-string-nesting"
     description: "Test complex nesting of string functions"
-    args: ["query", "--embedded", "RETURN substring(upper(lower(trim(replace('  HELLO world  ', 'world', 'GEODE')))), 0, 10) AS result"]
+    args: ["query", "RETURN substring(upper(lower(trim(replace('  HELLO world  ', 'world', 'GEODE')))), 0, 10) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -141,7 +141,7 @@ tests:
   
   - name: "test-sqrt-function"
     description: "Test sqrt function"
-    args: ["query", "--embedded", "RETURN sqrt(16) AS result"]
+    args: ["query", "RETURN sqrt(16) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -151,7 +151,7 @@ tests:
 
   - name: "test-pow-function"
     description: "Test pow function"
-    args: ["query", "--embedded", "RETURN pow(2, 3) AS result"]
+    args: ["query", "RETURN pow(2, 3) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -161,7 +161,7 @@ tests:
 
   - name: "test-trigonometric-functions"
     description: "Test sin, cos, tan functions"
-    args: ["query", "--embedded", "RETURN round(sin(0)) AS s, round(cos(0)) AS c"]
+    args: ["query", "RETURN round(sin(0)) AS s, round(cos(0)) AS c"]
     expect:
       exit_code: 0
       geode_query:
@@ -171,7 +171,7 @@ tests:
 
   - name: "test-log-exp-functions"
     description: "Test log and exp functions"
-    args: ["query", "--embedded", "RETURN round(log(exp(1))) AS result"]
+    args: ["query", "RETURN round(log(exp(1))) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -181,7 +181,7 @@ tests:
 
   - name: "test-ceil-floor-round"
     description: "Test ceil, floor, and round functions"
-    args: ["query", "--embedded", "RETURN ceil(3.2) AS c, floor(3.8) AS f, round(3.5) AS r"]
+    args: ["query", "RETURN ceil(3.2) AS c, floor(3.8) AS f, round(3.5) AS r"]
     expect:
       exit_code: 0
       geode_query:
@@ -191,7 +191,7 @@ tests:
 
   - name: "test-random-function"
     description: "Test random function returns value between 0 and 1"
-    args: ["query", "--embedded", "WITH random() AS r RETURN r >= 0 AND r <= 1 AS in_range"]
+    args: ["query", "WITH random() AS r RETURN r >= 0 AND r <= 1 AS in_range"]
     expect:
       exit_code: 0
       geode_query:
@@ -201,7 +201,7 @@ tests:
 
   - name: "test-abs-function-positive"
     description: "Test abs function with positive number"
-    args: ["query", "--embedded", "RETURN abs(5) AS result"]
+    args: ["query", "RETURN abs(5) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -211,7 +211,7 @@ tests:
 
   - name: "test-abs-function-negative"
     description: "Test abs function with negative number"
-    args: ["query", "--embedded", "RETURN abs(-5) AS result"]
+    args: ["query", "RETURN abs(-5) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -221,7 +221,7 @@ tests:
 
   - name: "test-nested-math-functions"
     description: "Test nested math functions"
-    args: ["query", "--embedded", "RETURN sqrt(pow(3, 2)) AS result"]
+    args: ["query", "RETURN sqrt(pow(3, 2)) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -235,28 +235,28 @@ tests:
   
   - name: "test-create-graph-basic"
     description: "Test basic CREATE GRAPH statement"
-    args: ["query", "--embedded", "CREATE GRAPH IF NOT EXISTS test_graph_1"]
+    args: ["query", "CREATE GRAPH IF NOT EXISTS test_graph_1"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "create"]
 
   - name: "test-create-graph-if-not-exists"
     description: "Test CREATE GRAPH IF NOT EXISTS"
-    args: ["query", "--embedded", "CREATE GRAPH IF NOT EXISTS test_graph_2"]
+    args: ["query", "CREATE GRAPH IF NOT EXISTS test_graph_2"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "create"]
 
   - name: "test-create-or-replace-graph"
     description: "Test CREATE OR REPLACE GRAPH"
-    args: ["query", "--embedded", "CREATE OR REPLACE GRAPH test_graph_3"]
+    args: ["query", "CREATE OR REPLACE GRAPH test_graph_3"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "create"]
 
   - name: "test-create-property-graph"
     description: "Test CREATE PROPERTY GRAPH"
-    args: ["query", "--embedded", "CREATE PROPERTY GRAPH IF NOT EXISTS prop_graph_1"]
+    args: ["query", "CREATE PROPERTY GRAPH IF NOT EXISTS prop_graph_1"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "create", "property"]
@@ -265,36 +265,36 @@ tests:
     description: "Test DROP GRAPH statement"
     skip: true  # Works manually, test runner name isolation issue - needs investigation
     setup:
-      - "query --embedded \"CREATE GRAPH IF NOT EXISTS test_graph_1 ANY\""
-    args: ["query", "--embedded", "DROP GRAPH test_graph_1"]
+      - "query \"CREATE GRAPH IF NOT EXISTS test_graph_1 ANY\""
+    args: ["query", "DROP GRAPH test_graph_1"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "drop"]
 
   - name: "test-create-graph-type"
     description: "Test CREATE GRAPH TYPE statement"
-    args: ["query", "--embedded", "CREATE GRAPH TYPE social_network_type"]
+    args: ["query", "CREATE GRAPH TYPE social_network_type"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "type"]
 
   - name: "test-drop-graph-type"
     description: "Test DROP GRAPH TYPE statement"
-    args: ["query", "--embedded", "DROP GRAPH TYPE social_network_type"]
+    args: ["query", "DROP GRAPH TYPE social_network_type"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "type"]
 
   - name: "test-use-graph"
     description: "Test USE GRAPH statement"
-    args: ["query", "--embedded", "USE GRAPH test_graph_2"]
+    args: ["query", "USE GRAPH test_graph_2"]
     expect:
       exit_code: 0
     tags: ["ddl", "graph", "use"]
 
   - name: "test-create-schema"
     description: "Test CREATE SCHEMA statement"
-    args: ["query", "--embedded", "CREATE SCHEMA IF NOT EXISTS test_schema"]
+    args: ["query", "CREATE SCHEMA IF NOT EXISTS test_schema"]
     expect:
       exit_code: 0
     tags: ["ddl", "schema"]
@@ -303,8 +303,8 @@ tests:
     description: "Test DROP SCHEMA statement"
     skip: true  # Works manually, test runner name isolation issue - needs investigation
     setup:
-      - "query --embedded \"CREATE SCHEMA IF NOT EXISTS test_schema\""
-    args: ["query", "--embedded", "DROP SCHEMA test_schema"]
+      - "query \"CREATE SCHEMA IF NOT EXISTS test_schema\""
+    args: ["query", "DROP SCHEMA test_schema"]
     expect:
       exit_code: 0
     tags: ["ddl", "schema"]
@@ -315,7 +315,7 @@ tests:
   
   - name: "test-map-literal-creation"
     description: "Test creating map literals"
-    args: ["query", "--embedded", "RETURN {a: 1, b: 2, c: 3} AS map"]
+    args: ["query", "RETURN {a: 1, b: 2, c: 3} AS map"]
     expect:
       exit_code: 0
       geode_query:
@@ -325,7 +325,7 @@ tests:
 
   - name: "test-map-nested-values"
     description: "Test map with different value types"
-    args: ["query", "--embedded", "RETURN {str: 'hello', num: 42, bool: true, decimal: 3.14} AS map"]
+    args: ["query", "RETURN {str: 'hello', num: 42, bool: true, decimal: 3.14} AS map"]
     expect:
       exit_code: 0
       geode_query:
@@ -335,7 +335,7 @@ tests:
   # Note: keys() and values() have issues that need debugging
   # - name: "test-map-keys-function"
   #   description: "Test keys() function on maps"
-  #   args: ["query", "--embedded", "RETURN keys({a: 1, b: 2}) AS k"]
+  #   args: ["query", "RETURN keys({a: 1, b: 2}) AS k"]
   #   expect:
   #     exit_code: 0
   #     geode_query:
@@ -348,7 +348,7 @@ tests:
   
   - name: "test-group-by-setup"
     description: "Setup data for GROUP BY tests"
-    args: ["query", "--embedded", "CREATE (n:Person {age: 25, city: 'NYC'}) CREATE (m:Person {age: 30, city: 'NYC'}) CREATE (o:Person {age: 25, city: 'LA'}) CREATE (p:Person {age: 35, city: 'LA'}) RETURN count(*) as created"]
+    args: ["query", "CREATE (n:Person {age: 25, city: 'NYC'}) CREATE (m:Person {age: 30, city: 'NYC'}) CREATE (o:Person {age: 25, city: 'LA'}) CREATE (p:Person {age: 35, city: 'LA'}) RETURN count(*) as created"]
     expect:
       exit_code: 0
       geode_query:
@@ -358,7 +358,7 @@ tests:
 
   - name: "test-group-by-single-column"
     description: "Test GROUP BY with single column"
-    args: ["query", "--embedded", "MATCH (n:Person) RETURN n.city AS city, COUNT(*) AS count GROUP BY n.city ORDER BY city"]
+    args: ["query", "MATCH (n:Person) RETURN n.city AS city, COUNT(*) AS count GROUP BY n.city ORDER BY city"]
     expect:
       exit_code: 0
       geode_query:
@@ -367,7 +367,7 @@ tests:
 
   - name: "test-group-by-with-sum"
     description: "Test GROUP BY with SUM aggregation"
-    args: ["query", "--embedded", "MATCH (n:Person) RETURN n.city AS city, SUM(n.age) AS total_age GROUP BY n.city"]
+    args: ["query", "MATCH (n:Person) RETURN n.city AS city, SUM(n.age) AS total_age GROUP BY n.city"]
     expect:
       exit_code: 0
       geode_query:
@@ -376,7 +376,7 @@ tests:
 
   - name: "test-group-by-with-avg"
     description: "Test GROUP BY with AVG aggregation"
-    args: ["query", "--embedded", "MATCH (n:Person) RETURN n.city AS city, AVG(n.age) AS avg_age GROUP BY n.city"]
+    args: ["query", "MATCH (n:Person) RETURN n.city AS city, AVG(n.age) AS avg_age GROUP BY n.city"]
     expect:
       exit_code: 0
       geode_query:
@@ -389,7 +389,7 @@ tests:
   
   - name: "regression-decimal-overflow"
     description: "Regression test for decimal overflow handling"
-    args: ["query", "--embedded", "RETURN 1e20 + 1 AS result"]
+    args: ["query", "RETURN 1e20 + 1 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -398,7 +398,7 @@ tests:
 
   - name: "regression-nested-decimal-ops"
     description: "Regression test for nested decimal operations"
-    args: ["query", "--embedded", "RETURN round(3.14159 * 2) AS result"]
+    args: ["query", "RETURN round(3.14159 * 2) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -408,7 +408,7 @@ tests:
 
   - name: "regression-string-null-handling"
     description: "Regression test for string functions with null"
-    args: ["query", "--embedded", "RETURN upper(null) AS result"]
+    args: ["query", "RETURN upper(null) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -418,7 +418,7 @@ tests:
 
   - name: "regression-empty-graph-algorithms"
     description: "Regression test for algorithms on empty graph"
-    args: ["query", "--embedded", "MATCH (n) DETACH DELETE n WITH 1 AS cleared CALL algo.pageRank.stream() YIELD nodeId, score RETURN count(*) AS count"]
+    args: ["query", "MATCH (n) DETACH DELETE n WITH 1 AS cleared CALL algo.pageRank.stream() YIELD nodeId, score RETURN count(*) AS count"]
     expect:
       exit_code: 0
       geode_query:
@@ -432,7 +432,7 @@ tests:
   
   - name: "edge-case-zero-sqrt"
     description: "Test sqrt(0)"
-    args: ["query", "--embedded", "RETURN sqrt(0) AS result"]
+    args: ["query", "RETURN sqrt(0) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -442,7 +442,7 @@ tests:
 
   - name: "edge-case-negative-sqrt"
     description: "Test sqrt of negative number returns null"
-    args: ["query", "--embedded", "RETURN sqrt(-1) AS result"]
+    args: ["query", "RETURN sqrt(-1) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -452,7 +452,7 @@ tests:
 
   - name: "edge-case-log-zero"
     description: "Test log(0) returns null"
-    args: ["query", "--embedded", "RETURN log(0) AS result"]
+    args: ["query", "RETURN log(0) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -462,7 +462,7 @@ tests:
 
   - name: "edge-case-empty-string-ops"
     description: "Test string operations on empty strings"
-    args: ["query", "--embedded", "RETURN upper('') AS u, trim('') AS t, replace('', 'a', 'b') AS r"]
+    args: ["query", "RETURN upper('') AS u, trim('') AS t, replace('', 'a', 'b') AS r"]
     expect:
       exit_code: 0
       geode_query:
@@ -472,7 +472,7 @@ tests:
 
   - name: "edge-case-substring-out-of-bounds"
     description: "Test substring with out of bounds indices"
-    args: ["query", "--embedded", "RETURN substring('hello', 10, 5) AS result"]
+    args: ["query", "RETURN substring('hello', 10, 5) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -488,7 +488,7 @@ tests:
     description: "Create a larger graph for stress testing"
     # MODIFIED: Replaced UNWIND (Cypher-only) with simple CREATE for GQL compliance
     # Note: This creates fewer nodes but maintains test validity
-    args: ["query", "--embedded", "CREATE (n1:Node {id: 1}), (n2:Node {id: 2}), (n3:Node {id: 3}), (n4:Node {id: 4}), (n5:Node {id: 5}) RETURN 5 AS created"]
+    args: ["query", "CREATE (n1:Node {id: 1}), (n2:Node {id: 2}), (n3:Node {id: 3}), (n4:Node {id: 4}), (n5:Node {id: 5}) RETURN 5 AS created"]
     expect:
       exit_code: 0
       geode_query:
@@ -498,7 +498,7 @@ tests:
 
   - name: "stress-pagerank-large-graph"
     description: "Test PageRank on larger graph"
-    args: ["query", "--embedded", "CALL algo.pageRank.stream() YIELD nodeId, score RETURN count(*) AS node_count"]
+    args: ["query", "CALL algo.pageRank.stream() YIELD nodeId, score RETURN count(*) AS node_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -508,7 +508,7 @@ tests:
 
   - name: "stress-nested-functions"
     description: "Test deeply nested function calls"
-    args: ["query", "--embedded", "RETURN round(sqrt(pow(ceil(floor(abs(-3.7))), 2))) AS result"]
+    args: ["query", "RETURN round(sqrt(pow(ceil(floor(abs(-3.7))), 2))) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -519,6 +519,6 @@ tests:
 cleanup:
   - name: "cleanup-test-data"
     description: "Clean up all test data"
-    args: ["query", "--embedded", "MATCH (n) DETACH DELETE n"]
+    args: ["query", "MATCH (n) DETACH DELETE n"]
     expect:
       exit_code: 0

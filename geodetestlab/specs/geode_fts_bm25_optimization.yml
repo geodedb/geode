@@ -17,7 +17,7 @@ setup:
     - name: "Create test data directory"
       command: "mkdir -p ./test_data/fts_bm25"
     - name: "Initialize test database"
-      command: "./zig-out/bin/geode query 'CREATE (doc:Document {id: 1})' --embedded"
+      command: "./zig-out/bin/geode query 'CREATE (doc:Document {id: 1})'"
 
 # Test cases for FTS BM25 and IndexOptimizer integration
 tests:
@@ -30,7 +30,7 @@ tests:
       CREATE (doc2:Document {id: 2, title: 'Database Systems', content: 'Relational database design and query optimization strategies'})
       CREATE (doc3:Document {id: 3, title: 'Advanced Algorithms', content: 'Complex algorithmic techniques for machine learning and optimization'})
       CREATE INDEX fts_content_idx ON Document (content) USING fulltext
-      " --embedded
+      "
     expected_output:
       contains: ["Index created successfully", "fts_content_idx"]
     success_criteria:
@@ -45,7 +45,7 @@ tests:
       WHERE doc.content CONTAINS 'machine learning'
       RETURN doc.title, doc.id
       ORDER BY doc.id
-      " --embedded
+      "
     expected_output:
       contains: ["Machine Learning Fundamentals", "Advanced Algorithms"]
     performance_check:
@@ -62,7 +62,7 @@ tests:
       WHERE doc.content CONTAINS 'algorithms' OR doc.content CONTAINS 'optimization'
       RETURN doc.title
       ORDER BY doc.title
-      " --embedded
+      "
     expected_output:
       contains: ["Advanced Algorithms", "Database Systems"]
     performance_check:
@@ -79,7 +79,7 @@ tests:
       WHERE doc.content =~ '.*data.*'
       RETURN doc.title
       ORDER BY doc.title
-      " --embedded
+      "
     expected_output:
       contains: ["Database Systems", "Machine Learning Fundamentals"]
     performance_check:
@@ -99,7 +99,7 @@ tests:
       CREATE (article4:Article {id: 4, content: 'Natural language processing using machine learning'})
       CREATE (article5:Article {id: 5, content: 'Information retrieval and search engine optimization'})
       CREATE INDEX article_content_fts ON Article (content) USING fulltext
-      " --embedded
+      "
     expected_output:
       contains: ["Index created successfully"]
     success_criteria:
@@ -112,7 +112,7 @@ tests:
       EXPLAIN MATCH (article:Article) 
       WHERE article.content CONTAINS 'machine learning'
       RETURN article.id, article.content
-      " --embedded
+      "
     expected_output:
       contains: ["Index Scan", "article_content_fts", "cost"]
     success_criteria:
@@ -127,7 +127,7 @@ tests:
       WHERE article.content CONTAINS 'machine' AND article.content CONTAINS 'learning'
       RETURN article.id
       ORDER BY article.id
-      " --embedded
+      "
     expected_output:
       contains: ["1", "4"]
     performance_check:
@@ -151,14 +151,14 @@ tests:
         CREATE (p7:Paper {id: 7, abstract: 'Search engine architecture and full-text indexing methodologies'})
         CREATE (p8:Paper {id: 8, abstract: 'Natural language understanding with transformer neural network models'})
         CREATE INDEX paper_abstract_fts ON Paper (abstract) USING fulltext
-        " --embedded
+        "
     command: |
       ./zig-out/bin/geode query "
       MATCH (paper:Paper) 
       WHERE paper.abstract CONTAINS 'neural networks' OR paper.abstract CONTAINS 'machine learning'
       RETURN paper.id, paper.abstract
       ORDER BY paper.id
-      " --embedded
+      "
     expected_output:
       contains: ["1", "2", "8"]
     performance_check:
@@ -174,14 +174,14 @@ tests:
         for i in {9..20}; do
           ./zig-out/bin/geode query "
           CREATE (p$i:Paper {id: $i, abstract: 'Research paper number $i discussing various computational methods and algorithms'})
-          " --embedded
+          "
         done
     command: |
       ./zig-out/bin/geode query "
       MATCH (paper:Paper) 
       WHERE paper.abstract CONTAINS 'computational' OR paper.abstract CONTAINS 'algorithms'
       RETURN COUNT(paper) AS total_papers
-      " --embedded
+      "
     expected_output:
       contains: ["total_papers"]
     performance_check:
@@ -199,7 +199,7 @@ tests:
       CREATE (doc2:TextDoc {id: 2, text: 'machine learning algorithms and data science'})
       CREATE (doc3:TextDoc {id: 3, text: 'various machine topics and learning concepts'})
       CREATE INDEX text_fts ON TextDoc (text) USING fulltext
-      " --embedded
+      "
     expected_output:
       contains: ["Index created successfully"]
     success_criteria:
@@ -213,7 +213,7 @@ tests:
       WHERE doc.text CONTAINS 'machine learning'
       RETURN doc.id, doc.text
       ORDER BY doc.id
-      " --embedded
+      "
     expected_output:
       contains: ["1", "2", "3"]
     success_criteria:
@@ -226,7 +226,7 @@ tests:
       EXPLAIN MATCH (doc:TextDoc) 
       WHERE doc.text =~ 'machine.*learning'
       RETURN doc.id
-      " --embedded
+      "
     expected_output:
       contains: ["cost", "selectivity"]
     success_criteria:
@@ -240,7 +240,7 @@ tests:
       MATCH (doc:NonExistent) 
       WHERE doc.content CONTAINS 'test'
       RETURN doc.id
-      " --embedded
+      "
     expected_output:
       contains: ["error", "not found"]
     success_criteria:
@@ -253,7 +253,7 @@ tests:
       MATCH (doc:TextDoc) 
       WHERE doc.text CONTAINS ''
       RETURN doc.id
-      " --embedded
+      "
     expected_output:
       contains: ["error", "empty"]
     success_criteria:

@@ -100,10 +100,10 @@ def run_test_worker(test_data):
     args = test_case.get("args", [])
     expect = test_case.get("expect", {})
 
-    # Add --no-quic for query commands
+    # Add --server 127.0.0.1:3141 --insecure for query commands
     if len(args) > 0 and args[0] == "query":
-        if not any("--server" in str(arg) for arg in args) and not any("--no-quic" in str(arg) for arg in args):
-            args = ["query", "--no-quic"] + args[1:]
+        if not any("--server" in str(arg) for arg in args) and not any("--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args):
+            args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
 
     # Only cleanup if test modifies state
     if needs_cleanup(test_case):

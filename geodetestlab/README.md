@@ -203,30 +203,23 @@ tests:
       # Assertions...
 ```
 
-### Scenarios (server + embedded)
+### Scenarios (server mode)
 
-Add a top-level `scenarios` list to define how each suite runs. When omitted, the runner injects defaults that execute every spec twice: once in embedded mode and once against a managed server (QUIC).
+Add a top-level `scenarios` list to define how each suite runs. When omitted, the runner uses the default server scenario which starts a managed QUIC server for testing.
 
 ```yaml
 scenarios:
-  - name: "embedded"
-    roles:
-      server:
-        enabled: false          # no managed server
-      client:
-        mode: "embedded"        # automatically adds --embedded
-        default_flags: ["--embedded"]
   - name: "server"
     roles:
       server:
         enabled: true
         default_flags: ["--log-level", "info"]  # appended to geode serve
       client:
-        mode: "server"          # forces --server <addr>, strips --embedded/--no-quic
-        default_flags: ["--server", "${server_address}"]
+        mode: "server"
+        default_flags: ["--server", "${server_address}", "--insecure"]
 ```
 
-Server scenarios always use QUIC. Embedded runs set `GEODE_DATA_DIR` for isolation so the client touches only local files, while server runs prevent the client from pointing at the server's data directory.
+All tests now run against a real QUIC server. The test runner manages server lifecycle (start/stop) and ensures proper isolation between test suites using separate data directories and port allocation.
 
 ### Test Case Features
 

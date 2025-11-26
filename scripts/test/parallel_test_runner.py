@@ -220,15 +220,8 @@ class ParallelTestRunner:
                         pass
 
     def default_scenario_configs(self) -> List[Dict]:
-        """Default scenarios to ensure both embedded and server coverage."""
+        """Default scenarios - server mode only."""
         return [
-            {
-                "name": "embedded",
-                "roles": {
-                    "server": {"enabled": False},
-                    "client": {"mode": "embedded", "default_flags": ["--embedded"]},
-                },
-            },
             {
                 "name": "server",
                 "roles": {
@@ -325,13 +318,13 @@ class ParallelTestRunner:
                 else:
                     server_enabled = True
 
-            client_mode = client_role.get("mode") or ("server" if server_enabled else "embedded")
+            client_mode = "server"  # Always use server mode
             client_flags = client_role.get("default_flags")
             if not isinstance(client_flags, list):
                 client_flags = None
             if client_flags is None:
-                client_flags = ["--server", "${server_address}", "--insecure"] if client_mode == "server" else ["--embedded"]
-            elif client_mode == "server" and "--server" in client_flags and "--insecure" not in client_flags:
+                client_flags = ["--server", "${server_address}", "--insecure"]
+            elif "--server" in client_flags and "--insecure" not in client_flags:
                 client_flags.append("--insecure")
 
             server_flags = server_role.get("default_flags")
@@ -357,16 +350,10 @@ class ParallelTestRunner:
         if not scenarios:
             scenarios = [
                 Scenario(
-                    name="embedded",
-                    server_enabled=False,
-                    client_mode="embedded",
-                    client_default_flags=["--embedded"],
-                ),
-                Scenario(
                     name="server",
                     server_enabled=True,
                     client_mode="server",
-                    client_default_flags=["--server", "${server_address}"],
+                    client_default_flags=["--server", "${server_address}", "--insecure"],
                 ),
             ]
 
@@ -388,12 +375,8 @@ class ParallelTestRunner:
                     skip_next = True  # Skip the next argument (server address)
                     continue
 
-                # Ignore embedded/no-quic flags - scenarios control connection mode
-                if arg in ("--embedded", "--no-quic"):
-                    continue
-
-                # In server mode, drop any client-side data-dir references
-                if scenario.client_mode == "server" and arg in ("--data-dir", "--db-file"):
+                # Drop any client-side data-dir references (server mode only)
+                if arg in ("--data-dir", "--db-file"):
                     skip_next = True
                     continue
 
@@ -442,10 +425,7 @@ class ParallelTestRunner:
             if should_attach_flags:
                 default_flags = scenario.expanded_client_flags(server_address)
                 if not default_flags:
-                    if scenario.client_mode == "server":
-                        default_flags = ["--server", server_address] if server_address else ["--embedded"]
-                    elif scenario.client_mode == "embedded":
-                        default_flags = ["--embedded"]
+                    default_flags = ["--server", server_address, "--insecure"] if server_address else []
 
                 insert_pos = 1 if len(processed_args) > 0 else 0
                 for flag in default_flags:
@@ -453,9 +433,9 @@ class ParallelTestRunner:
                         processed_args.insert(insert_pos, flag)
                         insert_pos += 1
             else:
-                # Some management commands support --server but not --embedded
+                # Some management commands support --server
                 server_capable_commands = {"auth", "user", "role", "policy", "grant", "revoke", "backup", "restore", "migrate"}
-                if scenario.client_mode == "server" and command in server_capable_commands and server_address:
+                if command in server_capable_commands and server_address:
                     if "--server" not in processed_args:
                         insert_pos = 2 if len(processed_args) >= 2 else len(processed_args)
                         processed_args.insert(insert_pos, "--server")

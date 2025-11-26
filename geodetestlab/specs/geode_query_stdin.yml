@@ -1,6 +1,6 @@
 version: "1.0"
 name: "Geode Query Stdin Support Tests"
-description: "Test Geode query command stdin functionality with --embedded mode"
+description: "Test Geode query command stdin functionality with mode"
 
 cli:
   binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
@@ -8,7 +8,7 @@ cli:
   env:
     GEODE_LOG_LEVEL: "info"
   server:
-    enabled: false  # Using --embedded mode
+    enabled: false  # Using mode
   client:
     server_address: "127.0.0.1:3141"
     timeout_ms: 30000
@@ -25,7 +25,7 @@ fuzz:
 tests:
   - name: "query-stdin-basic"
     description: "Test basic query execution from stdin"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "RETURN 1 AS x"
     expect:
       exit_code: 0
@@ -34,7 +34,7 @@ tests:
 
   - name: "query-stdin-syntax-error-double-hyphen"
     description: "Test double-hyphen comment error from stdin"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "RETURN 1 -- comment"
     expect:
       exit_code: 1
@@ -43,7 +43,7 @@ tests:
 
   - name: "query-stdin-multiline"
     description: "Test multiline query from stdin"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       RETURN 2 AS y,
              3 AS z
@@ -54,7 +54,7 @@ tests:
 
   - name: "query-stdin-whitespace-trimming"
     description: "Test whitespace trimming from stdin"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "   RETURN 1 AS x   \n\n"
     expect:
       exit_code: 0
@@ -63,7 +63,7 @@ tests:
 
   - name: "query-stdin-empty-error"
     description: "Test empty stdin input error"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "   \n\n   "
     expect:
       exit_code: 2
@@ -80,7 +80,7 @@ tests:
 
   - name: "query-stdin-with-format-option"
     description: "Test stdin with format option"
-    args: ["query", "--embedded", "--format", "json", "-"]
+    args: ["query", "--format", "json", "-"]
     stdin: "RETURN 1 AS x"
     expect:
       exit_code: 0

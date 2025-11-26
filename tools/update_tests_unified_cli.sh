@@ -32,17 +32,17 @@ update_file() {
     cp "$file" "$backup_file"
     
     # Update geodec calls to geode query (most specific patterns first)
-    # Pattern: ./zig-out/bin/geodec "QUERY" --no-quic
-    # Replace: ./zig-out/bin/geode query "QUERY" --no-quic
-    sed -i 's|geodec \(.*\) --no-quic|geode query \1 --no-quic|g' "$file"
+    # Pattern: ./zig-out/bin/geodec "QUERY" --server 127.0.0.1:3141 --insecure
+    # Replace: ./zig-out/bin/geode query "QUERY" --server 127.0.0.1:3141 --insecure
+    sed -i 's|geodec \(.*\) --server 127.0.0.1:3141 --insecure|geode query \1 --server 127.0.0.1:3141 --insecure|g' "$file"
     
     # Pattern: ./zig-out/bin/geodec "QUERY" --format
     # Replace: ./zig-out/bin/geode query "QUERY" --format
     sed -i 's|geodec \(.*\) --format|geode query \1 --format|g' "$file"
     
     # Pattern: ./zig-out/bin/geodec "QUERY" --process
-    # Replace: ./zig-out/bin/geode query "QUERY" --no-quic (remove --process)
-    sed -i 's|geodec \(.*\) --process [^ ]*|geode query \1 --no-quic|g' "$file"
+    # Replace: ./zig-out/bin/geode query "QUERY" --server 127.0.0.1:3141 --insecure (remove --process)
+    sed -i 's|geodec \(.*\) --process [^ ]*|geode query \1 --server 127.0.0.1:3141 --insecure|g' "$file"
     
     # Update geoded server references  
     # Pattern: ./zig-out/bin/geoded --data-dir

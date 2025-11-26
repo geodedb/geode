@@ -12,7 +12,7 @@ def main():
 
     # Categories
     server_tests = []  # Tests that need a running server
-    no_quic_tests = []  # Tests that can run with --no-quic
+    no_quic_tests = []  # Tests that can run with --server 127.0.0.1:3141 --insecure
     unknown_tests = []
 
     # Analyze each spec
@@ -46,7 +46,7 @@ def main():
                 # Server-dependent commands
                 if cmd in ["auth", "user", "role", "policy", "grant", "revoke"]:
                     server_tests.append((spec_file.name, name, cmd))
-                # Query command can run with --no-quic
+                # Query command can run with --server 127.0.0.1:3141 --insecure
                 elif cmd == "query":
                     # But check if it has --server flag
                     if any("--server" in str(arg) for arg in args):
@@ -97,11 +97,11 @@ def main():
     print(f"{'='*80}")
     print(f"1. Server-dependent commands (auth/user/role/policy/grant/revoke) need either:")
     print(f"   a) A running server to connect to")
-    print(f"   b) Implementation of --no-quic mode for these commands")
+    print(f"   b) Implementation of --server 127.0.0.1:3141 --insecure mode for these commands")
     print(f"   c) Mock implementation for testing without server")
     print(f"\n2. For now, we should either:")
     print(f"   - Skip server-dependent tests in extended_test_runner.py")
-    print(f"   - Or implement --no-quic mode for these commands")
+    print(f"   - Or implement --server 127.0.0.1:3141 --insecure mode for these commands")
 
 if __name__ == "__main__":
     main()

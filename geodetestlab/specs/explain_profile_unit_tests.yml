@@ -8,7 +8,7 @@ tests:
   # ===============================
   - name: "explain-basic-match"
     description: "Test EXPLAIN with basic MATCH query"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN MATCH (p:Person) RETURN p.name"
     expect:
       exit_code: 0
@@ -19,7 +19,7 @@ tests:
 
   - name: "explain-match-with-where"
     description: "Test EXPLAIN with MATCH and WHERE clause"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN MATCH (p:Person) WHERE p.age > 25 RETURN p.name"
     expect:
       exit_code: 0
@@ -30,7 +30,7 @@ tests:
 
   - name: "explain-match-with-relationship"
     description: "Test EXPLAIN with relationship pattern"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name"
     expect:
       exit_code: 0
@@ -41,7 +41,7 @@ tests:
 
   - name: "explain-create-statement"
     description: "Test EXPLAIN with CREATE statement"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN CREATE (p:Person {name: 'Alice'})"
     expect:
       exit_code: 0
@@ -52,7 +52,7 @@ tests:
 
   - name: "explain-delete-statement"
     description: "Test EXPLAIN with DELETE statement"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN MATCH (p:Person) DELETE p"
     expect:
       exit_code: 0
@@ -63,7 +63,7 @@ tests:
 
   - name: "explain-complex-query"
     description: "Test EXPLAIN with complex query including aggregation"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN MATCH (p:Person) RETURN count(p) AS person_count"
     expect:
       exit_code: 0
@@ -74,7 +74,7 @@ tests:
 
   - name: "explain-with-order-by"
     description: "Test EXPLAIN with ORDER BY clause"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN MATCH (p:Person) RETURN p.name ORDER BY p.name"
     expect:
       exit_code: 0
@@ -85,7 +85,7 @@ tests:
 
   - name: "explain-with-limit"
     description: "Test EXPLAIN with LIMIT clause"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN MATCH (p:Person) RETURN p.name LIMIT 10"
     expect:
       exit_code: 0
@@ -99,7 +99,7 @@ tests:
   # ===============================
   - name: "profile-basic-match"
     description: "Test PROFILE with basic MATCH query"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       CREATE (p1:Person {name: 'Alice'})
       CREATE (p2:Person {name: 'Bob'})
@@ -113,7 +113,7 @@ tests:
 
   - name: "profile-returns-metrics"
     description: "Test PROFILE returns expected metrics"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       CREATE (p:Person {name: 'Test'})
       PROFILE MATCH (p:Person) RETURN p.name
@@ -127,7 +127,7 @@ tests:
 
   - name: "profile-with-aggregation"
     description: "Test PROFILE with aggregation function"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       CREATE (p1:Person {name: 'Alice'})
       CREATE (p2:Person {name: 'Bob'})
@@ -141,7 +141,7 @@ tests:
 
   - name: "profile-with-where-clause"
     description: "Test PROFILE with WHERE clause"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       CREATE (p1:Person {name: 'Alice', age: 30})
       CREATE (p2:Person {name: 'Bob', age: 25})
@@ -155,7 +155,7 @@ tests:
 
   - name: "profile-create-statement"
     description: "Test PROFILE with CREATE statement"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "PROFILE CREATE (p:Person {name: 'ProfileTest'})"
     expect:
       exit_code: 0
@@ -166,7 +166,7 @@ tests:
 
   - name: "profile-relationship-pattern"
     description: "Test PROFILE with relationship traversal"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice'})
       CREATE (c:Company {name: 'Acme'})
@@ -181,7 +181,7 @@ tests:
 
   - name: "profile-empty-result"
     description: "Test PROFILE with query returning no results"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "PROFILE MATCH (p:NonExistent) RETURN p"
     expect:
       exit_code: 0
@@ -192,7 +192,7 @@ tests:
 
   - name: "profile-with-order-by-limit"
     description: "Test PROFILE with ORDER BY and LIMIT"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       CREATE (p1:Person {name: 'Charlie', age: 35})
       CREATE (p2:Person {name: 'Alice', age: 30})
@@ -210,7 +210,7 @@ tests:
   # ===============================
   - name: "explain-nested-pattern"
     description: "Test EXPLAIN with nested graph pattern"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN MATCH (a)-[:REL1]->(b)-[:REL2]->(c) RETURN a, b, c"
     expect:
       exit_code: 0
@@ -221,7 +221,7 @@ tests:
 
   - name: "profile-multiple-patterns"
     description: "Test PROFILE with multiple MATCH patterns"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice'})
       CREATE (c:Company {name: 'Acme'})
@@ -235,7 +235,7 @@ tests:
 
   - name: "explain-union-query"
     description: "Test EXPLAIN with UNION query"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       EXPLAIN
       MATCH (p:Person) RETURN p.name AS name
@@ -250,7 +250,7 @@ tests:
 
   - name: "profile-with-label-test"
     description: "Test PROFILE with label test in WHERE"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: |
       CREATE (p:Person {name: 'Alice'})
       CREATE (c:Company {name: 'Acme'})
@@ -264,7 +264,7 @@ tests:
 
   - name: "explain-merge-statement"
     description: "Test EXPLAIN with MERGE statement"
-    args: ["query", "--embedded", "-"]
+    args: ["query", "-"]
     stdin: "EXPLAIN MERGE (p:Person {email: 'test@example.com'}) ON CREATE SET p.created = true"
     expect:
       exit_code: 0

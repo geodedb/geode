@@ -43,7 +43,6 @@ tests:
     description: "Create a complex graph structure"
     args:
       - "query"
-      - "--embedded"
       - |
         CREATE 
           (alice:Person {name: 'Alice', age: 30, city: 'New York'}),
@@ -71,7 +70,6 @@ tests:
     description: "Complex path traversal and analysis"
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH path = (person:Person)-[:WORKS_FOR*1..2]->(org)-[:OWNS]->(product:Product)
         WHERE person.age > 25
@@ -92,7 +90,6 @@ tests:
     description: "Advanced aggregation and analytics"
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH (p:Person)-[r:WORKS_FOR]->(c:Company)
         WITH c.name AS company, 
@@ -113,7 +110,6 @@ tests:
     description: "Time-based query with temporal functions"
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH (p:Person)-[r:WORKS_FOR]->(c:Company)
         WHERE r.since <= 2021
@@ -134,7 +130,6 @@ tests:
     description: "Complex subquery with UNION operations"
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH (p:Person) RETURN p.name AS name, 'Person' AS type
         UNION
@@ -153,7 +148,6 @@ tests:
     description: "Explore database schema and structure"
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH (n)
         RETURN count(DISTINCT n) AS total_nodes,
@@ -171,7 +165,6 @@ tests:
     timeout_ms: 120000
     args:
       - "query"
-      - "--embedded"
       - |
         CREATE (n1:TestNode {id: 1, name: 'node_1', category: 'B'}),
                (n2:TestNode {id: 2, name: 'node_2', category: 'C'}),
@@ -194,7 +187,6 @@ tests:
     timeout_ms: 60000
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH (n:TestNode)
         WHERE n.category IN ['A', 'B']
@@ -213,7 +205,6 @@ tests:
     description: "Test transaction handling and rollback"
     args:
       - "query"
-      - "--embedded"
       - "--begin"
       - |
         CREATE (temp:TempNode {test: true})
@@ -228,7 +219,6 @@ tests:
     description: "Test query execution and performance"
     args:
       - "query"
-      - "--embedded"
       - |
         EXPLAIN MATCH (p:Person) 
         WHERE p.name = 'Alice' 
@@ -240,7 +230,7 @@ tests:
 
   - name: "error-handling-division-by-zero"
     description: "Test error handling in mathematical operations"
-    args: ["query", "--embedded", "RETURN 10 / 0 AS result"]
+    args: ["query", "RETURN 10 / 0 AS result"]
     expect:
       exit_code: 1
       stderr_contains: ["division", "zero", "error"]
@@ -248,7 +238,7 @@ tests:
 
   - name: "memory-cleanup-test"
     description: "Test memory cleanup with large result sets"
-    args: ["query", "--embedded", "MATCH (n:TestNode) RETURN n LIMIT 1000"]
+    args: ["query", "MATCH (n:TestNode) RETURN n LIMIT 1000"]
     expect:
       exit_code: 0
       geode_query:

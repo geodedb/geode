@@ -13,7 +13,7 @@ test_query() {
     local pattern="$3"
     
     echo -n "Testing $name... "
-    if ./zig-out/bin/geodec "$query" --no-quic 2>&1 | grep -q "$pattern"; then
+    if ./zig-out/bin/geodec "$query" --server 127.0.0.1:3141 --insecure 2>&1 | grep -q "$pattern"; then
         echo "PASS"
         return 0
     else
@@ -21,7 +21,7 @@ test_query() {
         echo "Query: $query"
         echo "Expected: $pattern"
         echo "Actual output:"
-        ./zig-out/bin/geodec "$query" --no-quic 2>&1 | head -3
+        ./zig-out/bin/geodec "$query" --server 127.0.0.1:3141 --insecure 2>&1 | head -3
         return 1
     fi
 }

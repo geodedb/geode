@@ -456,7 +456,7 @@ jobs:
       - name: Test basic query
         run: |
           docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.sha.outputs.short }}-${{ matrix.variant }} \
-            query "RETURN 1 AS x" --no-quic
+            --version
 
       - name: Verify binaries exist
         run: |

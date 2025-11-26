@@ -79,7 +79,7 @@ tests:
 
   - name: merge-with-on-match
     setup:
-      - "query \"CREATE (n:Person {name: 'Test'})\" --format json --embedded"
+      - "query \"CREATE (n:Person {name: 'Test'})\" --format json"
     args: ["query", "MERGE (n:Person {name: 'Test'}) ON MATCH SET n.updated = true RETURN n", "--format", "json"]
     expect:
       exit_code: 0

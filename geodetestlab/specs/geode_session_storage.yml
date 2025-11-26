@@ -5,7 +5,7 @@ description: "Comprehensive testing of Geode's token-based session storage syste
 cli:
   binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
   server:
-    enabled: false  # Session tests use --embedded mode
+    enabled: true
     port: null
     data_dir: null
     startup_timeout_ms: 60000
@@ -61,7 +61,7 @@ tests:
     description: "Query command auto-loads saved session credentials"
     setup:
       - "auth login -U autoload_test_user -P autoloadpass --save-session"
-    args: ["query", "--embedded", "RETURN 'auto-loaded-session' AS session_test"]
+    args: ["query", "RETURN 'auto-loaded-session' AS session_test"]
     expect:
       exit_code: 0
       stdout_contains:
@@ -74,7 +74,7 @@ tests:
     description: "Query with --no-saved-session ignores saved credentials"
     setup:
       - "auth login -U nosave_test_user -P nosavepass --save-session"
-    args: ["query", "--embedded", "--no-saved-session", "RETURN 'no-session-flag' AS test"]
+    args: ["query", "--no-saved-session", "RETURN 'no-session-flag' AS test"]
     expect:
       exit_code: 0
       stdout_contains:
@@ -83,8 +83,8 @@ tests:
       - "auth logout"
 
   - name: "query-without-session"
-    description: "Query works in --embedded mode without any session"
-    args: ["query", "--embedded", "RETURN 42 AS answer"]
+    description: "Query works without any session"
+    args: ["query", "RETURN 42 AS answer"]
     expect:
       exit_code: 0
       stdout_contains:

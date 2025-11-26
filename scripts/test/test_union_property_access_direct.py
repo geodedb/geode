@@ -17,7 +17,7 @@ class UnionPropertyAccessTester:
         """Execute a query and return the result."""
         try:
             result = subprocess.run(
-                [self.binary, query, "--no-quic", "--format", "json"],
+                [self.binary, query, "--server 127.0.0.1:3141 --insecure", "--format", "json"],
                 capture_output=True,
                 text=True,
                 timeout=timeout

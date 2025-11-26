@@ -23,14 +23,14 @@ tests:
   
   - name: "insert-basic-node"
     description: "Test basic INSERT node pattern"
-    args: ["query", "--embedded", "INSERT (n:Person {name: 'Alice', age: 30})"]
+    args: ["query", "INSERT (n:Person {name: 'Alice', age: 30})"]
     expect:
       exit_code: 0
     tags: ["insert", "node", "basic"]
 
   - name: "insert-multiple-nodes"
     description: "Test INSERT multiple nodes"
-    args: ["query", "--embedded", "INSERT (a:Person {name: 'Bob', age: 25}), (b:Person {name: 'Carol', age: 35})"]
+    args: ["query", "INSERT (a:Person {name: 'Bob', age: 25}), (b:Person {name: 'Carol', age: 35})"]
     expect:
       exit_code: 0
     tags: ["insert", "node", "multiple"]
@@ -38,8 +38,8 @@ tests:
   - name: "insert-relationship"
     description: "Test INSERT relationship pattern"
     setup:
-      - "query --embedded \"INSERT (a:Person {name: 'David', age: 40}), (b:Person {name: 'Eve', age: 28})\""
-    args: ["query", "--embedded", "INSERT (a:Person {name: 'David'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Eve'})"]
+      - "query \"INSERT (a:Person {name: 'David', age: 40}), (b:Person {name: 'Eve', age: 28})\""
+    args: ["query", "INSERT (a:Person {name: 'David'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Eve'})"]
     expect:
       exit_code: 0
     tags: ["insert", "relationship", "basic"]
@@ -48,7 +48,6 @@ tests:
     description: "Test INSERT complex pattern with nodes and relationships"
     args:
       - "query"
-      - "--embedded"
       - |
         INSERT (company:Company {name: 'TechCorp', founded: 2010}),
                (person:Person {name: 'Frank', age: 32}),
@@ -63,7 +62,6 @@ tests:
     description: "Test INSERT node with various property types"
     args:
       - "query"
-      - "--embedded"
       - "INSERT (n:Product {id: 1, name: 'Laptop', price: 999.99, in_stock: true, tags: ['electronics', 'computers'], metadata: {brand: 'TechBrand', model: 'X1'}})"
     expect:
       exit_code: 0
@@ -76,8 +74,8 @@ tests:
   - name: "set-property-basic"
     description: "Test basic SET property operation"
     setup:
-      - "query --embedded \"INSERT (n:Person {name: 'Grace', age: 26})\""
-    args: ["query", "--embedded", "MATCH (n:Person {name: 'Grace'}) SET n.age = 27"]
+      - "query \"INSERT (n:Person {name: 'Grace', age: 26})\""
+    args: ["query", "MATCH (n:Person {name: 'Grace'}) SET n.age = 27"]
     expect:
       exit_code: 0
     tags: ["set", "property", "basic"]
@@ -85,8 +83,8 @@ tests:
   - name: "set-multiple-properties"
     description: "Test SET multiple properties"
     setup:
-      - "query --embedded \"INSERT (n:Person {name: 'Henry', age: 30})\""
-    args: ["query", "--embedded", "MATCH (n:Person {name: 'Henry'}) SET n.age = 31, n.city = 'New York', n.updated = true"]
+      - "query \"INSERT (n:Person {name: 'Henry', age: 30})\""
+    args: ["query", "MATCH (n:Person {name: 'Henry'}) SET n.age = 31, n.city = 'New York', n.updated = true"]
     expect:
       exit_code: 0
     tags: ["set", "property", "multiple"]
@@ -94,8 +92,8 @@ tests:
   - name: "set-all-properties"
     description: "Test SET all properties with property map"
     setup:
-      - "query --embedded \"INSERT (n:Person {name: 'Ivy', age: 29})\""
-    args: ["query", "--embedded", "MATCH (n:Person {name: 'Ivy'}) SET n = {name: 'Ivy Johnson', age: 30, department: 'Engineering', active: true}"]
+      - "query \"INSERT (n:Person {name: 'Ivy', age: 29})\""
+    args: ["query", "MATCH (n:Person {name: 'Ivy'}) SET n = {name: 'Ivy Johnson', age: 30, department: 'Engineering', active: true}"]
     expect:
       exit_code: 0
     tags: ["set", "properties", "all"]
@@ -103,8 +101,8 @@ tests:
   - name: "set-label"
     description: "Test SET label operation"
     setup:
-      - "query --embedded \"INSERT (n:Person {name: 'Jack', age: 33})\""
-    args: ["query", "--embedded", "MATCH (n:Person {name: 'Jack'}) SET n:Employee"]
+      - "query \"INSERT (n:Person {name: 'Jack', age: 33})\""
+    args: ["query", "MATCH (n:Person {name: 'Jack'}) SET n:Employee"]
     expect:
       exit_code: 0
     tags: ["set", "label", "basic"]
@@ -112,8 +110,8 @@ tests:
   - name: "set-multiple-labels"
     description: "Test SET multiple labels"
     setup:
-      - "query --embedded \"INSERT (n:Person {name: 'Kate', age: 27})\""
-    args: ["query", "--embedded", "MATCH (n:Person {name: 'Kate'}) SET n:Employee, n:Manager"]
+      - "query \"INSERT (n:Person {name: 'Kate', age: 27})\""
+    args: ["query", "MATCH (n:Person {name: 'Kate'}) SET n:Employee, n:Manager"]
     expect:
       exit_code: 0
     tags: ["set", "label", "multiple"]
@@ -121,8 +119,8 @@ tests:
   - name: "set-relationship-property"
     description: "Test SET property on relationship"
     setup:
-      - "query --embedded \"INSERT (a:Person {name: 'Liam'}), (b:Person {name: 'Mia'}), (a)-[:KNOWS]->(b)\""
-    args: ["query", "--embedded", "MATCH (a:Person {name: 'Liam'})-[r:KNOWS]->(b:Person {name: 'Mia'}) SET r.strength = 'strong', r.verified = true"]
+      - "query \"INSERT (a:Person {name: 'Liam'}), (b:Person {name: 'Mia'}), (a)-[:KNOWS]->(b)\""
+    args: ["query", "MATCH (a:Person {name: 'Liam'})-[r:KNOWS]->(b:Person {name: 'Mia'}) SET r.strength = 'strong', r.verified = true"]
     expect:
       exit_code: 0
     tags: ["set", "relationship", "property"]
@@ -130,8 +128,8 @@ tests:
   - name: "set-computed-property"
     description: "Test SET property with computed value"
     setup:
-      - "query --embedded \"INSERT (n:Product {name: 'Monitor', price: 299.99})\""
-    args: ["query", "--embedded", "MATCH (n:Product {name: 'Monitor'}) SET n.discounted_price = n.price * 0.9"]
+      - "query \"INSERT (n:Product {name: 'Monitor', price: 299.99})\""
+    args: ["query", "MATCH (n:Product {name: 'Monitor'}) SET n.discounted_price = n.price * 0.9"]
     expect:
       exit_code: 0
     tags: ["set", "property", "computed"]
@@ -143,8 +141,8 @@ tests:
   - name: "remove-property-basic"
     description: "Test basic REMOVE property operation"
     setup:
-      - "query --embedded \"INSERT (n:Person {name: 'Noah', age: 35, temp_field: 'remove_me'})\""
-    args: ["query", "--embedded", "MATCH (n:Person {name: 'Noah'}) REMOVE n.temp_field"]
+      - "query \"INSERT (n:Person {name: 'Noah', age: 35, temp_field: 'remove_me'})\""
+    args: ["query", "MATCH (n:Person {name: 'Noah'}) REMOVE n.temp_field"]
     expect:
       exit_code: 0
     tags: ["remove", "property", "basic"]
@@ -152,8 +150,8 @@ tests:
   - name: "remove-multiple-properties"
     description: "Test REMOVE multiple properties"
     setup:
-      - "query --embedded \"INSERT (n:Person {name: 'Olivia', age: 28, temp1: 'remove', temp2: 'also_remove'})\""
-    args: ["query", "--embedded", "MATCH (n:Person {name: 'Olivia'}) REMOVE n.temp1, n.temp2"]
+      - "query \"INSERT (n:Person {name: 'Olivia', age: 28, temp1: 'remove', temp2: 'also_remove'})\""
+    args: ["query", "MATCH (n:Person {name: 'Olivia'}) REMOVE n.temp1, n.temp2"]
     expect:
       exit_code: 0
     tags: ["remove", "property", "multiple"]
@@ -161,8 +159,8 @@ tests:
   - name: "remove-label-basic"
     description: "Test basic REMOVE label operation"
     setup:
-      - "query --embedded \"INSERT (n:Person:Temporary {name: 'Paul', age: 42})\""
-    args: ["query", "--embedded", "MATCH (n:Person {name: 'Paul'}) REMOVE n:Temporary"]
+      - "query \"INSERT (n:Person:Temporary {name: 'Paul', age: 42})\""
+    args: ["query", "MATCH (n:Person {name: 'Paul'}) REMOVE n:Temporary"]
     expect:
       exit_code: 0
     tags: ["remove", "label", "basic"]
@@ -170,8 +168,8 @@ tests:
   - name: "remove-multiple-labels"
     description: "Test REMOVE multiple labels"
     setup:
-      - "query --embedded \"INSERT (n:Person:Employee:Manager:Temporary {name: 'Quinn', age: 38})\""
-    args: ["query", "--embedded", "MATCH (n:Person {name: 'Quinn'}) REMOVE n:Employee, n:Temporary"]
+      - "query \"INSERT (n:Person:Employee:Manager:Temporary {name: 'Quinn', age: 38})\""
+    args: ["query", "MATCH (n:Person {name: 'Quinn'}) REMOVE n:Employee, n:Temporary"]
     expect:
       exit_code: 0
     tags: ["remove", "label", "multiple"]
@@ -179,8 +177,8 @@ tests:
   - name: "remove-relationship-property"
     description: "Test REMOVE property from relationship"
     setup:
-      - "query --embedded \"INSERT (a:Person {name: 'Ryan'}), (b:Person {name: 'Sara'}), (a)-[:KNOWS {temp_prop: 'remove_me', since: 2020}]->(b)\""
-    args: ["query", "--embedded", "MATCH (a:Person {name: 'Ryan'})-[r:KNOWS]->(b:Person {name: 'Sara'}) REMOVE r.temp_prop"]
+      - "query \"INSERT (a:Person {name: 'Ryan'}), (b:Person {name: 'Sara'}), (a)-[:KNOWS {temp_prop: 'remove_me', since: 2020}]->(b)\""
+    args: ["query", "MATCH (a:Person {name: 'Ryan'})-[r:KNOWS]->(b:Person {name: 'Sara'}) REMOVE r.temp_prop"]
     expect:
       exit_code: 0
     tags: ["remove", "relationship", "property"]
@@ -192,8 +190,8 @@ tests:
   - name: "delete-node-basic"
     description: "Test basic DELETE node operation"
     setup:
-      - "query --embedded \"INSERT (n:TempNode {id: 1, name: 'delete_me'})\""
-    args: ["query", "--embedded", "MATCH (n:TempNode {id: 1}) DELETE n"]
+      - "query \"INSERT (n:TempNode {id: 1, name: 'delete_me'})\""
+    args: ["query", "MATCH (n:TempNode {id: 1}) DELETE n"]
     expect:
       exit_code: 0
     tags: ["delete", "node", "basic"]
@@ -201,8 +199,8 @@ tests:
   - name: "delete-multiple-nodes"
     description: "Test DELETE multiple nodes"
     setup:
-      - "query --embedded \"INSERT (a:TempNode {id: 2}), (b:TempNode {id: 3})\""
-    args: ["query", "--embedded", "MATCH (n:TempNode) WHERE n.id IN [2, 3] DELETE n"]
+      - "query \"INSERT (a:TempNode {id: 2}), (b:TempNode {id: 3})\""
+    args: ["query", "MATCH (n:TempNode) WHERE n.id IN [2, 3] DELETE n"]
     expect:
       exit_code: 0
     tags: ["delete", "node", "multiple"]
@@ -210,8 +208,8 @@ tests:
   - name: "delete-relationship-basic"
     description: "Test DELETE relationship operation"
     setup:
-      - "query --embedded \"INSERT (a:Person {name: 'Tom'}), (b:Person {name: 'Uma'}), (a)-[:TEMP_REL]->(b)\""
-    args: ["query", "--embedded", "MATCH (a:Person {name: 'Tom'})-[r:TEMP_REL]->(b:Person {name: 'Uma'}) DELETE r"]
+      - "query \"INSERT (a:Person {name: 'Tom'}), (b:Person {name: 'Uma'}), (a)-[:TEMP_REL]->(b)\""
+    args: ["query", "MATCH (a:Person {name: 'Tom'})-[r:TEMP_REL]->(b:Person {name: 'Uma'}) DELETE r"]
     expect:
       exit_code: 0
     tags: ["delete", "relationship", "basic"]
@@ -219,8 +217,8 @@ tests:
   - name: "detach-delete-node"
     description: "Test DETACH DELETE node operation"
     setup:
-      - "query --embedded \"INSERT (a:Person {name: 'Victor'}), (b:TempNode {name: 'detach_me'}), (a)-[:CONNECTED]->(b)\""
-    args: ["query", "--embedded", "MATCH (n:TempNode {name: 'detach_me'}) DETACH DELETE n"]
+      - "query \"INSERT (a:Person {name: 'Victor'}), (b:TempNode {name: 'detach_me'}), (a)-[:CONNECTED]->(b)\""
+    args: ["query", "MATCH (n:TempNode {name: 'detach_me'}) DETACH DELETE n"]
     expect:
       exit_code: 0
     tags: ["delete", "detach", "node"]
@@ -228,19 +226,19 @@ tests:
   - name: "nodetach-delete-error"
     description: "Test NODETACH DELETE on node with relationships (should error)"
     setup:
-      - "query --embedded \"INSERT (a:Person {name: 'Walter'}), (b:TempNode {name: 'nodetach_error'}), (a)-[:CONNECTED]->(b)\""
-    args: ["query", "--embedded", "MATCH (n:TempNode {name: 'nodetach_error'}) NODETACH DELETE n"]
+      - "query \"INSERT (a:Person {name: 'Walter'}), (b:TempNode {name: 'nodetach_error'}), (a)-[:CONNECTED]->(b)\""
+    args: ["query", "MATCH (n:TempNode {name: 'nodetach_error'}) NODETACH DELETE n"]
     expect:
       exit_code: 1
     cleanup:
-      - "query --embedded \"MATCH (n:TempNode {name: 'nodetach_error'}) DETACH DELETE n\""
+      - "query \"MATCH (n:TempNode {name: 'nodetach_error'}) DETACH DELETE n\""
     tags: ["delete", "nodetach", "error"]
 
   - name: "delete-complex-pattern"
     description: "Test DELETE with complex matching pattern"
     setup:
-      - "query --embedded \"INSERT (a:TempNode {type: 'source'}), (b:TempNode {type: 'target'}), (a)-[:TEMP_CONNECTS {weight: 1.0}]->(b)\""
-    args: ["query", "--embedded", "MATCH (a:TempNode {type: 'source'})-[r:TEMP_CONNECTS]->(b:TempNode {type: 'target'}) DELETE r, a, b"]
+      - "query \"INSERT (a:TempNode {type: 'source'}), (b:TempNode {type: 'target'}), (a)-[:TEMP_CONNECTS {weight: 1.0}]->(b)\""
+    args: ["query", "MATCH (a:TempNode {type: 'source'})-[r:TEMP_CONNECTS]->(b:TempNode {type: 'target'}) DELETE r, a, b"]
     expect:
       exit_code: 0
     tags: ["delete", "complex", "pattern"]
@@ -253,7 +251,6 @@ tests:
     description: "Test INSERT followed by SET operations"
     args:
       - "query"
-      - "--embedded"
       - |
         INSERT (n:WorkflowTest {name: 'TestUser', status: 'new'});
         MATCH (n:WorkflowTest {name: 'TestUser'}) SET n.status = 'active', n.created_at = 'now';
@@ -268,10 +265,9 @@ tests:
   - name: "set-remove-workflow"
     description: "Test SET followed by REMOVE operations"
     setup:
-      - "query --embedded \"INSERT (n:WorkflowTest {name: 'ModifyUser', temp: 'temporary', keep: 'permanent'})\""
+      - "query \"INSERT (n:WorkflowTest {name: 'ModifyUser', temp: 'temporary', keep: 'permanent'})\""
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH (n:WorkflowTest {name: 'ModifyUser'}) SET n.updated = true;
         MATCH (n:WorkflowTest {name: 'ModifyUser'}) REMOVE n.temp;
@@ -287,7 +283,6 @@ tests:
     description: "Comprehensive workflow: INSERT, SET, REMOVE, DELETE"
     args:
       - "query"
-      - "--embedded"
       - |
         INSERT (a:ComprehensiveTest {id: 1, name: 'Alpha', temp: 'remove_later'}),
                (b:ComprehensiveTest {id: 2, name: 'Beta'}),
@@ -315,7 +310,6 @@ tests:
     timeout_ms: 30000
     args:
       - "query"
-      - "--embedded"
       - |
         INSERT (n1:BulkTest {id: 1, batch: 'perf'}),
                (n2:BulkTest {id: 2, batch: 'perf'}),
@@ -342,10 +336,9 @@ tests:
     description: "Performance test with bulk SET operations"
     timeout_ms: 30000
     setup:
-      - "query --embedded \"INSERT (n1:BulkSetTest {id: 1}), (n2:BulkSetTest {id: 2}), (n3:BulkSetTest {id: 3}), (n4:BulkSetTest {id: 4}), (n5:BulkSetTest {id: 5})\""
+      - "query \"INSERT (n1:BulkSetTest {id: 1}), (n2:BulkSetTest {id: 2}), (n3:BulkSetTest {id: 3}), (n4:BulkSetTest {id: 4}), (n5:BulkSetTest {id: 5})\""
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH (n:BulkSetTest) SET n.processed = true, n.timestamp = 'bulk_update';
         MATCH (n:BulkSetTest) RETURN count(n) AS updated_count
@@ -362,7 +355,7 @@ tests:
   
   - name: "set-nonexistent-node-property"
     description: "Test SET property on non-existent node (should succeed with no effect)"
-    args: ["query", "--embedded", "MATCH (n:NonExistent) SET n.property = 'value'"]
+    args: ["query", "MATCH (n:NonExistent) SET n.property = 'value'"]
     expect:
       exit_code: 0
     tags: ["error", "set", "nonexistent"]
@@ -370,15 +363,15 @@ tests:
   - name: "remove-nonexistent-property"
     description: "Test REMOVE non-existent property (should succeed with no effect)"
     setup:
-      - "query --embedded \"INSERT (n:ErrorTest {name: 'test'})\""
-    args: ["query", "--embedded", "MATCH (n:ErrorTest) REMOVE n.nonexistent_property"]
+      - "query \"INSERT (n:ErrorTest {name: 'test'})\""
+    args: ["query", "MATCH (n:ErrorTest) REMOVE n.nonexistent_property"]
     expect:
       exit_code: 0
     tags: ["error", "remove", "nonexistent"]
 
   - name: "delete-nonexistent-node"
     description: "Test DELETE non-existent node (should succeed with no effect)"
-    args: ["query", "--embedded", "MATCH (n:NonExistent) DELETE n"]
+    args: ["query", "MATCH (n:NonExistent) DELETE n"]
     expect:
       exit_code: 0
     tags: ["error", "delete", "nonexistent"]
@@ -391,7 +384,6 @@ tests:
     description: "Clean up all data created during data modification tests"
     args:
       - "query"
-      - "--embedded"
       - "MATCH (n) WHERE n:Person OR n:Company OR n:Project OR n:Product OR n:TempNode OR n:WorkflowTest OR n:ComprehensiveTest OR n:BulkTest OR n:BulkSetTest OR n:ErrorTest DETACH DELETE n"
     expect:
       exit_code: 0

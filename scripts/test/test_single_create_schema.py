@@ -9,7 +9,7 @@ def test_create_schema():
     cmd = [
         "/home/benji/src/spyder/geode/zig-out/bin/geode",
         "query",
-        "--no-quic",
+        "--server 127.0.0.1:3141 --insecure",
         "CREATE SCHEMA test_schema"
     ]
     

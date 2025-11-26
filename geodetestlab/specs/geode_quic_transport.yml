@@ -32,7 +32,7 @@ tests:
   # Basic QUIC connectivity tests
   - name: "quic-handshake-success"
     description: "Verify successful QUIC handshake with self-signed certificate"
-    args: ["query", "--embedded", "--insecure", "RETURN 'quic-test' AS transport"]
+    args: ["query", "--insecure", "RETURN 'quic-test' AS transport"]
     expect:
       exit_code: 0
       geode_query:
@@ -42,7 +42,7 @@ tests:
 
   - name: "quic-secure-connection"
     description: "Test secure QUIC connection without --insecure flag"
-    args: ["query", "--embedded", "RETURN 'secure-test' AS transport"]
+    args: ["query", "RETURN 'secure-test' AS transport"]
     expect:
       exit_code: 0  # Should work with self-signed cert in test environment
       geode_query:
@@ -54,7 +54,7 @@ tests:
     description: "Test multiple concurrent QUIC connections"
     parallel: true
     instances: 5
-    args: ["query", "--embedded", "--insecure", "RETURN ${instance_id} AS connection_id"]
+    args: ["query", "--insecure", "RETURN ${instance_id} AS connection_id"]
     expect:
       exit_code: 0
       geode_query:
@@ -65,7 +65,7 @@ tests:
   # Certificate and TLS tests
   - name: "certificate-validation"
     description: "Test certificate validation behavior"
-    args: ["query", "--embedded", "--insecure", "RETURN current_timestamp() AS cert_test"]
+    args: ["query", "--insecure", "RETURN current_timestamp() AS cert_test"]
     expect:
       exit_code: 0
       geode_query:
@@ -76,7 +76,7 @@ tests:
   - name: "insecure-flag-required"
     description: "Verify --insecure flag is required for self-signed certificates"
     skip_if_env: "CI"  # Skip in CI where cert validation might be different
-    args: ["query", "--embedded", "RETURN 'no-insecure' AS test"]
+    args: ["query", "RETURN 'no-insecure' AS test"]
     expect:
       # May succeed or fail depending on environment cert handling
       exit_code_any: [0, 1]
@@ -108,7 +108,7 @@ tests:
   # Shell interactive mode tests
   - name: "shell-quic-connect"
     description: "Test shell connection over QUIC"
-    args: ["shell", "--embedded", "--insecure", "--non-interactive"]
+    args: ["shell",  "--insecure", "--non-interactive"]
     stdin: "RETURN 'shell-test' AS mode;\n.exit\n"
     expect:
       exit_code: 0
@@ -117,7 +117,7 @@ tests:
 
   - name: "shell-multiple-queries"
     description: "Test multiple queries in shell session"
-    args: ["shell", "--embedded", "--insecure", "--non-interactive"]
+    args: ["shell",  "--insecure", "--non-interactive"]
     stdin: |
       RETURN 1 AS first;
       RETURN 2 AS second;
@@ -131,7 +131,7 @@ tests:
   # Data operations over QUIC
   - name: "quic-create-data"
     description: "Create data over QUIC connection"
-    args: ["query", "--embedded", "--insecure", "CREATE (n:QuicTest {id: uuid(), timestamp: current_timestamp()}) RETURN n.id AS created_id"]
+    args: ["query", "--insecure", "CREATE (n:QuicTest {id: uuid(), timestamp: current_timestamp()}) RETURN n.id AS created_id"]
     expect:
       exit_code: 0
       geode_query:
@@ -141,7 +141,7 @@ tests:
 
   - name: "quic-query-data"
     description: "Query data over QUIC connection"
-    args: ["query", "--embedded", "--insecure", "MATCH (n:QuicTest) RETURN count(n) AS quic_nodes"]
+    args: ["query", "--insecure", "MATCH (n:QuicTest) RETURN count(n) AS quic_nodes"]
     expect:
       exit_code: 0
       geode_query:
@@ -152,8 +152,8 @@ tests:
   - name: "quic-large-transaction"
     description: "Test large transaction over QUIC"
     # UNWIND is not GQL-compliant - replaced with simpler test
-    # Original: args: ["query", "--embedded", "--insecure", "UNWIND range(1, 50) AS i CREATE (n:QuicBulk {id: i, data: 'test-data-' + toString(i)}) RETURN count(n) AS created"]
-    args: ["query", "--embedded", "--insecure", "CREATE (n1:QuicBulk {id: 1}), (n2:QuicBulk {id: 2}), (n3:QuicBulk {id: 3}) RETURN count(*) AS created"]
+    # Original: args: ["query", "--insecure", "UNWIND range(1, 50) AS i CREATE (n:QuicBulk {id: i, data: 'test-data-' + toString(i)}) RETURN count(n) AS created"]
+    args: ["query", "--insecure", "CREATE (n1:QuicBulk {id: 1}), (n2:QuicBulk {id: 2}), (n3:QuicBulk {id: 3}) RETURN count(*) AS created"]
     expect:
       exit_code: 0
       geode_query:
@@ -165,7 +165,7 @@ tests:
   - name: "quic-rapid-connections"
     description: "Test rapid connection establishment and teardown"
     loop: 10
-    args: ["query", "--embedded", "--insecure", "RETURN ${loop_index} AS rapid_test"]
+    args: ["query", "--insecure", "RETURN ${loop_index} AS rapid_test"]
     expect:
       exit_code: 0
       geode_query:
@@ -174,7 +174,7 @@ tests:
 
   - name: "quic-large-result"
     description: "Test large result set over QUIC"
-    args: ["query", "--embedded", "--insecure", "MATCH (n:QuicBulk) RETURN n.id, n.data ORDER BY n.id LIMIT 25"]
+    args: ["query", "--insecure", "MATCH (n:QuicBulk) RETURN n.id, n.data ORDER BY n.id LIMIT 25"]
     expect:
       exit_code: 0
       geode_query:
@@ -186,7 +186,7 @@ tests:
   # Protocol-specific tests
   - name: "quic-protocol-version"
     description: "Verify QUIC protocol compatibility"
-    args: ["query", "--embedded", "--insecure", "RETURN 'quic-v1' AS protocol_version"]
+    args: ["query", "--insecure", "RETURN 'quic-v1' AS protocol_version"]
     expect:
       exit_code: 0
       geode_query:
@@ -197,7 +197,7 @@ tests:
     description: "Test QUIC stream multiplexing capability"
     parallel: true
     instances: 3
-    args: ["query", "--embedded", "--insecure", "CREATE (n:Stream {id: ${instance_id}, created: current_timestamp()}) RETURN n.id AS stream_id"]
+    args: ["query", "--insecure", "CREATE (n:Stream {id: ${instance_id}, created: current_timestamp()}) RETURN n.id AS stream_id"]
     expect:
       exit_code: 0
       geode_query:
@@ -207,7 +207,7 @@ tests:
   # Error recovery tests
   - name: "quic-connection-recovery"
     description: "Test connection recovery after network error simulation"
-    args: ["query", "--embedded", "--insecure", "--retry", "3", "RETURN 'recovery-test' AS status"]
+    args: ["query", "--insecure", "--retry", "3", "RETURN 'recovery-test' AS status"]
     expect:
       exit_code: 0
       geode_query:
@@ -216,7 +216,7 @@ tests:
 
   - name: "quic-graceful-shutdown"
     description: "Test graceful connection shutdown"
-    args: ["shell", "--embedded", "--insecure", "--non-interactive"]
+    args: ["shell",  "--insecure", "--non-interactive"]
     stdin: "RETURN 'shutdown-test' AS test;\n.exit\n"
     expect:
       exit_code: 0
@@ -225,7 +225,7 @@ tests:
   # Security tests
   - name: "quic-tls-handshake"
     description: "Verify TLS 1.3 handshake in QUIC"
-    args: ["query", "--embedded", "--insecure", "RETURN 'tls13-test' AS handshake"]
+    args: ["query", "--insecure", "RETURN 'tls13-test' AS handshake"]
     expect:
       exit_code: 0
       geode_query:
@@ -234,7 +234,7 @@ tests:
 
   - name: "quic-encryption-active"
     description: "Verify encryption is active on QUIC connection"
-    args: ["query", "--embedded", "--insecure", "RETURN 'encrypted-data' AS secure_payload"]
+    args: ["query", "--insecure", "RETURN 'encrypted-data' AS secure_payload"]
     expect:
       exit_code: 0
       geode_query:
@@ -244,7 +244,7 @@ tests:
   # Cleanup
   - name: "quic-cleanup-test-data"
     description: "Clean up QUIC test data"
-    args: ["query", "--embedded", "--insecure", "MATCH (n) WHERE n:QuicTest OR n:QuicBulk OR n:Stream DELETE n"]
+    args: ["query", "--insecure", "MATCH (n) WHERE n:QuicTest OR n:QuicBulk OR n:Stream DELETE n"]
     expect:
       exit_code: 0
     tags: ["cleanup", "quic"]

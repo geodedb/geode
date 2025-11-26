@@ -23,7 +23,7 @@ tests:
 
   - name: "setup-keyword-test-data"
     description: "Create test data for keyword handling validation"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "CREATE (alice:Person {name: 'Alice', age: 30, property: 'senior', type: 'engineer', count: 5, path: '/home/alice', value: 100}), (bob:Person {name: 'Bob', age: 25, property: 'junior', type: 'developer', count: 3, path: '/home/bob', value: 80}), (charlie:Person {name: 'Charlie', age: 35, property: 'manager', type: 'lead', count: 8, path: '/home/charlie', value: 120}), (alice)-[:KNOWS {since: 2020, type: 'friendship', property: 'strong'}]->(bob), (alice)-[:KNOWS {since: 2018, type: 'work', property: 'professional'}]->(charlie), (bob)-[:KNOWS {since: 2021, type: 'work', property: 'collaboration'}]->(charlie) RETURN count(*) AS created"]
     expect:
       exit_code: 0
@@ -39,7 +39,7 @@ tests:
 
   - name: "path-variable-basic-assignment"
     description: "Test basic path variable assignment with PATH keyword"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN a.name AS from_name, b.name AS to_name, length(path) AS path_length"]
     expect:
       exit_code: 0
@@ -49,7 +49,7 @@ tests:
 
   - name: "path-variable-with-quantifiers"
     description: "Test path variable assignment with variable-length patterns"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS from_name, b.name AS to_name, length(path) AS path_length"]
     expect:
       exit_code: 0
@@ -59,7 +59,7 @@ tests:
 
   - name: "path-variable-complex-pattern"
     description: "Test the originally failing complex path variable pattern"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS*2..4]->(b:Person) RETURN a.name AS from_name, b.name AS to_name, length(path) AS path_length"]
     expect:
       exit_code: 0
@@ -69,7 +69,7 @@ tests:
 
   - name: "multiple-path-variables"
     description: "Test multiple path variables with different keyword names"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS]->(b:Person), route = (b)-[:KNOWS]->(c:Person) RETURN length(path) AS path_len, length(route) AS route_len"]
     expect:
       exit_code: 0
@@ -83,7 +83,7 @@ tests:
 
   - name: "function-calls-with-path-keyword"
     description: "Test function calls using PATH keyword as argument"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN length(path) AS path_length, upper(path) AS upper_path"]
     expect:
       exit_code: 0
@@ -93,7 +93,7 @@ tests:
 
   - name: "function-calls-with-other-keywords"
     description: "Test function calls using other keywords as arguments"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) RETURN length(n.property) AS property_length, upper(n.type) AS upper_type, size(n.count) AS count_size"]
     expect:
       exit_code: 0
@@ -103,7 +103,7 @@ tests:
 
   - name: "nested-function-calls-with-keywords"
     description: "Test nested function calls with keyword arguments"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN upper(lower(substring(path, 0, length(path)))) AS processed_path"]
     expect:
       exit_code: 0
@@ -117,7 +117,7 @@ tests:
 
   - name: "aggregation-count-with-keyword-alias"
     description: "Test COUNT aggregation with keyword aliases"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) RETURN COUNT(n) AS count, COUNT(n.name) AS property, COUNT(DISTINCT n.type) AS type"]
     expect:
       exit_code: 0
@@ -128,7 +128,7 @@ tests:
 
   - name: "aggregation-math-functions-with-keyword-aliases"
     description: "Test mathematical aggregations with keyword aliases"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) RETURN SUM(n.value) AS sum, AVG(n.age) AS avg, MIN(n.count) AS min, MAX(n.value) AS max"]
     expect:
       exit_code: 0
@@ -139,7 +139,7 @@ tests:
 
   - name: "aggregation-with-path-keyword-alias"
     description: "Test aggregation functions with PATH keyword as alias"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) RETURN COUNT(n) AS path, SUM(n.value) AS value, AVG(n.count) AS property"]
     expect:
       exit_code: 0
@@ -150,7 +150,7 @@ tests:
 
   - name: "complex-aggregation-with-keywords"
     description: "Test complex aggregation with multiple keyword usage"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN COUNT(path) AS count, SUM(length(path)) AS sum, AVG(a.value) AS avg"]
     expect:
       exit_code: 0
@@ -165,7 +165,7 @@ tests:
 
   - name: "set-property-keyword-basic"
     description: "Test SET clause with PROPERTY keyword as property name"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Alice'}) SET n.property = 'updated_senior' RETURN n.name AS name, n.property AS property"]
     expect:
       exit_code: 0
@@ -176,7 +176,7 @@ tests:
 
   - name: "set-type-keyword-property"
     description: "Test SET clause with TYPE keyword as property name"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Bob'}) SET n.type = 'senior_developer' RETURN n.name AS name, n.type AS type"]
     expect:
       exit_code: 0
@@ -187,7 +187,7 @@ tests:
 
   - name: "set-path-keyword-property"
     description: "Test SET clause with PATH keyword as property name"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Charlie'}) SET n.path = '/updated/home/charlie' RETURN n.name AS name, n.path AS path"]
     expect:
       exit_code: 0
@@ -198,7 +198,7 @@ tests:
 
   - name: "set-count-keyword-property"
     description: "Test SET clause with COUNT keyword as property name"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Alice'}) SET n.count = n.count + 1 RETURN n.name AS name, n.count AS count"]
     expect:
       exit_code: 0
@@ -209,7 +209,7 @@ tests:
 
   - name: "set-multiple-keyword-properties"
     description: "Test SET clause with multiple keyword properties"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Bob'}) SET n.property = 'multi_update', n.count = 99, n.path = '/new/path' RETURN n.name AS name"]
     expect:
       exit_code: 0
@@ -220,7 +220,7 @@ tests:
 
   - name: "set-without-return-property-keyword"
     description: "Test SET clause without RETURN using keyword properties"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Charlie'}) SET n.property = 'no_return_test', n.type = 'updated_lead'"]
     expect:
       exit_code: 0
@@ -232,7 +232,7 @@ tests:
 
   - name: "remove-property-keyword-basic"
     description: "Test REMOVE clause with PROPERTY keyword as property name"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Alice'}) REMOVE n.property RETURN n.name AS name, n.property AS property"]
     expect:
       exit_code: 0
@@ -243,7 +243,7 @@ tests:
 
   - name: "remove-type-keyword-property"
     description: "Test REMOVE clause with TYPE keyword as property name"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Bob'}) REMOVE n.type RETURN n.name AS name, n.type AS type"]
     expect:
       exit_code: 0
@@ -254,7 +254,7 @@ tests:
 
   - name: "remove-path-keyword-property"
     description: "Test REMOVE clause with PATH keyword as property name"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Charlie'}) REMOVE n.path RETURN n.name AS name, n.path AS path"]
     expect:
       exit_code: 0
@@ -265,7 +265,7 @@ tests:
 
   - name: "remove-multiple-keyword-properties"
     description: "Test REMOVE clause with multiple keyword properties"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Bob'}) REMOVE n.property, n.count RETURN n.name AS name, n.property AS property, n.count AS count"]
     expect:
       exit_code: 0
@@ -276,7 +276,7 @@ tests:
 
   - name: "remove-without-return-property-keyword"
     description: "Test REMOVE clause without RETURN using keyword properties"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person {name: 'Charlie'}) REMOVE n.property, n.type"]
     expect:
       exit_code: 0
@@ -288,7 +288,7 @@ tests:
 
   - name: "parameter-parsing-with-count-keyword"
     description: "Test parameter parsing with COUNT keyword"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) WHERE n.count > $count RETURN n.name AS name", 
            "--param", "count=4"]
     expect:
@@ -299,7 +299,7 @@ tests:
 
   - name: "parameter-parsing-with-path-keyword"
     description: "Test parameter parsing with PATH keyword"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) WHERE n.path STARTS WITH $path RETURN n.name AS name", 
            "--param", "path=/home"]
     expect:
@@ -310,7 +310,7 @@ tests:
 
   - name: "parameter-parsing-with-property-keyword"
     description: "Test parameter parsing with PROPERTY keyword"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) WHERE n.property = $property RETURN n.name AS name", 
            "--param", "property=manager"]
     expect:
@@ -325,7 +325,7 @@ tests:
 
   - name: "keywords-as-node-variables"
     description: "Test keywords used as node variable names"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (path:Person), (count:Person) WHERE path.name = 'Alice' AND count.name = 'Bob' RETURN path.name AS person1, count.name AS person2"]
     expect:
       exit_code: 0
@@ -336,7 +336,7 @@ tests:
 
   - name: "keywords-as-relationship-variables"
     description: "Test keywords used as relationship variable names"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (a:Person)-[property:KNOWS]->(b:Person) RETURN a.name AS from_name, b.name AS to_name, property.since AS since"]
     expect:
       exit_code: 0
@@ -346,7 +346,7 @@ tests:
 
   - name: "keywords-in-where-clauses"
     description: "Test keywords used in WHERE clause property access"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) WHERE n.type IN ['engineer', 'developer'] AND n.property IS NOT NULL RETURN n.name AS name, n.type AS type, n.property AS property"]
     expect:
       exit_code: 0
@@ -356,7 +356,7 @@ tests:
 
   - name: "keywords-in-order-by-clauses"
     description: "Test keywords used in ORDER BY clauses"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) RETURN n.name AS name, n.count AS count, n.property AS property ORDER BY n.count DESC, n.property ASC"]
     expect:
       exit_code: 0
@@ -370,7 +370,7 @@ tests:
 
   - name: "complex-path-aggregation-keywords"
     description: "Test complex scenario: path variables + aggregation + keyword aliases"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN COUNT(path) AS count, AVG(length(path)) AS avg, SUM(a.value) AS sum"]
     expect:
       exit_code: 0
@@ -381,7 +381,7 @@ tests:
 
   - name: "complex-set-remove-with-keywords"
     description: "Test complex scenario: SET/REMOVE + aggregation + keyword properties"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) SET n.property = 'batch_update' REMOVE n.count RETURN COUNT(n) AS count, SUM(n.value) AS sum"]
     expect:
       exit_code: 0
@@ -392,7 +392,7 @@ tests:
 
   - name: "complex-multiple-path-variables-with-functions"
     description: "Test complex scenario: multiple path variables + functions + keywords"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS]->(b:Person), route = (b)-[:KNOWS]->(c:Person) RETURN length(path) + length(route) AS total, upper(a.property) AS property"]
     expect:
       exit_code: 0
@@ -402,7 +402,7 @@ tests:
 
   - name: "complex-merge-with-keyword-properties"
     description: "Test complex MERGE with keyword properties and aggregation"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MERGE (n:Person {type: 'test'}) ON CREATE SET n.property = 'created', n.count = 1 ON MATCH SET n.property = 'matched', n.count = n.count + 1 RETURN n.property AS property, n.count AS count"]
     expect:
       exit_code: 0
@@ -413,7 +413,7 @@ tests:
 
   - name: "complex-nested-function-calls-keywords"
     description: "Test complex nested function calls with multiple keywords"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN upper(lower(substring(a.property, 0, length(a.property)))) AS processed, length(path) AS path_length"]
     expect:
       exit_code: 0
@@ -423,7 +423,7 @@ tests:
 
   - name: "complex-where-with-set-remove-keywords"
     description: "Test complex WHERE with SET/REMOVE using keywords"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (n:Person) WHERE n.type IN ['engineer', 'developer'] SET n.property = n.count || '_processed' REMOVE n.path RETURN COUNT(n) AS count"]
     expect:
       exit_code: 0
@@ -438,7 +438,7 @@ tests:
 
   - name: "regression-original-failing-case"
     description: "Test the exact original failing case that triggered all fixes"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH path = (a:Person)-[:KNOWS*2..4]->(b:Person) RETURN a.name AS from_name, b.name AS to_name, length(path) AS path_length"]
     expect:
       exit_code: 0
@@ -448,7 +448,7 @@ tests:
 
   - name: "regression-string-concatenation"
     description: "Test string concatenation still works after keyword fixes"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "RETURN 'hello' || ' world' AS concatenated, 'test' || ' string' AS test_concat"]
     expect:
       exit_code: 0
@@ -459,7 +459,7 @@ tests:
 
   - name: "regression-built-in-functions"
     description: "Test built-in functions still work after keyword fixes"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "RETURN upper('hello') AS upper_case, lower('WORLD') AS lower_case, length('test') AS string_length, abs(-5) AS absolute"]
     expect:
       exit_code: 0
@@ -470,7 +470,7 @@ tests:
 
   - name: "regression-variable-length-paths"
     description: "Test variable-length paths still work after keyword fixes"
-    args: ["query", "--embedded", 
+    args: ["query", 
            "MATCH (a:Person)-[*1..2]->(b:Person) RETURN count(*) AS path_count"]
     expect:
       exit_code: 0
@@ -485,28 +485,28 @@ tests:
 
   - name: "error-missing-label-name"
     description: "Test that syntax errors still fail correctly (missing label)"
-    args: ["query", "--embedded", "MATCH (n:) RETURN n"]
+    args: ["query", "MATCH (n:) RETURN n"]
     expect:
       exit_code: 1
     tags: ["error", "syntax", "validation"]
 
   - name: "error-unclosed-parenthesis"
     description: "Test that syntax errors still fail correctly (unclosed paren)"
-    args: ["query", "--embedded", "RETURN (1 + 2"]
+    args: ["query", "RETURN (1 + 2"]
     expect:
       exit_code: 1
     tags: ["error", "syntax", "validation"]
 
   - name: "error-missing-property-in-set"
     description: "Test that SET errors still fail correctly (missing property)"
-    args: ["query", "--embedded", "MATCH (n) SET = value"]
+    args: ["query", "MATCH (n) SET = value"]
     expect:
       exit_code: 1
     tags: ["error", "set", "validation"]
 
   - name: "error-incomplete-remove"
     description: "Test that REMOVE errors still fail correctly (incomplete)"
-    args: ["query", "--embedded", "MATCH (n) REMOVE"]
+    args: ["query", "MATCH (n) REMOVE"]
     expect:
       exit_code: 1
     tags: ["error", "remove", "validation"]
@@ -517,14 +517,14 @@ tests:
 
   - name: "cleanup-keyword-test-data"
     description: "Clean up all keyword test data"
-    args: ["query", "--embedded", "MATCH (n) DETACH DELETE n"]
+    args: ["query", "MATCH (n) DETACH DELETE n"]
     expect:
       exit_code: 0
     tags: ["cleanup"]
 
   - name: "verify-keyword-cleanup"
     description: "Verify all keyword test data is cleaned up"
-    args: ["query", "--embedded", "MATCH (n) RETURN count(n) AS remaining_nodes"]
+    args: ["query", "MATCH (n) RETURN count(n) AS remaining_nodes"]
     expect:
       exit_code: 0
       geode_query:

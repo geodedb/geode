@@ -8,7 +8,7 @@ def run_query(query, expect_exit_code=0):
     cmd = [
         "/home/benji/src/spyder/geode/zig-out/bin/geode",
         "query",
-        "--no-quic",
+        "--server 127.0.0.1:3141 --insecure",
         query
     ]
     

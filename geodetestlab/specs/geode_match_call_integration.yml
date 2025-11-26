@@ -6,7 +6,7 @@ tests:
   description: MATCH + CALL BFS with single node binding
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.bfs.stream(start, {maxDepth: 2}) YIELD path RETURN path'
   expect:
     exit_code: 0
@@ -16,7 +16,7 @@ tests:
   description: MATCH with property filter + CALL
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node {id: 1}) CALL algo.bfs.stream(n, {maxDepth: 3}) YIELD path RETURN length(path) AS depth'
   expect:
     exit_code: 0
@@ -26,7 +26,7 @@ tests:
   description: MATCH + CALL DFS traversal
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.dfs.stream(start, {maxDepth: 3}) YIELD path RETURN path'
   expect:
     exit_code: 0
@@ -36,7 +36,7 @@ tests:
   description: MATCH two nodes + CALL Dijkstra shortest path
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}), (end:Node {name: ''D''}) CALL algo.shortestPath.dijkstra(start, end, ''weight'') YIELD path, cost RETURN cost'
   expect:
     exit_code: 0
@@ -46,7 +46,7 @@ tests:
   description: Verify Dijkstra finds optimal path (not direct path)
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}), (end:Node {name: ''C''}) CALL algo.shortestPath.dijkstra(start, end, ''weight'') YIELD cost RETURN cost'
   expect:
     exit_code: 0
@@ -57,7 +57,7 @@ tests:
   description: MATCH + CALL with ORDER BY on results
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN length(path) AS depth ORDER BY depth'
   expect:
     exit_code: 0
@@ -67,7 +67,7 @@ tests:
   description: MATCH + CALL with LIMIT
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN path LIMIT 5'
   expect:
     exit_code: 0
@@ -77,7 +77,7 @@ tests:
   description: MATCH + CALL with OFFSET
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.bfs.stream(start, {maxDepth: 2}) YIELD path RETURN path OFFSET 2'
   expect:
     exit_code: 0
@@ -85,7 +85,7 @@ tests:
   description: MATCH + CALL with both LIMIT and OFFSET
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN path LIMIT 3 OFFSET 1'
   expect:
     exit_code: 0
@@ -93,7 +93,7 @@ tests:
   description: MATCH + CALL with multiple YIELD columns
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}), (end:Node {name: ''E''}) CALL algo.shortestPath.dijkstra(start, end, ''weight'') YIELD path, cost RETURN path, cost'
   expect:
     exit_code: 0
@@ -104,7 +104,7 @@ tests:
   description: MATCH + CALL PageRank with parameters
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node) CALL algo.pageRank.stream({iterations: 20, dampingFactor: 0.85}) YIELD nodeId, score RETURN nodeId, score ORDER BY score DESC LIMIT 3'
   expect:
     exit_code: 0
@@ -115,7 +115,7 @@ tests:
   description: MATCH + CALL Betweenness Centrality
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node) CALL algo.betweenness.stream() YIELD nodeId, centrality RETURN nodeId, centrality ORDER BY centrality DESC LIMIT 5'
   expect:
     exit_code: 0
@@ -125,7 +125,7 @@ tests:
   description: MATCH + CALL Closeness Centrality
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node) CALL algo.closeness.stream() YIELD nodeId, centrality RETURN centrality'
   expect:
     exit_code: 0
@@ -135,7 +135,7 @@ tests:
   description: MATCH with label filter + CALL
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node) WHERE n.name = ''B'' CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path'
   expect:
     exit_code: 0
@@ -145,7 +145,7 @@ tests:
   description: MATCH + CALL with maxDepth parameter
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.bfs.stream(start, {maxDepth: 1}) YIELD path RETURN length(path) AS depth'
   expect:
     exit_code: 0
@@ -155,7 +155,7 @@ tests:
   description: MATCH + CALL with higher maxDepth
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.dfs.stream(start, {maxDepth: 5}) YIELD path RETURN count(*) AS paths'
   expect:
     exit_code: 0
@@ -165,7 +165,7 @@ tests:
   description: MATCH + CALL with DISTINCT
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.bfs.stream(start, {maxDepth: 2}) YIELD path RETURN DISTINCT length(path) AS depth'
   expect:
     exit_code: 0
@@ -175,7 +175,7 @@ tests:
   description: MATCH + CALL with GROUP BY
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN length(path) AS depth, count(*) AS count GROUP BY depth ORDER BY depth'
   expect:
     exit_code: 0
@@ -186,7 +186,7 @@ tests:
   description: MATCH with WHERE clause + CALL
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node) WHERE n.id > 2 CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path'
   expect:
     exit_code: 0
@@ -196,7 +196,7 @@ tests:
   description: Direct node ID usage (backward compatibility)
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); CALL algo.bfs.stream(1, {maxDepth: 2}) YIELD path RETURN path'
   expect:
     exit_code: 0
@@ -206,7 +206,7 @@ tests:
   description: Direct node IDs for Dijkstra (backward compatibility)
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); CALL algo.shortestPath.dijkstra(1, 4, ''weight'') YIELD cost RETURN cost'
   expect:
     exit_code: 0
@@ -216,7 +216,7 @@ tests:
   description: MATCH with no matching nodes returns empty
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node {name: ''NonExistent''}) CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path'
   expect:
     exit_code: 0
@@ -226,17 +226,17 @@ tests:
   description: Create nodes with multiple labels
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (p:Person:Employee {name: ''Alice'', empId: 101}), (q:Person:Manager {name: ''Bob'', empId: 102})'
   expect:
     exit_code: 0
 - name: match-call-multiple-labels
   description: MATCH specific label + CALL
   setup:
-    - "query \"CREATE (p:Person:Employee {name: 'Alice', empId: 101}), (q:Person:Manager {name: 'Bob', empId: 102})\" --format json --embedded"
+    - "query \"CREATE (p:Person:Employee {name: 'Alice', empId: 101}), (q:Person:Manager {name: 'Bob', empId: 102})\" --format json"
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (p:Person) CALL algo.pageRank.stream({iterations: 10}) YIELD nodeId, score RETURN score LIMIT 2'
   expect:
     exit_code: 0
@@ -246,7 +246,7 @@ tests:
   description: Complex MATCH pattern with Dijkstra
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (a:Node {name: ''A''}), (e:Node {name: ''E''}) CALL algo.shortestPath.dijkstra(a, e, ''weight'') YIELD path, cost RETURN a.name AS start, e.name AS end, cost ORDER BY cost'
   expect:
     exit_code: 0
@@ -258,7 +258,7 @@ tests:
   description: Aggregation on CALL results
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (start:Node {name: ''A''}) CALL algo.bfs.stream(start, {maxDepth: 3}) YIELD path RETURN count(*) AS total_paths, max(length(path)) AS max_depth'
   expect:
     exit_code: 0
@@ -269,7 +269,7 @@ tests:
   description: MATCH + CALL Louvain community detection
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node) CALL algo.louvain.stream() YIELD nodeId, community RETURN community, count(*) AS size GROUP BY community ORDER BY size DESC'
   expect:
     exit_code: 0
@@ -280,7 +280,7 @@ tests:
   description: MATCH + CALL Label Propagation
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node) CALL algo.labelPropagation.stream() YIELD nodeId, label RETURN label, count(*) AS members GROUP BY label'
   expect:
     exit_code: 0
@@ -291,7 +291,7 @@ tests:
   description: MATCH + CALL Connected Components (Union-Find)
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node) CALL algo.unionFind.stream() YIELD nodeId, setId RETURN setId, count(*) AS component_size GROUP BY setId ORDER BY component_size DESC'
   expect:
     exit_code: 0
@@ -302,7 +302,7 @@ tests:
   description: MATCH + CALL Strongly Connected Components
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node) CALL algo.scc.stream() YIELD nodeId, partition RETURN partition, count(*) AS nodes GROUP BY partition'
   expect:
     exit_code: 0
@@ -313,7 +313,7 @@ tests:
   description: Multiple sequential MATCH + CALL queries
   args:
   - query
-  - --embedded
+  -
   - 'CREATE (a:Node {name: ''A'', id: 1}), (b:Node {name: ''B'', id: 2}), (c:Node {name: ''C'', id: 3}), (d:Node {name: ''D'', id: 4}), (e:Node {name: ''E'', id: 5}), (a)-[:ROAD {weight: 1.0}]->(b), (b)-[:ROAD {weight: 2.0}]->(c), (a)-[:ROAD {weight: 5.0}]->(c), (c)-[:ROAD {weight: 1.0}]->(d), (b)-[:ROAD {weight: 3.0}]->(d), (d)-[:ROAD {weight: 2.0}]->(e); MATCH (n:Node {name: ''A''}) CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path; MATCH (m:Node {name: ''B''}) CALL algo.dfs.stream(m, {maxDepth: 2}) YIELD path RETURN path'
   expect:
     exit_code: 0

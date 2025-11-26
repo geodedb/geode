@@ -26,10 +26,10 @@ tests:
   - name: "filter-basic"
     description: "Test basic FILTER clause functionality"
     setup:
-      - args: ["CREATE (a:Person {name: 'Alice', city: 'Seattle'})", "--embedded"]
-      - args: ["CREATE (b:Person {name: 'Bob', city: 'Portland'})", "--embedded"]
-      - args: ["MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)", "--embedded"]
-    args: ["MATCH (a:Person)-[r]->(b:Person) WHERE a.name = 'Alice' FILTER b.city = 'Seattle' RETURN b.name", "--embedded"]
+      - args: ["CREATE (a:Person {name: 'Alice', city: 'Seattle'})"]
+      - args: ["CREATE (b:Person {name: 'Bob', city: 'Portland'})"]
+      - args: ["MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+    args: ["MATCH (a:Person)-[r]->(b:Person) WHERE a.name = 'Alice' FILTER b.city = 'Seattle' RETURN b.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -39,12 +39,12 @@ tests:
   - name: "filter-with-where"
     description: "Test FILTER WHERE syntax"
     setup:
-      - args: ["CREATE (alice:Person {name: 'Alice', age: 30})", "--embedded"]
-      - args: ["CREATE (bob:Person {name: 'Bob', age: 25})", "--embedded"]
-      - args: ["CREATE (carol:Person {name: 'Carol', age: 35})", "--embedded"]
-      - args: ["MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)", "--embedded"]
-      - args: ["MATCH (a:Person), (c:Person) WHERE a.name = 'Alice' AND c.name = 'Carol' CREATE (a)-[:KNOWS]->(c)", "--embedded"]
-    args: ["MATCH (a:Person)-[r:KNOWS]->(friend) WHERE a.name = 'Alice' FILTER WHERE friend.age > 30 RETURN friend.name", "--embedded"]
+      - args: ["CREATE (alice:Person {name: 'Alice', age: 30})"]
+      - args: ["CREATE (bob:Person {name: 'Bob', age: 25})"]
+      - args: ["CREATE (carol:Person {name: 'Carol', age: 35})"]
+      - args: ["MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+      - args: ["MATCH (a:Person), (c:Person) WHERE a.name = 'Alice' AND c.name = 'Carol' CREATE (a)-[:KNOWS]->(c)"]
+    args: ["MATCH (a:Person)-[r:KNOWS]->(friend) WHERE a.name = 'Alice' FILTER WHERE friend.age > 30 RETURN friend.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -55,10 +55,10 @@ tests:
   - name: "type-function-basic"
     description: "Test type() function returns relationship type"
     setup:
-      - args: ["CREATE (a {name: 'Alice'})", "--embedded"]
-      - args: ["CREATE (b {name: 'Bob'})", "--embedded"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)", "--embedded"]
-    args: ["MATCH (a)-[r]->(b) WHERE a.name = 'Alice' RETURN type(r) AS rel_type", "--embedded"]
+      - args: ["CREATE (a {name: 'Alice'})"]
+      - args: ["CREATE (b {name: 'Bob'})"]
+      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+    args: ["MATCH (a)-[r]->(b) WHERE a.name = 'Alice' RETURN type(r) AS rel_type"]
     expect:
       exit_code: 0
       stdout_contains: ["KNOWS"]
@@ -69,12 +69,12 @@ tests:
   - name: "type-function-multiple-types"
     description: "Test type() function with different relationship types"
     setup:
-      - args: ["CREATE (a {name: 'Alice'})", "--embedded"]
-      - args: ["CREATE (b {name: 'Bob'})", "--embedded"]
-      - args: ["CREATE (c {name: 'Charlie'})", "--embedded"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)", "--embedded"]
-      - args: ["MATCH (a), (c) WHERE a.name = 'Alice' AND c.name = 'Charlie' CREATE (a)-[:LIKES]->(c)", "--embedded"]
-    args: ["MATCH (a)-[r]->(x) WHERE a.name = 'Alice' RETURN type(r) AS rel_type", "--embedded"]
+      - args: ["CREATE (a {name: 'Alice'})"]
+      - args: ["CREATE (b {name: 'Bob'})"]
+      - args: ["CREATE (c {name: 'Charlie'})"]
+      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+      - args: ["MATCH (a), (c) WHERE a.name = 'Alice' AND c.name = 'Charlie' CREATE (a)-[:LIKES]->(c)"]
+    args: ["MATCH (a)-[r]->(x) WHERE a.name = 'Alice' RETURN type(r) AS rel_type"]
     expect:
       exit_code: 0
       geode_query:
@@ -84,7 +84,7 @@ tests:
   # SET Label Operations Tests
   - name: "set-label-single"
     description: "Test SET operation for adding single label"
-    args: ["CREATE (n:Person {name: 'Alice'}) SET n:Employee RETURN n", "--embedded"]
+    args: ["CREATE (n:Person {name: 'Alice'}) SET n:Employee RETURN n"]
     expect:
       exit_code: 0
       geode_query:
@@ -93,7 +93,7 @@ tests:
 
   - name: "set-label-multiple"
     description: "Test SET operation for adding multiple labels"
-    args: ["CREATE (n:Person {name: 'Alice'}) SET n:Employee:Manager RETURN n", "--embedded"]
+    args: ["CREATE (n:Person {name: 'Alice'}) SET n:Employee:Manager RETURN n"]
     expect:
       exit_code: 0
       geode_query:
@@ -103,8 +103,8 @@ tests:
   - name: "set-label-match"
     description: "Test SET label with MATCH clause"
     setup:
-      - args: ["CREATE (alice:Person {name: 'Alice'})", "--embedded"]
-    args: ["MATCH (n:Person) WHERE n.name = 'Alice' SET n:Employee RETURN n", "--embedded"]
+      - args: ["CREATE (alice:Person {name: 'Alice'})"]
+    args: ["MATCH (n:Person) WHERE n.name = 'Alice' SET n:Employee RETURN n"]
     expect:
       exit_code: 0
       geode_query:
@@ -115,12 +115,12 @@ tests:
   - name: "varlen-path-basic"
     description: "Test variable-length path with specific range"
     setup:
-      - args: ["CREATE (a {name: 'Alice'})", "--embedded"]
-      - args: ["CREATE (b {name: 'Bob'})", "--embedded"]
-      - args: ["CREATE (c {name: 'Carol'})", "--embedded"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)", "--embedded"]
-      - args: ["MATCH (b), (c) WHERE b.name = 'Bob' AND c.name = 'Carol' CREATE (b)-[:KNOWS]->(c)", "--embedded"]
-    args: ["MATCH (a)-[:KNOWS*1..2]->(friend) WHERE a.name = 'Alice' RETURN friend.name", "--embedded"]
+      - args: ["CREATE (a {name: 'Alice'})"]
+      - args: ["CREATE (b {name: 'Bob'})"]
+      - args: ["CREATE (c {name: 'Carol'})"]
+      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+      - args: ["MATCH (b), (c) WHERE b.name = 'Bob' AND c.name = 'Carol' CREATE (b)-[:KNOWS]->(c)"]
+    args: ["MATCH (a)-[:KNOWS*1..2]->(friend) WHERE a.name = 'Alice' RETURN friend.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -130,12 +130,12 @@ tests:
   - name: "varlen-path-unbounded"
     description: "Test variable-length path with unbounded range"
     setup:
-      - args: ["CREATE (a {name: 'A'})", "--embedded"]
-      - args: ["CREATE (b {name: 'B'})", "--embedded"]
-      - args: ["CREATE (c {name: 'C'})", "--embedded"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'A' AND b.name = 'B' CREATE (a)-[:NEXT]->(b)", "--embedded"]
-      - args: ["MATCH (b), (c) WHERE b.name = 'B' AND c.name = 'C' CREATE (b)-[:NEXT]->(c)", "--embedded"]
-    args: ["MATCH (a)-[:NEXT*]->(x) WHERE a.name = 'A' RETURN x.name", "--embedded"]
+      - args: ["CREATE (a {name: 'A'})"]
+      - args: ["CREATE (b {name: 'B'})"]
+      - args: ["CREATE (c {name: 'C'})"]
+      - args: ["MATCH (a), (b) WHERE a.name = 'A' AND b.name = 'B' CREATE (a)-[:NEXT]->(b)"]
+      - args: ["MATCH (b), (c) WHERE b.name = 'B' AND c.name = 'C' CREATE (b)-[:NEXT]->(c)"]
+    args: ["MATCH (a)-[:NEXT*]->(x) WHERE a.name = 'A' RETURN x.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -145,11 +145,11 @@ tests:
   - name: "varlen-path-cycle-detection"
     description: "Test variable-length path handles cycles correctly"
     setup:
-      - args: ["CREATE (a {name: 'Alice'})", "--embedded"]
-      - args: ["CREATE (b {name: 'Bob'})", "--embedded"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)", "--embedded"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (b)-[:KNOWS]->(a)", "--embedded"]
-    args: ["MATCH (a)-[:KNOWS*1..5]->(x) WHERE a.name = 'Alice' RETURN x.name", "--embedded"]
+      - args: ["CREATE (a {name: 'Alice'})"]
+      - args: ["CREATE (b {name: 'Bob'})"]
+      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (b)-[:KNOWS]->(a)"]
+    args: ["MATCH (a)-[:KNOWS*1..5]->(x) WHERE a.name = 'Alice' RETURN x.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -159,35 +159,35 @@ tests:
   # Session Management Tests
   - name: "session-set-graph"
     description: "Test SESSION SET GRAPH command"
-    args: ["query", "SESSION SET GRAPH test_graph", "--embedded"]
+    args: ["query", "SESSION SET GRAPH test_graph"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
 
   - name: "session-set-schema"
     description: "Test SESSION SET SCHEMA command"
-    args: ["query", "SESSION SET SCHEMA test_schema", "--embedded"]
+    args: ["query", "SESSION SET SCHEMA test_schema"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
 
   - name: "session-set-timezone"
     description: "Test SESSION SET TIME ZONE command"
-    args: ["query", "SESSION SET TIME ZONE 'UTC'", "--embedded"]
+    args: ["query", "SESSION SET TIME ZONE 'UTC'"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
 
   - name: "session-reset"
     description: "Test SESSION RESET command"
-    args: ["query", "SESSION RESET", "--embedded"]
+    args: ["query", "SESSION RESET"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
 
   - name: "session-close"
     description: "Test SESSION CLOSE command"
-    args: ["query", "SESSION CLOSE", "--embedded"]
+    args: ["query", "SESSION CLOSE"]
     expect:
       exit_code: 0
     tags: ["session", "october-2025"]
@@ -195,14 +195,14 @@ tests:
   # Transaction Management Tests
   - name: "transaction-start"
     description: "Test START TRANSACTION command"
-    args: ["query", "START TRANSACTION", "--embedded"]
+    args: ["query", "START TRANSACTION"]
     expect:
       exit_code: 0
     tags: ["transaction", "october-2025"]
 
   - name: "transaction-begin-alias"
     description: "Test BEGIN as alias for START TRANSACTION"
-    args: ["query", "BEGIN", "--embedded"]
+    args: ["query", "BEGIN"]
     expect:
       exit_code: 0
     tags: ["transaction", "october-2025"]
@@ -211,12 +211,12 @@ tests:
   - name: "combined-filter-varlen"
     description: "Test FILTER with variable-length paths"
     setup:
-      - args: ["CREATE (alice:Person {name: 'Alice', city: 'Seattle'})", "--embedded"]
-      - args: ["CREATE (bob:Person {name: 'Bob', city: 'Portland'})", "--embedded"]
-      - args: ["CREATE (carol:Person {name: 'Carol', city: 'Seattle'})", "--embedded"]
-      - args: ["MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)", "--embedded"]
-      - args: ["MATCH (b:Person), (c:Person) WHERE b.name = 'Bob' AND c.name = 'Carol' CREATE (b)-[:KNOWS]->(c)", "--embedded"]
-    args: ["MATCH (a:Person)-[:KNOWS*1..2]->(friend) WHERE a.name = 'Alice' FILTER friend.city = 'Seattle' RETURN friend.name", "--embedded"]
+      - args: ["CREATE (alice:Person {name: 'Alice', city: 'Seattle'})"]
+      - args: ["CREATE (bob:Person {name: 'Bob', city: 'Portland'})"]
+      - args: ["CREATE (carol:Person {name: 'Carol', city: 'Seattle'})"]
+      - args: ["MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+      - args: ["MATCH (b:Person), (c:Person) WHERE b.name = 'Bob' AND c.name = 'Carol' CREATE (b)-[:KNOWS]->(c)"]
+    args: ["MATCH (a:Person)-[:KNOWS*1..2]->(friend) WHERE a.name = 'Alice' FILTER friend.city = 'Seattle' RETURN friend.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -226,12 +226,12 @@ tests:
   - name: "combined-type-filter"
     description: "Test type() function with FILTER clause"
     setup:
-      - args: ["CREATE (a {name: 'Alice'})", "--embedded"]
-      - args: ["CREATE (b {name: 'Bob'})", "--embedded"]
-      - args: ["CREATE (c {name: 'Charlie'})", "--embedded"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)", "--embedded"]
-      - args: ["MATCH (a), (c) WHERE a.name = 'Alice' AND c.name = 'Charlie' CREATE (a)-[:LIKES]->(c)", "--embedded"]
-    args: ["MATCH (a)-[r]->(x) WHERE a.name = 'Alice' FILTER type(r) = 'KNOWS' RETURN x.name", "--embedded"]
+      - args: ["CREATE (a {name: 'Alice'})"]
+      - args: ["CREATE (b {name: 'Bob'})"]
+      - args: ["CREATE (c {name: 'Charlie'})"]
+      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+      - args: ["MATCH (a), (c) WHERE a.name = 'Alice' AND c.name = 'Charlie' CREATE (a)-[:LIKES]->(c)"]
+    args: ["MATCH (a)-[r]->(x) WHERE a.name = 'Alice' FILTER type(r) = 'KNOWS' RETURN x.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -241,10 +241,10 @@ tests:
   - name: "combined-set-varlen"
     description: "Test SET label with variable-length path results"
     setup:
-      - args: ["CREATE (a:Person {name: 'Alice'})", "--embedded"]
-      - args: ["CREATE (b:Person {name: 'Bob'})", "--embedded"]
-      - args: ["MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)", "--embedded"]
-    args: ["MATCH (a:Person)-[:KNOWS*1]->(friend) WHERE a.name = 'Alice' SET friend:Verified RETURN friend", "--embedded"]
+      - args: ["CREATE (a:Person {name: 'Alice'})"]
+      - args: ["CREATE (b:Person {name: 'Bob'})"]
+      - args: ["MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+    args: ["MATCH (a:Person)-[:KNOWS*1]->(friend) WHERE a.name = 'Alice' SET friend:Verified RETURN friend"]
     expect:
       exit_code: 0
       geode_query:

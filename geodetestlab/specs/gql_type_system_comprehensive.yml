@@ -23,7 +23,7 @@ tests:
   
   - name: "type-boolean-true"
     description: "Test boolean true literal"
-    args: ["query", "--embedded", "RETURN true AS bool_value"]
+    args: ["query", "RETURN true AS bool_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -36,7 +36,7 @@ tests:
 
   - name: "type-boolean-false"
     description: "Test boolean false literal"
-    args: ["query", "--embedded", "RETURN false AS bool_value"]
+    args: ["query", "RETURN false AS bool_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -49,7 +49,7 @@ tests:
 
   - name: "type-null"
     description: "Test null literal"
-    args: ["query", "--embedded", "RETURN null AS null_value"]
+    args: ["query", "RETURN null AS null_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -66,7 +66,7 @@ tests:
   
   - name: "type-integer-positive"
     description: "Test positive integer literal"
-    args: ["query", "--embedded", "RETURN 42 AS int_value"]
+    args: ["query", "RETURN 42 AS int_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -79,7 +79,7 @@ tests:
 
   - name: "type-integer-negative"
     description: "Test negative integer literal"
-    args: ["query", "--embedded", "RETURN -123 AS neg_int_value"]
+    args: ["query", "RETURN -123 AS neg_int_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -92,7 +92,7 @@ tests:
 
   - name: "type-integer-zero"
     description: "Test zero integer literal"
-    args: ["query", "--embedded", "RETURN 0 AS zero_value"]
+    args: ["query", "RETURN 0 AS zero_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -105,7 +105,7 @@ tests:
 
   - name: "type-integer-large"
     description: "Test large integer literal"
-    args: ["query", "--embedded", "RETURN 9223372036854775807 AS large_int"]
+    args: ["query", "RETURN 9223372036854775807 AS large_int"]
     expect:
       exit_code: 0
       geode_query:
@@ -119,7 +119,7 @@ tests:
   
   - name: "type-decimal-positive"
     description: "Test positive decimal literal"
-    args: ["query", "--embedded", "RETURN 3.14159 AS decimal_value"]
+    args: ["query", "RETURN 3.14159 AS decimal_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -132,7 +132,7 @@ tests:
 
   - name: "type-decimal-negative"
     description: "Test negative decimal literal"
-    args: ["query", "--embedded", "RETURN -2.71828 AS neg_decimal"]
+    args: ["query", "RETURN -2.71828 AS neg_decimal"]
     expect:
       exit_code: 0
       geode_query:
@@ -145,7 +145,7 @@ tests:
 
   - name: "type-decimal-scientific"
     description: "Test scientific notation decimal literal"
-    args: ["query", "--embedded", "RETURN 1.23e-4 AS scientific_value"]
+    args: ["query", "RETURN 1.23e-4 AS scientific_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -158,7 +158,7 @@ tests:
 
   - name: "type-decimal-zero"
     description: "Test zero decimal literal"
-    args: ["query", "--embedded", "RETURN 0.0 AS zero_decimal"]
+    args: ["query", "RETURN 0.0 AS zero_decimal"]
     expect:
       exit_code: 0
       geode_query:
@@ -175,7 +175,7 @@ tests:
   
   - name: "type-string-simple"
     description: "Test simple string literal"
-    args: ["query", "--embedded", "RETURN 'Hello World' AS string_value"]
+    args: ["query", "RETURN 'Hello World' AS string_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -188,7 +188,7 @@ tests:
 
   - name: "type-string-empty"
     description: "Test empty string literal"
-    args: ["query", "--embedded", "RETURN '' AS empty_string"]
+    args: ["query", "RETURN '' AS empty_string"]
     expect:
       exit_code: 0
       geode_query:
@@ -201,7 +201,7 @@ tests:
 
   - name: "type-string-with-quotes"
     description: "Test string literal with embedded quotes"
-    args: ["query", "--embedded", "RETURN 'He said \\'Hello\\'' AS quoted_string"]
+    args: ["query", "RETURN 'He said \\'Hello\\'' AS quoted_string"]
     expect:
       exit_code: 0
       geode_query:
@@ -214,7 +214,7 @@ tests:
 
   - name: "type-string-special-characters"
     description: "Test string literal with special characters"
-    args: ["query", "--embedded", "RETURN 'Line1\\nLine2\\tTabbed' AS special_chars"]
+    args: ["query", "RETURN 'Line1\\nLine2\\tTabbed' AS special_chars"]
     expect:
       exit_code: 0
       geode_query:
@@ -224,7 +224,7 @@ tests:
 
   - name: "type-string-unicode"
     description: "Test string literal with Unicode characters"
-    args: ["query", "--embedded", "RETURN 'Hello 世界 🌍' AS unicode_string"]
+    args: ["query", "RETURN 'Hello 世界 🌍' AS unicode_string"]
     expect:
       exit_code: 0
       geode_query:
@@ -241,7 +241,7 @@ tests:
   
   - name: "type-list-integers"
     description: "Test list of integers"
-    args: ["query", "--embedded", "RETURN [1, 2, 3, 4, 5] AS int_list"]
+    args: ["query", "RETURN [1, 2, 3, 4, 5] AS int_list"]
     expect:
       exit_code: 0
       geode_query:
@@ -251,7 +251,7 @@ tests:
 
   - name: "type-list-strings"
     description: "Test list of strings"
-    args: ["query", "--embedded", "RETURN ['apple', 'banana', 'cherry'] AS string_list"]
+    args: ["query", "RETURN ['apple', 'banana', 'cherry'] AS string_list"]
     expect:
       exit_code: 0
       geode_query:
@@ -261,7 +261,7 @@ tests:
 
   - name: "type-list-mixed"
     description: "Test list with mixed types"
-    args: ["query", "--embedded", "RETURN [1, 'text', true, null, 3.14] AS mixed_list"]
+    args: ["query", "RETURN [1, 'text', true, null, 3.14] AS mixed_list"]
     expect:
       exit_code: 0
       geode_query:
@@ -271,7 +271,7 @@ tests:
 
   - name: "type-list-empty"
     description: "Test empty list"
-    args: ["query", "--embedded", "RETURN [] AS empty_list"]
+    args: ["query", "RETURN [] AS empty_list"]
     expect:
       exit_code: 0
       geode_query:
@@ -281,7 +281,7 @@ tests:
 
   - name: "type-list-nested"
     description: "Test nested lists"
-    args: ["query", "--embedded", "RETURN [[1, 2], [3, 4], [5, 6]] AS nested_list"]
+    args: ["query", "RETURN [[1, 2], [3, 4], [5, 6]] AS nested_list"]
     expect:
       exit_code: 0
       geode_query:
@@ -295,7 +295,7 @@ tests:
   
   - name: "type-map-simple"
     description: "Test simple map literal"
-    args: ["query", "--embedded", "RETURN {name: 'Alice', age: 30, active: true} AS person_map"]
+    args: ["query", "RETURN {name: 'Alice', age: 30, active: true} AS person_map"]
     expect:
       exit_code: 0
       geode_query:
@@ -305,7 +305,7 @@ tests:
 
   - name: "type-map-empty"
     description: "Test empty map literal"
-    args: ["query", "--embedded", "RETURN {} AS empty_map"]
+    args: ["query", "RETURN {} AS empty_map"]
     expect:
       exit_code: 0
       geode_query:
@@ -315,7 +315,7 @@ tests:
 
   - name: "type-map-nested"
     description: "Test nested map literal"
-    args: ["query", "--embedded", "RETURN {person: {name: 'Bob', details: {age: 25, city: 'Boston'}}} AS nested_map"]
+    args: ["query", "RETURN {person: {name: 'Bob', details: {age: 25, city: 'Boston'}}} AS nested_map"]
     expect:
       exit_code: 0
       geode_query:
@@ -325,7 +325,7 @@ tests:
 
   - name: "type-map-with-lists"
     description: "Test map containing lists"
-    args: ["query", "--embedded", "RETURN {scores: [85, 92, 78], subjects: ['math', 'science', 'english']} AS map_with_lists"]
+    args: ["query", "RETURN {scores: [85, 92, 78], subjects: ['math', 'science', 'english']} AS map_with_lists"]
     expect:
       exit_code: 0
       geode_query:
@@ -339,7 +339,7 @@ tests:
   
   - name: "type-date-literal"
     description: "Test date literal"
-    args: ["query", "--embedded", "RETURN date('2024-01-15') AS date_value"]
+    args: ["query", "RETURN date('2024-01-15') AS date_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -349,7 +349,7 @@ tests:
 
   - name: "type-time-literal"
     description: "Test time literal"
-    args: ["query", "--embedded", "RETURN time('14:30:25') AS time_value"]
+    args: ["query", "RETURN time('14:30:25') AS time_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -359,7 +359,7 @@ tests:
 
   - name: "type-datetime-literal"
     description: "Test datetime literal"
-    args: ["query", "--embedded", "RETURN datetime('2024-01-15T14:30:25') AS datetime_value"]
+    args: ["query", "RETURN datetime('2024-01-15T14:30:25') AS datetime_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -369,7 +369,7 @@ tests:
 
   - name: "type-datetime-with-timezone"
     description: "Test datetime with timezone"
-    args: ["query", "--embedded", "RETURN datetime('2024-01-15T14:30:25+05:00') AS datetime_tz"]
+    args: ["query", "RETURN datetime('2024-01-15T14:30:25+05:00') AS datetime_tz"]
     expect:
       exit_code: 0
       geode_query:
@@ -383,7 +383,7 @@ tests:
   
   - name: "type-function-type-of"
     description: "Test type() function"
-    args: ["query", "--embedded", "RETURN type(42) AS int_type, type('text') AS string_type, type(true) AS bool_type, type([1,2,3]) AS list_type"]
+    args: ["query", "RETURN type(42) AS int_type, type('text') AS string_type, type(true) AS bool_type, type([1,2,3]) AS list_type"]
     expect:
       exit_code: 0
       geode_query:
@@ -394,8 +394,8 @@ tests:
   - name: "type-function-exists"
     description: "Test exists() function"
     setup:
-      - "query --embedded \"CREATE (n:TypeTest {existing_prop: 'value'})\""
-    args: ["query", "--embedded", "MATCH (n:TypeTest) RETURN exists(n.existing_prop) AS has_prop, exists(n.missing_prop) AS missing_prop"]
+      - "query \"CREATE (n:TypeTest {existing_prop: 'value'})\""
+    args: ["query", "MATCH (n:TypeTest) RETURN exists(n.existing_prop) AS has_prop, exists(n.missing_prop) AS missing_prop"]
     expect:
       exit_code: 0
       geode_query:
@@ -414,7 +414,7 @@ tests:
   
   - name: "type-conversion-to-string"
     description: "Test toString() function"
-    args: ["query", "--embedded", "RETURN toString(42) AS int_to_string, toString(3.14) AS float_to_string, toString(true) AS bool_to_string"]
+    args: ["query", "RETURN toString(42) AS int_to_string, toString(3.14) AS float_to_string, toString(true) AS bool_to_string"]
     expect:
       exit_code: 0
       geode_query:
@@ -431,7 +431,7 @@ tests:
 
   - name: "type-conversion-to-integer"
     description: "Test toInteger() function"
-    args: ["query", "--embedded", "RETURN toInteger('42') AS string_to_int, toInteger(3.14) AS float_to_int, toInteger(true) AS bool_to_int"]
+    args: ["query", "RETURN toInteger('42') AS string_to_int, toInteger(3.14) AS float_to_int, toInteger(true) AS bool_to_int"]
     expect:
       exit_code: 0
       geode_query:
@@ -448,7 +448,7 @@ tests:
 
   - name: "type-conversion-to-float"
     description: "Test toFloat() function"
-    args: ["query", "--embedded", "RETURN toFloat('3.14') AS string_to_float, toFloat(42) AS int_to_float"]
+    args: ["query", "RETURN toFloat('3.14') AS string_to_float, toFloat(42) AS int_to_float"]
     expect:
       exit_code: 0
       geode_query:
@@ -463,7 +463,7 @@ tests:
 
   - name: "type-conversion-to-boolean"
     description: "Test toBoolean() function"
-    args: ["query", "--embedded", "RETURN toBoolean('true') AS string_to_bool, toBoolean(1) AS int_to_bool, toBoolean(0) AS zero_to_bool"]
+    args: ["query", "RETURN toBoolean('true') AS string_to_bool, toBoolean(1) AS int_to_bool, toBoolean(0) AS zero_to_bool"]
     expect:
       exit_code: 0
       geode_query:
@@ -484,7 +484,7 @@ tests:
   
   - name: "type-list-size"
     description: "Test size() function on lists"
-    args: ["query", "--embedded", "RETURN size([1, 2, 3, 4, 5]) AS list_size, size([]) AS empty_size, size('hello') AS string_size"]
+    args: ["query", "RETURN size([1, 2, 3, 4, 5]) AS list_size, size([]) AS empty_size, size('hello') AS string_size"]
     expect:
       exit_code: 0
       geode_query:
@@ -501,7 +501,7 @@ tests:
 
   - name: "type-list-head"
     description: "Test head() function on lists"
-    args: ["query", "--embedded", "RETURN head([1, 2, 3, 4]) AS first_element"]
+    args: ["query", "RETURN head([1, 2, 3, 4]) AS first_element"]
     expect:
       exit_code: 0
       geode_query:
@@ -514,7 +514,7 @@ tests:
 
   - name: "type-list-tail"
     description: "Test tail() function on lists"
-    args: ["query", "--embedded", "RETURN tail([1, 2, 3, 4]) AS rest_elements"]
+    args: ["query", "RETURN tail([1, 2, 3, 4]) AS rest_elements"]
     expect:
       exit_code: 0
       geode_query:
@@ -524,7 +524,7 @@ tests:
 
   - name: "type-list-last"
     description: "Test last() function on lists"
-    args: ["query", "--embedded", "RETURN last([1, 2, 3, 4]) AS last_element"]
+    args: ["query", "RETURN last([1, 2, 3, 4]) AS last_element"]
     expect:
       exit_code: 0
       geode_query:
@@ -541,7 +541,7 @@ tests:
   
   - name: "type-map-keys"
     description: "Test keys() function on maps"
-    args: ["query", "--embedded", "RETURN keys({name: 'Alice', age: 30, active: true}) AS map_keys"]
+    args: ["query", "RETURN keys({name: 'Alice', age: 30, active: true}) AS map_keys"]
     expect:
       exit_code: 0
       geode_query:
@@ -551,7 +551,7 @@ tests:
 
   - name: "type-map-values"
     description: "Test values() function on maps"
-    args: ["query", "--embedded", "RETURN values({name: 'Alice', age: 30}) AS map_values"]
+    args: ["query", "RETURN values({name: 'Alice', age: 30}) AS map_values"]
     expect:
       exit_code: 0
       geode_query:
@@ -561,7 +561,7 @@ tests:
 
   - name: "type-map-size"
     description: "Test size() function on maps"
-    args: ["query", "--embedded", "RETURN size({a: 1, b: 2, c: 3}) AS map_size"]
+    args: ["query", "RETURN size({a: 1, b: 2, c: 3}) AS map_size"]
     expect:
       exit_code: 0
       geode_query:
@@ -578,7 +578,7 @@ tests:
   
   - name: "type-coercion-arithmetic"
     description: "Test type coercion in arithmetic operations"
-    args: ["query", "--embedded", "RETURN 5 + 3.14 AS int_plus_float, 2 * 1.5 AS int_times_float"]
+    args: ["query", "RETURN 5 + 3.14 AS int_plus_float, 2 * 1.5 AS int_times_float"]
     expect:
       exit_code: 0
       geode_query:
@@ -593,7 +593,7 @@ tests:
 
   - name: "type-coercion-comparison"
     description: "Test type coercion in comparison operations"
-    args: ["query", "--embedded", "RETURN 5 = 5.0 AS int_equals_float, 3 < 3.5 AS int_less_float"]
+    args: ["query", "RETURN 5 = 5.0 AS int_equals_float, 3 < 3.5 AS int_less_float"]
     expect:
       exit_code: 0
       geode_query:
@@ -608,7 +608,7 @@ tests:
 
   - name: "type-coercion-string-concat"
     description: "Test type coercion in string concatenation"
-    args: ["query", "--embedded", "RETURN 'Value: ' || 42 AS string_concat_int, 'Pi: ' || 3.14 AS string_concat_float"]
+    args: ["query", "RETURN 'Value: ' || 42 AS string_concat_int, 'Pi: ' || 3.14 AS string_concat_float"]
     expect:
       exit_code: 0
       geode_query:
@@ -628,8 +628,8 @@ tests:
   - name: "type-property-access-mixed"
     description: "Test property access with mixed types"
     setup:
-      - "query --embedded \"CREATE (n:TypeNode {int_prop: 42, string_prop: 'text', bool_prop: true, list_prop: [1, 2, 3], map_prop: {nested: 'value'}})\""
-    args: ["query", "--embedded", "MATCH (n:TypeNode) RETURN n.int_prop AS int_val, n.string_prop AS string_val, n.bool_prop AS bool_val, n.list_prop AS list_val, n.map_prop AS map_val"]
+      - "query \"CREATE (n:TypeNode {int_prop: 42, string_prop: 'text', bool_prop: true, list_prop: [1, 2, 3], map_prop: {nested: 'value'}})\""
+    args: ["query", "MATCH (n:TypeNode) RETURN n.int_prop AS int_val, n.string_prop AS string_val, n.bool_prop AS bool_val, n.list_prop AS list_val, n.map_prop AS map_val"]
     expect:
       exit_code: 0
       geode_query:
@@ -643,21 +643,21 @@ tests:
   
   - name: "type-error-invalid-conversion"
     description: "Test invalid type conversion (should error)"
-    args: ["query", "--embedded", "RETURN toInteger('not_a_number') AS invalid_conversion"]
+    args: ["query", "RETURN toInteger('not_a_number') AS invalid_conversion"]
     expect:
       exit_code: 1
     tags: ["type-system", "error", "invalid-conversion"]
 
   - name: "type-error-incompatible-operations"
     description: "Test incompatible type operations (should error)"
-    args: ["query", "--embedded", "RETURN [1, 2, 3] + 'string' AS incompatible_op"]
+    args: ["query", "RETURN [1, 2, 3] + 'string' AS incompatible_op"]
     expect:
       exit_code: 1
     tags: ["type-system", "error", "incompatible-operations"]
 
   - name: "type-error-list-access-out-of-bounds"
     description: "Test list access out of bounds (should return null or error)"
-    args: ["query", "--embedded", "RETURN [1, 2, 3][10] AS out_of_bounds"]
+    args: ["query", "RETURN [1, 2, 3][10] AS out_of_bounds"]
     expect:
       exit_code: 0
       geode_query:
@@ -676,7 +676,6 @@ tests:
     description: "Test complex nested type structures"
     args:
       - "query"
-      - "--embedded"
       - |
         RETURN {
           users: [
@@ -699,8 +698,8 @@ tests:
   - name: "type-dynamic-property-access"
     description: "Test dynamic property access on complex types"
     setup:
-      - "query --embedded \"CREATE (n:DynamicTest {data: {level1: {level2: {value: 'deep_value'}}}})\""
-    args: ["query", "--embedded", "MATCH (n:DynamicTest) RETURN n.data.level1.level2.value AS deep_value"]
+      - "query \"CREATE (n:DynamicTest {data: {level1: {level2: {value: 'deep_value'}}}})\""
+    args: ["query", "MATCH (n:DynamicTest) RETURN n.data.level1.level2.value AS deep_value"]
     expect:
       exit_code: 0
       geode_query:
@@ -719,7 +718,6 @@ tests:
     description: "Clean up all test data created during type system tests"
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH (n) WHERE 
           n:TypeTest OR n:TypeNode OR n:DynamicTest

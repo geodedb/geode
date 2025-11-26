@@ -23,7 +23,7 @@ tests:
   
   - name: "arithmetic-addition"
     description: "Test arithmetic addition expression"
-    args: ["query", "--embedded", "RETURN 5 + 3 AS result"]
+    args: ["query", "RETURN 5 + 3 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -36,7 +36,7 @@ tests:
 
   - name: "arithmetic-subtraction"
     description: "Test arithmetic subtraction expression"
-    args: ["query", "--embedded", "RETURN 10 - 4 AS result"]
+    args: ["query", "RETURN 10 - 4 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -49,7 +49,7 @@ tests:
 
   - name: "arithmetic-multiplication"
     description: "Test arithmetic multiplication expression"
-    args: ["query", "--embedded", "RETURN 6 * 7 AS result"]
+    args: ["query", "RETURN 6 * 7 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -62,7 +62,7 @@ tests:
 
   - name: "arithmetic-division"
     description: "Test arithmetic division expression"
-    args: ["query", "--embedded", "RETURN 15 / 3 AS result"]
+    args: ["query", "RETURN 15 / 3 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -75,7 +75,7 @@ tests:
 
   - name: "arithmetic-modulo"
     description: "Test arithmetic modulo expression"
-    args: ["query", "--embedded", "RETURN 17 % 5 AS result"]
+    args: ["query", "RETURN 17 % 5 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -88,7 +88,7 @@ tests:
 
   - name: "arithmetic-unary-minus"
     description: "Test unary minus expression"
-    args: ["query", "--embedded", "RETURN -42 AS result"]
+    args: ["query", "RETURN -42 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -101,7 +101,7 @@ tests:
 
   - name: "arithmetic-unary-plus"
     description: "Test unary plus expression"
-    args: ["query", "--embedded", "RETURN +42 AS result"]
+    args: ["query", "RETURN +42 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -114,7 +114,7 @@ tests:
 
   - name: "arithmetic-precedence"
     description: "Test arithmetic operator precedence"
-    args: ["query", "--embedded", "RETURN 2 + 3 * 4 AS result"]
+    args: ["query", "RETURN 2 + 3 * 4 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -127,7 +127,7 @@ tests:
 
   - name: "arithmetic-parentheses"
     description: "Test arithmetic with parentheses"
-    args: ["query", "--embedded", "RETURN (2 + 3) * 4 AS result"]
+    args: ["query", "RETURN (2 + 3) * 4 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -144,7 +144,7 @@ tests:
   
   - name: "logical-and-true"
     description: "Test logical AND with true operands"
-    args: ["query", "--embedded", "RETURN true AND true AS result"]
+    args: ["query", "RETURN true AND true AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -157,7 +157,7 @@ tests:
 
   - name: "logical-and-false"
     description: "Test logical AND with false operand"
-    args: ["query", "--embedded", "RETURN true AND false AS result"]
+    args: ["query", "RETURN true AND false AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -170,7 +170,7 @@ tests:
 
   - name: "logical-or-true"
     description: "Test logical OR with true operand"
-    args: ["query", "--embedded", "RETURN false OR true AS result"]
+    args: ["query", "RETURN false OR true AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -183,7 +183,7 @@ tests:
 
   - name: "logical-or-false"
     description: "Test logical OR with false operands"
-    args: ["query", "--embedded", "RETURN false OR false AS result"]
+    args: ["query", "RETURN false OR false AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -196,7 +196,7 @@ tests:
 
   - name: "logical-not-true"
     description: "Test logical NOT with true operand"
-    args: ["query", "--embedded", "RETURN NOT true AS result"]
+    args: ["query", "RETURN NOT true AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -209,7 +209,7 @@ tests:
 
   - name: "logical-not-false"
     description: "Test logical NOT with false operand"
-    args: ["query", "--embedded", "RETURN NOT false AS result"]
+    args: ["query", "RETURN NOT false AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -222,7 +222,7 @@ tests:
 
   - name: "logical-precedence"
     description: "Test logical operator precedence"
-    args: ["query", "--embedded", "RETURN true OR false AND false AS result"]
+    args: ["query", "RETURN true OR false AND false AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -239,7 +239,7 @@ tests:
   
   - name: "comparison-equals"
     description: "Test equality comparison"
-    args: ["query", "--embedded", "RETURN 5 = 5 AS result"]
+    args: ["query", "RETURN 5 = 5 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -252,7 +252,7 @@ tests:
 
   - name: "comparison-not-equals"
     description: "Test inequality comparison"
-    args: ["query", "--embedded", "RETURN 5 <> 3 AS result"]
+    args: ["query", "RETURN 5 <> 3 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -265,7 +265,7 @@ tests:
 
   - name: "comparison-less-than"
     description: "Test less than comparison"
-    args: ["query", "--embedded", "RETURN 3 < 5 AS result"]
+    args: ["query", "RETURN 3 < 5 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -278,7 +278,7 @@ tests:
 
   - name: "comparison-less-than-or-equal"
     description: "Test less than or equal comparison"
-    args: ["query", "--embedded", "RETURN 5 <= 5 AS result"]
+    args: ["query", "RETURN 5 <= 5 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -291,7 +291,7 @@ tests:
 
   - name: "comparison-greater-than"
     description: "Test greater than comparison"
-    args: ["query", "--embedded", "RETURN 7 > 5 AS result"]
+    args: ["query", "RETURN 7 > 5 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -304,7 +304,7 @@ tests:
 
   - name: "comparison-greater-than-or-equal"
     description: "Test greater than or equal comparison"
-    args: ["query", "--embedded", "RETURN 5 >= 5 AS result"]
+    args: ["query", "RETURN 5 >= 5 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -317,7 +317,7 @@ tests:
 
   - name: "comparison-string-equals"
     description: "Test string equality comparison"
-    args: ["query", "--embedded", "RETURN 'hello' = 'hello' AS result"]
+    args: ["query", "RETURN 'hello' = 'hello' AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -334,7 +334,7 @@ tests:
   
   - name: "null-is-null"
     description: "Test IS NULL expression"
-    args: ["query", "--embedded", "RETURN null IS NULL AS result"]
+    args: ["query", "RETURN null IS NULL AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -347,7 +347,7 @@ tests:
 
   - name: "value-is-not-null"
     description: "Test IS NOT NULL expression"
-    args: ["query", "--embedded", "RETURN 42 IS NOT NULL AS result"]
+    args: ["query", "RETURN 42 IS NOT NULL AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -360,7 +360,7 @@ tests:
 
   - name: "null-arithmetic"
     description: "Test arithmetic with null values"
-    args: ["query", "--embedded", "RETURN null + 5 AS result"]
+    args: ["query", "RETURN null + 5 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -373,7 +373,7 @@ tests:
 
   - name: "null-comparison"
     description: "Test comparison with null values"
-    args: ["query", "--embedded", "RETURN null = null AS result"]
+    args: ["query", "RETURN null = null AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -390,7 +390,7 @@ tests:
   
   - name: "string-concatenation"
     description: "Test string concatenation expression"
-    args: ["query", "--embedded", "RETURN 'Hello' || ' ' || 'World' AS result"]
+    args: ["query", "RETURN 'Hello' || ' ' || 'World' AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -403,7 +403,7 @@ tests:
 
   - name: "string-starts-with"
     description: "Test STARTS WITH string expression"
-    args: ["query", "--embedded", "RETURN 'Hello World' STARTS WITH 'Hello' AS result"]
+    args: ["query", "RETURN 'Hello World' STARTS WITH 'Hello' AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -416,7 +416,7 @@ tests:
 
   - name: "string-ends-with"
     description: "Test ENDS WITH string expression"
-    args: ["query", "--embedded", "RETURN 'Hello World' ENDS WITH 'World' AS result"]
+    args: ["query", "RETURN 'Hello World' ENDS WITH 'World' AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -429,7 +429,7 @@ tests:
 
   - name: "string-contains"
     description: "Test CONTAINS string expression"
-    args: ["query", "--embedded", "RETURN 'Hello World' CONTAINS 'lo Wo' AS result"]
+    args: ["query", "RETURN 'Hello World' CONTAINS 'lo Wo' AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -442,7 +442,7 @@ tests:
 
   - name: "string-regex-match"
     description: "Test regular expression matching"
-    args: ["query", "--embedded", "RETURN 'abc123' =~ '^[a-z]+[0-9]+$' AS result"]
+    args: ["query", "RETURN 'abc123' =~ '^[a-z]+[0-9]+$' AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -459,7 +459,7 @@ tests:
   
   - name: "in-list-true"
     description: "Test IN expression with matching value"
-    args: ["query", "--embedded", "RETURN 3 IN [1, 2, 3, 4, 5] AS result"]
+    args: ["query", "RETURN 3 IN [1, 2, 3, 4, 5] AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -472,7 +472,7 @@ tests:
 
   - name: "in-list-false"
     description: "Test IN expression with non-matching value"
-    args: ["query", "--embedded", "RETURN 6 IN [1, 2, 3, 4, 5] AS result"]
+    args: ["query", "RETURN 6 IN [1, 2, 3, 4, 5] AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -485,7 +485,7 @@ tests:
 
   - name: "not-in-list"
     description: "Test NOT IN expression"
-    args: ["query", "--embedded", "RETURN 6 NOT IN [1, 2, 3, 4, 5] AS result"]
+    args: ["query", "RETURN 6 NOT IN [1, 2, 3, 4, 5] AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -502,7 +502,7 @@ tests:
   
   - name: "function-length"
     description: "Test length() function"
-    args: ["query", "--embedded", "RETURN length('Hello') AS result"]
+    args: ["query", "RETURN length('Hello') AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -515,7 +515,7 @@ tests:
 
   - name: "function-upper"
     description: "Test upper() function"
-    args: ["query", "--embedded", "RETURN upper('hello') AS result"]
+    args: ["query", "RETURN upper('hello') AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -528,7 +528,7 @@ tests:
 
   - name: "function-lower"
     description: "Test lower() function"
-    args: ["query", "--embedded", "RETURN lower('WORLD') AS result"]
+    args: ["query", "RETURN lower('WORLD') AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -541,7 +541,7 @@ tests:
 
   - name: "function-trim"
     description: "Test trim() function"
-    args: ["query", "--embedded", "RETURN trim('  spaced  ') AS result"]
+    args: ["query", "RETURN trim('  spaced  ') AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -554,7 +554,7 @@ tests:
 
   - name: "function-substring"
     description: "Test substring() function"
-    args: ["query", "--embedded", "RETURN substring('Hello World', 1, 5) AS result"]
+    args: ["query", "RETURN substring('Hello World', 1, 5) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -567,7 +567,7 @@ tests:
 
   - name: "function-replace"
     description: "Test replace() function"
-    args: ["query", "--embedded", "RETURN replace('Hello World', 'World', 'GQL') AS result"]
+    args: ["query", "RETURN replace('Hello World', 'World', 'GQL') AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -580,7 +580,7 @@ tests:
 
   - name: "function-abs"
     description: "Test abs() function"
-    args: ["query", "--embedded", "RETURN abs(-42) AS result"]
+    args: ["query", "RETURN abs(-42) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -598,8 +598,8 @@ tests:
   - name: "aggregation-count-star"
     description: "Test count(*) aggregation function"
     setup:
-      - "query --embedded \"CREATE (a:CountTest {id: 1}), (b:CountTest {id: 2}), (c:CountTest {id: 3})\""
-    args: ["query", "--embedded", "MATCH (n:CountTest) RETURN count(*) AS total"]
+      - "query \"CREATE (a:CountTest {id: 1}), (b:CountTest {id: 2}), (c:CountTest {id: 3})\""
+    args: ["query", "MATCH (n:CountTest) RETURN count(*) AS total"]
     expect:
       exit_code: 0
       geode_query:
@@ -613,8 +613,8 @@ tests:
   - name: "aggregation-count-property"
     description: "Test count(property) aggregation function"
     setup:
-      - "query --embedded \"CREATE (a:CountPropTest {value: 1}), (b:CountPropTest {value: 2}), (c:CountPropTest)\""
-    args: ["query", "--embedded", "MATCH (n:CountPropTest) RETURN count(n.value) AS non_null_count"]
+      - "query \"CREATE (a:CountPropTest {value: 1}), (b:CountPropTest {value: 2}), (c:CountPropTest)\""
+    args: ["query", "MATCH (n:CountPropTest) RETURN count(n.value) AS non_null_count"]
     expect:
       exit_code: 0
       geode_query:
@@ -628,8 +628,8 @@ tests:
   - name: "aggregation-sum"
     description: "Test sum() aggregation function"
     setup:
-      - "query --embedded \"CREATE (a:SumTest {value: 10}), (b:SumTest {value: 20}), (c:SumTest {value: 30})\""
-    args: ["query", "--embedded", "MATCH (n:SumTest) RETURN sum(n.value) AS total"]
+      - "query \"CREATE (a:SumTest {value: 10}), (b:SumTest {value: 20}), (c:SumTest {value: 30})\""
+    args: ["query", "MATCH (n:SumTest) RETURN sum(n.value) AS total"]
     expect:
       exit_code: 0
       geode_query:
@@ -643,8 +643,8 @@ tests:
   - name: "aggregation-avg"
     description: "Test avg() aggregation function"
     setup:
-      - "query --embedded \"CREATE (a:AvgTest {value: 10}), (b:AvgTest {value: 20}), (c:AvgTest {value: 30})\""
-    args: ["query", "--embedded", "MATCH (n:AvgTest) RETURN avg(n.value) AS average"]
+      - "query \"CREATE (a:AvgTest {value: 10}), (b:AvgTest {value: 20}), (c:AvgTest {value: 30})\""
+    args: ["query", "MATCH (n:AvgTest) RETURN avg(n.value) AS average"]
     expect:
       exit_code: 0
       geode_query:
@@ -658,8 +658,8 @@ tests:
   - name: "aggregation-min"
     description: "Test min() aggregation function"
     setup:
-      - "query --embedded \"CREATE (a:MinTest {value: 5}), (b:MinTest {value: 15}), (c:MinTest {value: 3})\""
-    args: ["query", "--embedded", "MATCH (n:MinTest) RETURN min(n.value) AS minimum"]
+      - "query \"CREATE (a:MinTest {value: 5}), (b:MinTest {value: 15}), (c:MinTest {value: 3})\""
+    args: ["query", "MATCH (n:MinTest) RETURN min(n.value) AS minimum"]
     expect:
       exit_code: 0
       geode_query:
@@ -673,8 +673,8 @@ tests:
   - name: "aggregation-max"
     description: "Test max() aggregation function"
     setup:
-      - "query --embedded \"CREATE (a:MaxTest {value: 5}), (b:MaxTest {value: 15}), (c:MaxTest {value: 3})\""
-    args: ["query", "--embedded", "MATCH (n:MaxTest) RETURN max(n.value) AS maximum"]
+      - "query \"CREATE (a:MaxTest {value: 5}), (b:MaxTest {value: 15}), (c:MaxTest {value: 3})\""
+    args: ["query", "MATCH (n:MaxTest) RETURN max(n.value) AS maximum"]
     expect:
       exit_code: 0
       geode_query:
@@ -693,7 +693,6 @@ tests:
     description: "Test simple CASE expression"
     args:
       - "query"
-      - "--embedded"
       - |
         RETURN CASE 2
           WHEN 1 THEN 'one'
@@ -715,7 +714,6 @@ tests:
     description: "Test searched CASE expression"
     args:
       - "query"
-      - "--embedded"
       - |
         RETURN CASE
           WHEN 5 > 10 THEN 'greater'
@@ -736,7 +734,6 @@ tests:
     description: "Test CASE expression with null handling"
     args:
       - "query"
-      - "--embedded"
       - |
         RETURN CASE
           WHEN null IS NULL THEN 'is_null'
@@ -758,7 +755,7 @@ tests:
   
   - name: "complex-nested-arithmetic"
     description: "Test complex nested arithmetic expression"
-    args: ["query", "--embedded", "RETURN ((5 + 3) * 2) - (10 / 2) AS result"]
+    args: ["query", "RETURN ((5 + 3) * 2) - (10 / 2) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -771,7 +768,7 @@ tests:
 
   - name: "complex-logical-combinations"
     description: "Test complex logical expression combinations"
-    args: ["query", "--embedded", "RETURN (true AND false) OR (NOT false AND true) AS result"]
+    args: ["query", "RETURN (true AND false) OR (NOT false AND true) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -784,7 +781,7 @@ tests:
 
   - name: "complex-mixed-operators"
     description: "Test mixed arithmetic and comparison operators"
-    args: ["query", "--embedded", "RETURN (5 + 3) > (2 * 3) AND (10 - 5) = 5 AS result"]
+    args: ["query", "RETURN (5 + 3) > (2 * 3) AND (10 - 5) = 5 AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -797,7 +794,7 @@ tests:
 
   - name: "complex-function-composition"
     description: "Test function composition in expressions"
-    args: ["query", "--embedded", "RETURN length(upper(trim('  hello  '))) AS result"]
+    args: ["query", "RETURN length(upper(trim('  hello  '))) AS result"]
     expect:
       exit_code: 0
       geode_query:
@@ -815,8 +812,8 @@ tests:
   - name: "property-access-basic"
     description: "Test basic property access expression"
     setup:
-      - "query --embedded \"CREATE (n:PropTest {name: 'test_node', value: 42})\""
-    args: ["query", "--embedded", "MATCH (n:PropTest) RETURN n.name AS name, n.value AS value"]
+      - "query \"CREATE (n:PropTest {name: 'test_node', value: 42})\""
+    args: ["query", "MATCH (n:PropTest) RETURN n.name AS name, n.value AS value"]
     expect:
       exit_code: 0
       geode_query:
@@ -832,8 +829,8 @@ tests:
   - name: "property-access-in-expression"
     description: "Test property access within arithmetic expression"
     setup:
-      - "query --embedded \"CREATE (n:PropArithTest {a: 10, b: 5})\""
-    args: ["query", "--embedded", "MATCH (n:PropArithTest) RETURN n.a + n.b AS sum, n.a * n.b AS product"]
+      - "query \"CREATE (n:PropArithTest {a: 10, b: 5})\""
+    args: ["query", "MATCH (n:PropArithTest) RETURN n.a + n.b AS sum, n.a * n.b AS product"]
     expect:
       exit_code: 0
       geode_query:
@@ -852,21 +849,21 @@ tests:
   
   - name: "arithmetic-division-by-zero"
     description: "Test division by zero error handling"
-    args: ["query", "--embedded", "RETURN 5 / 0 AS result"]
+    args: ["query", "RETURN 5 / 0 AS result"]
     expect:
       exit_code: 1
     tags: ["expressions", "error", "division-by-zero"]
 
   - name: "function-invalid-arguments"
     description: "Test function with invalid argument count"
-    args: ["query", "--embedded", "RETURN length() AS result"]
+    args: ["query", "RETURN length() AS result"]
     expect:
       exit_code: 1
     tags: ["expressions", "error", "invalid-arguments"]
 
   - name: "type-mismatch-arithmetic"
     description: "Test type mismatch in arithmetic operations"
-    args: ["query", "--embedded", "RETURN 'text' + 5 AS result"]
+    args: ["query", "RETURN 'text' + 5 AS result"]
     expect:
       exit_code: 1
     tags: ["expressions", "error", "type-mismatch"]
@@ -879,7 +876,6 @@ tests:
     description: "Clean up all test data created during expression tests"
     args:
       - "query"
-      - "--embedded"
       - |
         MATCH (n) WHERE 
           n:CountTest OR n:CountPropTest OR n:SumTest OR n:AvgTest OR

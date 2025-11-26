@@ -101,7 +101,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         authenticated_user = options.user;
     } else if (options.user != null and options.token != null) {
         // Token-based authentication - skip password verification for local sessions
-        // In --no-quic mode, tokens are validated client-side via system fingerprint
+        // Tokens are validated via system fingerprint
         authenticated_user = options.user;
         user_role = user_mgmt.Role.User; // Default role for token auth
     } else if (options.user != null or options.password != null) {

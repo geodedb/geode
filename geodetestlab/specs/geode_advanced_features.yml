@@ -22,7 +22,6 @@ tests:
     description: "Create comprehensive test dataset for advanced features"
     args: 
       - "query"
-      - "--embedded"
       - |
         CREATE 
           (alice:Person {name: 'Alice', age: 30, department: 'Engineering'}),
@@ -84,7 +83,7 @@ tests:
   # Modify data before restore test
   - name: "modify-data-before-restore"
     description: "Modify data to test restore functionality"
-    args: ["query", "--embedded", "MATCH (p:Person {name: 'Alice'}) SET p.age = 31, p.status = 'modified' RETURN p.name AS name, p.age AS age, p.status AS status"]
+    args: ["query", "MATCH (p:Person {name: 'Alice'}) SET p.age = 31, p.status = 'modified' RETURN p.name AS name, p.age AS age, p.status AS status"]
     expect:
       exit_code: 0
       geode_query:
@@ -103,7 +102,7 @@ tests:
 
   - name: "verify-restore"
     description: "Verify data after restore"
-    args: ["query", "--embedded", "MATCH (p:Person {name: 'Alice'}) RETURN p.age AS age, p.status AS status"]
+    args: ["query", "MATCH (p:Person {name: 'Alice'}) RETURN p.age AS age, p.status AS status"]
     expect:
       exit_code: 0
       geode_query:
@@ -139,21 +138,21 @@ tests:
   # Schema introspection
   - name: "create-node-index"
     description: "Create index on node property"
-    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS person_name_idx FOR (p:Person) ON (p.name)"]
+    args: ["query", "CREATE INDEX IF NOT EXISTS person_name_idx FOR (p:Person) ON (p.name)"]
     expect:
       exit_code: 0
     tags: ["index", "create", "node"]
 
   - name: "create-relationship-index"
     description: "Create index on relationship property"
-    args: ["query", "--embedded", "CREATE INDEX IF NOT EXISTS works_for_since_idx FOR ()-[r:WORKS_FOR]-() ON (r.since)"]
+    args: ["query", "CREATE INDEX IF NOT EXISTS works_for_since_idx FOR ()-[r:WORKS_FOR]-() ON (r.since)"]
     expect:
       exit_code: 0
     tags: ["index", "create", "relationship"]
 
   - name: "list-indexes"
     description: "List all indexes"
-    args: ["query", "--embedded", "SHOW INDEXES"]
+    args: ["query", "SHOW INDEXES"]
     expect:
       exit_code: 0
       geode_query:
@@ -163,8 +162,8 @@ tests:
   - name: "drop-index"
     description: "Drop an index"
     setup:
-      - "query \"CREATE INDEX IF NOT EXISTS person_name_idx FOR (p:Person) ON (p.name)\" --embedded"
-    args: ["query", "--embedded", "DROP INDEX person_name_idx"]
+      - "query \"CREATE INDEX IF NOT EXISTS person_name_idx FOR (p:Person) ON (p.name)\""
+    args: ["query", "DROP INDEX person_name_idx"]
     expect:
       exit_code: 0
     tags: ["index", "drop"]
@@ -172,21 +171,21 @@ tests:
   # Constraint management
   - name: "create-uniqueness-constraint"
     description: "Create uniqueness constraint"
-    args: ["query", "--embedded", "CREATE CONSTRAINT person_email_unique FOR (p:Person) REQUIRE p.email IS UNIQUE"]
+    args: ["query", "CREATE CONSTRAINT person_email_unique FOR (p:Person) REQUIRE p.email IS UNIQUE"]
     expect:
       exit_code: 0
     tags: ["constraint", "unique"]
 
   - name: "create-node-key-constraint"
     description: "Create node key constraint"
-    args: ["query", "--embedded", "CREATE CONSTRAINT company_key FOR (c:Company) REQUIRE (c.name, c.founded) IS NODE KEY"]
+    args: ["query", "CREATE CONSTRAINT company_key FOR (c:Company) REQUIRE (c.name, c.founded) IS NODE KEY"]
     expect:
       exit_code: 0
     tags: ["constraint", "nodekey"]
 
   - name: "list-constraints"
     description: "List all constraints"
-    args: ["query", "--embedded", "SHOW CONSTRAINTS"]
+    args: ["query", "SHOW CONSTRAINTS"]
     expect:
       exit_code: 0
       geode_query:
@@ -196,7 +195,7 @@ tests:
   # Performance and monitoring
   - name: "explain-query-plan"
     description: "Explain query execution plan"
-    args: ["query", "--embedded", "EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company) WHERE p.age > 30 RETURN p.name, c.name"]
+    args: ["query", "EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company) WHERE p.age > 30 RETURN p.name, c.name"]
     expect:
       exit_code: 0
       stdout_contains: ["plan", "cost"]
@@ -204,7 +203,7 @@ tests:
 
   - name: "profile-query-execution"
     description: "Profile query execution"
-    args: ["query", "--embedded", "PROFILE MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN count(p) AS employee_count"]
+    args: ["query", "PROFILE MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN count(p) AS employee_count"]
     expect:
       exit_code: 0
       stdout_contains: ["profile", "time", "rows"]
@@ -213,7 +212,7 @@ tests:
   # Transaction management
   - name: "long-running-transaction"
     description: "Test long-running transaction"
-    args: ["query", "--embedded", "--begin", "MATCH (p:Person) SET p.last_updated = timestamp() RETURN count(p) AS updated"]
+    args: ["query", "--begin", "MATCH (p:Person) SET p.last_updated = timestamp() RETURN count(p) AS updated"]
     expect:
       exit_code: 0
       geode_query:
@@ -223,7 +222,7 @@ tests:
 
   - name: "rollback-transaction"
     description: "Test transaction rollback"
-    args: ["query", "--embedded", "--rollback", "MATCH (p:Person) RETURN count(p) AS count"]
+    args: ["query", "--rollback", "MATCH (p:Person) RETURN count(p) AS count"]
     expect:
       exit_code: 0
       geode_query:
@@ -235,8 +234,8 @@ tests:
   - name: "bulk-data-load"
     description: "Test bulk data loading"
     # UNWIND is not GQL-compliant - replaced with simpler test
-    # Original: args: ["query", "--embedded", "UNWIND range(1, 1000) AS i CREATE (n:BulkTest {id: i, value: 'test_' + toString(i)}) RETURN count(n) AS created"]
-    args: ["query", "--embedded", "CREATE (n1:BulkTest {id: 1, value: 'test_1'}), (n2:BulkTest {id: 2, value: 'test_2'}), (n3:BulkTest {id: 3, value: 'test_3'}) RETURN count(*) AS created"]
+    # Original: args: ["query", "UNWIND range(1, 1000) AS i CREATE (n:BulkTest {id: i, value: 'test_' + toString(i)}) RETURN count(n) AS created"]
+    args: ["query", "CREATE (n1:BulkTest {id: 1, value: 'test_1'}), (n2:BulkTest {id: 2, value: 'test_2'}), (n3:BulkTest {id: 3, value: 'test_3'}) RETURN count(*) AS created"]
     expect:
       exit_code: 0
       geode_query:
@@ -246,7 +245,7 @@ tests:
 
   - name: "bulk-data-update"
     description: "Test bulk data updates"
-    args: ["query", "--embedded", "MATCH (n:BulkTest) WHERE n.id % 10 = 0 SET n.special = true RETURN count(n) AS updated"]
+    args: ["query", "MATCH (n:BulkTest) WHERE n.id % 10 = 0 SET n.special = true RETURN count(n) AS updated"]
     expect:
       exit_code: 0
       geode_query:
@@ -256,7 +255,7 @@ tests:
 
   - name: "bulk-data-delete"
     description: "Test bulk data deletion"
-    args: ["query", "--embedded", "MATCH (n:BulkTest) DELETE n RETURN count(n) AS deleted"]
+    args: ["query", "MATCH (n:BulkTest) DELETE n RETURN count(n) AS deleted"]
     expect:
       exit_code: 0
       geode_query:
@@ -267,14 +266,14 @@ tests:
   # Cleanup
   - name: "cleanup-constraints"
     description: "Clean up test constraints"
-    args: ["query", "--embedded", "DROP CONSTRAINT person_email_unique"]
+    args: ["query", "DROP CONSTRAINT person_email_unique"]
     expect:
       exit_code: 0
     tags: ["cleanup", "constraint"]
 
   - name: "cleanup-test-data"
     description: "Clean up all test data"
-    args: ["query", "--embedded", "MATCH (n) DETACH DELETE n"]
+    args: ["query", "MATCH (n) DETACH DELETE n"]
     expect:
       exit_code: 0
     tags: ["cleanup", "data"]
