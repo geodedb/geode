@@ -290,6 +290,10 @@ pub const ServerState = struct {
     // security_manager: ?*SecurityManager = null,
     // current_user_id: ?UserId = null,
 
+    // Authentication state for current session (set by HELLO message handler)
+    authenticated_user: ?[]const u8 = null,
+    authenticated_role: ?@import("../security/user_management.zig").Role = null,
+
     pub fn resetResult(self: *ServerState) void {
         // Free row fragments
         var i: usize = 0;

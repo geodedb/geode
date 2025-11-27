@@ -285,6 +285,7 @@ const MAX_LINE_SIZE: usize = 65_536;
 const StreamState = struct {
     buffer: std.ArrayList(u8),
     authenticated_username: ?[]const u8 = null,
+    authenticated_password: ?[]const u8 = null,
     last_result_data: ?[]const u8 = null,
     message_count: usize = 0,
 
@@ -292,6 +293,7 @@ const StreamState = struct {
         return StreamState{
             .buffer = try std.ArrayList(u8).initCapacity(allocator, 1024),
             .authenticated_username = null,
+            .authenticated_password = null,
             .last_result_data = null,
             .message_count = 0,
         };
@@ -300,6 +302,7 @@ const StreamState = struct {
     fn deinit(self: *StreamState, allocator: std.mem.Allocator) void {
         self.buffer.deinit(allocator);
         if (self.authenticated_username) |username| allocator.free(username);
+        if (self.authenticated_password) |password| allocator.free(password);
         if (self.last_result_data) |data| allocator.free(data);
     }
 
@@ -537,9 +540,11 @@ fn processProtocolMessage(
                 return;
             };
 
-            // Authentication successful - store username
+            // Authentication successful - store username and password
             if (state.authenticated_username) |old| allocator.free(old);
             state.authenticated_username = try allocator.dupe(u8, username);
+            if (state.authenticated_password) |old| allocator.free(old);
+            state.authenticated_password = try allocator.dupe(u8, password);
             std.debug.print("Authentication successful for user: {s}\n", .{username});
         } else {
             log.debug("Authentication is NOT enabled, skipping credential validation", .{});
@@ -605,6 +610,7 @@ fn processProtocolMessage(
         const options = geode.test_harness.QueryOptions{
             .token = null,
             .user = state.authenticated_username,
+            .password = state.authenticated_password,
             .strict_offset_validation = true, // QUIC mode enforces US001 (OFFSET requires ORDER BY)
             .param_names = param_names.items,
             .param_values = param_values.items,
@@ -717,7 +723,13 @@ fn processProtocolMessage(
                     for (columns.array.items, 0..) |col, col_idx| {
                         if (col_idx > 0) try resp_writer.writeAll(",");
                         try resp_writer.print("\"{s}\":", .{col.string});
-                        try writeJsonValueWithDecimalScale(resp_writer, row_array.array.items[col_idx], allocator);
+                        // Bounds check: ensure col_idx is within row_array bounds
+                        // (mutation queries without RETURN may have empty row data)
+                        if (col_idx < row_array.array.items.len) {
+                            try writeJsonValueWithDecimalScale(resp_writer, row_array.array.items[col_idx], allocator);
+                        } else {
+                            try resp_writer.writeAll("null");
+                        }
                     }
 
                     try resp_writer.writeAll("}");

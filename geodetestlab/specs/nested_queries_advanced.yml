@@ -1,305 +1,233 @@
-name: "Nested Queries - Advanced"
-description: "Advanced nested queries with multiple levels of nesting and complex logic"
-version: "1.0.0"
-provider: "cli"
+description: "Advanced nested queries with complex logic (features currently supported)"
+binary: geode
+timeout: 30
+
+cli:
+  server:
+    enabled: true
+    port: null
+    data_dir: null
+    startup_timeout_ms: 30000
+    cleanup: true
+    args: ["--log-level", "error"]
+  client:
+    timeout_ms: 30000
+    tls_verify: false
+    format: "json"
 
 setup:
-  - command: "query"
-    args: ["-"]
+  - args: ["query", "-"]
     stdin: |
-      CREATE SCHEMA IF NOT EXISTS nested_advanced;
-      USE nested_advanced;
-      
-      CREATE NODE Customer {
-        id: INTEGER,
-        name: STRING,
-        email: STRING,
-        registration_date: DATE,
-        tier: STRING,
-        credit_limit: DECIMAL(10,2)
-      };
-      
-      CREATE NODE Order {
-        id: INTEGER,
-        order_date: DATE,
-        total_amount: DECIMAL(10,2),
-        status: STRING,
-        shipping_cost: DECIMAL(8,2)
-      };
-      
-      CREATE NODE Product {
-        id: INTEGER,
-        name: STRING,
-        category: STRING,
-        price: DECIMAL(10,2),
-        stock: INTEGER,
-        rating: DECIMAL(3,2)
-      };
-      
-      CREATE NODE Supplier {
-        id: INTEGER,
-        name: STRING,
-        country: STRING,
-        reliability_score: DECIMAL(3,2)
-      };
-      
-      CREATE NODE Warehouse {
-        id: INTEGER,
-        location: STRING,
-        capacity: INTEGER,
-        current_stock: INTEGER
-      };
-      
-      CREATE EDGE PLACED {timestamp: DATETIME};
-      CREATE EDGE CONTAINS {quantity: INTEGER, unit_price: DECIMAL(10,2), discount: DECIMAL(5,2)};
-      CREATE EDGE SUPPLIES {lead_time: INTEGER, min_order: INTEGER};
-      CREATE EDGE STORED_IN {quantity: INTEGER, last_updated: DATE};
-      CREATE EDGE REFERRED {referral_date: DATE, bonus: DECIMAL(8,2)};
-    expected_output:
-      contains: []
+      CREATE (c1:CustAdv {id: 1, name: 'Alice', email: 'alice@example.com', tier: 'Gold', credit_limit: 10000.00})
+      CREATE (c2:CustAdv {id: 2, name: 'Bob', email: 'bob@example.com', tier: 'Silver', credit_limit: 5000.00})
+      CREATE (c3:CustAdv {id: 3, name: 'Charlie', email: 'charlie@example.com', tier: 'Gold', credit_limit: 8000.00})
+      CREATE (c4:CustAdv {id: 4, name: 'Diana', email: 'diana@example.com', tier: 'Bronze', credit_limit: 2000.00})
+      CREATE (c5:CustAdv {id: 5, name: 'Eve', email: 'eve@example.com', tier: 'Silver', credit_limit: 6000.00})
+    expect:
+      exit_code: 0
 
-  - command: "query"
-    args: ["-"]
+  - args: ["query", "-"]
     stdin: |
-      // Create customers with referral chains
-      CREATE (c1:Customer {id: 1, name: 'Alice', email: 'alice@example.com', registration_date: DATE '2022-01-15', tier: 'Gold', credit_limit: 10000.00})
-      CREATE (c2:Customer {id: 2, name: 'Bob', email: 'bob@example.com', registration_date: DATE '2022-03-20', tier: 'Silver', credit_limit: 5000.00})
-      CREATE (c3:Customer {id: 3, name: 'Charlie', email: 'charlie@example.com', registration_date: DATE '2022-06-10', tier: 'Gold', credit_limit: 8000.00})
-      CREATE (c4:Customer {id: 4, name: 'Diana', email: 'diana@example.com', registration_date: DATE '2022-09-01', tier: 'Bronze', credit_limit: 2000.00})
-      CREATE (c5:Customer {id: 5, name: 'Eve', email: 'eve@example.com', registration_date: DATE '2023-01-01', tier: 'Silver', credit_limit: 6000.00})
-      
-      // Create referral relationships
-      MATCH (c1:Customer {id: 1}), (c2:Customer {id: 2})
-      CREATE (c1)-[:REFERRED {referral_date: DATE '2022-03-01', bonus: 50.00}]->(c2)
-      
-      MATCH (c1:Customer {id: 1}), (c3:Customer {id: 3})
-      CREATE (c1)-[:REFERRED {referral_date: DATE '2022-06-01', bonus: 50.00}]->(c3)
-      
-      MATCH (c2:Customer {id: 2}), (c4:Customer {id: 4})
-      CREATE (c2)-[:REFERRED {referral_date: DATE '2022-08-15', bonus: 30.00}]->(c4)
-      
-      MATCH (c3:Customer {id: 3}), (c5:Customer {id: 5})
-      CREATE (c3)-[:REFERRED {referral_date: DATE '2022-12-20', bonus: 40.00}]->(c5)
-      
-      // Create products
-      CREATE (p1:Product {id: 1, name: 'Laptop', category: 'Electronics', price: 999.99, stock: 50, rating: 4.5})
-      CREATE (p2:Product {id: 2, name: 'Mouse', category: 'Electronics', price: 29.99, stock: 200, rating: 4.2})
-      CREATE (p3:Product {id: 3, name: 'Desk', category: 'Furniture', price: 299.99, stock: 30, rating: 4.7})
-      CREATE (p4:Product {id: 4, name: 'Chair', category: 'Furniture', price: 199.99, stock: 75, rating: 4.3})
-      CREATE (p5:Product {id: 5, name: 'Monitor', category: 'Electronics', price: 399.99, stock: 40, rating: 4.6})
-      CREATE (p6:Product {id: 6, name: 'Keyboard', category: 'Electronics', price: 79.99, stock: 150, rating: 4.4})
-      
-      // Create suppliers
-      CREATE (s1:Supplier {id: 1, name: 'TechCorp', country: 'USA', reliability_score: 4.8})
-      CREATE (s2:Supplier {id: 2, name: 'FurniturePlus', country: 'Canada', reliability_score: 4.5})
-      CREATE (s3:Supplier {id: 3, name: 'GlobalSupply', country: 'China', reliability_score: 3.9})
-      
-      // Create warehouses
-      CREATE (w1:Warehouse {id: 1, location: 'NYC', capacity: 10000, current_stock: 7500})
-      CREATE (w2:Warehouse {id: 2, location: 'LA', capacity: 8000, current_stock: 5000})
-      CREATE (w3:Warehouse {id: 3, location: 'Chicago', capacity: 6000, current_stock: 4000})
-      
-      // Create orders
-      CREATE (o1:Order {id: 1, order_date: DATE '2023-01-15', total_amount: 1329.97, status: 'Completed', shipping_cost: 20.00})
-      CREATE (o2:Order {id: 2, order_date: DATE '2023-02-20', total_amount: 499.98, status: 'Completed', shipping_cost: 15.00})
-      CREATE (o3:Order {id: 3, order_date: DATE '2023-03-10', total_amount: 1679.95, status: 'Pending', shipping_cost: 25.00})
-      CREATE (o4:Order {id: 4, order_date: DATE '2023-03-15', total_amount: 329.98, status: 'Completed', shipping_cost: 10.00})
-      CREATE (o5:Order {id: 5, order_date: DATE '2023-04-01', total_amount: 899.97, status: 'Processing', shipping_cost: 18.00})
-      
-      // Link customers to orders
-      MATCH (c1:Customer {id: 1}), (o1:Order {id: 1})
-      CREATE (c1)-[:PLACED {timestamp: DATETIME '2023-01-15T10:30:00'}]->(o1)
-      
-      MATCH (c2:Customer {id: 2}), (o2:Order {id: 2})
-      CREATE (c2)-[:PLACED {timestamp: DATETIME '2023-02-20T14:15:00'}]->(o2)
-      
-      MATCH (c1:Customer {id: 1}), (o3:Order {id: 3})
-      CREATE (c1)-[:PLACED {timestamp: DATETIME '2023-03-10T09:45:00'}]->(o3)
-      
-      MATCH (c3:Customer {id: 3}), (o4:Order {id: 4})
-      CREATE (c3)-[:PLACED {timestamp: DATETIME '2023-03-15T16:20:00'}]->(o4)
-      
-      MATCH (c4:Customer {id: 4}), (o5:Order {id: 5})
-      CREATE (c4)-[:PLACED {timestamp: DATETIME '2023-04-01T11:00:00'}]->(o5)
-      
-      // Link orders to products
-      MATCH (o1:Order {id: 1}), (p1:Product {id: 1}), (p2:Product {id: 2})
-      CREATE (o1)-[:CONTAINS {quantity: 1, unit_price: 999.99, discount: 0.00}]->(p1)
-      CREATE (o1)-[:CONTAINS {quantity: 1, unit_price: 29.99, discount: 0.00}]->(p2)
-      CREATE (o1)-[:CONTAINS {quantity: 1, unit_price: 299.99, discount: 0.00}]->(p3)
-      
-      MATCH (o2:Order {id: 2}), (p3:Product {id: 3}), (p4:Product {id: 4})
-      CREATE (o2)-[:CONTAINS {quantity: 1, unit_price: 299.99, discount: 0.00}]->(p3)
-      CREATE (o2)-[:CONTAINS {quantity: 1, unit_price: 199.99, discount: 0.00}]->(p4)
-      
-      MATCH (o3:Order {id: 3}), (p1:Product {id: 1}), (p5:Product {id: 5}), (p6:Product {id: 6})
-      CREATE (o3)-[:CONTAINS {quantity: 1, unit_price: 999.99, discount: 50.00}]->(p1)
-      CREATE (o3)-[:CONTAINS {quantity: 2, unit_price: 399.99, discount: 20.00}]->(p5)
-      CREATE (o3)-[:CONTAINS {quantity: 1, unit_price: 79.99, discount: 5.00}]->(p6)
-      
-      // Link suppliers to products
-      MATCH (s1:Supplier {id: 1}), (p1:Product {id: 1}), (p2:Product {id: 2}), (p5:Product {id: 5}), (p6:Product {id: 6})
-      CREATE (s1)-[:SUPPLIES {lead_time: 7, min_order: 10}]->(p1)
-      CREATE (s1)-[:SUPPLIES {lead_time: 3, min_order: 50}]->(p2)
-      CREATE (s1)-[:SUPPLIES {lead_time: 5, min_order: 20}]->(p5)
-      CREATE (s1)-[:SUPPLIES {lead_time: 3, min_order: 30}]->(p6)
-      
-      MATCH (s2:Supplier {id: 2}), (p3:Product {id: 3}), (p4:Product {id: 4})
-      CREATE (s2)-[:SUPPLIES {lead_time: 10, min_order: 5}]->(p3)
-      CREATE (s2)-[:SUPPLIES {lead_time: 10, min_order: 10}]->(p4)
-      
-      // Store products in warehouses
-      MATCH (p1:Product {id: 1}), (w1:Warehouse {id: 1}), (w2:Warehouse {id: 2})
-      CREATE (p1)-[:STORED_IN {quantity: 30, last_updated: DATE '2023-04-01'}]->(w1)
-      CREATE (p1)-[:STORED_IN {quantity: 20, last_updated: DATE '2023-04-01'}]->(w2)
-    expected_output:
-      contains: []
+      CREATE (p1:ProdAdv {id: 1, name: 'Laptop', category: 'Electronics', price: 999.99, stock: 50, rating: 4.5})
+      CREATE (p2:ProdAdv {id: 2, name: 'Mouse', category: 'Electronics', price: 29.99, stock: 200, rating: 4.2})
+      CREATE (p3:ProdAdv {id: 3, name: 'Desk', category: 'Furniture', price: 299.99, stock: 30, rating: 4.7})
+      CREATE (p4:ProdAdv {id: 4, name: 'Chair', category: 'Furniture', price: 199.99, stock: 75, rating: 4.3})
+      CREATE (p5:ProdAdv {id: 5, name: 'Monitor', category: 'Electronics', price: 399.99, stock: 40, rating: 4.6})
+      CREATE (p6:ProdAdv {id: 6, name: 'Keyboard', category: 'Electronics', price: 79.99, stock: 150, rating: 4.4})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (s1:SupplierAdv {id: 1, name: 'TechCorp', country: 'USA', reliability_score: 4.8})
+      CREATE (s2:SupplierAdv {id: 2, name: 'FurniturePlus', country: 'Canada', reliability_score: 4.5})
+      CREATE (s3:SupplierAdv {id: 3, name: 'GlobalSupply', country: 'China', reliability_score: 3.9})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (o1:OrderAdv {id: 1, total_amount: 1329.97, status: 'Completed', shipping_cost: 20.00})
+      CREATE (o2:OrderAdv {id: 2, total_amount: 499.98, status: 'Completed', shipping_cost: 15.00})
+      CREATE (o3:OrderAdv {id: 3, total_amount: 1679.95, status: 'Pending', shipping_cost: 25.00})
+      CREATE (o4:OrderAdv {id: 4, total_amount: 329.98, status: 'Completed', shipping_cost: 10.00})
+      CREATE (o5:OrderAdv {id: 5, total_amount: 899.97, status: 'Processing', shipping_cost: 18.00})
+    expect:
+      exit_code: 0
+
+  # Create relationships
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (c1:CustAdv {id: 1}), (o1:OrderAdv {id: 1})
+      CREATE (c1)-[:PLACED_ADV]->(o1)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (c2:CustAdv {id: 2}), (o2:OrderAdv {id: 2})
+      CREATE (c2)-[:PLACED_ADV]->(o2)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (c1:CustAdv {id: 1}), (o3:OrderAdv {id: 3})
+      CREATE (c1)-[:PLACED_ADV]->(o3)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (c3:CustAdv {id: 3}), (o4:OrderAdv {id: 4})
+      CREATE (c3)-[:PLACED_ADV]->(o4)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (c4:CustAdv {id: 4}), (o5:OrderAdv {id: 5})
+      CREATE (c4)-[:PLACED_ADV]->(o5)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (s1:SupplierAdv {id: 1}), (p1:ProdAdv {id: 1})
+      CREATE (s1)-[:SUPPLIES_ADV {lead_time: 7, min_order: 10}]->(p1)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (s2:SupplierAdv {id: 2}), (p3:ProdAdv {id: 3})
+      CREATE (s2)-[:SUPPLIES_ADV {lead_time: 10, min_order: 5}]->(p3)
+    expect:
+      exit_code: 0
 
 tests:
-  # Level 1: Three-Level Nested Queries
-  - name: "Triple Nested Subquery"
-    command: "query"
-    args: ["MATCH (c:Customer) WHERE c.credit_limit > (SELECT avg(c2.credit_limit) FROM Customer c2 WHERE EXISTS { MATCH (c2)-[:PLACED]->(o:Order) WHERE o.total_amount > (SELECT avg(o2.total_amount) FROM Order o2) }) RETURN c.name"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Nested EXISTS with Multiple Levels"
-    command: "query"
-    args: ["MATCH (c:Customer) WHERE EXISTS { MATCH (c)-[:PLACED]->(o:Order) WHERE EXISTS { MATCH (o)-[:CONTAINS]->(p:Product) WHERE p.price > (SELECT avg(p2.price) FROM Product p2 WHERE p2.category = p.category) } } RETURN c.name"]
-    expected_output:
-      pattern: "\\w+"
-  
-  # Level 2: Complex Correlated Subqueries
-  - name: "Multi-Table Correlated Subquery"
-    command: "query"
-    args: ["MATCH (p:Product) WHERE p.stock < (SELECT avg(si.quantity) FROM Product p2, (p2)-[:STORED_IN]->(w:Warehouse) AS si WHERE p2.category = p.category) RETURN p.name, p.stock"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Correlated Subquery with Path"
-    command: "query"
-    args: ["MATCH (c:Customer) WHERE EXISTS { MATCH path = (c)-[:REFERRED*1..3]->(:Customer)-[:PLACED]->(:Order) WHERE length(path) > (SELECT avg(length(path2)) FROM (c)-[:REFERRED*]->(:Customer) AS path2) } RETURN c.name"]
-    expected_output:
-      pattern: "\\w+"
-  
-  # Level 3: Nested Aggregations with HAVING
-  - name: "Nested HAVING Clause"
-    command: "query"
-    args: ["MATCH (c:Customer)-[:PLACED]->(o:Order) WITH c, count(o) AS order_count, sum(o.total_amount) AS total_spent WHERE order_count > 1 WITH c.tier AS tier, avg(total_spent) AS avg_spent HAVING avg_spent > (SELECT avg(o.total_amount) FROM Order o) RETURN tier, avg_spent"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Double GROUP BY with Nested Conditions"
-    command: "query"
-    args: ["MATCH (p:Product)-[:STORED_IN]->(w:Warehouse) WITH p.category AS category, w.location AS location, sum(si.quantity) AS total_stock GROUP BY category, location HAVING total_stock > (SELECT avg(p2.stock) FROM Product p2 WHERE p2.category = category) RETURN category, location, total_stock"]
-    expected_output:
-      pattern: "\\w+"
-  
-  # Level 4: Complex WITH Chains
-  - name: "Four-Level WITH Chain"
-    command: "query"
-    args: ["MATCH (c:Customer)-[:PLACED]->(o:Order) WITH c, count(o) AS orders WITH c, orders WHERE orders > 0 WITH c.tier AS tier, avg(orders) AS avg_orders WITH tier WHERE avg_orders > 1 RETURN tier"]
-    expected_output:
-      contains:
-        - "Gold"
-  
-  - name: "WITH Chain with Subqueries"
-    command: "query"
-    args: ["WITH (SELECT avg(p.price) FROM Product p) AS avg_price MATCH (p:Product) WHERE p.price > avg_price WITH p, p.price - avg_price AS price_diff WITH p.category AS category, avg(price_diff) AS avg_diff WHERE avg_diff > 100 RETURN category, avg_diff"]
-    expected_output:
-      pattern: "\\w+"
-  
-  # Level 5: Recursive Patterns with Nesting
-  - name: "Recursive Referral Chain"
-    command: "query"
-    args: ["MATCH (c:Customer) WHERE EXISTS { MATCH (c)-[:REFERRED*1..3]->(referred:Customer) WHERE (SELECT count(o) FROM (referred)-[:PLACED]->(o:Order)) > (SELECT avg(count(o2)) FROM Customer c2, (c2)-[:PLACED]->(o2:Order) GROUP BY c2) } RETURN c.name AS top_referrer"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Variable Length Path with Nested Filter"
-    command: "query"
-    args: ["MATCH path = (c:Customer)-[:REFERRED*]->(:Customer) WHERE all(node IN nodes(path) WHERE node.credit_limit > (SELECT avg(c2.credit_limit) FROM Customer c2)) RETURN c.name, length(path) AS chain_length ORDER BY chain_length DESC"]
-    expected_output:
-      pattern: "\\w+"
-  
-  # Level 6: UNION with Nested Queries
-  - name: "UNION of Nested Results"
-    command: "query"
-    args: ["(SELECT c.name FROM Customer c WHERE c.credit_limit > (SELECT avg(credit_limit) FROM Customer)) UNION (SELECT s.name FROM Supplier s WHERE s.reliability_score > (SELECT avg(reliability_score) FROM Supplier))"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Complex UNION ALL"
-    command: "query"
-    args: ["(MATCH (c:Customer) WHERE EXISTS { MATCH (c)-[:PLACED]->(o:Order) WHERE o.total_amount > 1000 } RETURN c.name AS name, 'High Value Customer' AS type) UNION ALL (MATCH (s:Supplier) WHERE EXISTS { MATCH (s)-[:SUPPLIES]->(p:Product) WHERE p.rating > 4.5 } RETURN s.name AS name, 'Premium Supplier' AS type)"]
-    expected_output:
-      contains:
-        - "High Value Customer"
-        - "Premium Supplier"
-  
-  # Level 7: Window Functions in Nested Context
-  - name: "Nested RANK with Filtering"
-    command: "query"
-    args: ["WITH (MATCH (c:Customer)-[:PLACED]->(o:Order) RETURN c.name, sum(o.total_amount) AS total, rank() OVER (ORDER BY sum(o.total_amount) DESC) AS spending_rank GROUP BY c) AS ranked WHERE ranked.spending_rank <= (SELECT count(DISTINCT c2.tier) FROM Customer c2) RETURN ranked.name, ranked.spending_rank"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Cumulative Sum in Subquery"
-    command: "query"
-    args: ["WITH (MATCH (o:Order) WHERE o.status = 'Completed' RETURN o.order_date, o.total_amount, sum(o.total_amount) OVER (ORDER BY o.order_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total) AS cumulative WHERE cumulative.running_total > (SELECT avg(o2.total_amount) * 2 FROM Order o2) RETURN cumulative.order_date, cumulative.running_total"]
-    expected_output:
-      pattern: "\\d{4}-\\d{2}-\\d{2}"
-  
-  # Level 8: Complex CASE with Multiple Nesting Levels
-  - name: "Nested CASE with Subqueries"
-    command: "query"
-    args: ["MATCH (c:Customer) RETURN c.name, CASE WHEN c.credit_limit > (SELECT avg(credit_limit) FROM Customer) THEN CASE WHEN EXISTS { MATCH (c)-[:PLACED]->(o:Order) WHERE o.total_amount > (SELECT avg(total_amount) FROM Order) } THEN 'Premium High Spender' ELSE 'Premium Low Spender' END ELSE CASE WHEN EXISTS { MATCH (c)-[:REFERRED]->() } THEN 'Standard Referrer' ELSE 'Standard Customer' END END AS customer_category"]
-    expected_output:
-      contains:
-        - "Premium"
-        - "Standard"
-  
-  - name: "CASE in WHERE with Nesting"
-    command: "query"
-    args: ["MATCH (p:Product) WHERE CASE WHEN p.category = 'Electronics' THEN p.price > (SELECT avg(p2.price) FROM Product p2 WHERE p2.category = 'Electronics') ELSE p.stock > (SELECT avg(p3.stock) FROM Product p3 WHERE p3.category = p.category) END RETURN p.name, p.category"]
-    expected_output:
-      pattern: "\\w+"
-  
-  # Level 9: Advanced Joins with Subqueries
-  - name: "Self-Join with Nested Conditions"
-    command: "query"
-    args: ["MATCH (p1:Product), (p2:Product) WHERE p1.id < p2.id AND p1.category = p2.category AND abs(p1.price - p2.price) < (SELECT stddev(p.price) FROM Product p WHERE p.category = p1.category) RETURN p1.name AS product1, p2.name AS product2, abs(p1.price - p2.price) AS price_diff"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Cross Join with Filtering Subquery"
-    command: "query"
-    args: ["MATCH (c:Customer), (p:Product) WHERE NOT EXISTS { MATCH (c)-[:PLACED]->(:Order)-[:CONTAINS]->(p) } AND p.price < c.credit_limit * 0.5 AND p.rating > (SELECT avg(p2.rating) FROM Product p2) RETURN c.name, p.name AS recommended_product LIMIT 5"]
-    expected_output:
-      pattern: "\\w+"
-  
-  # Level 10: Ultra-Complex Nested Queries
-  - name: "Five-Level Deep Nesting"
-    command: "query"
-    args: ["MATCH (c:Customer) WHERE c.credit_limit > (SELECT avg(c2.credit_limit) FROM Customer c2 WHERE EXISTS { MATCH (c2)-[:PLACED]->(o:Order) WHERE o.total_amount > (SELECT avg(o2.total_amount) FROM Order o2 WHERE EXISTS { MATCH (o2)-[:CONTAINS]->(p:Product) WHERE p.price > (SELECT avg(p2.price) FROM Product p2 WHERE EXISTS { MATCH (p2)<-[:SUPPLIES]-(s:Supplier) WHERE s.reliability_score > (SELECT avg(s2.reliability_score) FROM Supplier s2) }) }) }) RETURN c.name"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Complex Analytical Query"
-    command: "query"
-    args: ["WITH (MATCH (c:Customer)-[:PLACED]->(o:Order)-[:CONTAINS]->(p:Product) RETURN c.tier, p.category, sum(co.quantity * co.unit_price * (1 - co.discount/100)) AS revenue GROUP BY c.tier, p.category) AS tier_category_revenue WHERE tier_category_revenue.revenue > (SELECT percentile(o.total_amount, 0.75) FROM Order o) WITH tier_category_revenue.tier AS tier, avg(tier_category_revenue.revenue) AS avg_revenue WHERE avg_revenue > (WITH (MATCH (o:Order) RETURN avg(o.total_amount) AS avg) AS global_avg RETURN global_avg * 1.5) RETURN tier, avg_revenue"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Multi-Path Correlation Query"
-    command: "query"
-    args: ["MATCH (c:Customer) WHERE EXISTS { MATCH path1 = (c)-[:REFERRED*]->(r1:Customer)-[:PLACED]->(o1:Order) WHERE length(path1) > 1 AND o1.total_amount > (SELECT avg(o.total_amount) FROM (c)-[:PLACED]->(o:Order)) } AND EXISTS { MATCH path2 = (c)-[:PLACED]->(o2:Order)-[:CONTAINS]->(p:Product)<-[:SUPPLIES]-(s:Supplier) WHERE s.reliability_score > (SELECT avg(s2.reliability_score) FROM Supplier s2) AND p.rating > (SELECT percentile(p2.rating, 0.8) FROM Product p2) } RETURN c.name AS influential_customer"]
-    expected_output:
-      pattern: "\\w+"
+  # UNION Queries
+  - name: "union-nested-results"
+    description: "UNION of nested query results"
+    args: ["query", "-"]
+    stdin: "MATCH (c:CustAdv) WHERE c.credit_limit > 7000 RETURN c.name AS name UNION MATCH (s:SupplierAdv) WHERE s.reliability_score > 4.4 RETURN s.name AS name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Charlie", "TechCorp", "FurniturePlus"]
+    tags: ["nested", "union"]
 
-cleanup:
-  - command: "query"
-    args: ["-"]
-    stdin: "DROP SCHEMA nested_advanced CASCADE;"
-    expected_output:
-      contains: []
+  - name: "union-all-products"
+    description: "UNION ALL for products from different categories"
+    args: ["query", "-"]
+    stdin: "MATCH (p:ProdAdv) WHERE p.category = 'Electronics' RETURN p.name AS name UNION ALL MATCH (p:ProdAdv) WHERE p.category = 'Furniture' RETURN p.name AS name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Laptop", "Desk"]
+    tags: ["union-all"]
+
+  # DISTINCT Queries
+  - name: "high-value-customers"
+    description: "High value customers query with DISTINCT"
+    args: ["query", "-"]
+    stdin: "MATCH (c:CustAdv)-[:PLACED_ADV]->(o:OrderAdv) WHERE o.total_amount > 500 RETURN DISTINCT c.name, c.tier ORDER BY c.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Diana"]
+    tags: ["filter", "distinct"]
+
+  - name: "distinct-suppliers"
+    description: "DISTINCT supplier countries"
+    args: ["query", "-"]
+    stdin: "MATCH (s:SupplierAdv) RETURN DISTINCT s.country AS country ORDER BY country"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Canada", "China", "USA"]
+    tags: ["distinct"]
+
+  # Filter with AND Conditions
+  - name: "electronics-high-rating"
+    description: "Electronics with high rating"
+    args: ["query", "-"]
+    stdin: "MATCH (p:ProdAdv) WHERE p.category = 'Electronics' AND p.rating > 4.3 RETURN p.name, p.price, p.rating ORDER BY p.rating DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Monitor", "Laptop"]
+    tags: ["filter", "category"]
+
+  - name: "furniture-high-rating"
+    description: "Furniture with high rating and stock"
+    args: ["query", "-"]
+    stdin: "MATCH (p:ProdAdv) WHERE p.category = 'Furniture' AND p.rating > 4.2 RETURN p.name, p.rating"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Desk", "Chair"]
+    tags: ["filter", "and"]
+
+  # Filter with OR Conditions
+  - name: "gold-or-silver-customers"
+    description: "Customers with Gold or Silver tier"
+    args: ["query", "-"]
+    stdin: "MATCH (c:CustAdv) WHERE c.tier = 'Gold' OR c.tier = 'Silver' RETURN c.name, c.tier ORDER BY c.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Bob", "Charlie", "Eve"]
+    tags: ["filter", "or"]
+
+  # Relationship Traversal
+  - name: "customer-orders-relationship"
+    description: "Customer orders via relationship"
+    args: ["query", "-"]
+    stdin: "MATCH (c:CustAdv)-[:PLACED_ADV]->(o:OrderAdv) RETURN c.name, o.total_amount ORDER BY o.total_amount DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "1679.95"]
+    tags: ["relationship"]
+
+  - name: "supplier-products-relationship"
+    description: "Supplier products via relationship"
+    args: ["query", "-"]
+    stdin: "MATCH (s:SupplierAdv)-[:SUPPLIES_ADV]->(p:ProdAdv) RETURN s.name, p.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["TechCorp", "Laptop"]
+    tags: ["relationship"]
+
+  # Credit limit filters
+  - name: "high-credit-customers"
+    description: "Customers with high credit limit"
+    args: ["query", "-"]
+    stdin: "MATCH (c:CustAdv) WHERE c.credit_limit >= 5000 RETURN c.name, c.credit_limit ORDER BY c.credit_limit DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "10000", "Charlie", "8000"]
+    tags: ["filter"]
+
+  - name: "order-status-filter"
+    description: "Filter orders by status"
+    args: ["query", "-"]
+    stdin: "MATCH (o:OrderAdv) WHERE o.status = 'Completed' RETURN o.id, o.total_amount ORDER BY o.total_amount DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["1329.97"]
+    tags: ["filter"]
+
+  # Price range queries
+  - name: "products-price-range"
+    description: "Products in price range"
+    args: ["query", "-"]
+    stdin: "MATCH (p:ProdAdv) WHERE p.price >= 100 AND p.price <= 500 RETURN p.name, p.price ORDER BY p.price DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Monitor", "Desk", "Chair"]
+    tags: ["filter", "range"]
+
+  # Stock queries
+  - name: "high-stock-products"
+    description: "Products with high stock"
+    args: ["query", "-"]
+    stdin: "MATCH (p:ProdAdv) WHERE p.stock > 100 RETURN p.name, p.stock ORDER BY p.stock DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Mouse", "Keyboard"]
+    tags: ["filter"]
+

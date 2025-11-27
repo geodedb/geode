@@ -209,14 +209,17 @@ pub fn processMessage(
                 const username = hello.username.?;
                 const password = hello.password.?;
 
-                _ = user_mgmt.authenticate(username, password) catch {
+                const role = user_mgmt.authenticate(username, password) catch {
                     // Authentication failed
                     const error_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Authentication failed: invalid username or password\"}\n";
                     return try gpa.dupe(u8, error_response);
                 };
 
-                // Authentication successful - store session info if needed
-                log.info("Authenticated user: {s}", .{username});
+                // Authentication successful - store session info in state
+                // Note: username comes from arena which is freed, so we must dupe it
+                state.authenticated_user = gpa.dupe(u8, username) catch null;
+                state.authenticated_role = role;
+                log.info("Authenticated user: {s} with role: {s}", .{ username, role.toString() });
             }
 
             // Return HELLO response with capabilities
@@ -404,11 +407,13 @@ pub fn processMessage(
                                 // Extract first row of parameters (most queries have single parameter row)
                                 const param_values = if (pr.len > 0) pr[0] else &[_]eval.Value{};
 
-                                // Create execution context with parameters
+                                // Create execution context with parameters and authentication state
                                 const context = execution.ExecutionContext{
                                     .catalog = @constCast(&catalog_stub),
                                     .query_param_names = pn,
                                     .query_param_values = param_values,
+                                    .user = state.authenticated_user,
+                                    .role = state.authenticated_role,
                                 };
 
                                 // Execute via new modular execution path

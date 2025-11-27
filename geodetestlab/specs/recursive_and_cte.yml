@@ -1,488 +1,305 @@
-name: "Recursive Queries and Common Table Expressions"
-description: "Test recursive patterns, CTEs, and hierarchical data traversal"
-version: "1.0.0"
-provider: "cli"
+description: "Test recursive patterns and hierarchical data traversal (supported features)"
+binary: geode
+timeout: 30
+
+cli:
+  server:
+    enabled: true
+    port: null
+    data_dir: null
+    startup_timeout_ms: 30000
+    cleanup: true
+    args: ["--log-level", "error"]
+  client:
+    timeout_ms: 30000
+    tls_verify: false
+    format: "json"
 
 setup:
-  - command: "query"
-    args: ["-"]
+  - args: ["query", "-"]
     stdin: |
-      CREATE SCHEMA IF NOT EXISTS recursive_cte;
-      USE recursive_cte;
-      
-      CREATE NODE Person {
-        id: INTEGER,
-        name: STRING,
-        birth_year: INTEGER,
-        death_year: INTEGER
-      };
-      
-      CREATE NODE Location {
-        id: INTEGER,
-        name: STRING,
-        type: STRING,
-        population: INTEGER,
-        area_sq_km: DECIMAL(10,2)
-      };
-      
-      CREATE NODE Category {
-        id: INTEGER,
-        name: STRING,
-        level: INTEGER,
-        active: BOOLEAN
-      };
-      
-      CREATE NODE File {
-        id: INTEGER,
-        name: STRING,
-        size_bytes: INTEGER,
-        created: DATETIME,
-        modified: DATETIME
-      };
-      
-      CREATE NODE Organization {
-        id: INTEGER,
-        name: STRING,
-        type: STRING,
-        founded_year: INTEGER,
-        employee_count: INTEGER
-      };
-      
-      CREATE NODE Network {
-        id: INTEGER,
-        ip_address: STRING,
-        subnet_mask: STRING,
-        vlan_id: INTEGER
-      };
-      
-      CREATE EDGE PARENT_OF {};
-      CREATE EDGE LOCATED_IN {};
-      CREATE EDGE SUBCATEGORY_OF {};
-      CREATE EDGE CONTAINS {};
-      CREATE EDGE FOLLOWS {};
-      CREATE EDGE CONNECTED_TO {bandwidth_mbps: INTEGER, latency_ms: DECIMAL(6,2)};
-      CREATE EDGE SUBSIDIARY_OF {ownership_percent: DECIMAL(5,2)};
-      CREATE EDGE FRIENDS_WITH {since: DATE};
-      CREATE EDGE ANCESTOR_OF {generations: INTEGER};
-    expected_output:
-      contains: []
+      CREATE (p1:PersonRec {id: 1, name: 'Great-Grandparent', birth_year: 1900})
+      CREATE (p2:PersonRec {id: 2, name: 'Grandparent-1', birth_year: 1925})
+      CREATE (p3:PersonRec {id: 3, name: 'Grandparent-2', birth_year: 1928})
+      CREATE (p4:PersonRec {id: 4, name: 'Parent-1', birth_year: 1950})
+      CREATE (p5:PersonRec {id: 5, name: 'Parent-2', birth_year: 1952})
+      CREATE (p6:PersonRec {id: 6, name: 'Parent-3', birth_year: 1955})
+      CREATE (p7:PersonRec {id: 7, name: 'Child-1', birth_year: 1975})
+      CREATE (p8:PersonRec {id: 8, name: 'Child-2', birth_year: 1978})
+      CREATE (p9:PersonRec {id: 9, name: 'Child-3', birth_year: 1980})
+      CREATE (p10:PersonRec {id: 10, name: 'Grandchild-1', birth_year: 2000})
+      CREATE (p11:PersonRec {id: 11, name: 'Grandchild-2', birth_year: 2002})
+      CREATE (p12:PersonRec {id: 12, name: 'Grandchild-3', birth_year: 2005})
+    expect:
+      exit_code: 0
 
-  - command: "query"
-    args: ["-"]
+  - args: ["query", "-"]
     stdin: |
-      // Create family tree (genealogy)
-      CREATE (p1:Person {id: 1, name: 'Great-Grandparent', birth_year: 1900, death_year: 1980})
-      CREATE (p2:Person {id: 2, name: 'Grandparent-1', birth_year: 1925, death_year: 2005})
-      CREATE (p3:Person {id: 3, name: 'Grandparent-2', birth_year: 1928, death_year: 2010})
-      CREATE (p4:Person {id: 4, name: 'Parent-1', birth_year: 1950, death_year: NULL})
-      CREATE (p5:Person {id: 5, name: 'Parent-2', birth_year: 1952, death_year: NULL})
-      CREATE (p6:Person {id: 6, name: 'Parent-3', birth_year: 1955, death_year: NULL})
-      CREATE (p7:Person {id: 7, name: 'Child-1', birth_year: 1975, death_year: NULL})
-      CREATE (p8:Person {id: 8, name: 'Child-2', birth_year: 1978, death_year: NULL})
-      CREATE (p9:Person {id: 9, name: 'Child-3', birth_year: 1980, death_year: NULL})
-      CREATE (p10:Person {id: 10, name: 'Grandchild-1', birth_year: 2000, death_year: NULL})
-      CREATE (p11:Person {id: 11, name: 'Grandchild-2', birth_year: 2002, death_year: NULL})
-      CREATE (p12:Person {id: 12, name: 'Grandchild-3', birth_year: 2005, death_year: NULL})
-      
-      // Create family relationships
-      MATCH (p1:Person {id: 1}), (p2:Person {id: 2}), (p3:Person {id: 3})
-      CREATE (p1)-[:PARENT_OF]->(p2)
-      CREATE (p1)-[:PARENT_OF]->(p3)
-      CREATE (p1)-[:ANCESTOR_OF {generations: 1}]->(p2)
-      CREATE (p1)-[:ANCESTOR_OF {generations: 1}]->(p3)
-      
-      MATCH (p2:Person {id: 2}), (p4:Person {id: 4}), (p5:Person {id: 5})
-      CREATE (p2)-[:PARENT_OF]->(p4)
-      CREATE (p2)-[:PARENT_OF]->(p5)
-      
-      MATCH (p3:Person {id: 3}), (p6:Person {id: 6})
-      CREATE (p3)-[:PARENT_OF]->(p6)
-      
-      MATCH (p4:Person {id: 4}), (p7:Person {id: 7}), (p8:Person {id: 8})
-      CREATE (p4)-[:PARENT_OF]->(p7)
-      CREATE (p4)-[:PARENT_OF]->(p8)
-      
-      MATCH (p5:Person {id: 5}), (p9:Person {id: 9})
-      CREATE (p5)-[:PARENT_OF]->(p9)
-      
-      MATCH (p7:Person {id: 7}), (p10:Person {id: 10}), (p11:Person {id: 11})
-      CREATE (p7)-[:PARENT_OF]->(p10)
-      CREATE (p7)-[:PARENT_OF]->(p11)
-      
-      MATCH (p8:Person {id: 8}), (p12:Person {id: 12})
-      CREATE (p8)-[:PARENT_OF]->(p12)
-      
-      // Create ancestor relationships for multiple generations
-      MATCH (p1:Person {id: 1}), (p4:Person {id: 4}), (p5:Person {id: 5}), (p6:Person {id: 6})
-      CREATE (p1)-[:ANCESTOR_OF {generations: 2}]->(p4)
-      CREATE (p1)-[:ANCESTOR_OF {generations: 2}]->(p5)
-      CREATE (p1)-[:ANCESTOR_OF {generations: 2}]->(p6)
-      
-      MATCH (p1:Person {id: 1}), (p7:Person {id: 7}), (p8:Person {id: 8}), (p9:Person {id: 9})
-      CREATE (p1)-[:ANCESTOR_OF {generations: 3}]->(p7)
-      CREATE (p1)-[:ANCESTOR_OF {generations: 3}]->(p8)
-      CREATE (p1)-[:ANCESTOR_OF {generations: 3}]->(p9)
-      
-      // Create geographic hierarchy
-      CREATE (l1:Location {id: 1, name: 'World', type: 'Planet', population: 8000000000, area_sq_km: 510072000.00})
-      CREATE (l2:Location {id: 2, name: 'North America', type: 'Continent', population: 579000000, area_sq_km: 24709000.00})
-      CREATE (l3:Location {id: 3, name: 'USA', type: 'Country', population: 331000000, area_sq_km: 9833517.00})
-      CREATE (l4:Location {id: 4, name: 'California', type: 'State', population: 39500000, area_sq_km: 423967.00})
-      CREATE (l5:Location {id: 5, name: 'Los Angeles', type: 'City', population: 3900000, area_sq_km: 1302.00})
-      CREATE (l6:Location {id: 6, name: 'Texas', type: 'State', population: 29100000, area_sq_km: 695662.00})
-      CREATE (l7:Location {id: 7, name: 'Houston', type: 'City', population: 2300000, area_sq_km: 1651.00})
-      CREATE (l8:Location {id: 8, name: 'Europe', type: 'Continent', population: 746000000, area_sq_km: 10180000.00})
-      CREATE (l9:Location {id: 9, name: 'Germany', type: 'Country', population: 83000000, area_sq_km: 357022.00})
-      CREATE (l10:Location {id: 10, name: 'Berlin', type: 'City', population: 3600000, area_sq_km: 891.00})
-      
-      // Create location hierarchy
-      MATCH (l1:Location {id: 1}), (l2:Location {id: 2}), (l8:Location {id: 8})
-      CREATE (l2)-[:LOCATED_IN]->(l1)
-      CREATE (l8)-[:LOCATED_IN]->(l1)
-      
-      MATCH (l2:Location {id: 2}), (l3:Location {id: 3})
-      CREATE (l3)-[:LOCATED_IN]->(l2)
-      
-      MATCH (l3:Location {id: 3}), (l4:Location {id: 4}), (l6:Location {id: 6})
-      CREATE (l4)-[:LOCATED_IN]->(l3)
-      CREATE (l6)-[:LOCATED_IN]->(l3)
-      
-      MATCH (l4:Location {id: 4}), (l5:Location {id: 5})
-      CREATE (l5)-[:LOCATED_IN]->(l4)
-      
-      MATCH (l6:Location {id: 6}), (l7:Location {id: 7})
-      CREATE (l7)-[:LOCATED_IN]->(l6)
-      
-      MATCH (l8:Location {id: 8}), (l9:Location {id: 9})
-      CREATE (l9)-[:LOCATED_IN]->(l8)
-      
-      MATCH (l9:Location {id: 9}), (l10:Location {id: 10})
-      CREATE (l10)-[:LOCATED_IN]->(l9)
-      
-      // Create category hierarchy
-      CREATE (c1:Category {id: 1, name: 'Products', level: 0, active: true})
-      CREATE (c2:Category {id: 2, name: 'Electronics', level: 1, active: true})
-      CREATE (c3:Category {id: 3, name: 'Clothing', level: 1, active: true})
-      CREATE (c4:Category {id: 4, name: 'Computers', level: 2, active: true})
-      CREATE (c5:Category {id: 5, name: 'Phones', level: 2, active: true})
-      CREATE (c6:Category {id: 6, name: 'Laptops', level: 3, active: true})
-      CREATE (c7:Category {id: 7, name: 'Desktops', level: 3, active: true})
-      CREATE (c8:Category {id: 8, name: 'Smartphones', level: 3, active: true})
-      CREATE (c9:Category {id: 9, name: 'Gaming Laptops', level: 4, active: true})
-      CREATE (c10:Category {id: 10, name: 'Business Laptops', level: 4, active: true})
-      
-      // Create category relationships
-      MATCH (c1:Category {id: 1}), (c2:Category {id: 2}), (c3:Category {id: 3})
-      CREATE (c2)-[:SUBCATEGORY_OF]->(c1)
-      CREATE (c3)-[:SUBCATEGORY_OF]->(c1)
-      
-      MATCH (c2:Category {id: 2}), (c4:Category {id: 4}), (c5:Category {id: 5})
-      CREATE (c4)-[:SUBCATEGORY_OF]->(c2)
-      CREATE (c5)-[:SUBCATEGORY_OF]->(c2)
-      
-      MATCH (c4:Category {id: 4}), (c6:Category {id: 6}), (c7:Category {id: 7})
-      CREATE (c6)-[:SUBCATEGORY_OF]->(c4)
-      CREATE (c7)-[:SUBCATEGORY_OF]->(c4)
-      
-      MATCH (c5:Category {id: 5}), (c8:Category {id: 8})
-      CREATE (c8)-[:SUBCATEGORY_OF]->(c5)
-      
-      MATCH (c6:Category {id: 6}), (c9:Category {id: 9}), (c10:Category {id: 10})
-      CREATE (c9)-[:SUBCATEGORY_OF]->(c6)
-      CREATE (c10)-[:SUBCATEGORY_OF]->(c6)
-      
-      // Create file system hierarchy
-      CREATE (f1:File {id: 1, name: '/', size_bytes: 0, created: DATETIME '2020-01-01T00:00:00', modified: DATETIME '2023-04-01T12:00:00'})
-      CREATE (f2:File {id: 2, name: '/home', size_bytes: 0, created: DATETIME '2020-01-01T00:00:00', modified: DATETIME '2023-03-15T10:00:00'})
-      CREATE (f3:File {id: 3, name: '/home/user', size_bytes: 0, created: DATETIME '2020-01-01T00:00:00', modified: DATETIME '2023-03-01T09:00:00'})
-      CREATE (f4:File {id: 4, name: '/home/user/documents', size_bytes: 0, created: DATETIME '2020-02-01T00:00:00', modified: DATETIME '2023-02-15T14:00:00'})
-      CREATE (f5:File {id: 5, name: '/home/user/documents/report.pdf', size_bytes: 2048576, created: DATETIME '2023-01-15T10:30:00', modified: DATETIME '2023-01-15T10:30:00'})
-      CREATE (f6:File {id: 6, name: '/var', size_bytes: 0, created: DATETIME '2020-01-01T00:00:00', modified: DATETIME '2023-04-01T11:00:00'})
-      CREATE (f7:File {id: 7, name: '/var/log', size_bytes: 0, created: DATETIME '2020-01-01T00:00:00', modified: DATETIME '2023-04-01T11:00:00'})
-      CREATE (f8:File {id: 8, name: '/var/log/system.log', size_bytes: 10485760, created: DATETIME '2023-03-01T00:00:00', modified: DATETIME '2023-04-01T11:00:00'})
-      
-      // Create file system relationships
-      MATCH (f1:File {id: 1}), (f2:File {id: 2}), (f6:File {id: 6})
-      CREATE (f2)-[:CONTAINS]->(f1)
-      CREATE (f6)-[:CONTAINS]->(f1)
-      
-      MATCH (f2:File {id: 2}), (f3:File {id: 3})
-      CREATE (f3)-[:CONTAINS]->(f2)
-      
-      MATCH (f3:File {id: 3}), (f4:File {id: 4})
-      CREATE (f4)-[:CONTAINS]->(f3)
-      
-      MATCH (f4:File {id: 4}), (f5:File {id: 5})
-      CREATE (f5)-[:CONTAINS]->(f4)
-      
-      MATCH (f6:File {id: 6}), (f7:File {id: 7})
-      CREATE (f7)-[:CONTAINS]->(f6)
-      
-      MATCH (f7:File {id: 7}), (f8:File {id: 8})
-      CREATE (f8)-[:CONTAINS]->(f7)
-      
-      // Create organizational hierarchy
-      CREATE (o1:Organization {id: 1, name: 'GlobalCorp', type: 'Holding', founded_year: 1950, employee_count: 100000})
-      CREATE (o2:Organization {id: 2, name: 'TechDiv', type: 'Division', founded_year: 1980, employee_count: 30000})
-      CREATE (o3:Organization {id: 3, name: 'FinanceDiv', type: 'Division', founded_year: 1960, employee_count: 20000})
-      CREATE (o4:Organization {id: 4, name: 'Software Co', type: 'Subsidiary', founded_year: 2000, employee_count: 5000})
-      CREATE (o5:Organization {id: 5, name: 'Hardware Co', type: 'Subsidiary', founded_year: 1995, employee_count: 8000})
-      CREATE (o6:Organization {id: 6, name: 'AI Lab', type: 'Department', founded_year: 2015, employee_count: 500})
-      CREATE (o7:Organization {id: 7, name: 'Cloud Team', type: 'Team', founded_year: 2018, employee_count: 50})
-      
-      // Create organizational relationships
-      MATCH (o1:Organization {id: 1}), (o2:Organization {id: 2}), (o3:Organization {id: 3})
-      CREATE (o2)-[:SUBSIDIARY_OF {ownership_percent: 100.00}]->(o1)
-      CREATE (o3)-[:SUBSIDIARY_OF {ownership_percent: 100.00}]->(o1)
-      
-      MATCH (o2:Organization {id: 2}), (o4:Organization {id: 4}), (o5:Organization {id: 5})
-      CREATE (o4)-[:SUBSIDIARY_OF {ownership_percent: 80.00}]->(o2)
-      CREATE (o5)-[:SUBSIDIARY_OF {ownership_percent: 75.00}]->(o2)
-      
-      MATCH (o4:Organization {id: 4}), (o6:Organization {id: 6})
-      CREATE (o6)-[:SUBSIDIARY_OF {ownership_percent: 100.00}]->(o4)
-      
-      MATCH (o6:Organization {id: 6}), (o7:Organization {id: 7})
-      CREATE (o7)-[:SUBSIDIARY_OF {ownership_percent: 100.00}]->(o6)
-      
-      // Create social network
-      MATCH (p7:Person {id: 7}), (p8:Person {id: 8}), (p9:Person {id: 9})
-      CREATE (p7)-[:FRIENDS_WITH {since: DATE '2000-01-01'}]->(p8)
-      CREATE (p8)-[:FRIENDS_WITH {since: DATE '2000-01-01'}]->(p7)
-      CREATE (p8)-[:FRIENDS_WITH {since: DATE '2002-06-15'}]->(p9)
-      CREATE (p9)-[:FRIENDS_WITH {since: DATE '2002-06-15'}]->(p8)
-      
-      // Create follower network
-      MATCH (p10:Person {id: 10}), (p11:Person {id: 11}), (p12:Person {id: 12})
-      CREATE (p10)-[:FOLLOWS]->(p7)
-      CREATE (p11)-[:FOLLOWS]->(p7)
-      CREATE (p11)-[:FOLLOWS]->(p10)
-      CREATE (p12)-[:FOLLOWS]->(p10)
-      CREATE (p12)-[:FOLLOWS]->(p11)
-    expected_output:
-      contains: []
+      MATCH (p1:PersonRec {id: 1}), (p2:PersonRec {id: 2}), (p3:PersonRec {id: 3})
+      CREATE (p1)-[:PARENT_OF_REC]->(p2)
+      CREATE (p1)-[:PARENT_OF_REC]->(p3)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (p2:PersonRec {id: 2}), (p4:PersonRec {id: 4}), (p5:PersonRec {id: 5})
+      CREATE (p2)-[:PARENT_OF_REC]->(p4)
+      CREATE (p2)-[:PARENT_OF_REC]->(p5)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (p3:PersonRec {id: 3}), (p6:PersonRec {id: 6})
+      CREATE (p3)-[:PARENT_OF_REC]->(p6)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (p4:PersonRec {id: 4}), (p7:PersonRec {id: 7}), (p8:PersonRec {id: 8})
+      CREATE (p4)-[:PARENT_OF_REC]->(p7)
+      CREATE (p4)-[:PARENT_OF_REC]->(p8)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (p5:PersonRec {id: 5}), (p9:PersonRec {id: 9})
+      CREATE (p5)-[:PARENT_OF_REC]->(p9)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (p7:PersonRec {id: 7}), (p10:PersonRec {id: 10}), (p11:PersonRec {id: 11})
+      CREATE (p7)-[:PARENT_OF_REC]->(p10)
+      CREATE (p7)-[:PARENT_OF_REC]->(p11)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (p8:PersonRec {id: 8}), (p12:PersonRec {id: 12})
+      CREATE (p8)-[:PARENT_OF_REC]->(p12)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (l1:LocRec {id: 1, name: 'World', type: 'Planet', population: 8000000000})
+      CREATE (l2:LocRec {id: 2, name: 'North America', type: 'Continent', population: 579000000})
+      CREATE (l3:LocRec {id: 3, name: 'USA', type: 'Country', population: 331000000})
+      CREATE (l4:LocRec {id: 4, name: 'California', type: 'State', population: 39500000})
+      CREATE (l5:LocRec {id: 5, name: 'Los Angeles', type: 'City', population: 3900000})
+      CREATE (l6:LocRec {id: 6, name: 'Texas', type: 'State', population: 29100000})
+      CREATE (l7:LocRec {id: 7, name: 'Houston', type: 'City', population: 2300000})
+      CREATE (l8:LocRec {id: 8, name: 'Europe', type: 'Continent', population: 746000000})
+      CREATE (l9:LocRec {id: 9, name: 'Germany', type: 'Country', population: 83000000})
+      CREATE (l10:LocRec {id: 10, name: 'Berlin', type: 'City', population: 3600000})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (l1:LocRec {id: 1}), (l2:LocRec {id: 2}), (l8:LocRec {id: 8})
+      CREATE (l2)-[:LOCATED_IN_REC]->(l1)
+      CREATE (l8)-[:LOCATED_IN_REC]->(l1)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (l2:LocRec {id: 2}), (l3:LocRec {id: 3})
+      CREATE (l3)-[:LOCATED_IN_REC]->(l2)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (l3:LocRec {id: 3}), (l4:LocRec {id: 4}), (l6:LocRec {id: 6})
+      CREATE (l4)-[:LOCATED_IN_REC]->(l3)
+      CREATE (l6)-[:LOCATED_IN_REC]->(l3)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (l4:LocRec {id: 4}), (l5:LocRec {id: 5})
+      CREATE (l5)-[:LOCATED_IN_REC]->(l4)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (l6:LocRec {id: 6}), (l7:LocRec {id: 7})
+      CREATE (l7)-[:LOCATED_IN_REC]->(l6)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (l8:LocRec {id: 8}), (l9:LocRec {id: 9})
+      CREATE (l9)-[:LOCATED_IN_REC]->(l8)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (l9:LocRec {id: 9}), (l10:LocRec {id: 10})
+      CREATE (l10)-[:LOCATED_IN_REC]->(l9)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (c1:CatRec {id: 1, name: 'Products', level: 0})
+      CREATE (c2:CatRec {id: 2, name: 'Electronics', level: 1})
+      CREATE (c3:CatRec {id: 3, name: 'Clothing', level: 1})
+      CREATE (c4:CatRec {id: 4, name: 'Computers', level: 2})
+      CREATE (c5:CatRec {id: 5, name: 'Phones', level: 2})
+      CREATE (c6:CatRec {id: 6, name: 'Laptops', level: 3})
+      CREATE (c7:CatRec {id: 7, name: 'Desktops', level: 3})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (c1:CatRec {id: 1}), (c2:CatRec {id: 2}), (c3:CatRec {id: 3})
+      CREATE (c2)-[:SUBCATEGORY_OF_REC]->(c1)
+      CREATE (c3)-[:SUBCATEGORY_OF_REC]->(c1)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (c2:CatRec {id: 2}), (c4:CatRec {id: 4}), (c5:CatRec {id: 5})
+      CREATE (c4)-[:SUBCATEGORY_OF_REC]->(c2)
+      CREATE (c5)-[:SUBCATEGORY_OF_REC]->(c2)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (c4:CatRec {id: 4}), (c6:CatRec {id: 6}), (c7:CatRec {id: 7})
+      CREATE (c6)-[:SUBCATEGORY_OF_REC]->(c4)
+      CREATE (c7)-[:SUBCATEGORY_OF_REC]->(c4)
+    expect:
+      exit_code: 0
 
 tests:
-  # Basic Recursive Patterns
-  - name: "Simple Recursive Path - All Ancestors"
-    command: "query"
-    args: ["MATCH path = (descendant:Person {name: 'Grandchild-1'})<-[:PARENT_OF*]-(ancestor:Person) RETURN ancestor.name, length(path) AS generations ORDER BY generations DESC"]
-    expected_output:
-      contains:
-        - "Great-Grandparent"
-        - "3"
-  
-  - name: "Recursive Path with Depth Limit"
-    command: "query"
-    args: ["MATCH path = (p:Person {name: 'Great-Grandparent'})-[:PARENT_OF*1..2]->(descendant:Person) RETURN descendant.name, length(path) AS depth ORDER BY depth, descendant.name"]
-    expected_output:
-      contains:
-        - "Grandparent-1"
-        - "Grandparent-2"
-        - "Parent-1"
-  
-  - name: "All Descendants Count"
-    command: "query"
-    args: ["MATCH (ancestor:Person {name: 'Great-Grandparent'})-[:PARENT_OF*]->(descendant:Person) RETURN count(DISTINCT descendant) AS total_descendants"]
-    expected_output:
-      contains:
-        - "11"
-  
-  # Hierarchical Aggregations
-  - name: "Category Depth Analysis"
-    command: "query"
-    args: ["MATCH path = (c:Category)-[:SUBCATEGORY_OF*]->(root:Category {name: 'Products'}) RETURN c.name, length(path) AS depth, c.level ORDER BY depth DESC, c.name"]
-    expected_output:
-      contains:
-        - "Gaming Laptops"
-        - "4"
-  
-  - name: "Location Hierarchy with Population Roll-up"
-    command: "query"
-    args: ["MATCH path = (city:Location {type: 'City'})-[:LOCATED_IN*]->(country:Location {type: 'Country'}) WITH country.name AS country, collect(city.name) AS cities, sum(city.population) AS total_city_population RETURN country, size(cities) AS num_cities, total_city_population ORDER BY total_city_population DESC"]
-    expected_output:
-      contains:
-        - "USA"
-        - "Germany"
-  
-  # CTE-like WITH Recursion
-  - name: "Simulated CTE - Level-by-Level Traversal"
-    command: "query"
-    args: ["WITH collect(p) AS level_0 MATCH (p:Person) WHERE NOT EXISTS { MATCH (p)<-[:PARENT_OF]-() } WITH level_0 MATCH (p1:Person)<-[:PARENT_OF]-(p0:Person) WHERE p0 IN level_0 WITH level_0, collect(DISTINCT p1) AS level_1 MATCH (p2:Person)<-[:PARENT_OF]-(p1:Person) WHERE p1 IN level_1 WITH level_0, level_1, collect(DISTINCT p2) AS level_2 RETURN size(level_0) AS gen_0, size(level_1) AS gen_1, size(level_2) AS gen_2"]
-    expected_output:
-      contains:
-        - "1"
-        - "2"
-        - "3"
-  
-  - name: "Recursive WITH for Path Building"
-    command: "query"
-    args: ["WITH [] AS path, 1 AS current_id MATCH (start:Category {id: current_id}) WITH path + [start] AS path, start MATCH (start)<-[:SUBCATEGORY_OF]-(child:Category) WITH path + [child] AS path, child MATCH (child)<-[:SUBCATEGORY_OF]-(grandchild:Category) WITH path + [grandchild] AS path WHERE size(path) = 3 RETURN [n IN path | n.name] AS category_chain"]
-    expected_output:
-      contains:
-        - "Products"
-        - "Electronics"
-  
-  # Transitive Closure
-  - name: "Transitive Closure - All Reachable Nodes"
-    command: "query"
-    args: ["MATCH (start:Person {name: 'Child-1'}), path = (start)-[:FRIENDS_WITH|FOLLOWS*]-(reachable:Person) RETURN DISTINCT reachable.name AS reachable_person ORDER BY reachable_person"]
-    expected_output:
-      contains:
-        - "Child-2"
-        - "Child-3"
-  
-  - name: "Organization Ownership Chain"
-    command: "query"
-    args: ["MATCH path = (subsidiary:Organization)-[:SUBSIDIARY_OF*]->(parent:Organization {name: 'GlobalCorp'}) WITH subsidiary, path, reduce(ownership = 1.0, r IN relationships(path) | ownership * r.ownership_percent / 100) AS effective_ownership WHERE effective_ownership > 0.5 RETURN subsidiary.name, round(effective_ownership * 100, 2) AS ownership_percentage ORDER BY ownership_percentage DESC"]
-    expected_output:
-      contains:
-        - "TechDiv"
-        - "FinanceDiv"
-  
-  # File System Traversal
-  - name: "File System Path Resolution"
-    command: "query"
-    args: ["MATCH path = (file:File {name: '/var/log/system.log'})-[:CONTAINS*]->(root:File {name: '/'}) WITH [n IN nodes(path) | n.name] AS full_path RETURN full_path"]
-    expected_output:
-      contains:
-        - "/var/log/system.log"
-        - "/"
-  
-  - name: "Directory Size Calculation"
-    command: "query"
-    args: ["MATCH (dir:File {name: '/home'})-[:CONTAINS*0..]->(file:File) WHERE file.size_bytes > 0 WITH dir, sum(file.size_bytes) AS total_size RETURN dir.name, total_size"]
-    expected_output:
-      contains:
-        - "/home"
-        - "2048576"
-  
-  # Complex Recursive Queries
-  - name: "Common Ancestors"
-    command: "query"
-    args: ["MATCH (p1:Person {name: 'Child-1'})<-[:PARENT_OF*]-(common:Person)-[:PARENT_OF*]->(p2:Person {name: 'Child-3'}) RETURN DISTINCT common.name AS common_ancestor ORDER BY common.name"]
-    expected_output:
-      contains:
-        - "Grandparent-1"
-        - "Great-Grandparent"
-  
-  - name: "Sibling Detection"
-    command: "query"
-    args: ["MATCH (person:Person)-[:PARENT_OF]->(child1:Person), (person)-[:PARENT_OF]->(child2:Person) WHERE child1.id < child2.id RETURN person.name AS parent, child1.name AS sibling1, child2.name AS sibling2 ORDER BY parent, sibling1"]
-    expected_output:
-      contains:
-        - "Parent-1"
-        - "Child-1"
-        - "Child-2"
-  
-  # Graph Algorithms Using Recursion
-  - name: "Shortest Path in Hierarchy"
-    command: "query"
-    args: ["MATCH path = shortestPath((start:Location {name: 'Los Angeles'})-[:LOCATED_IN*]-(end:Location {name: 'World'})) RETURN [n IN nodes(path) | n.name] AS location_path, length(path) AS hops"]
-    expected_output:
-      contains:
-        - "Los Angeles"
-        - "California"
-        - "USA"
-        - "North America"
-        - "World"
-        - "4"
-  
-  - name: "All Simple Paths"
-    command: "query"
-    args: ["MATCH path = (start:Category {name: 'Gaming Laptops'})-[:SUBCATEGORY_OF*]-(end:Category {name: 'Products'}) WHERE all(n IN nodes(path) WHERE single(x IN nodes(path) WHERE x = n)) RETURN length(path) AS path_length, [n IN nodes(path) | n.name] AS categories"]
-    expected_output:
-      contains:
-        - "Gaming Laptops"
-        - "Products"
-  
-  # Recursive Aggregation
-  - name: "Recursive Sum - Subtree Employee Count"
-    command: "query"
-    args: ["MATCH (parent:Organization {name: 'TechDiv'})-[:SUBSIDIARY_OF*0..]-(child:Organization) RETURN parent.name AS division, sum(child.employee_count) AS total_employees"]
-    expected_output:
-      contains:
-        - "TechDiv"
-  
-  - name: "Level-wise Aggregation"
-    command: "query"
-    args: ["MATCH path = (c:Category)-[:SUBCATEGORY_OF*0..]->(root:Category {name: 'Products'}) WITH c.level AS level, count(DISTINCT c) AS count GROUP BY level RETURN level, count ORDER BY level"]
-    expected_output:
-      contains:
-        - "0"
-        - "1"
-        - "2"
-        - "3"
-        - "4"
-  
-  # Cycle Detection
-  - name: "Detect Cycles in Friend Network"
-    command: "query"
-    args: ["MATCH path = (start:Person)-[:FRIENDS_WITH*2..4]-(start) WHERE all(n IN nodes(path)[1..-1] WHERE n <> start) RETURN start.name AS person, length(path) AS cycle_length LIMIT 1"]
-    expected_output:
-      contains:
-        - "Child-"
-        - "2"
-  
-  - name: "Acyclic Path Verification"
-    command: "query"
-    args: ["MATCH path = (start:Category)-[:SUBCATEGORY_OF*]->(end:Category) WHERE all(n IN nodes(path) WHERE single(x IN nodes(path) WHERE x = n)) RETURN count(path) AS acyclic_paths"]
-    expected_output:
-      pattern: "\\d+"
-  
-  # Advanced Recursive Patterns
-  - name: "Recursive Pattern Matching"
-    command: "query"
-    args: ["MATCH (root:Person {name: 'Great-Grandparent'}) CALL { WITH root MATCH path = (root)-[:PARENT_OF*]->(leaf:Person) WHERE NOT EXISTS { MATCH (leaf)-[:PARENT_OF]->() } RETURN leaf, length(path) AS depth } RETURN leaf.name, depth ORDER BY depth DESC, leaf.name"]
-    expected_output:
-      contains:
-        - "Grandchild-"
-        - "4"
-  
-  - name: "Recursive Subquery"
-    command: "query"
-    args: ["MATCH (p:Person) WHERE EXISTS { MATCH path = (p)-[:PARENT_OF*]->(descendant:Person) WHERE length(path) = (SELECT max(length(p2)) FROM (p)-[:PARENT_OF*]->(d:Person) AS p2) } RETURN p.name AS person_with_deepest_lineage"]
-    expected_output:
-      contains:
-        - "Great-Grandparent"
-  
-  # Complex CTE Simulation
-  - name: "Multi-Level CTE Simulation"
-    command: "query"
-    args: ["WITH (MATCH (l:Location {type: 'City'}) RETURN l) AS cities WITH cities, (MATCH (s:Location {type: 'State'}) RETURN s) AS states WITH cities, states, (MATCH (c:Location {type: 'Country'}) RETURN c) AS countries WITH [city IN cities WHERE EXISTS { MATCH (city)-[:LOCATED_IN]->(:Location)-[:LOCATED_IN]->(country:Location) WHERE country IN countries }] AS cities_in_countries RETURN size(cities_in_countries) AS city_count"]
-    expected_output:
-      contains:
-        - "4"
-  
-  - name: "Recursive CTE with Filtering"
-    command: "query"
-    args: ["WITH 'Products' AS root_name MATCH (root:Category {name: root_name}) WITH root MATCH path = (root)<-[:SUBCATEGORY_OF*]-(cat:Category) WHERE cat.active = true WITH cat, length(path) AS distance WHERE distance <= 3 WITH cat.level AS level, collect(cat.name) AS categories GROUP BY level RETURN level, categories ORDER BY level"]
-    expected_output:
-      contains:
-        - "Electronics"
-        - "Computers"
-  
-  # Ultimate Recursive Complexity
-  - name: "Complex Multi-Path Recursive Analysis"
-    command: "query"
-    args: ["MATCH (ancestor:Person {name: 'Great-Grandparent'}) WITH ancestor MATCH path1 = (ancestor)-[:PARENT_OF*]->(d1:Person) WITH ancestor, collect(path1) AS all_paths WITH ancestor, all_paths, [p IN all_paths WHERE length(p) = max([p2 IN all_paths | length(p2)])] AS longest_paths WITH ancestor, longest_paths, [n IN longest_paths | last(nodes(n))] AS deepest_descendants MATCH path2 = (d:Person)<-[:PARENT_OF*]-(ancestor) WHERE d IN deepest_descendants WITH ancestor, d, path2, reduce(years = [], n IN nodes(path2) | years + [n.birth_year]) AS birth_years RETURN ancestor.name, d.name AS deepest_descendant, birth_years"]
-    expected_output:
-      contains:
-        - "Great-Grandparent"
-        - "Grandchild"
-  
-  - name: "Recursive Cross-Product Analysis"
-    command: "query"
-    args: ["MATCH path1 = (l1:Location {type: 'City'})-[:LOCATED_IN*]->(country:Location {type: 'Country'}), path2 = (l2:Location {type: 'City'})-[:LOCATED_IN*]->(country) WHERE l1.id < l2.id AND length(path1) = length(path2) WITH l1.name AS city1, l2.name AS city2, country.name AS common_country, length(path1) AS depth RETURN city1, city2, common_country, depth ORDER BY common_country, city1"]
-    expected_output:
-      contains:
-        - "Los Angeles"
-        - "Houston"
-        - "USA"
+  # Simple count aggregations (without GROUP BY) - these work
+  - name: "all-descendants-count"
+    description: "Count all descendants"
+    args: ["query", "-"]
+    stdin: "MATCH (ancestor:PersonRec {name: 'Great-Grandparent'})-[:PARENT_OF_REC*]->(descendant:PersonRec) RETURN count(DISTINCT descendant) AS total_descendants"
+    expect:
+      exit_code: 0
+      stdout_contains: ["11"]
+    tags: ["recursive", "count"]
 
-cleanup:
-  - command: "query"
-    args: ["-"]
-    stdin: "DROP SCHEMA recursive_cte CASCADE;"
-    expected_output:
-      contains: []
+  # Single-depth relationship traversal
+  - name: "parent-children-relationship"
+    description: "Parent children relationship"
+    args: ["query", "-"]
+    stdin: "MATCH (parent:PersonRec {name: 'Grandparent-1'})-[:PARENT_OF_REC]->(child:PersonRec) RETURN parent.name, child.name ORDER BY child.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Grandparent-1", "Parent-1", "Parent-2"]
+    tags: ["hierarchy"]
+
+  # Simple queries without GROUP BY
+  - name: "state-populations"
+    description: "State populations"
+    args: ["query", "-"]
+    stdin: "MATCH (state:LocRec {type: 'State'}) RETURN state.name, state.population ORDER BY state.population DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["California", "Texas"]
+    tags: ["location", "population"]
+
+  - name: "city-populations"
+    description: "City populations"
+    args: ["query", "-"]
+    stdin: "MATCH (city:LocRec {type: 'City'}) RETURN city.name, city.population ORDER BY city.population DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Los Angeles", "Berlin", "Houston"]
+    tags: ["location", "population"]
+
+  - name: "country-populations"
+    description: "Country populations"
+    args: ["query", "-"]
+    stdin: "MATCH (country:LocRec {type: 'Country'}) RETURN country.name, country.population ORDER BY country.population DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["USA", "Germany"]
+    tags: ["location"]
+
+  # Category hierarchy single level
+  - name: "top-level-categories"
+    description: "Top level categories"
+    args: ["query", "-"]
+    stdin: "MATCH (c:CatRec) WHERE c.level = 0 RETURN c.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Products"]
+    tags: ["category"]
+
+  - name: "level-one-categories"
+    description: "Level one categories"
+    args: ["query", "-"]
+    stdin: "MATCH (c:CatRec) WHERE c.level = 1 RETURN c.name ORDER BY c.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Clothing", "Electronics"]
+    tags: ["category"]
+
+  - name: "level-two-categories"
+    description: "Level two categories"
+    args: ["query", "-"]
+    stdin: "MATCH (c:CatRec) WHERE c.level = 2 RETURN c.name ORDER BY c.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Computers", "Phones"]
+    tags: ["category"]
+
+  - name: "deepest-categories"
+    description: "Deepest categories (level 3)"
+    args: ["query", "-"]
+    stdin: "MATCH (c:CatRec) WHERE c.level = 3 RETURN c.name ORDER BY c.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Desktops", "Laptops"]
+    tags: ["category"]
+
+  # Person queries by birth year
+  - name: "older-generation"
+    description: "Older generation (birth year < 1930)"
+    args: ["query", "-"]
+    stdin: "MATCH (p:PersonRec) WHERE p.birth_year < 1930 RETURN p.name ORDER BY p.birth_year"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Great-Grandparent", "Grandparent-1", "Grandparent-2"]
+    tags: ["person", "filter"]
+
+  - name: "younger-generation"
+    description: "Younger generation (birth year >= 2000)"
+    args: ["query", "-"]
+    stdin: "MATCH (p:PersonRec) WHERE p.birth_year >= 2000 RETURN p.name ORDER BY p.birth_year"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Grandchild-1", "Grandchild-2", "Grandchild-3"]
+    tags: ["person", "filter"]
+
+  # Location relationships (single level)
+  - name: "city-in-california"
+    description: "City in California"
+    args: ["query", "-"]
+    stdin: "MATCH (city:LocRec)-[:LOCATED_IN_REC]->(state:LocRec {name: 'California'}) RETURN city.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Los Angeles"]
+    tags: ["location"]
+

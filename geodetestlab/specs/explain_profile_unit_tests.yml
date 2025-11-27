@@ -1,6 +1,19 @@
 description: "Unit tests for EXPLAIN and PROFILE commands"
 binary: geode
-timeout: 10
+timeout: 30
+
+cli:
+  server:
+    enabled: true
+    port: null
+    data_dir: null
+    startup_timeout_ms: 30000
+    cleanup: true
+    args: ["--log-level", "error"]
+  client:
+    timeout_ms: 30000
+    tls_verify: false
+    format: "json"
 
 tests:
   # ===============================

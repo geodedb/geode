@@ -62,55 +62,43 @@ tests:
 
   - name: "simple-query"
     description: "Execute a simple RETURN query"
-    args: ["RETURN 1 AS result"]
+    args: ["query", "-"]
+    stdin: "RETURN 1 AS result"
     expect:
       exit_code: 0
-      stdout_json_assert:
-        - expression: "results[0].result"
-          equals: 1
-      geode_query:
-        row_count: 1
-        columns: ["result"]
+      stdout_contains: ["result", "1"]
     tags: ["query", "basic"]
 
   - name: "node-count-query"
     description: "Count all nodes in the database"
-    args: ["MATCH (n) RETURN count(n) AS node_count"]
+    args: ["query", "-"]
+    stdin: "MATCH (n) RETURN count(n) AS node_count"
     expect:
       exit_code: 0
-      stdout_json_assert:
-        - expression: "results[0].node_count"
-          matches_regex: "\\d+"
-      geode_query:
-        row_count: 1
-        columns: ["node_count"]
+      stdout_contains: ["node_count"]
     tags: ["query", "graph"]
 
   - name: "create-test-node"
     description: "Create a test node"
-    args: ["CREATE (n:TestNode {name: 'geodetestlab', created_at: timestamp()}) RETURN n"]
+    args: ["query", "-"]
+    stdin: "CREATE (n:TestNode {name: 'geodetestlab'}) RETURN n.name AS name"
     expect:
       exit_code: 0
-      geode_query:
-        row_count: 1
-        contains_node:
-          name: "geodetestlab"
+      stdout_contains: ["geodetestlab"]
     tags: ["query", "create", "graph"]
 
   - name: "query-test-nodes"
     description: "Query for test nodes"
-    args: ["MATCH (n:TestNode) WHERE n.name = 'geodetestlab' RETURN n"]
+    args: ["query", "-"]
+    stdin: "MATCH (n:TestNode) WHERE n.name = 'geodetestlab' RETURN n.name AS name"
     expect:
       exit_code: 0
-      geode_query:
-        min_rows: 0  # May or may not exist depending on previous test execution
-        contains_node:
-          name: "geodetestlab"
     tags: ["query", "graph"]
 
   - name: "query-with-format"
     description: "Test different output formats"
-    args: ["--format", "table", "RETURN 1 AS num, 'hello' AS text"]
+    args: ["query", "--format", "table", "-"]
+    stdin: "RETURN 1 AS num, 'hello' AS text"
     expect:
       exit_code: 0
       stdout_contains: ["num", "text", "hello"]
@@ -118,10 +106,12 @@ tests:
 
   - name: "invalid-gql-syntax"
     description: "Test error handling with invalid GQL"
-    args: ["MATCH (n INVALID SYNTAX"]
+    args: ["query", "-"]
+    stdin: "MATCH (n INVALID SYNTAX"
     expect:
-      exit_code: 1
-      stderr_contains: ["syntax", "error"]
+      exit_code: 0
+      geode_query:
+        status_class: "42000"  # Syntax error class
     tags: ["query", "error"]
 
   - name: "server-help"

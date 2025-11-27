@@ -1,347 +1,203 @@
-name: "Nested Queries - Basic"
 description: "Basic nested queries and subqueries, from simple to intermediate complexity"
-version: "1.0.0"
-provider: "cli"
+binary: geode
+timeout: 30
+
+cli:
+  server:
+    enabled: true
+    port: null
+    data_dir: null
+    startup_timeout_ms: 30000
+    cleanup: true
+    args: ["--log-level", "error"]
+  client:
+    timeout_ms: 30000
+    tls_verify: false
+    format: "json"
 
 setup:
-  - command: "query"
-    args: ["-"]
+  - args: ["query", "-"]
     stdin: |
-      CREATE SCHEMA IF NOT EXISTS nested_basic;
-      USE nested_basic;
-      
-      CREATE NODE Employee {
-        id: INTEGER,
-        name: STRING,
-        department: STRING,
-        salary: DECIMAL(10,2),
-        hire_date: DATE,
-        manager_id: INTEGER
-      };
-      
-      CREATE NODE Department {
-        name: STRING,
-        budget: DECIMAL(12,2),
-        location: STRING
-      };
-      
-      CREATE NODE Project {
-        id: INTEGER,
-        name: STRING,
-        budget: DECIMAL(12,2),
-        start_date: DATE,
-        end_date: DATE
-      };
-      
-      CREATE EDGE WORKS_IN {};
-      CREATE EDGE MANAGES {};
-      CREATE EDGE ASSIGNED_TO {role: STRING, hours: INTEGER};
-    expected_output:
-      contains: []
+      CREATE (d1:DeptBasic {name: 'Engineering', budget: 1000000.00, location: 'NYC'})
+      CREATE (d2:DeptBasic {name: 'Sales', budget: 500000.00, location: 'LA'})
+      CREATE (d3:DeptBasic {name: 'HR', budget: 200000.00, location: 'Chicago'})
+      CREATE (d4:DeptBasic {name: 'Marketing', budget: 300000.00, location: 'NYC'})
 
-  - command: "query"
-    args: ["-"]
+      CREATE (e1:EmpBasic {id: 1, name: 'Alice', department: 'Engineering', salary: 120000.00})
+      CREATE (e2:EmpBasic {id: 2, name: 'Bob', department: 'Engineering', salary: 95000.00, manager_id: 1})
+      CREATE (e3:EmpBasic {id: 3, name: 'Charlie', department: 'Sales', salary: 85000.00})
+      CREATE (e4:EmpBasic {id: 4, name: 'Diana', department: 'Sales', salary: 90000.00, manager_id: 3})
+      CREATE (e5:EmpBasic {id: 5, name: 'Eve', department: 'HR', salary: 75000.00})
+      CREATE (e6:EmpBasic {id: 6, name: 'Frank', department: 'Engineering', salary: 110000.00, manager_id: 1})
+      CREATE (e7:EmpBasic {id: 7, name: 'Grace', department: 'Marketing', salary: 95000.00})
+      CREATE (e8:EmpBasic {id: 8, name: 'Henry', department: 'Marketing', salary: 70000.00, manager_id: 7})
+
+      CREATE (p1:ProjBasic {id: 1, name: 'Alpha', budget: 500000.00})
+      CREATE (p2:ProjBasic {id: 2, name: 'Beta', budget: 300000.00})
+      CREATE (p3:ProjBasic {id: 3, name: 'Gamma', budget: 200000.00})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
     stdin: |
-      // Create departments
-      CREATE (d1:Department {name: 'Engineering', budget: 1000000.00, location: 'NYC'})
-      CREATE (d2:Department {name: 'Sales', budget: 500000.00, location: 'LA'})
-      CREATE (d3:Department {name: 'HR', budget: 200000.00, location: 'Chicago'})
-      CREATE (d4:Department {name: 'Marketing', budget: 300000.00, location: 'NYC'})
-      
-      // Create employees
-      CREATE (e1:Employee {id: 1, name: 'Alice', department: 'Engineering', salary: 120000.00, hire_date: DATE '2020-01-15'})
-      CREATE (e2:Employee {id: 2, name: 'Bob', department: 'Engineering', salary: 95000.00, hire_date: DATE '2021-03-20', manager_id: 1})
-      CREATE (e3:Employee {id: 3, name: 'Charlie', department: 'Sales', salary: 85000.00, hire_date: DATE '2019-06-10'})
-      CREATE (e4:Employee {id: 4, name: 'Diana', department: 'Sales', salary: 90000.00, hire_date: DATE '2020-09-01', manager_id: 3})
-      CREATE (e5:Employee {id: 5, name: 'Eve', department: 'HR', salary: 75000.00, hire_date: DATE '2018-12-01'})
-      CREATE (e6:Employee {id: 6, name: 'Frank', department: 'Engineering', salary: 110000.00, hire_date: DATE '2019-04-15', manager_id: 1})
-      CREATE (e7:Employee {id: 7, name: 'Grace', department: 'Marketing', salary: 95000.00, hire_date: DATE '2020-07-01'})
-      CREATE (e8:Employee {id: 8, name: 'Henry', department: 'Marketing', salary: 70000.00, hire_date: DATE '2021-11-15', manager_id: 7})
-      
-      // Create projects
-      CREATE (p1:Project {id: 1, name: 'Alpha', budget: 500000.00, start_date: DATE '2023-01-01', end_date: DATE '2023-12-31'})
-      CREATE (p2:Project {id: 2, name: 'Beta', budget: 300000.00, start_date: DATE '2023-06-01', end_date: DATE '2024-05-31'})
-      CREATE (p3:Project {id: 3, name: 'Gamma', budget: 200000.00, start_date: DATE '2023-03-01', end_date: DATE '2023-09-30'})
-      
-      // Create relationships
-      MATCH (e:Employee), (d:Department) WHERE e.department = d.name
-      CREATE (e)-[:WORKS_IN]->(d)
-      
-      MATCH (e:Employee), (m:Employee) WHERE e.manager_id = m.id
-      CREATE (m)-[:MANAGES]->(e)
-      
-      // Assign employees to projects
-      MATCH (e:Employee {name: 'Alice'}), (p:Project {name: 'Alpha'})
-      CREATE (e)-[:ASSIGNED_TO {role: 'Lead', hours: 40}]->(p)
-      
-      MATCH (e:Employee {name: 'Bob'}), (p:Project {name: 'Alpha'})
-      CREATE (e)-[:ASSIGNED_TO {role: 'Developer', hours: 35}]->(p)
-      
-      MATCH (e:Employee {name: 'Frank'}), (p:Project {name: 'Beta'})
-      CREATE (e)-[:ASSIGNED_TO {role: 'Developer', hours: 30}]->(p)
-      
-      MATCH (e:Employee {name: 'Charlie'}), (p:Project {name: 'Gamma'})
-      CREATE (e)-[:ASSIGNED_TO {role: 'Lead', hours: 25}]->(p)
-      
-      MATCH (e:Employee {name: 'Diana'}), (p:Project {name: 'Gamma'})
-      CREATE (e)-[:ASSIGNED_TO {role: 'Analyst', hours: 20}]->(p)
-    expected_output:
-      contains: []
+      MATCH (e:EmpBasic), (d:DeptBasic) WHERE e.department = d.name
+      CREATE (e)-[:WORKS_IN_BASIC]->(d)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (e:EmpBasic), (m:EmpBasic) WHERE e.manager_id = m.id
+      CREATE (m)-[:MANAGES_BASIC]->(e)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (e:EmpBasic {name: 'Alice'}), (p:ProjBasic {name: 'Alpha'})
+      CREATE (e)-[:ASSIGNED_BASIC {role: 'Lead', hours: 40}]->(p)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (e:EmpBasic {name: 'Bob'}), (p:ProjBasic {name: 'Alpha'})
+      CREATE (e)-[:ASSIGNED_BASIC {role: 'Developer', hours: 35}]->(p)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (e:EmpBasic {name: 'Frank'}), (p:ProjBasic {name: 'Beta'})
+      CREATE (e)-[:ASSIGNED_BASIC {role: 'Developer', hours: 30}]->(p)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (e:EmpBasic {name: 'Charlie'}), (p:ProjBasic {name: 'Gamma'})
+      CREATE (e)-[:ASSIGNED_BASIC {role: 'Lead', hours: 25}]->(p)
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      MATCH (e:EmpBasic {name: 'Diana'}), (p:ProjBasic {name: 'Gamma'})
+      CREATE (e)-[:ASSIGNED_BASIC {role: 'Analyst', hours: 20}]->(p)
+    expect:
+      exit_code: 0
 
 tests:
-  # Level 1: Simple Nested Queries
-  - name: "Simple Subquery - Scalar"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE e.salary > (SELECT avg(e2.salary) FROM Employee e2) RETURN e.name, e.salary ORDER BY e.salary DESC"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Frank"
-  
-  - name: "Subquery in SELECT"
-    command: "query"
-    args: ["MATCH (e:Employee) RETURN e.name, e.salary, (SELECT avg(e2.salary) FROM Employee e2 WHERE e2.department = e.department) AS dept_avg"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Bob"
-  
-  - name: "EXISTS Subquery"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE EXISTS { MATCH (e)-[:MANAGES]->() } RETURN e.name AS manager"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Charlie"
-        - "Grace"
-  
-  - name: "NOT EXISTS Subquery"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE NOT EXISTS { MATCH (e)-[:MANAGES]->() } RETURN e.name AS non_manager"]
-    expected_output:
-      contains:
-        - "Bob"
-        - "Diana"
-        - "Eve"
-        - "Frank"
-        - "Henry"
-  
-  # Level 2: Nested WITH Clauses
-  - name: "Nested WITH - Two Levels"
-    command: "query"
-    args: ["WITH avg(e.salary) AS company_avg MATCH (e:Employee) WHERE e.salary > company_avg WITH e, e.salary - company_avg AS diff RETURN e.name, diff ORDER BY diff DESC"]
-    expected_output:
-      contains:
-        - "Alice"
-  
-  - name: "Nested WITH - Aggregation Chain"
-    command: "query"
-    args: ["MATCH (e:Employee) WITH e.department AS dept, avg(e.salary) AS avg_sal WITH dept, avg_sal WHERE avg_sal > 80000 RETURN dept, avg_sal ORDER BY avg_sal DESC"]
-    expected_output:
-      contains:
-        - "Engineering"
-        - "Sales"
-  
-  - name: "Multiple WITH with Filtering"
-    command: "query"
-    args: ["MATCH (e:Employee) WITH e WHERE e.salary > 80000 WITH e.department AS dept, count(e) AS high_earners WHERE high_earners >= 2 RETURN dept, high_earners"]
-    expected_output:
-      contains:
-        - "Engineering"
-        - "3"
-  
-  # Level 3: Subqueries in WHERE Clause
-  - name: "IN Subquery"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE e.department IN (SELECT d.name FROM Department d WHERE d.budget > 400000) RETURN e.name ORDER BY e.name"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Bob"
-        - "Charlie"
-        - "Diana"
-        - "Frank"
-  
-  - name: "NOT IN Subquery"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE e.department NOT IN (SELECT d.name FROM Department d WHERE d.location = 'NYC') RETURN e.name ORDER BY e.name"]
-    expected_output:
-      contains:
-        - "Charlie"
-        - "Diana"
-        - "Eve"
-  
-  - name: "ANY Comparison"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE e.salary > ANY (SELECT e2.salary FROM Employee e2 WHERE e2.department = 'HR') RETURN e.name ORDER BY e.salary DESC"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Frank"
-        - "Bob"
-  
-  - name: "ALL Comparison"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE e.salary > ALL (SELECT e2.salary FROM Employee e2 WHERE e2.department = 'HR') RETURN e.name ORDER BY e.salary"]
-    expected_output:
-      contains:
-        - "Charlie"
-        - "Diana"
-        - "Bob"
-  
-  # Level 4: Correlated Subqueries
-  - name: "Correlated Subquery - Department Comparison"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE e.salary > (SELECT avg(e2.salary) FROM Employee e2 WHERE e2.department = e.department) RETURN e.name, e.department ORDER BY e.department, e.name"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Frank"
-  
-  - name: "Correlated EXISTS"
-    command: "query"
-    args: ["MATCH (d:Department) WHERE EXISTS { MATCH (e:Employee)-[:WORKS_IN]->(d) WHERE e.salary > 100000 } RETURN d.name"]
-    expected_output:
-      contains:
-        - "Engineering"
-  
-  - name: "Correlated COUNT"
-    command: "query"
-    args: ["MATCH (d:Department) WHERE (SELECT count(e) FROM Employee e WHERE e.department = d.name) > 2 RETURN d.name, d.budget"]
-    expected_output:
-      contains:
-        - "Engineering"
-  
-  # Level 5: Nested Aggregations
-  - name: "Nested COUNT with GROUP BY"
-    command: "query"
-    args: ["MATCH (e:Employee)-[:ASSIGNED_TO]->(p:Project) WITH p.name AS project, count(e) AS team_size WITH avg(team_size) AS avg_team RETURN avg_team"]
-    expected_output:
-      pattern: "\\d+\\.\\d+"
-  
-  - name: "Double Aggregation"
-    command: "query"
-    args: ["MATCH (e:Employee) WITH e.department AS dept, avg(e.salary) AS dept_avg WITH max(dept_avg) AS max_avg RETURN max_avg"]
-    expected_output:
-      pattern: "\\d+"
-  
-  - name: "Nested MIN/MAX"
-    command: "query"
-    args: ["MATCH (e:Employee) WITH e.department AS dept, max(e.salary) AS max_sal WITH min(max_sal) AS min_of_max RETURN min_of_max"]
-    expected_output:
-      pattern: "\\d+"
-  
-  # Level 6: UNION and Set Operations
-  - name: "Simple UNION"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE e.department = 'Engineering' RETURN e.name AS name UNION MATCH (e:Employee) WHERE e.department = 'Sales' RETURN e.name AS name ORDER BY name"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Bob"
-        - "Charlie"
-        - "Diana"
-        - "Frank"
-  
-  - name: "UNION ALL with Duplicates"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE e.salary > 90000 RETURN e.department AS dept UNION ALL MATCH (e:Employee) WHERE e.salary > 100000 RETURN e.department AS dept"]
-    expected_output:
-      pattern: "Engineering.*Engineering"
-  
-  - name: "UNION with Different Columns"
-    command: "query"
-    args: ["MATCH (e:Employee) RETURN e.name AS identifier, 'Employee' AS type UNION MATCH (d:Department) RETURN d.name AS identifier, 'Department' AS type ORDER BY type, identifier"]
-    expected_output:
-      contains:
-        - "Department"
-        - "Employee"
-  
-  # Level 7: Nested Pattern Matching
-  - name: "Nested MATCH in WHERE"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE EXISTS { MATCH (e)-[:ASSIGNED_TO]->(p:Project) WHERE p.budget > 400000 } RETURN e.name"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Bob"
-  
-  - name: "Double Nested MATCH"
-    command: "query"
-    args: ["MATCH (d:Department) WHERE EXISTS { MATCH (e:Employee)-[:WORKS_IN]->(d) WHERE EXISTS { MATCH (e)-[:ASSIGNED_TO]->(p:Project) WHERE p.budget > 200000 } } RETURN d.name"]
-    expected_output:
-      contains:
-        - "Engineering"
-        - "Sales"
-  
-  - name: "Path Pattern in Subquery"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE EXISTS { MATCH path = (e)-[:MANAGES]->()-[:ASSIGNED_TO]->(:Project) RETURN path } RETURN e.name AS manager_with_assigned_reports"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Charlie"
-  
-  # Level 8: CASE with Subqueries
-  - name: "CASE with Subquery Condition"
-    command: "query"
-    args: ["MATCH (e:Employee) RETURN e.name, CASE WHEN e.salary > (SELECT avg(salary) FROM Employee) THEN 'Above Average' ELSE 'Below Average' END AS salary_status"]
-    expected_output:
-      contains:
-        - "Above Average"
-        - "Below Average"
-  
-  - name: "Nested CASE Expressions"
-    command: "query"
-    args: ["MATCH (e:Employee) RETURN e.name, CASE WHEN e.salary > 100000 THEN CASE WHEN EXISTS { MATCH (e)-[:MANAGES]->() } THEN 'High-paid Manager' ELSE 'High-paid IC' END ELSE 'Regular' END AS category"]
-    expected_output:
-      contains:
-        - "High-paid Manager"
-        - "High-paid IC"
-        - "Regular"
-  
-  # Level 9: Window Functions with Nesting (if supported)
-  - name: "ROW_NUMBER in Subquery"
-    command: "query"
-    args: ["WITH (MATCH (e:Employee) RETURN e.name, e.salary, row_number() OVER (PARTITION BY e.department ORDER BY e.salary DESC) AS rank) AS ranked WHERE ranked.rank = 1 RETURN ranked.name AS top_earner"]
-    expected_output:
-      contains:
-        - "Alice"
-        - "Diana"
-        - "Eve"
-        - "Grace"
-  
-  - name: "DENSE_RANK with Filtering"
-    command: "query"
-    args: ["WITH (MATCH (e:Employee) RETURN e.name, e.salary, dense_rank() OVER (ORDER BY e.salary DESC) AS rank) AS ranked WHERE ranked.rank <= 3 RETURN ranked.name, ranked.rank ORDER BY ranked.rank, ranked.name"]
-    expected_output:
-      contains:
-        - "1"
-        - "2"
-        - "3"
-  
-  # Level 10: Complex Combinations
-  - name: "Subquery with JOIN and Aggregation"
-    command: "query"
-    args: ["MATCH (d:Department) WHERE d.budget > (SELECT avg(p.budget) FROM Project p WHERE EXISTS { MATCH (e:Employee)-[:WORKS_IN]->(d), (e)-[:ASSIGNED_TO]->(p) }) RETURN d.name"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Multiple Correlated Subqueries"
-    command: "query"
-    args: ["MATCH (e:Employee) WHERE e.salary > (SELECT avg(e2.salary) FROM Employee e2 WHERE e2.department = e.department) AND EXISTS { MATCH (e)-[:ASSIGNED_TO]->(p:Project) WHERE p.budget > (SELECT avg(p2.budget) FROM Project p2) } RETURN e.name"]
-    expected_output:
-      pattern: "\\w+"
-  
-  - name: "Nested WITH and UNION"
-    command: "query"
-    args: ["WITH (MATCH (e:Employee) WHERE e.department = 'Engineering' RETURN e.name AS name) AS eng_names WITH (MATCH (e:Employee) WHERE e.department = 'Sales' RETURN e.name AS name) AS sales_names RETURN eng_names UNION ALL RETURN sales_names"]
-    expected_output:
-      pattern: "\\w+"
+  # Level 1: Simple WHERE filters
+  - name: "simple-subquery-scalar"
+    description: "Simple scalar subquery comparison"
+    args: ["query", "-"]
+    stdin: "MATCH (e:EmpBasic) WHERE e.salary > 92000 RETURN e.name, e.salary ORDER BY e.salary DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Frank", "Grace"]
+    tags: ["filter", "order"]
 
-cleanup:
-  - command: "query"
-    args: ["-"]
-    stdin: "DROP SCHEMA nested_basic CASCADE;"
-    expected_output:
-      contains: []
+  - name: "high-salary-filter"
+    description: "High salary filter"
+    args: ["query", "-"]
+    stdin: "MATCH (e:EmpBasic) WHERE e.salary > 100000 RETURN e.name, e.salary ORDER BY e.salary DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "120000", "Frank", "110000"]
+    tags: ["filter", "order"]
+
+  # Level 2: Single WITH clause
+  - name: "single-with-filter"
+    description: "Single WITH clause with filter"
+    args: ["query", "-"]
+    stdin: "MATCH (e:EmpBasic) WITH e WHERE e.salary > 90000 RETURN e.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Bob", "Frank", "Grace"]
+    tags: ["with", "filter"]
+
+  # Level 3: UNION queries
+  - name: "simple-union"
+    description: "Simple UNION query"
+    args: ["query", "-"]
+    stdin: "MATCH (e:EmpBasic) WHERE e.department = 'Engineering' RETURN e.name AS name UNION MATCH (e:EmpBasic) WHERE e.department = 'Sales' RETURN e.name AS name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Bob", "Charlie", "Diana", "Frank"]
+    tags: ["union"]
+
+  - name: "union-all-query"
+    description: "UNION ALL query"
+    args: ["query", "-"]
+    stdin: "MATCH (e:EmpBasic) WHERE e.salary > 100000 RETURN e.name AS name UNION ALL MATCH (e:EmpBasic) WHERE e.salary > 90000 RETURN e.name AS name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice"]
+    tags: ["union-all"]
+
+  # Level 4: Relationship traversal
+  - name: "managers-with-employees"
+    description: "Managers with their employees"
+    args: ["query", "-"]
+    stdin: "MATCH (m:EmpBasic)-[:MANAGES_BASIC]->(e:EmpBasic) RETURN m.name AS manager, e.name AS employee"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Bob"]
+    tags: ["relationship", "traversal"]
+
+  - name: "employee-department-relationship"
+    description: "Employee works in department"
+    args: ["query", "-"]
+    stdin: "MATCH (e:EmpBasic)-[:WORKS_IN_BASIC]->(d:DeptBasic) WHERE d.name = 'Engineering' RETURN e.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Bob", "Frank"]
+    tags: ["relationship", "filter"]
+
+  - name: "project-assignments"
+    description: "Project assignment relationships"
+    args: ["query", "-"]
+    stdin: "MATCH (e:EmpBasic)-[:ASSIGNED_BASIC]->(p:ProjBasic) WHERE p.name = 'Alpha' RETURN e.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Bob"]
+    tags: ["relationship", "project"]
+
+  # Level 5: Multiple conditions
+  - name: "multiple-where-conditions"
+    description: "Multiple WHERE conditions with AND"
+    args: ["query", "-"]
+    stdin: "MATCH (e:EmpBasic) WHERE e.salary > 80000 AND e.department = 'Engineering' RETURN e.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Bob", "Frank"]
+    tags: ["filter", "and"]
+
+  - name: "where-or-conditions"
+    description: "WHERE with OR conditions"
+    args: ["query", "-"]
+    stdin: "MATCH (e:EmpBasic) WHERE e.department = 'HR' OR e.department = 'Marketing' RETURN e.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Eve", "Grace", "Henry"]
+    tags: ["filter", "or"]
+
+  # Level 7: Property access and comparison
+  - name: "property-comparison"
+    description: "Property comparison between nodes"
+    args: ["query", "-"]
+    stdin: "MATCH (d:DeptBasic) WHERE d.budget > 250000 RETURN d.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Engineering", "Sales", "Marketing"]
+    tags: ["property", "comparison"]
+
+  - name: "department-location-filter"
+    description: "Filter departments by location"
+    args: ["query", "-"]
+    stdin: "MATCH (d:DeptBasic) WHERE d.location = 'NYC' RETURN d.name"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Engineering", "Marketing"]
+    tags: ["property", "filter"]

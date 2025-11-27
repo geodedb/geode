@@ -17,7 +17,7 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
 
     # Extract command and args from test case
     test_command = test_case.get("command", None)
-    args = test_case.get("args", [])
+    args = test_case.get("args", []) or []  # Handle explicit null/None values
 
     # Handle both list and string command formats
     if test_command:
@@ -50,12 +50,20 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
 
         processed_arg = arg
 
-        # Replace server variables
+        # Replace server variables - use dynamic port from spec_config if available
         if "${server" in processed_arg:
-            processed_arg = processed_arg.replace("${server:port}", "8443")
+            server_port = "8443"  # Default port
+            if spec_config and isinstance(spec_config, dict):
+                cli_config = spec_config.get("cli", {})
+                if isinstance(cli_config, dict):
+                    server_config = cli_config.get("server", {})
+                    if isinstance(server_config, dict) and server_config.get("port"):
+                        server_port = str(server_config.get("port"))
+            server_address = f"127.0.0.1:{server_port}"
+            processed_arg = processed_arg.replace("${server:port}", server_port)
             processed_arg = processed_arg.replace("${server:host}", "127.0.0.1")
-            processed_arg = processed_arg.replace("${server_address}", "127.0.0.1:8443")
-            processed_arg = processed_arg.replace("${server}", "127.0.0.1:8443")
+            processed_arg = processed_arg.replace("${server_address}", server_address)
+            processed_arg = processed_arg.replace("${server}", server_address)
 
         # Replace secret variables
         if "${secret" in processed_arg:
@@ -273,7 +281,7 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                     input=setup_stdin,
                     capture_output=True,
                     text=True,
-                    timeout=2  # Reduced from 5 to 2 seconds
+                    timeout=10  # Allow more time for QUIC connection setup
                 )
                 if setup_result.returncode != 0:
                     # Include stderr in error message for debugging
@@ -287,6 +295,8 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
     # Check if spec explicitly enables server mode
     spec_server_enabled = False
     spec_server_args = []
+    # Default timeout is 10 seconds, but can be overridden by spec config
+    test_timeout_seconds = 10
     if spec_config and isinstance(spec_config, dict):
         cli_config = spec_config.get("cli", {})
         if isinstance(cli_config, dict):
@@ -294,6 +304,14 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
             if isinstance(server_config, dict):
                 spec_server_enabled = server_config.get("enabled", False)
                 spec_server_args = server_config.get("args", [])
+            # Get client timeout from spec config (in milliseconds, convert to seconds)
+            client_config = cli_config.get("client", {})
+            if isinstance(client_config, dict) and client_config.get("timeout_ms"):
+                test_timeout_seconds = max(5, client_config.get("timeout_ms", 10000) // 1000)
+
+    # Debug: print timeout being used
+    if os.environ.get("DEBUG_TIMEOUT"):
+        print(f"  [DEBUG] test_timeout_seconds={test_timeout_seconds}, spec_server_enabled={spec_server_enabled}")
 
     # Process args for server mode
     modified_args = args[:]
@@ -306,9 +324,19 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
         # If spec enables server mode and test doesn't already have --server,
         # inject --server and --insecure flags to connect to the running server
         if spec_server_enabled and not has_server:
-            # Insert --server ${server} after the command
+            # Get server port from spec_config
+            server_port = "8443"  # Default port
+            if spec_config and isinstance(spec_config, dict):
+                cli_config = spec_config.get("cli", {})
+                if isinstance(cli_config, dict):
+                    server_config = cli_config.get("server", {})
+                    if isinstance(server_config, dict) and server_config.get("port"):
+                        server_port = str(server_config.get("port"))
+            server_address = f"127.0.0.1:{server_port}"
+
+            # Insert --server with actual address after the command
             modified_args.insert(1, "--server")
-            modified_args.insert(2, "${server}")
+            modified_args.insert(2, server_address)
             # Add --insecure flag (test servers use self-signed certs)
             modified_args.insert(3, "--insecure")
             has_server = True
@@ -371,12 +399,15 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
     try:
         # Construct command: binary + global_flags + subcommand_args
         command = [binary] + global_flags + modified_args
+        # Always print debug during development - TODO: remove when stable
+        print(f"  [DEBUG] cmd={' '.join(command)}, timeout={test_timeout_seconds}s, stdin_len={len(stdin_content) if stdin_content else 0}")
         result = subprocess.run(
             command,
             input=stdin_content,
             capture_output=True,
-            text=True,
-            timeout=2  # Reduced from 5 to 2 seconds to fail faster
+            encoding='utf-8',
+            errors='replace',  # Handle binary debug output gracefully
+            timeout=test_timeout_seconds  # Use spec config timeout
         )
     except subprocess.TimeoutExpired:
         return False, "timeout"
@@ -510,6 +541,11 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
         # Strip test IDs from combined output
         combined_stripped = re.sub(r'_[0-9a-f]{8}', '', combined)
 
+        # DEBUG: Show what we're checking against
+        if os.environ.get("DEBUG_JSON_VALUES"):
+            print(f"    [DEBUG] json_values count: {len(json_values)}, first 5: {json_values[:5] if json_values else 'EMPTY'}")
+            print(f"    [DEBUG] looking for: {expect['stdout_contains']}")
+
         for pattern in expect["stdout_contains"]:
             # Try exact match in JSON values first (most reliable)
             if json_values and pattern in json_values:
@@ -560,14 +596,86 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
     
     return True, "PASSED"
 
+def start_server(binary, data_dir, port, args, timeout_ms=30000):
+    """Start a geode server for test execution.
+
+    Returns (process, port) tuple or (None, None) on failure.
+    Note: Uses time-based wait since QUIC uses UDP, not TCP sockets.
+    """
+    import time
+    import os
+
+    # Create data directory
+    os.makedirs(data_dir, exist_ok=True)
+
+    # Build server command
+    server_cmd = [
+        binary, "serve",
+        "--data-dir", data_dir,
+        "--listen", f"127.0.0.1:{port}"
+    ] + args
+
+    # Start server process
+    # Use DEVNULL for stdout/stderr to prevent server from hanging when pipe buffers fill
+    # (The server produces extensive QUIC debug output that would fill pipe buffers)
+    try:
+        server_proc = subprocess.Popen(
+            server_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception as e:
+        print(f"  Failed to start server: {e}")
+        return None, None
+
+    # Wait for server to initialize (QUIC uses UDP, can't use TCP socket check)
+    # Use a time-based wait with process check
+    wait_time = min(6, timeout_ms / 1000.0)  # Wait up to 6 seconds
+    time.sleep(wait_time)
+
+    # Verify server is still running
+    if server_proc.poll() is not None:
+        # Server exited prematurely (stderr not available since we use DEVNULL)
+        print(f"  Server exited prematurely with code {server_proc.returncode}")
+        return None, None
+
+    return server_proc, port
+
+
+def stop_server(server_proc):
+    """Stop a running geode server."""
+    if server_proc is None:
+        return
+
+    server_proc.terminate()
+    try:
+        server_proc.wait(timeout=5)
+    except:
+        server_proc.kill()
+        try:
+            server_proc.wait(timeout=2)
+        except:
+            pass
+
+
 def main():
     import shutil
     import os
+    import sys
 
     # Get project root directory (2 levels up from scripts/test/)
     script_dir = Path(__file__).parent
     project_root = script_dir.parent.parent
     specs_dir = project_root / "geodetestlab" / "specs"
+
+    # Check for spec filter argument
+    spec_filter = None
+    if len(sys.argv) > 1:
+        spec_filter = sys.argv[1]
+        # If it's a path, extract just the filename
+        if "/" in spec_filter:
+            spec_filter = Path(spec_filter).name
+        print(f"Running only specs matching: {spec_filter}")
 
     # Run all specs and see what we can test
     total_passed = 0
@@ -575,7 +683,14 @@ def main():
     total_skipped = 0
     all_failures = []
 
-    for spec_file in sorted(specs_dir.glob("*.yml")):
+    # Counter for assigning unique ports to each spec
+    base_port = 18000
+
+    all_specs = sorted(specs_dir.glob("*.yml"))
+    if spec_filter:
+        all_specs = [s for s in all_specs if spec_filter in s.name]
+
+    for spec_idx, spec_file in enumerate(all_specs):
         # Try to load the spec
         try:
             with open(spec_file, "r") as f:
@@ -588,79 +703,184 @@ def main():
         spec_data_dir = f"./data_test_{spec_file.stem}"
         os.makedirs(spec_data_dir, exist_ok=True)
 
+        # Check if spec requires a server
+        server_proc = None
+        server_port = None
+        spec_server_enabled = False
+        spec_server_args = []
+        binary = "./zig-out/bin/geode"
+
+        cli_config = spec.get("cli", {})
+        if isinstance(cli_config, dict):
+            binary = cli_config.get("binary", binary)
+            server_config = cli_config.get("server", {})
+            if isinstance(server_config, dict):
+                spec_server_enabled = server_config.get("enabled", False)
+                spec_server_args = server_config.get("args", [])
+                startup_timeout = server_config.get("startup_timeout_ms", 30000)
+
+        # Start server if required
+        if spec_server_enabled:
+            # Assign unique port for this spec (avoid port conflicts)
+            server_port = base_port + spec_idx
+            server_data_dir = f"/tmp/geodetestlab_server_{spec_file.stem}"
+
+            print(f"Starting server for {spec_file.name} on port {server_port}...")
+            server_proc, server_port = start_server(
+                binary, server_data_dir, server_port, spec_server_args, startup_timeout
+            )
+
+            if server_proc is None:
+                print(f"  Failed to start server for {spec_file.name}, skipping spec")
+                continue
+
+            # Update spec config with actual server port
+            if "cli" not in spec:
+                spec["cli"] = {}
+            if "server" not in spec["cli"]:
+                spec["cli"]["server"] = {}
+            spec["cli"]["server"]["port"] = server_port
+
         has_tests = False
         spec_passed = 0
         spec_failed = 0
         spec_skipped = 0
-        
-        for test in spec.get("tests", []):
-            name = test["name"]
 
-            # Skip tests marked with skip: true
-            if test.get("skip", False):
-                spec_skipped += 1
-                total_skipped += 1
-                continue
+        try:
+            # Execute spec-level setup if present
+            spec_setup = spec.get("setup", [])
+            if spec_setup and spec_server_enabled:
+                print(f"  Running spec-level setup for {spec_file.name} ({len(spec_setup)} commands)...")
+                setup_failed = False
+                for setup_idx, setup_item in enumerate(spec_setup):
+                    try:
+                        # Build setup command from the spec setup item
+                        setup_args = setup_item.get("args", [])
+                        setup_stdin = setup_item.get("stdin", None)
+                        setup_expect = setup_item.get("expect", {})
 
-            # Handle parallel tests with multiple instances
-            if test.get("parallel") and test.get("instances"):
-                for instance in range(test["instances"]):
-                    success, message = run_test(test, spec_name=spec_file.name, instance_id=instance, spec_config=spec, spec_data_dir=spec_data_dir)
+                        # Build command for setup
+                        setup_cmd = [binary] + setup_args
 
-                    if success is None:
-                        spec_skipped += 1
-                        total_skipped += 1
-                    elif success:
-                        print(f"✓ [{spec_file.name}] {name} [instance {instance}]")
-                        spec_passed += 1
-                        total_passed += 1
-                        has_tests = True
-                    else:
-                        print(f"✗ [{spec_file.name}] {name} [instance {instance}]: {message}")
-                        spec_failed += 1
-                        total_failed += 1
-                        all_failures.append((spec_file.name, f"{name} [instance {instance}]", message))
-                        has_tests = True
+                        # Inject server connection for query commands
+                        if len(setup_args) > 0 and setup_args[0] == "query":
+                            # Insert server connection after the command
+                            setup_cmd = [binary, "query", "--server", f"127.0.0.1:{server_port}", "--insecure"] + setup_args[1:]
 
-            # Handle loop tests
-            elif test.get("loop"):
-                for i in range(test["loop"]):
-                    success, message = run_test(test, spec_name=spec_file.name, loop_index=i, spec_config=spec, spec_data_dir=spec_data_dir)
+                        # Execute setup command
+                        result = subprocess.run(
+                            setup_cmd,
+                            input=setup_stdin,
+                            capture_output=True,
+                            encoding='utf-8',
+                            errors='replace',
+                            timeout=30  # Setup commands get longer timeout
+                        )
 
-                    if success is None:
-                        spec_skipped += 1
-                        total_skipped += 1
-                    elif success:
-                        print(f"✓ [{spec_file.name}] {name} [iteration {i}]")
-                        spec_passed += 1
-                        total_passed += 1
-                        has_tests = True
-                    else:
-                        print(f"✗ [{spec_file.name}] {name} [iteration {i}]: {message}")
-                        spec_failed += 1
-                        total_failed += 1
-                        all_failures.append((spec_file.name, f"{name} [iteration {i}]", message))
-                        has_tests = True
+                        # Check if setup succeeded
+                        expected_exit = setup_expect.get("exit_code", 0)
+                        if result.returncode != expected_exit:
+                            print(f"    Setup command {setup_idx + 1} failed: exit code {result.returncode} (expected {expected_exit})")
+                            if result.stderr:
+                                print(f"      stderr: {result.stderr[:200]}")
+                            setup_failed = True
+                            break
+                    except subprocess.TimeoutExpired:
+                        print(f"    Setup command {setup_idx + 1} timed out")
+                        setup_failed = True
+                        break
+                    except Exception as e:
+                        print(f"    Setup command {setup_idx + 1} error: {e}")
+                        setup_failed = True
+                        break
 
-            # Handle normal tests
-            else:
-                success, message = run_test(test, spec_name=spec_file.name, spec_config=spec, spec_data_dir=spec_data_dir)
+                if setup_failed:
+                    print(f"  Skipping {spec_file.name} due to setup failure")
+                    continue
+                else:
+                    print(f"  Setup complete for {spec_file.name}")
 
-                if success is None:
-                    # Skipped
+            for test in spec.get("tests", []):
+                name = test["name"]
+
+                # Skip tests marked with skip: true
+                if test.get("skip", False):
                     spec_skipped += 1
                     total_skipped += 1
-                elif success:
-                    print(f"✓ [{spec_file.name}] {name}")
-                    spec_passed += 1
-                    total_passed += 1
-                    has_tests = True
+                    continue
+
+                # Handle parallel tests with multiple instances
+                if test.get("parallel") and test.get("instances"):
+                    for instance in range(test["instances"]):
+                        success, message = run_test(test, spec_name=spec_file.name, instance_id=instance, spec_config=spec, spec_data_dir=spec_data_dir)
+
+                        if success is None:
+                            spec_skipped += 1
+                            total_skipped += 1
+                        elif success:
+                            print(f"✓ [{spec_file.name}] {name} [instance {instance}]")
+                            spec_passed += 1
+                            total_passed += 1
+                            has_tests = True
+                        else:
+                            print(f"✗ [{spec_file.name}] {name} [instance {instance}]: {message}")
+                            spec_failed += 1
+                            total_failed += 1
+                            all_failures.append((spec_file.name, f"{name} [instance {instance}]", message))
+                            has_tests = True
+
+                # Handle loop tests
+                elif test.get("loop"):
+                    for i in range(test["loop"]):
+                        success, message = run_test(test, spec_name=spec_file.name, loop_index=i, spec_config=spec, spec_data_dir=spec_data_dir)
+
+                        if success is None:
+                            spec_skipped += 1
+                            total_skipped += 1
+                        elif success:
+                            print(f"✓ [{spec_file.name}] {name} [iteration {i}]")
+                            spec_passed += 1
+                            total_passed += 1
+                            has_tests = True
+                        else:
+                            print(f"✗ [{spec_file.name}] {name} [iteration {i}]: {message}")
+                            spec_failed += 1
+                            total_failed += 1
+                            all_failures.append((spec_file.name, f"{name} [iteration {i}]", message))
+                            has_tests = True
+
+                # Handle normal tests
                 else:
-                    print(f"✗ [{spec_file.name}] {name}: {message}")
-                    spec_failed += 1
-                    total_failed += 1
-                    all_failures.append((spec_file.name, name, message))
-                    has_tests = True
+                    success, message = run_test(test, spec_name=spec_file.name, spec_config=spec, spec_data_dir=spec_data_dir)
+
+                    if success is None:
+                        # Skipped
+                        spec_skipped += 1
+                        total_skipped += 1
+                    elif success:
+                        print(f"✓ [{spec_file.name}] {name}")
+                        spec_passed += 1
+                        total_passed += 1
+                        has_tests = True
+                    else:
+                        print(f"✗ [{spec_file.name}] {name}: {message}")
+                        spec_failed += 1
+                        total_failed += 1
+                        all_failures.append((spec_file.name, name, message))
+                        has_tests = True
+
+        finally:
+            # Stop server if it was started
+            if server_proc is not None:
+                print(f"  Stopping server for {spec_file.name}...")
+                stop_server(server_proc)
+                # Clean up server data directory
+                server_data_dir = f"/tmp/geodetestlab_server_{spec_file.stem}"
+                if os.path.exists(server_data_dir):
+                    try:
+                        shutil.rmtree(server_data_dir)
+                    except:
+                        pass
 
         if has_tests:
             print(f"  {spec_file.name}: {spec_passed} passed, {spec_failed} failed, {spec_skipped} skipped")

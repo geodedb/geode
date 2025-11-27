@@ -3,6 +3,19 @@ description: "Test complex chained operations, pipelines, and sequential transfo
 version: "1.0.0"
 provider: "cli"
 
+cli:
+  server:
+    enabled: true
+    port: null
+    data_dir: null
+    startup_timeout_ms: 30000
+    cleanup: true
+    args: ["--log-level", "info"]
+  client:
+    timeout_ms: 15000
+    tls_verify: false
+    format: "json"
+
 setup:
   - command: "query"
     args: ["-"]
