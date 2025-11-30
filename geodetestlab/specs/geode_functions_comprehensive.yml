@@ -1,8 +1,9 @@
+version: "1.0"
+name: "Geode Functions Comprehensive Tests"
 description: "Comprehensive test suite for all mathematical, string, and graph functions"
-binary: geode
-timeout: 30
 
 cli:
+  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
   server:
     enabled: true
     port: null
@@ -411,3 +412,8 @@ tests:
       exit_code: 0
       stdout_contains: ["null"]
     tags: ["null", "handling"]
+
+invariants:
+  - type: "server_running"
+
+tags: ["functions", "math", "string", "comprehensive"]

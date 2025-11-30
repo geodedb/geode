@@ -427,6 +427,12 @@ class ParallelTestRunner:
                 if not default_flags:
                     default_flags = ["--server", server_address, "--insecure"] if server_address else []
 
+                # Always add --log-level error to suppress QUIC debug output which causes parsing issues
+                # unless an explicit --log-level is already present in the args or default flags
+                has_log_level = "--log-level" in default_flags or "--log-level" in processed_args
+                if not has_log_level:
+                    default_flags.extend(["--log-level", "error"])
+
                 insert_pos = 1 if len(processed_args) > 0 else 0
                 for flag in default_flags:
                     if flag not in processed_args:
@@ -453,7 +459,7 @@ class ParallelTestRunner:
         for query in cleanup_queries:
             try:
                 subprocess.run(
-                    [self.binary, "query", "--server", server_address, query],
+                    [self.binary, "query", "--server", server_address, "--insecure", "--log-level", "error", query],
                     capture_output=True,
                     text=True,
                     timeout=5
@@ -523,14 +529,30 @@ class ParallelTestRunner:
                     else:
                         cmd = setup_args
 
-                    subprocess.run(
-                        cmd,
-                        input=setup_stdin,  # Pass stdin content to subprocess
-                        capture_output=True,
-                        text=True,
-                        timeout=self.test_timeout,
-                        env=env  # Pass the same env with isolated data_dir
-                    )
+                    # Detect shell commands and run through shell
+                    is_shell_cmd = (len(cmd) > 0 and cmd[0] in ['echo', 'rm', 'mkdir', 'cat', 'touch', 'cd', 'ls', 'pwd', 'cp', 'mv'])
+                    if is_shell_cmd:
+                        shell_cmd = ' '.join(cmd)
+                        subprocess.run(
+                            shell_cmd,
+                            shell=True,
+                            input=setup_stdin,
+                            capture_output=True,
+                            encoding='utf-8',
+                            errors='replace',  # Handle binary debug output gracefully
+                            timeout=self.test_timeout,
+                            env=env  # Pass the same env with isolated data_dir
+                        )
+                    else:
+                        subprocess.run(
+                            cmd,
+                            input=setup_stdin,  # Pass stdin content to subprocess
+                            capture_output=True,
+                            encoding='utf-8',
+                            errors='replace',  # Handle binary debug output gracefully
+                            timeout=self.test_timeout,
+                            env=env  # Pass the same env with isolated data_dir
+                        )
                 except Exception as e:
                     # Log setup failure but continue
                     pass
@@ -542,7 +564,8 @@ class ParallelTestRunner:
                 [self.binary] + args,
                 input=stdin_input,
                 capture_output=True,
-                text=True,
+                encoding='utf-8',
+                errors='replace',  # Handle binary debug output gracefully
                 timeout=self.test_timeout,
                 env=env
             )
@@ -755,7 +778,8 @@ class ParallelTestRunner:
                 server_address = f"127.0.0.1:{port}"
 
                 # Start server with data directory isolation
-                server_args = [self.binary, "serve", "--listen", f"0.0.0.0:{port}", "--data-dir", str(spec_data_dir)]
+                # Use --log-level error to reduce debug noise which causes test output parsing issues
+                server_args = [self.binary, "serve", "--listen", f"0.0.0.0:{port}", "--data-dir", str(spec_data_dir), "--log-level", "error"]
                 server_extra_args = server_args_override or []
                 if server_extra_args:
                     server_args.extend(server_extra_args)
@@ -892,14 +916,31 @@ class ParallelTestRunner:
                         # Run external setup commands (e.g., rm, mkdir) directly
                         cmd = setup_args
 
-                    result = subprocess.run(
-                        cmd,
-                        input=setup_stdin,  # Pass stdin content to subprocess
-                        capture_output=True,
-                        text=True,
-                        timeout=self.test_timeout,
-                        env=setup_env
-                    )
+                    # Detect shell commands and run through shell
+                    is_shell_cmd = (len(cmd) > 0 and cmd[0] in ['echo', 'rm', 'mkdir', 'cat', 'touch', 'cd', 'ls', 'pwd', 'cp', 'mv'])
+                    if is_shell_cmd:
+                        # Run through shell for commands like "echo 'message'"
+                        shell_cmd = ' '.join(cmd)
+                        result = subprocess.run(
+                            shell_cmd,
+                            shell=True,
+                            input=setup_stdin,
+                            capture_output=True,
+                            encoding='utf-8',
+                            errors='replace',  # Handle binary debug output gracefully
+                            timeout=self.test_timeout,
+                            env=setup_env
+                        )
+                    else:
+                        result = subprocess.run(
+                            cmd,
+                            input=setup_stdin,  # Pass stdin content to subprocess
+                            capture_output=True,
+                            encoding='utf-8',
+                            errors='replace',  # Handle binary debug output gracefully
+                            timeout=self.test_timeout,
+                            env=setup_env
+                        )
                     if result.returncode != 0:
                         self.log_progress(f"Setup failed for {spec_label}: {result.stderr}")
                 except Exception as e:

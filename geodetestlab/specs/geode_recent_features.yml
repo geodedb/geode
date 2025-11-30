@@ -2,6 +2,13 @@ spec_version: "1.0"
 name: "Geode Recent Features Test Suite"
 description: "Comprehensive tests for recently implemented features including graph algorithms, string/math functions, and CREATE GRAPH statements"
 
+cli:
+  binary: "./zig-out/bin/geode"
+  server:
+    enabled: true
+    startup_timeout_ms: 30000
+    args: ["--log-level", "error"]
+
 setup:
   - name: "clear-data"
     description: "Clear any existing test data"

@@ -3,7 +3,7 @@ name: "October 2025 GQL Feature Tests"
 description: "Comprehensive tests for October 2025 feature implementations: FILTER clause, type() function, SET label operations, variable-length paths, session management, and transaction management"
 
 cli:
-  binary: "geode"
+  binary: "./zig-out/bin/geode"
   working_dir: null
   env:
     GEODE_LOG_LEVEL: "info"

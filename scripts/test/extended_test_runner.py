@@ -239,15 +239,24 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                 if len(setup_processed) > 0 and setup_processed[0] == "query":
                     has_server = any("--server" in arg for arg in setup_processed)
                     # Check if spec explicitly enables server mode
-                    spec_server_enabled = False
+                    spec_server_enabled_for_setup = False
+                    server_port_for_setup = "8443"  # Default port
                     if spec_config and isinstance(spec_config, dict):
                         cli_config = spec_config.get("cli", {})
                         if isinstance(cli_config, dict):
                             server_config = cli_config.get("server", {})
                             if isinstance(server_config, dict):
-                                spec_server_enabled = server_config.get("enabled", False)
-                    # Server mode is now the default - no need to inject unless spec requires it
-                    # If spec has server enabled, the test harness will start one
+                                spec_server_enabled_for_setup = server_config.get("enabled", False)
+                                if server_config.get("port"):
+                                    server_port_for_setup = str(server_config.get("port"))
+                    # If spec has server enabled, inject --server and --insecure for setup commands
+                    if spec_server_enabled_for_setup and not has_server:
+                        server_address = f"127.0.0.1:{server_port_for_setup}"
+                        # Insert --server with actual address after the command
+                        setup_processed.insert(1, "--server")
+                        setup_processed.insert(2, server_address)
+                        # Add --insecure flag (test servers use self-signed certs)
+                        setup_processed.insert(3, "--insecure")
 
                 # Add --non-interactive for shell commands when stdin is used
                 if len(setup_processed) > 0 and setup_processed[0] == "shell" and setup_stdin:
@@ -280,7 +289,8 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                     [binary] + setup_processed,
                     input=setup_stdin,
                     capture_output=True,
-                    text=True,
+                    encoding='utf-8',
+                    errors='replace',  # Handle binary debug output gracefully
                     timeout=10  # Allow more time for QUIC connection setup
                 )
                 if setup_result.returncode != 0:

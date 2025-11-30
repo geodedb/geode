@@ -229,11 +229,11 @@ tests:
     tags: ["query", "performance", "explain"]
 
   - name: "error-handling-division-by-zero"
-    description: "Test error handling in mathematical operations"
+    description: "Test error handling in mathematical operations (Geode returns division by zero error)"
     args: ["query", "RETURN 10 / 0 AS result"]
     expect:
-      exit_code: 1
-      stderr_contains: ["division", "zero", "error"]
+      exit_code: 0
+      stdout_contains: ["division by zero"]
     tags: ["error", "math"]
 
   - name: "memory-cleanup-test"

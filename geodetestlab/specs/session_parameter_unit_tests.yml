@@ -2,6 +2,13 @@ description: "Unit tests for SESSION SET and RESET parameter commands"
 binary: geode
 timeout: 10
 
+cli:
+  binary: "./zig-out/bin/geode"
+  server:
+    enabled: true
+    startup_timeout_ms: 30000
+    args: ["--log-level", "error"]
+
 tests:
   # ===============================
   # SESSION SET GRAPH TESTS

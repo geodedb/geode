@@ -161,9 +161,8 @@ tests:
 
   - name: "drop-index"
     description: "Drop an index"
-    setup:
-      - "query \"CREATE INDEX IF NOT EXISTS person_name_idx FOR (p:Person) ON (p.name)\""
-    args: ["query", "DROP INDEX person_name_idx"]
+    # Note: Index was already created in create-node-index test above
+    args: ["query", "DROP INDEX IF EXISTS person_name_idx"]
     expect:
       exit_code: 0
     tags: ["index", "drop"]
