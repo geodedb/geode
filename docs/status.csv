@@ -1060,7 +1060,7 @@ REQ-GQL-2PC-004,2PC Raft Integration,2PC,IMPL,TestCANARY_2PC_RaftIntegration,,di
 REQ-GQL-2PC-005,Distributed Query Processing,Distributed,IMPL,TestCANARY_DistributedQuery,,distributed,2025-09-29,src/distributed/cluster.zig
 REQ-GQL-2PC-TEST,2PC Test Suite,Testing,TESTED,TestCANARY_2PC_Suite,,test,2025-09-29,tests/test_2pc_distributed.zig
 REQ-GQL-ADVANCED-INDEX-INTEGRATION,Advanced Types Index Integration,Index,IMPL,TestCANARY_REQ_GQL_ADVANCED_INDEX_INTEGRATION_All,,index,2025-01-03,src/index/advanced_types_index.zig
-REQ-GQL-ADVANCED-TYPES-INTEGRATION,Advanced Types Integration Tests,Testing,IMPL,TestCANARY_REQ_GQL_ADVANCED_TYPES_INTEGRATION_All,,testing,2025-01-03,geodetestlab/specs/advanced_types_integration.yml
+REQ-GQL-ADVANCED-TYPES-INTEGRATION,Advanced Types Integration Tests,Testing,IMPL,TestCANARY_REQ_GQL_ADVANCED_TYPES_INTEGRATION_All,,testing,2025-01-03,geodetestlab/specs/legacy/advanced_types_integration.yml
 REQ-GQL-ADVANCED-TYPES-OPTIMIZER,Advanced Types Query Optimizer,Optimizer,IMPL,TestCANARY_REQ_GQL_ADVANCED_TYPES_OPTIMIZER_All,,optimizer,2025-01-03,src/optimizer/advanced_types_optimizer.zig
 REQ-GQL-ADVANCED-TYPES-REGRESSION,Advanced Types Regression Tests,Testing,IMPL,TestCANARY_REQ_GQL_ADVANCED_TYPES_REGRESSION_All,,testing,2025-01-03,tests/advanced_types_regression_test.zig
 REQ-GQL-AGGREGATE-WHERE,AggregateWithWHERE,Execution,FIXED,,,execution,2025-10-13,src/execution/match_operations.zig
@@ -1207,7 +1207,7 @@ REQ-GQL-NET-TYPES-001,IpAddr Network Type,Types,IMPL,TestCANARY_REQ_GQL_NET_TYPE
 REQ-GQL-NET-TYPES-002,Subnet CIDR Type,Types,IMPL,TestCANARY_REQ_GQL_NET_TYPES_002_Subnet,,types,2025-01-03,src/types/network/subnet.zig
 REQ-GQL-NET-TYPES-003,Mac Address Type,Types,IMPL,TestCANARY_REQ_GQL_NET_TYPES_003_Mac,,types,2025-01-03,src/types/network/mac.zig
 REQ-GQL-NET-TYPES-100,NetworkTypesIntegration,EndToEndTesting,TESTED,TestCANARY_REQ_GQL_NET_TYPES_100_Integration,,types,2025-10-03,tests/network_types_integration_test.zig
-REQ-GQL-NET-TYPES-GEODETESTLAB,Network Types Geodetestlab Tests,Testing,IMPL,TestCANARY_REQ_GQL_NET_TYPES_GEODETESTLAB_All,,testing,2025-01-03,geodetestlab/specs/network_types_validation.yml
+REQ-GQL-NET-TYPES-GEODETESTLAB,Network Types Geodetestlab Tests,Testing,IMPL,TestCANARY_REQ_GQL_NET_TYPES_GEODETESTLAB_All,,testing,2025-01-03,geodetestlab/specs/legacy/network_types_validation.yml
 REQ-GQL-NET-TYPES-REGRESSION,Network Types Regression Tests,Testing,IMPL,TestCANARY_REQ_GQL_NET_TYPES_REGRESSION_All,,testing,2025-01-03,tests/network_types_regression_test.zig
 REQ-GQL-NET-TYPES-VALIDATION,Network Types Validation Script,Testing,IMPL,TestCANARY_REQ_GQL_NET_TYPES_VALIDATION_Script,,testing,2025-01-03,validate_current_features.zig
 REQ-GQL-NODE-PROPERTY-ACCESS,Node Property Access,RuntimeStability,IMPL,TestNodePropertyHashMapAccess,,core,2025-10-05,tests/regression_integer_overflow_binding_fix.sh
