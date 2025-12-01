@@ -190,6 +190,7 @@ tests:
 
   - name: "password-policy-validation"
     description: "Test password policy enforcement"
+    skip: true  # CLI-only command - doesn't work in server mode context
     args: ["user", "create", "weakpass", "weak@example.com", "123"]
     expect:
       exit_code: 1  # Should fail due to weak password
