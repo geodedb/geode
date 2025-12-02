@@ -121,14 +121,13 @@ tests:
   # Variable-Length Paths Tests
   - name: "varlen-path-basic"
     description: "Test variable-length path with specific range"
-    skip: true  # Variable-length path traversal not yet implemented
     setup:
-      - args: ["CREATE (a {name: 'Alice'})"]
-      - args: ["CREATE (b {name: 'Bob'})"]
-      - args: ["CREATE (c {name: 'Carol'})"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
-      - args: ["MATCH (b), (c) WHERE b.name = 'Bob' AND c.name = 'Carol' CREATE (b)-[:KNOWS]->(c)"]
-    args: ["MATCH (a)-[:KNOWS*1..2]->(friend) WHERE a.name = 'Alice' RETURN friend.name"]
+      - args: ["query", "CREATE (a {name: 'Alice'})"]
+      - args: ["query", "CREATE (b {name: 'Bob'})"]
+      - args: ["query", "CREATE (c {name: 'Carol'})"]
+      - args: ["query", "MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+      - args: ["query", "MATCH (b), (c) WHERE b.name = 'Bob' AND c.name = 'Carol' CREATE (b)-[:KNOWS]->(c)"]
+    args: ["query", "MATCH (a)-[:KNOWS*1..2]->(friend) WHERE a.name = 'Alice' RETURN friend.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -137,14 +136,13 @@ tests:
 
   - name: "varlen-path-unbounded"
     description: "Test variable-length path with unbounded range"
-    skip: true  # Variable-length path traversal not yet implemented
     setup:
-      - args: ["CREATE (a {name: 'A'})"]
-      - args: ["CREATE (b {name: 'B'})"]
-      - args: ["CREATE (c {name: 'C'})"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'A' AND b.name = 'B' CREATE (a)-[:NEXT]->(b)"]
-      - args: ["MATCH (b), (c) WHERE b.name = 'B' AND c.name = 'C' CREATE (b)-[:NEXT]->(c)"]
-    args: ["MATCH (a)-[:NEXT*]->(x) WHERE a.name = 'A' RETURN x.name"]
+      - args: ["query", "CREATE (a {name: 'A'})"]
+      - args: ["query", "CREATE (b {name: 'B'})"]
+      - args: ["query", "CREATE (c {name: 'C'})"]
+      - args: ["query", "MATCH (a), (b) WHERE a.name = 'A' AND b.name = 'B' CREATE (a)-[:NEXT]->(b)"]
+      - args: ["query", "MATCH (b), (c) WHERE b.name = 'B' AND c.name = 'C' CREATE (b)-[:NEXT]->(c)"]
+    args: ["query", "MATCH (a)-[:NEXT*]->(x) WHERE a.name = 'A' RETURN x.name"]
     expect:
       exit_code: 0
       geode_query:
@@ -153,13 +151,12 @@ tests:
 
   - name: "varlen-path-cycle-detection"
     description: "Test variable-length path handles cycles correctly"
-    skip: true  # Variable-length path traversal not yet implemented
     setup:
-      - args: ["CREATE (a {name: 'Alice'})"]
-      - args: ["CREATE (b {name: 'Bob'})"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
-      - args: ["MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (b)-[:KNOWS]->(a)"]
-    args: ["MATCH (a)-[:KNOWS*1..5]->(x) WHERE a.name = 'Alice' RETURN x.name"]
+      - args: ["query", "CREATE (a {name: 'Alice'})"]
+      - args: ["query", "CREATE (b {name: 'Bob'})"]
+      - args: ["query", "MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)"]
+      - args: ["query", "MATCH (a), (b) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (b)-[:KNOWS]->(a)"]
+    args: ["query", "MATCH (a)-[:KNOWS*1..5]->(x) WHERE a.name = 'Alice' RETURN x.name"]
     expect:
       exit_code: 0
       geode_query:

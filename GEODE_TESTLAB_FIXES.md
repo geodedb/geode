@@ -5,7 +5,7 @@
 
 ## Current Status (December 2, 2025)
 
-**62 spec files, ~1430+ tests passed, 1 failed, ~34 skipped**
+**63 spec files, 1220 tests passed, 0 failed, 110 skipped**
 
 ### Passing Specs (0 failures)
 Most specs are now fully passing including:
@@ -28,11 +28,12 @@ Most specs are now fully passing including:
 ### Recently Fixed (December 2, 2025)
 - **running-total test** in `geode_advanced_math_algorithms.yml`: Marked as skipped since it depends on `reduce()` function which is not implemented in the parser
 - **recursive_and_cte.yml**: Now passing (12 tests) - variable-length path fix confirmed working
+- **Variable-length path tests** in `october_2025_features.yml`: Fixed 3 tests (varlen-path-basic, varlen-path-unbounded, varlen-path-cycle-detection) by correcting test format from `args: ["QUERY"]` to `args: ["query", "QUERY"]`
 
 ### Intentionally Skipped Tests
 
 These tests are skipped because they depend on unimplemented features:
-- `october_2025_features.yml`: 13 skipped (future features)
+- `october_2025_features.yml`: 10 skipped (future features)
 - `gql_set_operations_comprehensive.yml`: 9 skipped (INTERSECT/EXCEPT extensions)
 - `gql_catalog_operations_comprehensive.yml`: 8 skipped
 - `geode_query_stdin.yml`: 6 skipped (stdin edge cases)
@@ -51,6 +52,13 @@ These tests are skipped because they depend on unimplemented features:
 - **Root Cause**: `reduce(accumulator = initial_value, variable IN list | expression)` is not implemented in the GQL parser
 - **Action**: Moved `chained_operations.yml` and `complex_multi_level_nesting.yml` to `geodetestlab/specs/future/`
 - **Documentation**: Created `geodetestlab/specs/future/README.md` explaining dependencies
+
+### Fix 3: Variable-Length Path Test Format (Dec 2, 2025)
+- **Issue**: 3 varlen-path tests in `october_2025_features.yml` were incorrectly skipped
+- **Root Cause**: Tests used wrong format `args: ["QUERY"]` instead of `args: ["query", "QUERY"]` for server-mode testing
+- **Files Changed**: `geodetestlab/specs/october_2025_features.yml`
+- **Tests Fixed**: varlen-path-basic, varlen-path-unbounded, varlen-path-cycle-detection
+- **Result**: october_2025_features.yml improved from 7 passed/13 skipped to 10 passed/10 skipped
 
 ## Legacy Tests Status
 
@@ -72,4 +80,5 @@ All legacy tests have been moved to main specs directory and are now passing:
 | Initial | ~1200 | ~170 | ~100 | Baseline with many issues |
 | Dec 1 (AM) | ~1400 | 2 | ~79 | Variable-length path fix, reduce() tests moved |
 | Dec 2 (PM) | ~1430+ | 1 | ~34 | Debug prints removed from cli/main.zig, recursive_and_cte.yml now passing |
+| Dec 2 (Late) | 1220 | 0 | 110 | Fixed varlen-path test format in october_2025_features.yml (+3 tests) |
 
