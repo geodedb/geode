@@ -987,6 +987,120 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var matched_nodes = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
             defer matched_nodes.deinit(allocator);
 
+            // CANARY: REQ=REQ-GQL-VARLEN-AGG; FEATURE="VariableLengthPathAggregation"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-01
+            // Handle aggregation with variable-length paths: collect target nodes from paths instead of all nodes
+            if (has_relationship and (var_len_min != null or var_len_max != null)) {
+                const min_len = var_len_min orelse 0;
+                const max_len = var_len_max;
+
+                // Find all starting nodes matching the left pattern
+                var start_node_iter = store.nodes.iterator();
+                while (start_node_iter.next()) |entry| {
+                    const start_node = entry.value_ptr;
+
+                    // Filter by left node labels
+                    if (match_labels.len > 0) {
+                        var has_all_labels = true;
+                        for (match_labels) |required_label| {
+                            var found = false;
+                            for (start_node.labels) |node_label| {
+                                if (std.mem.eql(u8, required_label, node_label)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                has_all_labels = false;
+                                break;
+                            }
+                        }
+                        if (!has_all_labels) continue;
+                    }
+
+                    // Check left node property constraints if any
+                    if (match_props) |props| {
+                        var passes_props = true;
+                        for (props) |prop| {
+                            if (start_node.properties.get(prop.key)) |node_prop_val| {
+                                // Convert PropertyValue to Value for comparison
+                                const node_val = switch (node_prop_val) {
+                                    .Null => Value{ .Null = {} },
+                                    .Bool => |b| Value{ .Bool = b },
+                                    .Int => |i| Value{ .Int = i },
+                                    .String => |s| Value{ .Str = s },
+                                    .Float => Value{ .Null = {} },
+                                    .ExtValue => |ext| Value{ .ExtValue = ext },
+                                };
+                                // Evaluate the expected property value
+                                const empty_env = eval.Env{
+                                    .names = &.{},
+                                    .values = &.{},
+                                    .allocator = allocator,
+                                };
+                                const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                                if (!valuesEqual(node_val, prop_val)) {
+                                    passes_props = false;
+                                    break;
+                                }
+                            } else {
+                                passes_props = false;
+                                break;
+                            }
+                        }
+                        if (!passes_props) continue;
+                    }
+
+                    // Expand variable-length paths from this starting node
+                    var paths = try expandVariableLengthPaths(allocator, store, start_node.id, min_len, max_len, rel_type);
+                    defer {
+                        for (paths.items) |*path| {
+                            path.deinit(allocator);
+                        }
+                        paths.deinit(allocator);
+                    }
+
+                    // Collect all target nodes from paths (deduplicated by node ID)
+                    for (paths.items) |path| {
+                        if (path.nodes.items.len < 2) continue;
+
+                        const target_node_id = path.nodes.items[path.nodes.items.len - 1];
+                        const target_node_ptr = store.nodes.getPtr(target_node_id) orelse continue;
+
+                        // Check if already in matched_nodes (deduplicate)
+                        var already_added = false;
+                        for (matched_nodes.items) |existing| {
+                            if (existing.id == target_node_ptr.id) {
+                                already_added = true;
+                                break;
+                            }
+                        }
+                        if (!already_added) {
+                            try matched_nodes.append(allocator, target_node_ptr);
+                        }
+                    }
+                }
+
+                // Now compute aggregations over the path-matched nodes
+                var row = try allocator.alloc(Value, items.len);
+
+                for (items, 0..) |item, i| {
+                    row[i] = try evaluateGroupAggregation(allocator, item.expr, matched_nodes.items);
+                }
+
+                var rows_slice = try allocator.alloc([]Value, 1);
+                rows_slice[0] = row;
+
+                // Return the aggregation result (WITH clause processing not needed for variable-length path aggregation)
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = rows_slice,
+                    .flags = blk: {
+                        const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                        break :blk list;
+                    },
+                };
+            }
+
             // CANARY: PERF_PHASE5_ENV_ALLOC_AGGREGATE - Pre-allocate environment arrays for aggregation loop
             // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE=\"ExecutionOptimization\"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
             // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
@@ -1256,6 +1370,43 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
                     }
                     if (!has_all_labels) continue;
+                }
+
+                // CANARY: REQ=REQ-GQL-VARLEN-PROPS; FEATURE="VariableLengthPathPropertyFilter"; ASPECT=LeftNodeFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-01
+                // Filter left node by inline properties if specified (e.g., {id: 1} in MATCH (a:P {id: 1})-[:R*]->(b))
+                if (match_props) |props| {
+                    var passes_props = true;
+                    for (props) |prop| {
+                        if (left_node.properties.get(prop.key)) |node_prop_val| {
+                            // Convert PropertyValue to Value for comparison
+                            const node_val = switch (node_prop_val) {
+                                .Null => Value{ .Null = {} },
+                                .Bool => |b| Value{ .Bool = b },
+                                .Int => |i| Value{ .Int = i },
+                                .String => |s| Value{ .Str = s },
+                                .Float => Value{ .Null = {} },
+                                .ExtValue => |ext| Value{ .ExtValue = ext },
+                            };
+                            // Evaluate the expected property value
+                            const prop_env = eval.Env{
+                                .names = param_names,
+                                .values = param_values,
+                                .allocator = allocator,
+                            };
+                            const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                                passes_props = false;
+                                break;
+                            };
+                            if (!valuesEqual(node_val, prop_val)) {
+                                passes_props = false;
+                                break;
+                            }
+                        } else {
+                            passes_props = false;
+                            break;
+                        }
+                    }
+                    if (!passes_props) continue;
                 }
 
                 // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=Execution; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09

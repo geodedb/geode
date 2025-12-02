@@ -97,6 +97,11 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     // Note: only counting integer values for uniqueness
                                 }
                             }
+                        } else if (call.args[0].* == .Ident) {
+                            // COUNT(DISTINCT n) - count distinct nodes by their ID
+                            for (nodes) |node| {
+                                try unique_values.put(@intCast(node.id), {});
+                            }
                         }
 
                         return Value{ .Int = @intCast(unique_values.count()) };
