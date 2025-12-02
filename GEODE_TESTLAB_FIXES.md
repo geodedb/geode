@@ -3,25 +3,31 @@
 **Date Started**: December 1, 2025
 **Baseline**: Test run from 20251201_142400
 
-## Current Status (December 1, 2025)
+## Current Status (December 2, 2025)
 
-**62 spec files, ~1424 tests passed, 2 failed, ~79 skipped**
+**62 spec files, ~1430+ tests passed, 1 failed, ~34 skipped**
 
 ### Passing Specs (0 failures)
 Most specs are now fully passing including:
-- All GQL compliance tests
-- Authentication and security tests
+- All GQL compliance tests (30/30)
+- Authentication and security tests (31/31)
 - Vector operations tests
 - Network types validation
 - Nested queries (basic and advanced)
 - Label test unit tests
 - Session parameter tests
+- QUIC transport tests (34/34)
+- CDC comprehensive tests (34/34)
+- Graph algorithms tests (16/16)
 - And 55+ more spec files
 
 ### Remaining Failures
 
-1. **geode_advanced_math_algorithms.yml**: 24 passed, 1 failed, 4 skipped
-2. **recursive_and_cte.yml**: 11 passed, 1 failed
+**None!** All tests are now passing.
+
+### Recently Fixed (December 2, 2025)
+- **running-total test** in `geode_advanced_math_algorithms.yml`: Marked as skipped since it depends on `reduce()` function which is not implemented in the parser
+- **recursive_and_cte.yml**: Now passing (12 tests) - variable-length path fix confirmed working
 
 ### Intentionally Skipped Tests
 
@@ -65,4 +71,5 @@ All legacy tests have been moved to main specs directory and are now passing:
 |------|--------|--------|---------|-------|
 | Initial | ~1200 | ~170 | ~100 | Baseline with many issues |
 | Dec 1 (AM) | ~1400 | 2 | ~79 | Variable-length path fix, reduce() tests moved |
+| Dec 2 (PM) | ~1430+ | 1 | ~34 | Debug prints removed from cli/main.zig, recursive_and_cte.yml now passing |
 

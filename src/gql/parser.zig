@@ -1668,11 +1668,19 @@ pub const Parser = struct {
                 where_expr = try self.parseOrExpr();
             }
 
-            // After MATCH ... WHERE, check for CREATE
+            // After MATCH ... WHERE, check for CREATE - support multiple CREATE clauses
+            // e.g., MATCH (a), (b), (c) CREATE (a)-[:R]->(b) CREATE (a)-[:R]->(c)
             if (self.cur.kind == .CREATE) {
                 have_create = true;
-                self.advance();
-                create_pattern = try self.parseGraphPattern();
+                var create_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                while (self.cur.kind == .CREATE) {
+                    self.advance();
+                    const cp = try self.parseGraphPattern();
+                    for (cp.chains) |chain| {
+                        try create_chains.append(self.arena.allocator(), chain);
+                    }
+                }
+                create_pattern = .{ .chains = try create_chains.toOwnedSlice(self.arena.allocator()) };
             }
 
             break :blk_pat combined_gp;

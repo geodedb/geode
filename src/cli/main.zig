@@ -347,12 +347,9 @@ const StreamResponder = struct {
 
 // Thread wrapper for handleQuicStream
 fn handleQuicStreamThread(allocator: std.mem.Allocator, conn: anytype, stream: anytype) void {
-    const stream_ptr = @intFromPtr(stream);
-    std.debug.print("[THREAD-WRAPPER-{x}] ⚡ Thread started executing!\n", .{stream_ptr});
     handleQuicStream(allocator, conn, stream) catch |err| {
-        std.debug.print("[THREAD-WRAPPER-{x}] Error in stream handler: {}\n", .{stream_ptr, err});
+        log.err("Error in stream handler: {}", .{err});
     };
-    std.debug.print("[THREAD-WRAPPER-{x}] Thread completed\n", .{stream_ptr});
 }
 
 fn runSimpleStatement(
@@ -454,7 +451,7 @@ fn processProtocolMessage(
 
     // Parse JSON message
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg_trimmed, .{}) catch |err| {
-        std.debug.print("[JSON-PARSE-ERROR] Failed to parse JSON. Error: {}, Message length: {}, Content: '{s}'\n", .{ err, msg.len, msg });
+        log.err("Failed to parse JSON: {}", .{err});
         const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid JSON\"}\n";
         try responder.writeAll(error_response);
         return;
@@ -496,7 +493,7 @@ fn processProtocolMessage(
         else
             "unknown";
 
-        std.debug.print("Client: {s} version {s}\n", .{ client_name, client_ver });
+        log.debug("Client: {s} version {s}", .{ client_name, client_ver });
 
         // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=IMPL; OWNER=2025-10-25
         // Extract and validate authentication credentials (using global geode import to share state)
@@ -506,7 +503,7 @@ fn processProtocolMessage(
         const auth_enabled_status = user_mgmt.isAuthEnabled();
         log.debug("isAuthEnabled() returned: {}", .{auth_enabled_status});
         if (auth_enabled_status) {
-            std.debug.print("Authentication is enabled, validating credentials\n", .{});
+            log.debug("Authentication is enabled, validating credentials", .{});
 
             // Extract username and password from HELLO message
             const username_value = obj.get("username");
@@ -516,7 +513,7 @@ fn processProtocolMessage(
                 // Auth is enabled but credentials not provided
                 const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Authentication required\"}\n";
                 try responder.writeAll(error_response);
-                std.debug.print("Authentication failed: credentials not provided\n", .{});
+                log.debug("Authentication failed: credentials not provided", .{});
                 return;
             }
 
@@ -524,7 +521,7 @@ fn processProtocolMessage(
                 // Credentials are not strings
                 const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Invalid credential format\"}\n";
                 try responder.writeAll(error_response);
-                std.debug.print("Authentication failed: invalid credential format\n", .{});
+                log.debug("Authentication failed: invalid credential format", .{});
                 return;
             }
 
@@ -536,7 +533,7 @@ fn processProtocolMessage(
                 // Invalid credentials
                 const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Authentication failed\"}\n";
                 try responder.writeAll(error_response);
-                std.debug.print("Authentication failed for user: {s}\n", .{username});
+                log.debug("Authentication failed for user: {s}", .{username});
                 return;
             };
 
@@ -545,7 +542,7 @@ fn processProtocolMessage(
             state.authenticated_username = try allocator.dupe(u8, username);
             if (state.authenticated_password) |old| allocator.free(old);
             state.authenticated_password = try allocator.dupe(u8, password);
-            std.debug.print("Authentication successful for user: {s}\n", .{username});
+            log.debug("Authentication successful for user: {s}", .{username});
         } else {
             log.debug("Authentication is NOT enabled, skipping credential validation", .{});
         }
@@ -635,7 +632,7 @@ fn processProtocolMessage(
         // Store result data for PULL request
         state.resetLastResult(allocator);
         state.last_result_data = try allocator.dupe(u8, result);
-        std.debug.print("[STREAM-{}] RUN_GQL: Stored result data ({} bytes) at address {}\n", .{ stream_id, result.len, @intFromPtr(&state.last_result_data) });
+        log.debug("RUN_GQL: Stored result data ({} bytes)", .{result.len});
 
         // Build and send SCHEMA response only (client will PULL for data)
         var response_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
@@ -662,9 +659,8 @@ fn processProtocolMessage(
     } else if (std.mem.eql(u8, type_str, "PULL")) {
         // Handle PULL request - send result data from last query
         log.debug("Processing PULL request", .{});
-        std.debug.print("[STREAM-{}] PULL: Checking last_result_data at address {}, value is: {s}\n", .{ stream_id, @intFromPtr(&state.last_result_data), if (state.last_result_data) |_| "NOT NULL" else "NULL" });
         if (state.last_result_data) |result_data| {
-            std.debug.print("[DEBUG-PULL] Found result data ({} bytes)\n", .{result_data.len});
+            log.debug("PULL: Found result data ({} bytes)", .{result_data.len});
             // Parse the stored result
             const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result_data, .{});
             defer result_parsed.deinit();
@@ -798,7 +794,7 @@ fn processStreamBuffer(
     if (!entry.found_existing) {
         entry.value_ptr.* = try StreamState.init(allocator);
         stream_counter.* += 1;
-        std.debug.print("✅ Tracking new stream {}\n", .{stream_id});
+        log.debug("Tracking new stream {}", .{stream_id});
     }
     var state = entry.value_ptr;
 
@@ -808,7 +804,7 @@ fn processStreamBuffer(
 
     // Prevent unbounded growth if newline never arrives
     if (state.buffer.items.len > MAX_LINE_SIZE and std.mem.indexOfScalar(u8, state.buffer.items, '\n') == null) {
-        std.debug.print("[STREAM-{}] Buffer exceeded MAX_LINE_SIZE without newline, clearing buffer ({} bytes)\n", .{ stream_id, state.buffer.items.len });
+        log.warn("Buffer exceeded MAX_LINE_SIZE without newline, clearing buffer ({} bytes)", .{state.buffer.items.len});
         state.buffer.items = state.buffer.items[0..0];
         return;
     }
@@ -836,8 +832,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
     defer stream.close();
 
     const stream_id = @intFromPtr(stream);
-    std.debug.print("[STREAM-{x}] Stream handler started\n", .{stream_id});
-    log.debug("Handling QUIC stream", .{});
+    log.debug("Stream handler started (id={x})", .{stream_id});
 
     // CANARY: REQ=REQ-AUTH-QUIC-001; FEATURE="QUIC Authentication"; ASPECT=ConnectionAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
     // Connection-scoped authentication state
@@ -847,7 +842,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
     // Store last query result for PULL requests
     var last_result_data: ?[]const u8 = null;
     defer if (last_result_data) |data| {
-        std.debug.print("[STREAM-{x}] Freeing last_result_data on function exit\n", .{stream_id});
+        log.debug("Freeing last_result_data on function exit", .{});
         allocator.free(data);
     };
 
@@ -869,7 +864,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
                     std.Thread.sleep(10 * std.time.ns_per_ms);
                     continue;
                 }
-                std.debug.print("Failed to read message: {}\n", .{err});
+                log.err("Failed to read message: {}", .{err});
                 return err;
             }
         };
@@ -882,7 +877,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
 
         // Parse JSON message
         const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg_trimmed, .{}) catch |err| {
-            std.debug.print("[JSON-PARSE-ERROR] Failed to parse JSON. Error: {}, Message length: {}, Content: '{s}'\n", .{err, msg.len, msg});
+            log.err("Failed to parse JSON: {} (len={})", .{ err, msg.len });
             const error_response = "{\"status_class\":\"58000\",\"error\":\"Invalid JSON\"}\n";
             try stream.writeAll(error_response);
             continue;
@@ -925,7 +920,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             else
                 "unknown";
 
-            std.debug.print("Client: {s} version {s}\n", .{ client_name, client_ver });
+            log.debug("Client: {s} version {s}", .{ client_name, client_ver });
 
             // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=IMPL; OWNER=2025-10-25
             // Extract and validate authentication credentials (using global geode import to share state)
@@ -935,7 +930,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             const auth_enabled_status = user_mgmt.isAuthEnabled();
             log.debug("isAuthEnabled() returned: {}", .{auth_enabled_status});
             if (auth_enabled_status) {
-                std.debug.print("Authentication is enabled, validating credentials\n", .{});
+                log.debug("Authentication is enabled, validating credentials", .{});
 
                 // Extract username and password from HELLO message
                 const username_value = obj.get("username");
@@ -945,7 +940,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
                     // Auth is enabled but credentials not provided
                     const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Authentication required\"}\n";
                     try stream.writeAll(error_response);
-                    std.debug.print("Authentication failed: credentials not provided\n", .{});
+                    log.debug("Authentication failed: credentials not provided", .{});
                     return;
                 }
 
@@ -953,7 +948,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
                     // Credentials are not strings
                     const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Invalid credential format\"}\n";
                     try stream.writeAll(error_response);
-                    std.debug.print("Authentication failed: invalid credential format\n", .{});
+                    log.debug("Authentication failed: invalid credential format", .{});
                     return;
                 }
 
@@ -965,13 +960,13 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
                     // Invalid credentials
                     const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Authentication failed\"}\n";
                     try stream.writeAll(error_response);
-                    std.debug.print("Authentication failed for user: {s}\n", .{username});
+                    log.debug("Authentication failed for user: {s}", .{username});
                     return;
                 };
 
                 // Authentication successful - store username
                 authenticated_username = try allocator.dupe(u8, username);
-                std.debug.print("Authentication successful for user: {s}\n", .{username});
+                log.debug("Authentication successful for user: {s}", .{username});
             } else {
                 log.debug("Authentication is NOT enabled, skipping credential validation", .{});
             }
@@ -1060,7 +1055,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             // Store result data for PULL request
             if (last_result_data) |old_data| allocator.free(old_data);
             last_result_data = try allocator.dupe(u8, result);
-            std.debug.print("[STREAM-{x}] RUN_GQL: Stored result data ({} bytes) at address {}\n", .{ stream_id, result.len, @intFromPtr(&last_result_data) });
+            log.debug("RUN_GQL: Stored result data ({} bytes)", .{result.len});
 
             // Build and send SCHEMA response only (client will PULL for data)
             var response_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
@@ -1083,16 +1078,13 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
 
             log.debug("Writing query response ({} bytes)", .{response_buf.items.len});
             stream.writeAll(response_buf.items) catch |err| {
-                std.debug.print("ERROR: Failed to write response: {}\n", .{err});
                 return err;
             };
             log.debug("Query response sent successfully", .{});
         } else if (std.mem.eql(u8, type_str, "PULL")) {
             // Handle PULL request - send result data from last query
             log.debug("Processing PULL request", .{});
-            std.debug.print("[STREAM-{x}] PULL: Checking last_result_data at address {}, value is: {s}\n", .{ stream_id, @intFromPtr(&last_result_data), if (last_result_data) |_| "NOT NULL" else "NULL" });
             if (last_result_data) |result_data| {
-                std.debug.print("[DEBUG-PULL] Found result data ({} bytes)\n", .{result_data.len});
                 // Parse the stored result
                 const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result_data, .{});
                 defer result_parsed.deinit();
@@ -1419,14 +1411,11 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         // Connections become available after QUIC handshake completes
         while (quic_server.tryAccept()) |conn| {
             connection_count += 1;
-            std.debug.print("✅ Accepted QUIC connection #{}\n", .{connection_count});
             var conn_state = ConnectionState.init(allocator, conn);
-            active_connections.append(allocator, conn_state) catch |err| {
-                std.debug.print("[DEBUG-APPEND] ❌ Append FAILED: {}\n", .{err});
+            active_connections.append(allocator, conn_state) catch {
                 conn_state.deinit(allocator);
                 continue;
             };
-            std.debug.print("[DEBUG-APPEND] Connection list size={}\n", .{active_connections.items.len});
         }
 
         // Poll streams from existing connections using direct stream ID polling

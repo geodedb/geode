@@ -440,15 +440,10 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
     if (context.query_param_names.len != 0) {
         std.debug.assert(context.query_param_names.len == context.query_param_values.len);
-        // DEBUG: Log parameter copying
-        std.debug.print("[DEBUG] Copying {d} parameters from context\n", .{context.query_param_names.len});
         for (context.query_param_names, context.query_param_values) |name, value| {
-            std.debug.print("[DEBUG] Param: {s} = {}\n", .{name, value});
             try param_names.append(allocator, name);
             try param_values.append(allocator, value);
         }
-    } else {
-        std.debug.print("[DEBUG] No parameters in context\n", .{});
     }
 
     // Empty environment for evaluating LET binding expressions

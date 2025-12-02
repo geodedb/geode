@@ -1335,6 +1335,8 @@ REQ-GQL-UNION-INTEGRATION-001,UNION Property Access Integration,Integration,IMPL
 REQ-GQL-VALUES-MATCH-001,ValuesMatchChaining,BindingPropagation,SPEC,TestValuesMatchBasic|TestValuesMatchWhere|TestValuesMatchMultiRow,,engine,2025-10-11,docs/VALUES_MATCH_CHAINING_SPEC.md
 "REQ-GQL-VARIABLE-PATHS"" {
     // CANARY: REQ=REQ-GQL-VARIABLE-PATHS",VariablePaths,Core,TESTED,TestCANARY_REQ_GQL_VARIABLE_PATHS,,team,2025-10-02,tests/integration/test_variable_paths.zig
+REQ-GQL-VARLEN-AGG,VariableLengthPathAggregation,Execution,IMPL,,,execution,2025-12-01,src/execution/match_operations.zig
+REQ-GQL-VARLEN-PROPS,VariableLengthPathPropertyFilter,LeftNodeFiltering,IMPL,,,engine,2025-12-01,src/execution/match_operations.zig
 REQ-GQL-VAULT-KMS-001,VaultKMSProvider,SECURITY,IMPL,tests/test_vault_kms_provider.zig,,security,2025-10-05,src/security/vault_kms_provider.zig
 REQ-GQL-VAULT-KMS-001,VaultKMSProvider,SECURITY,TESTED,TestCANARY_REQ_GQL_VAULT_KMS_001_VaultIntegration,,security,2025-10-05,tests/test_vault_kms_provider.zig
 "REQ-GQL-VECTOR-INDEX"" {

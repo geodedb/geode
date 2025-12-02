@@ -153,13 +153,9 @@ pub fn handleQuicConnection(
 
         if (line.len == 0) continue;
 
-        // DEBUG: Log exactly what we received
-        std.debug.print("[DEBUG-RECV] Received line (len={d}): '{s}'\n", .{ line.len, line });
-
         // Process the message and send response
         const response = processMessage(gpa, &state, line, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
-            std.debug.print("[DEBUG-ERROR] processMessage failed with error: {s}\n", .{@errorName(err)});
-            std.debug.print("[DEBUG-ERROR] Line that failed: '{s}'\n", .{line});
+            _ = err;
             const error_msg = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)});
             defer gpa.free(error_msg);
             try stream.writeAll(error_msg);
@@ -168,7 +164,6 @@ pub fn handleQuicConnection(
         defer if (response.len > 0) gpa.free(response);
 
         if (response.len > 0) {
-            std.debug.print("[DEBUG-RESPONSE] Sending response (len={d}): {s}\n", .{ response.len, response });
             try stream.writeAll(response);
         }
     }
@@ -248,7 +243,6 @@ pub fn processMessage(
         },
         .RUN_GQL => |rq| {
             state.resetResult();
-            std.debug.print("[DEBUG RUN_GQL] text={s}, params_json={s}\n", .{rq.text, if (rq.params_json) |p| p else "NULL"});
             var text = rq.text;
             // Detect EXPLAIN / EXPLAIN CALIBRATED / PROFILE prefixes; track modes then strip
             var explain_mode = false;
