@@ -1,0 +1,68 @@
+-- Enterprise Network Schema - Infrastructure Entities
+-- Migration 002: Server, Application, Database, Network, Datacenter nodes
+
+-- Server nodes (2,000 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (s:Server) REQUIRE s.id IS UNIQUE;
+CREATE CONSTRAINT IF NOT EXISTS FOR (s:Server) REQUIRE s.hostname IS UNIQUE;
+
+-- Application nodes (3,000 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (a:Application) REQUIRE a.id IS UNIQUE;
+
+-- Database nodes (500 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (db:Database) REQUIRE db.id IS UNIQUE;
+
+-- Network nodes (200 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (n:Network) REQUIRE n.id IS UNIQUE;
+
+-- Datacenter nodes (20 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (dc:Datacenter) REQUIRE dc.id IS UNIQUE;
+
+-- Sample datacenters
+CREATE (:Datacenter {
+  id: 'dc-us-west-1',
+  name: 'US West Primary',
+  location: point({latitude: 37.7749, longitude: -122.4194}),
+  tier: 4,
+  pue_rating: 1.2
+});
+
+CREATE (:Datacenter {
+  id: 'dc-us-east-1',
+  name: 'US East Primary',
+  location: point({latitude: 40.7128, longitude: -74.0060}),
+  tier: 4,
+  pue_rating: 1.25
+});
+
+CREATE (:Datacenter {
+  id: 'dc-eu-central-1',
+  name: 'EU Central',
+  location: point({latitude: 50.1109, longitude: 8.6821}),
+  tier: 3,
+  pue_rating: 1.35
+});
+
+-- Sample networks
+CREATE (:Network {
+  id: 'net-prod-001',
+  name: 'Production Network',
+  cidr: '10.0.0.0/16',
+  vlan_id: 100,
+  gateway: '10.0.0.1'
+});
+
+CREATE (:Network {
+  id: 'net-dev-001',
+  name: 'Development Network',
+  cidr: '10.1.0.0/16',
+  vlan_id: 200,
+  gateway: '10.1.0.1'
+});
+
+CREATE (:Network {
+  id: 'net-dmz-001',
+  name: 'DMZ Network',
+  cidr: '172.16.0.0/24',
+  vlan_id: 50,
+  gateway: '172.16.0.1'
+});

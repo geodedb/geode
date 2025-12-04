@@ -1,0 +1,152 @@
+-- Enterprise Network Schema - Seed Projects
+-- Migration 009: Create projects with documents and relationships
+
+-- Active projects for Engineering
+CREATE (:Project {
+  id: 'proj-001',
+  name: 'Geode 2.0 Migration',
+  description: 'Migration from legacy graph database to Geode 2.0 with enhanced vector search',
+  status: 'ACTIVE',
+  priority: 'HIGH',
+  budget: 2500000.00,
+  start_date: date('2024-06-01'),
+  deadline: date('2025-03-31'),
+  completion_pct: 65
+});
+
+CREATE (:Project {
+  id: 'proj-002',
+  name: 'API Gateway Modernization',
+  description: 'Replace legacy API gateway with cloud-native solution supporting QUIC',
+  status: 'ACTIVE',
+  priority: 'HIGH',
+  budget: 1200000.00,
+  start_date: date('2024-09-01'),
+  deadline: date('2025-06-30'),
+  completion_pct: 35
+});
+
+CREATE (:Project {
+  id: 'proj-003',
+  name: 'Security Audit 2024',
+  description: 'Annual security audit and penetration testing of all production systems',
+  status: 'COMPLETED',
+  priority: 'CRITICAL',
+  budget: 500000.00,
+  start_date: date('2024-01-15'),
+  deadline: date('2024-04-30'),
+  completion_pct: 100
+});
+
+CREATE (:Project {
+  id: 'proj-004',
+  name: 'Customer Analytics Platform',
+  description: 'Build real-time customer analytics with ML-powered insights',
+  status: 'ACTIVE',
+  priority: 'MEDIUM',
+  budget: 3000000.00,
+  start_date: date('2024-08-01'),
+  deadline: date('2025-12-31'),
+  completion_pct: 20
+});
+
+CREATE (:Project {
+  id: 'proj-005',
+  name: 'Infrastructure Cost Optimization',
+  description: 'Reduce cloud infrastructure costs by 30% through optimization and rightsizing',
+  status: 'PLANNING',
+  priority: 'MEDIUM',
+  budget: 150000.00,
+  start_date: date('2025-01-01'),
+  deadline: date('2025-06-30'),
+  completion_pct: 0
+});
+
+-- Documents associated with projects
+CREATE (:Document {
+  id: 'doc-001',
+  title: 'Geode 2.0 Technical Specification',
+  content: 'Comprehensive technical specification for the Geode 2.0 migration including schema design, data migration strategy, and rollback procedures.',
+  author_id: 'emp-001',
+  created_at: datetime('2024-05-15T14:30:00Z'),
+  updated_at: datetime('2024-11-01T09:00:00Z'),
+  version: '2.3',
+  status: 'APPROVED'
+});
+
+CREATE (:Document {
+  id: 'doc-002',
+  title: 'API Gateway Architecture Decision Record',
+  content: 'ADR documenting the decision to adopt cloud-native API gateway with QUIC support. Includes evaluation criteria, alternatives considered, and rationale.',
+  author_id: 'emp-001',
+  created_at: datetime('2024-08-20T10:00:00Z'),
+  updated_at: datetime('2024-08-25T16:00:00Z'),
+  version: '1.0',
+  status: 'APPROVED'
+});
+
+CREATE (:Document {
+  id: 'doc-003',
+  title: 'Security Audit Final Report',
+  content: 'Final report from the 2024 security audit including findings, risk assessments, and remediation recommendations.',
+  author_id: 'emp-002',
+  created_at: datetime('2024-04-28T11:00:00Z'),
+  updated_at: datetime('2024-04-30T17:00:00Z'),
+  version: '1.0',
+  status: 'FINAL'
+});
+
+CREATE (:Document {
+  id: 'doc-004',
+  title: 'Customer Analytics Requirements',
+  content: 'Business requirements document for the customer analytics platform including user stories, acceptance criteria, and success metrics.',
+  author_id: 'emp-004',
+  created_at: datetime('2024-07-10T09:00:00Z'),
+  updated_at: datetime('2024-10-15T14:00:00Z'),
+  version: '3.1',
+  status: 'APPROVED'
+});
+
+CREATE (:Document {
+  id: 'doc-005',
+  title: 'Infrastructure Cost Analysis',
+  content: 'Analysis of current infrastructure costs with recommendations for optimization opportunities and projected savings.',
+  author_id: 'emp-003',
+  created_at: datetime('2024-11-01T08:00:00Z'),
+  updated_at: datetime('2024-11-15T12:00:00Z'),
+  version: '1.2',
+  status: 'DRAFT'
+});
+
+-- Link projects to departments
+MATCH (p:Project {id: 'proj-001'}), (d:Department {id: 'dept-eng-001'}) CREATE (d)-[:OWNS_PROJECT]->(p);
+MATCH (p:Project {id: 'proj-002'}), (d:Department {id: 'dept-eng-001'}) CREATE (d)-[:OWNS_PROJECT]->(p);
+MATCH (p:Project {id: 'proj-003'}), (d:Department {id: 'dept-ops-001'}) CREATE (d)-[:OWNS_PROJECT]->(p);
+MATCH (p:Project {id: 'proj-004'}), (d:Department {id: 'dept-sales-001'}) CREATE (d)-[:OWNS_PROJECT]->(p);
+MATCH (p:Project {id: 'proj-005'}), (d:Department {id: 'dept-ops-001'}) CREATE (d)-[:OWNS_PROJECT]->(p);
+
+-- Link employees to projects (WORKS_ON)
+MATCH (e:Employee {id: 'emp-001'}), (p:Project {id: 'proj-001'}) CREATE (e)-[:WORKS_ON {role: 'Tech Lead', hours_per_week: 20}]->(p);
+MATCH (e:Employee {id: 'emp-002'}), (p:Project {id: 'proj-001'}) CREATE (e)-[:WORKS_ON {role: 'Developer', hours_per_week: 30}]->(p);
+MATCH (e:Employee {id: 'emp-003'}), (p:Project {id: 'proj-001'}) CREATE (e)-[:WORKS_ON {role: 'Developer', hours_per_week: 40}]->(p);
+MATCH (e:Employee {id: 'emp-001'}), (p:Project {id: 'proj-002'}) CREATE (e)-[:WORKS_ON {role: 'Architect', hours_per_week: 15}]->(p);
+MATCH (e:Employee {id: 'emp-002'}), (p:Project {id: 'proj-003'}) CREATE (e)-[:WORKS_ON {role: 'Security Reviewer', hours_per_week: 10}]->(p);
+MATCH (e:Employee {id: 'emp-004'}), (p:Project {id: 'proj-004'}) CREATE (e)-[:WORKS_ON {role: 'Product Owner', hours_per_week: 15}]->(p);
+MATCH (e:Employee {id: 'emp-005'}), (p:Project {id: 'proj-004'}) CREATE (e)-[:WORKS_ON {role: 'Business Analyst', hours_per_week: 25}]->(p);
+
+-- Link documents to projects
+MATCH (d:Document {id: 'doc-001'}), (p:Project {id: 'proj-001'}) CREATE (d)-[:BELONGS_TO_PROJECT]->(p);
+MATCH (d:Document {id: 'doc-002'}), (p:Project {id: 'proj-002'}) CREATE (d)-[:BELONGS_TO_PROJECT]->(p);
+MATCH (d:Document {id: 'doc-003'}), (p:Project {id: 'proj-003'}) CREATE (d)-[:BELONGS_TO_PROJECT]->(p);
+MATCH (d:Document {id: 'doc-004'}), (p:Project {id: 'proj-004'}) CREATE (d)-[:BELONGS_TO_PROJECT]->(p);
+MATCH (d:Document {id: 'doc-005'}), (p:Project {id: 'proj-005'}) CREATE (d)-[:BELONGS_TO_PROJECT]->(p);
+
+-- Link documents to authors
+MATCH (d:Document {author_id: 'emp-001'}), (e:Employee {id: 'emp-001'}) CREATE (e)-[:AUTHORED]->(d);
+MATCH (d:Document {author_id: 'emp-002'}), (e:Employee {id: 'emp-002'}) CREATE (e)-[:AUTHORED]->(d);
+MATCH (d:Document {author_id: 'emp-003'}), (e:Employee {id: 'emp-003'}) CREATE (e)-[:AUTHORED]->(d);
+MATCH (d:Document {author_id: 'emp-004'}), (e:Employee {id: 'emp-004'}) CREATE (e)-[:AUTHORED]->(d);
+
+-- Project dependencies
+MATCH (p1:Project {id: 'proj-002'}), (p2:Project {id: 'proj-001'}) CREATE (p1)-[:DEPENDS_ON {reason: 'Requires Geode 2.0 for vector search'}]->(p2);
+MATCH (p1:Project {id: 'proj-004'}), (p2:Project {id: 'proj-001'}) CREATE (p1)-[:DEPENDS_ON {reason: 'Uses Geode for graph analytics'}]->(p2);

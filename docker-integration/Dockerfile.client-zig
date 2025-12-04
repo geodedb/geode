@@ -1,0 +1,105 @@
+# Zig Client Container for Integration Testing
+# Tests native Zig client with minimal overhead
+
+FROM debian:bookworm-slim AS builder
+
+ARG TARGETARCH
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    xz-utils \
+    ca-certificates \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zig 0.15.1
+ARG ZIG_VERSION=0.15.1
+RUN set -ex && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        ARCH="aarch64"; \
+    else \
+        ARCH="x86_64"; \
+    fi && \
+    TARBALL="zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz" && \
+    curl -fsSL --connect-timeout 30 --max-time 300 \
+         -o "/tmp/${TARBALL}" \
+         "https://ziglang.org/download/${ZIG_VERSION}/${TARBALL}" && \
+    tar -xJf "/tmp/${TARBALL}" -C /opt && \
+    rm "/tmp/${TARBALL}" && \
+    ln -s "/opt/zig-${ARCH}-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig && \
+    zig version
+
+WORKDIR /app
+
+# Copy vendor directory first (for symlink resolution)
+# clients/zig/vendor_quic_setup.zig -> ../../vendor/quic/vendor_setup.zig
+COPY vendor/quic/ /app/vendor/quic/
+
+# Copy Zig client source
+COPY clients/zig/ /app/clients/zig/
+
+# Build Zig client (may fail if vendored dependencies are missing)
+WORKDIR /app/clients/zig
+RUN mkdir -p zig-out/bin && \
+    (zig build -Doptimize=ReleaseSafe || echo "Zig build skipped - vendored dependencies may be missing")
+
+# Runtime stage
+FROM debian:bookworm-slim AS runtime
+
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    jq \
+    netcat-openbsd \
+    xz-utils \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/* && \
+    useradd -m -u 1000 tester && \
+    mkdir -p /app/scripts /app/bin /logs/client-zig /results/zig /opt && \
+    chown -R tester:tester /app /logs /results
+
+# Copy Zig installation from builder - need to determine arch and copy explicitly
+ARG ZIG_VERSION=0.15.1
+RUN set -ex && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        echo "aarch64" > /tmp/zig_arch; \
+    else \
+        echo "x86_64" > /tmp/zig_arch; \
+    fi
+
+# Copy the specific Zig directory - we need to use a separate COPY for each arch
+# Since Docker doesn't support variable expansion in COPY, use a workaround
+COPY --from=builder /opt/ /opt/
+RUN set -ex && \
+    ARCH=$(cat /tmp/zig_arch) && \
+    rm /tmp/zig_arch && \
+    ls -la /opt/ && \
+    ln -sf /opt/zig-${ARCH}-linux-0.15.1/zig /usr/local/bin/zig && \
+    zig version
+
+# Copy vendor directory for symlink resolution in runtime
+# clients/zig/vendor_quic_setup.zig -> ../../vendor/quic/vendor_setup.zig
+COPY --from=builder /app/vendor/quic/ /app/vendor/quic/
+
+# Copy Zig client source (binaries may not exist if build failed)
+COPY --from=builder /app/clients/zig/ /app/clients/zig/
+
+# Copy test scripts and fix permissions
+COPY docker-integration/scripts/run_zig_tests.sh /app/scripts/
+RUN chmod +x /app/scripts/*.sh && \
+    mkdir -p /app/clients/zig/zig-out/bin && \
+    chown -R tester:tester /app/scripts /app/clients /app/bin /app/vendor
+
+USER tester
+WORKDIR /app
+
+# Default environment
+ENV GEODE_SERVER=geode-server:8443 \
+    TEST_MODE=standard
+
+CMD ["/app/scripts/run_zig_tests.sh"]

@@ -1410,3 +1410,105 @@ docker-ci:
 		echo "5. Stopping container..."; \
 		docker stop geode-ci-test >/dev/null 2>&1 || true; \
 		echo "==== Docker CI Complete ===="
+
+# ====================================================================================
+# Docker Integration Tests
+# ====================================================================================
+
+.PHONY: docker-integration-build docker-integration-up docker-integration-down docker-integration-test docker-integration-logs docker-integration-clean
+
+DOCKER_INTEGRATION_DIR := docker-integration
+DOCKER_COMPOSE_INTEGRATION := docker compose -f $(DOCKER_INTEGRATION_DIR)/docker-compose.integration.yml
+
+# Build all Docker integration images
+docker-integration-build:
+	@echo "==== Building Docker Integration Images ===="
+	@if ! command -v docker >/dev/null 2>&1; then \
+		echo "ERROR: Docker not installed"; exit 1; \
+	fi
+	@echo "Building Geode server image..."
+	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.server -t geode-integration-server:latest .
+	@echo "Building GeodeTestLab image..."
+	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.geodetestlab -t geode-integration-testlab:latest .
+	@echo "Building Go client image..."
+	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-go -t geode-integration-client-go:latest .
+	@echo "Building Python client image..."
+	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-python -t geode-integration-client-python:latest .
+	@echo "Building Rust client image..."
+	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-rust -t geode-integration-client-rust:latest .
+	@echo "Building Zig client image..."
+	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-zig -t geode-integration-client-zig:latest .
+	@echo "==== All integration images built ===="
+
+# Start Docker integration environment
+docker-integration-up: docker-integration-build
+	@echo "==== Starting Docker Integration Environment ===="
+	$(DOCKER_COMPOSE_INTEGRATION) up -d geode-server
+	@echo "Waiting for server to be ready..."
+	@sleep 10
+	@echo "Running migrations..."
+	$(DOCKER_COMPOSE_INTEGRATION) run --rm migration-runner
+	@echo "==== Integration environment ready ===="
+
+# Run full integration test suite
+docker-integration-test: docker-integration-up
+	@echo "==== Running Docker Integration Tests ===="
+	@echo "Starting client test containers..."
+	$(DOCKER_COMPOSE_INTEGRATION) up -d client-go client-python client-rust client-zig geodetestlab
+	@echo "Running results collector..."
+	$(DOCKER_COMPOSE_INTEGRATION) run --rm results-collector
+	@echo "==== Integration tests complete ===="
+	@$(MAKE) docker-integration-results
+
+# Show integration test results
+docker-integration-results:
+	@echo "==== Integration Test Results ===="
+	@if [ -d "$(DOCKER_INTEGRATION_DIR)/results" ]; then \
+		find $(DOCKER_INTEGRATION_DIR)/results -name "*.json" -type f -exec cat {} \; 2>/dev/null | head -100; \
+	else \
+		echo "No results found. Run 'make docker-integration-test' first."; \
+	fi
+
+# View integration logs
+docker-integration-logs:
+	$(DOCKER_COMPOSE_INTEGRATION) logs -f
+
+# View specific client logs
+docker-integration-logs-go:
+	$(DOCKER_COMPOSE_INTEGRATION) logs -f client-go
+
+docker-integration-logs-python:
+	$(DOCKER_COMPOSE_INTEGRATION) logs -f client-python
+
+docker-integration-logs-rust:
+	$(DOCKER_COMPOSE_INTEGRATION) logs -f client-rust
+
+docker-integration-logs-zig:
+	$(DOCKER_COMPOSE_INTEGRATION) logs -f client-zig
+
+docker-integration-logs-server:
+	$(DOCKER_COMPOSE_INTEGRATION) logs -f geode-server
+
+# Stop integration environment
+docker-integration-down:
+	@echo "==== Stopping Docker Integration Environment ===="
+	$(DOCKER_COMPOSE_INTEGRATION) down --remove-orphans
+	@echo "==== Integration environment stopped ===="
+
+# Clean integration environment (remove volumes and images)
+docker-integration-clean: docker-integration-down
+	@echo "==== Cleaning Docker Integration Environment ===="
+	$(DOCKER_COMPOSE_INTEGRATION) down -v --rmi local
+	@rm -rf $(DOCKER_INTEGRATION_DIR)/results/* $(DOCKER_INTEGRATION_DIR)/logs/*
+	@echo "==== Integration environment cleaned ===="
+
+# Quick integration smoke test (server + basic queries)
+docker-integration-smoke: docker-integration-build
+	@echo "==== Docker Integration Smoke Test ===="
+	$(DOCKER_COMPOSE_INTEGRATION) up -d geode-server
+	@sleep 10
+	@echo "Running smoke test queries..."
+	$(DOCKER_COMPOSE_INTEGRATION) run --rm migration-runner /bin/sh -c \
+		"/app/geode query --server geode-server:8443 --insecure 'RETURN 1 AS smoke_test'"
+	$(DOCKER_COMPOSE_INTEGRATION) down
+	@echo "==== Smoke test complete ===="

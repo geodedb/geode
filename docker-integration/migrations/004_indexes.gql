@@ -1,0 +1,42 @@
+-- Enterprise Network Schema - Index Definitions
+-- Migration 004: B-tree, Full-text, HNSW, R-tree, Patricia Trie indexes
+
+-- B-tree indexes for common lookups
+CREATE INDEX IF NOT EXISTS idx_org_name FOR (o:Organization) ON (o.name);
+CREATE INDEX IF NOT EXISTS idx_org_industry FOR (o:Organization) ON (o.industry);
+
+CREATE INDEX IF NOT EXISTS idx_dept_name FOR (d:Department) ON (d.name);
+
+CREATE INDEX IF NOT EXISTS idx_emp_name FOR (e:Employee) ON (e.name);
+CREATE INDEX IF NOT EXISTS idx_emp_title FOR (e:Employee) ON (e.title);
+CREATE INDEX IF NOT EXISTS idx_emp_hire_date FOR (e:Employee) ON (e.hire_date);
+
+CREATE INDEX IF NOT EXISTS idx_proj_status FOR (p:Project) ON (p.status);
+CREATE INDEX IF NOT EXISTS idx_proj_deadline FOR (p:Project) ON (p.deadline);
+
+CREATE INDEX IF NOT EXISTS idx_doc_title FOR (d:Document) ON (d.title);
+CREATE INDEX IF NOT EXISTS idx_doc_created FOR (d:Document) ON (d.created_at);
+
+CREATE INDEX IF NOT EXISTS idx_server_hostname FOR (s:Server) ON (s.hostname);
+CREATE INDEX IF NOT EXISTS idx_server_os FOR (s:Server) ON (s.os);
+
+CREATE INDEX IF NOT EXISTS idx_app_name FOR (a:Application) ON (a.name);
+CREATE INDEX IF NOT EXISTS idx_app_health FOR (a:Application) ON (a.health_status);
+
+CREATE INDEX IF NOT EXISTS idx_user_username FOR (u:User) ON (u.username);
+CREATE INDEX IF NOT EXISTS idx_user_role FOR (u:User) ON (u.role);
+
+CREATE INDEX IF NOT EXISTS idx_audit_timestamp FOR (al:AuditLog) ON (al.timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_action FOR (al:AuditLog) ON (al.action);
+
+CREATE INDEX IF NOT EXISTS idx_incident_severity FOR (i:Incident) ON (i.severity);
+CREATE INDEX IF NOT EXISTS idx_incident_detected FOR (i:Incident) ON (i.detected_at);
+
+-- Full-text indexes for search
+CREATE FULLTEXT INDEX IF NOT EXISTS ft_doc_content FOR (d:Document) ON (d.title, d.content);
+CREATE FULLTEXT INDEX IF NOT EXISTS ft_proj_description FOR (p:Project) ON (p.name, p.description);
+CREATE FULLTEXT INDEX IF NOT EXISTS ft_incident_desc FOR (i:Incident) ON (i.description, i.root_cause);
+
+-- Composite indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_emp_dept_title FOR (e:Employee) ON (e.department_id, e.title);
+CREATE INDEX IF NOT EXISTS idx_server_dc_os FOR (s:Server) ON (s.datacenter_id, s.os);

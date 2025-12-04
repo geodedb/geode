@@ -1,0 +1,58 @@
+-- Enterprise Network Schema - Security and Audit Entities
+-- Migration 003: User, Permission, AuditLog, Policy, Incident nodes
+
+-- User nodes (1,000 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE;
+CREATE CONSTRAINT IF NOT EXISTS FOR (u:User) REQUIRE u.username IS UNIQUE;
+
+-- Permission nodes (500 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (p:Permission) REQUIRE p.id IS UNIQUE;
+
+-- Role nodes for RBAC
+CREATE CONSTRAINT IF NOT EXISTS FOR (r:Role) REQUIRE r.id IS UNIQUE;
+
+-- AuditLog nodes (100,000 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (al:AuditLog) REQUIRE al.id IS UNIQUE;
+
+-- Policy nodes (50 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (p:Policy) REQUIRE p.id IS UNIQUE;
+
+-- Incident nodes (500 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (i:Incident) REQUIRE i.id IS UNIQUE;
+
+-- Sample roles
+CREATE (:Role {id: 'role-admin', name: 'Administrator', level: 100});
+CREATE (:Role {id: 'role-developer', name: 'Developer', level: 50});
+CREATE (:Role {id: 'role-analyst', name: 'Analyst', level: 30});
+CREATE (:Role {id: 'role-viewer', name: 'Viewer', level: 10});
+
+-- Sample permissions
+CREATE (:Permission {id: 'perm-read-all', resource: '*', action: 'READ', conditions: '{}'});
+CREATE (:Permission {id: 'perm-write-data', resource: 'data/*', action: 'WRITE', conditions: '{}'});
+CREATE (:Permission {id: 'perm-admin', resource: '*', action: '*', conditions: '{}'});
+CREATE (:Permission {id: 'perm-deploy', resource: 'deployments/*', action: 'CREATE', conditions: '{}'});
+
+-- Sample policies
+CREATE (:Policy {
+  id: 'policy-data-retention',
+  name: 'Data Retention Policy',
+  type: 'COMPLIANCE',
+  enforcement_level: 'STRICT',
+  effective_date: date('2024-01-01')
+});
+
+CREATE (:Policy {
+  id: 'policy-password-complexity',
+  name: 'Password Complexity Requirements',
+  type: 'SECURITY',
+  enforcement_level: 'STRICT',
+  effective_date: date('2023-06-01')
+});
+
+CREATE (:Policy {
+  id: 'policy-access-logging',
+  name: 'Access Logging Requirements',
+  type: 'AUDIT',
+  enforcement_level: 'MANDATORY',
+  effective_date: date('2022-01-01')
+});

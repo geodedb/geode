@@ -1,0 +1,77 @@
+-- Enterprise Network Schema - Seed Security
+-- Migration 008: Create users and security relationships
+
+-- System users
+CREATE (:User {
+  id: 'user-001',
+  username: 'admin',
+  password_hash: '$argon2id$v=19$m=65536,t=3,p=4$...',
+  mfa_enabled: true,
+  last_login: datetime('2024-11-30T08:15:00Z'),
+  role: 'admin'
+});
+
+CREATE (:User {
+  id: 'user-002',
+  username: 'developer1',
+  password_hash: '$argon2id$v=19$m=65536,t=3,p=4$...',
+  mfa_enabled: true,
+  last_login: datetime('2024-11-30T09:30:00Z'),
+  role: 'developer'
+});
+
+CREATE (:User {
+  id: 'user-003',
+  username: 'analyst1',
+  password_hash: '$argon2id$v=19$m=65536,t=3,p=4$...',
+  mfa_enabled: false,
+  last_login: datetime('2024-11-29T14:00:00Z'),
+  role: 'analyst'
+});
+
+CREATE (:User {
+  id: 'user-004',
+  username: 'viewer1',
+  password_hash: '$argon2id$v=19$m=65536,t=3,p=4$...',
+  mfa_enabled: false,
+  last_login: datetime('2024-11-28T10:00:00Z'),
+  role: 'viewer'
+});
+
+-- Link users to roles
+MATCH (u:User {role: 'admin'}), (r:Role {id: 'role-admin'}) CREATE (u)-[:BELONGS_TO_ROLE]->(r);
+MATCH (u:User {role: 'developer'}), (r:Role {id: 'role-developer'}) CREATE (u)-[:BELONGS_TO_ROLE]->(r);
+MATCH (u:User {role: 'analyst'}), (r:Role {id: 'role-analyst'}) CREATE (u)-[:BELONGS_TO_ROLE]->(r);
+MATCH (u:User {role: 'viewer'}), (r:Role {id: 'role-viewer'}) CREATE (u)-[:BELONGS_TO_ROLE]->(r);
+
+-- Link users to permissions
+MATCH (u:User {role: 'admin'}), (p:Permission {id: 'perm-admin'}) CREATE (u)-[:HAS_PERMISSION]->(p);
+MATCH (u:User {role: 'developer'}), (p:Permission {id: 'perm-write-data'}) CREATE (u)-[:HAS_PERMISSION]->(p);
+MATCH (u:User {role: 'developer'}), (p:Permission {id: 'perm-deploy'}) CREATE (u)-[:HAS_PERMISSION]->(p);
+MATCH (u:User), (p:Permission {id: 'perm-read-all'}) CREATE (u)-[:HAS_PERMISSION]->(p);
+
+-- Sample incidents
+CREATE (:Incident {
+  id: 'inc-001',
+  severity: 'HIGH',
+  description: 'API response time degradation',
+  detected_at: datetime('2024-11-25T03:15:00Z'),
+  resolved_at: datetime('2024-11-25T04:30:00Z'),
+  root_cause: 'Database connection pool exhaustion'
+});
+
+CREATE (:Incident {
+  id: 'inc-002',
+  severity: 'MEDIUM',
+  description: 'SSL certificate expiration warning',
+  detected_at: datetime('2024-11-20T10:00:00Z'),
+  resolved_at: datetime('2024-11-20T12:00:00Z'),
+  root_cause: 'Certificate renewal process not triggered'
+});
+
+-- Link incidents to applications
+MATCH (i:Incident {id: 'inc-001'}), (a:Application {id: 'app-api-001'}) CREATE (i)-[:AFFECTS]->(a);
+
+-- Link incidents to employees for assignment
+MATCH (i:Incident {id: 'inc-001'}), (e:Employee {id: 'emp-001'}) CREATE (i)-[:ASSIGNED_TO]->(e);
+MATCH (i:Incident {id: 'inc-002'}), (e:Employee {id: 'emp-002'}) CREATE (i)-[:ASSIGNED_TO]->(e);

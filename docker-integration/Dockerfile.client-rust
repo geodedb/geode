@@ -1,0 +1,47 @@
+# Rust Client Container for Integration Testing
+# Tests high-performance async connections via tokio and quinn
+
+FROM rust:1.83-bookworm AS builder
+
+WORKDIR /app
+
+# Copy Rust client source
+COPY clients/rust/ /app/clients/rust/
+
+# Build Rust client
+WORKDIR /app/clients/rust
+RUN cargo build --release && \
+    cargo test --release --no-run 2>/dev/null || true
+
+# Runtime stage - use rust image to have cargo available for testing
+FROM rust:1.83-bookworm AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    jq \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/* && \
+    useradd -m -u 1000 tester && \
+    mkdir -p /app/scripts /logs/client-rust /results/rust && \
+    chown -R tester:tester /app /logs /results
+
+# Copy built binaries
+COPY --from=builder /app/clients/rust/target/release/ /app/bin/
+COPY --from=builder /app/clients/rust/ /app/clients/rust/
+
+# Copy test scripts and fix permissions
+COPY docker-integration/scripts/run_rust_tests.sh /app/scripts/
+RUN chmod +x /app/scripts/*.sh && \
+    chown -R tester:tester /app/scripts /app/clients /app/bin
+
+USER tester
+WORKDIR /app
+
+# Default environment
+ENV GEODE_SERVER=geode-server:8443 \
+    TEST_MODE=standard \
+    RUST_LOG=info \
+    RUST_BACKTRACE=1
+
+CMD ["/app/scripts/run_rust_tests.sh"]

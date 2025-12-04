@@ -36,9 +36,6 @@ RUN apt-get update && apt-get install -y \
     dnsutils \
     iputils-ping \
     traceroute \
-    # SSL/TLS
-    openssl \
-    libssl-dev \
     # System libraries
     liblttng-ust-dev \
     libnuma-dev \
@@ -85,65 +82,7 @@ ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en \
     LC_ALL=en_US.UTF-8
 
-# Stage 2: Build OpenSSL with FIPS support
-FROM base AS openssl-builder
-
-WORKDIR /build
-
-RUN curl -L https://www.openssl.org/source/openssl-3.3.2.tar.gz -o openssl-3.3.2.tar.gz && \
-    tar xzf openssl-3.3.2.tar.gz && \
-    cd openssl-3.3.2 && \
-    ./Configure enable-fips --prefix=/opt/openssl-fips --openssldir=/opt/openssl-fips/ssl && \
-    make -j$(nproc) && \
-    make install && \
-    # Generate FIPS module configuration
-    export LD_LIBRARY_PATH=/opt/openssl-fips/lib64:$LD_LIBRARY_PATH && \
-    /opt/openssl-fips/bin/openssl fipsinstall \
-        -out /opt/openssl-fips/ssl/fipsmodule.cnf \
-        -module /opt/openssl-fips/lib64/ossl-modules/fips.so && \
-    # Add FIPS configuration to openssl.cnf
-    cat >> /opt/openssl-fips/ssl/openssl.cnf <<'EOF'
-
-# FIPS Configuration
-[openssl_init]
-providers = provider_sect
-
-[provider_sect]
-fips = fips_sect
-
-[fips_sect]
-activate = 1
-EOF
-
-# Stage 3: Build MsQUIC
-FROM base AS msquic-builder
-
-RUN apt-get update && apt-get install -y \
-    git \
-    cmake \
-    build-essential \
-    libssl-dev \
-    liblttng-ust-dev \
-    libnuma-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-# Build MsQUIC v2.5.4 with logging disabled for Docker compatibility
-RUN git clone --depth 1 --branch v2.5.4 https://github.com/microsoft/msquic.git && \
-    cd msquic && \
-    git submodule update --init --recursive && \
-    mkdir build && \
-    cd build && \
-    cmake -G 'Unix Makefiles' \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DQUIC_BUILD_SHARED=ON \
-        -DQUIC_ENABLE_LOGGING=OFF \
-        .. && \
-    cmake --build . --config Release -j$(nproc) && \
-    cmake --install . --prefix /opt/msquic
-
-# Stage 4: Development environment
+# Stage 2: Development environment
 FROM base AS development
 
 # Create developer user
@@ -167,10 +106,6 @@ RUN set -ex && \
     # Setup sudo access
     echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME && \
     chmod 0440 /etc/sudoers.d/$USERNAME
-
-# Copy OpenSSL FIPS and MsQUIC from builders
-COPY --from=openssl-builder /opt/openssl-fips /opt/openssl-fips
-COPY --from=msquic-builder /opt/msquic /opt/msquic
 
 # Install Zig 0.15.1
 ARG ZIG_VERSION=0.15.1
@@ -257,14 +192,8 @@ ENV PATH="/root/.cargo/bin:$PATH" \
 #     && rm -rf /var/lib/apt/lists/* cuda-keyring_1.1-1_all.deb
 
 # Setup environment variables
-ENV PATH="/root/.cargo/bin:/opt/openssl-fips/bin:/usr/local/cuda/bin:$PATH" \
-    LD_LIBRARY_PATH="/opt/openssl-fips/lib64:/opt/msquic/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH" \
-    PKG_CONFIG_PATH="/opt/openssl-fips/lib64/pkgconfig:/opt/msquic/lib/pkgconfig:$PKG_CONFIG_PATH" \
-    OPENSSL_CONF=/opt/openssl-fips/ssl/openssl.cnf \
-    OPENSSL_DIR=/opt/openssl-fips \
-    OPENSSL_LIB_DIR=/opt/openssl-fips/lib64 \
-    OPENSSL_INCLUDE_DIR=/opt/openssl-fips/include \
-    FIPS_MODE=enabled \
+ENV PATH="/root/.cargo/bin:/usr/local/cuda/bin:$PATH" \
+    LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH" \
     CUDA_HOME=/usr/local/cuda \
     CUDA_PATH=/usr/local/cuda \
     VULKAN_SDK=/usr
@@ -304,8 +233,8 @@ echo "  • Rust $(rustc --version 2>/dev/null | awk '{print $2}')"
 echo "  • Go $(go version 2>/dev/null | awk '{print $3}')"
 echo "  • Python $(python3 --version 2>&1 | awk '{print $2}')"
 echo "  • Node.js $(node --version 2>/dev/null)"
-echo "  • OpenSSL $(/opt/openssl-fips/bin/openssl version 2>/dev/null | awk '{print $2}')"
-echo "  • MsQUIC v2.5.4 (FIPS compatible)"
+echo "  • TLS: Vendored ztls (no external OpenSSL)"
+echo "  • QUIC: Vendored zig-quic (no external MsQUIC)"
 if command -v nvcc &>/dev/null; then
     echo "  • CUDA $(nvcc --version 2>/dev/null | grep release | awk '{print $5,$6}')"
 else

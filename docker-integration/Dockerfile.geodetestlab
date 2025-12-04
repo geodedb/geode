@@ -1,0 +1,51 @@
+# GeodeTestLab Container for Integration Testing
+# Python-based comprehensive black-box testing
+
+FROM python:3.11-slim AS base
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    typer \
+    pydantic \
+    rich \
+    jmespath \
+    psutil \
+    pyyaml \
+    pytest \
+    pytest-asyncio \
+    aioquic \
+    cryptography \
+    pyopenssl \
+    service-identity \
+    aiohttp \
+    structlog
+
+# Create app directories
+RUN mkdir -p /app/scripts /geodetestlab /logs/geodetestlab /results/geodetestlab && \
+    useradd -m -u 1000 tester && \
+    chown -R tester:tester /app /geodetestlab /logs /results
+
+# Copy orchestrator scripts and fix permissions
+COPY docker-integration/scripts/ /app/scripts/
+RUN chmod +x /app/scripts/*.py /app/scripts/*.sh 2>/dev/null || true && \
+    chown -R tester:tester /app/scripts
+
+USER tester
+WORKDIR /app
+
+# Default environment
+ENV GEODE_SERVER=geode-server:8443 \
+    TEST_MODE=standard
+
+CMD ["python3", "/app/scripts/orchestrator.py", "--mode", "standard", "--client", "geodetestlab"]

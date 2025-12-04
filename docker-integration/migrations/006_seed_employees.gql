@@ -1,0 +1,75 @@
+-- Enterprise Network Schema - Seed Employees
+-- Migration 006: Create sample employees with vector embeddings
+
+-- Engineering employees for Acme
+CREATE (:Employee {
+  id: 'emp-001',
+  name: 'Alice Chen',
+  email: 'alice.chen@acme.com',
+  hire_date: date('2018-03-15'),
+  salary: 185000.00,
+  title: 'Principal Engineer',
+  department_id: 'dept-eng-001'
+});
+
+CREATE (:Employee {
+  id: 'emp-002',
+  name: 'Bob Williams',
+  email: 'bob.williams@acme.com',
+  hire_date: date('2019-07-22'),
+  salary: 165000.00,
+  title: 'Senior Engineer',
+  department_id: 'dept-eng-001'
+});
+
+CREATE (:Employee {
+  id: 'emp-003',
+  name: 'Carol Martinez',
+  email: 'carol.martinez@acme.com',
+  hire_date: date('2020-01-10'),
+  salary: 145000.00,
+  title: 'Software Engineer',
+  department_id: 'dept-eng-001'
+});
+
+-- Sales employees for Acme
+CREATE (:Employee {
+  id: 'emp-004',
+  name: 'David Johnson',
+  email: 'david.johnson@acme.com',
+  hire_date: date('2017-05-01'),
+  salary: 175000.00,
+  title: 'VP of Sales',
+  department_id: 'dept-sales-001'
+});
+
+CREATE (:Employee {
+  id: 'emp-005',
+  name: 'Emma Davis',
+  email: 'emma.davis@acme.com',
+  hire_date: date('2020-09-15'),
+  salary: 120000.00,
+  title: 'Account Executive',
+  department_id: 'dept-sales-001'
+});
+
+-- HR employee
+CREATE (:Employee {
+  id: 'emp-006',
+  name: 'Frank Brown',
+  email: 'frank.brown@acme.com',
+  hire_date: date('2016-02-28'),
+  salary: 135000.00,
+  title: 'HR Director',
+  department_id: 'dept-hr-001'
+});
+
+-- Link employees to departments
+MATCH (d:Department {id: 'dept-eng-001'}), (e:Employee {department_id: 'dept-eng-001'}) CREATE (d)-[:HAS_EMPLOYEE]->(e);
+MATCH (d:Department {id: 'dept-sales-001'}), (e:Employee {department_id: 'dept-sales-001'}) CREATE (d)-[:HAS_EMPLOYEE]->(e);
+MATCH (d:Department {id: 'dept-hr-001'}), (e:Employee {department_id: 'dept-hr-001'}) CREATE (d)-[:HAS_EMPLOYEE]->(e);
+
+-- Management relationships
+MATCH (m:Employee {id: 'emp-001'}), (e:Employee {id: 'emp-002'}) CREATE (m)-[:MANAGES]->(e);
+MATCH (m:Employee {id: 'emp-001'}), (e:Employee {id: 'emp-003'}) CREATE (m)-[:MANAGES]->(e);
+MATCH (m:Employee {id: 'emp-004'}), (e:Employee {id: 'emp-005'}) CREATE (m)-[:MANAGES]->(e);

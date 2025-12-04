@@ -1,0 +1,82 @@
+# Geode Server Container for Integration Testing
+# Uses vendored ztls and zig-quic (no external OpenSSL/MsQUIC dependencies)
+
+FROM debian:bookworm-slim AS builder
+
+ARG TARGETARCH
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+# Note: libssl-dev is required for crypto operations even though ztls is vendored
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    xz-utils \
+    ca-certificates \
+    git \
+    build-essential \
+    file \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zig 0.15.1
+ARG ZIG_VERSION=0.15.1
+RUN set -ex && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        ARCH="aarch64"; \
+    else \
+        ARCH="x86_64"; \
+    fi && \
+    TARBALL="zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz" && \
+    echo "Downloading Zig ${ZIG_VERSION} for ${ARCH}..." && \
+    curl -fsSL --connect-timeout 30 --max-time 300 \
+         -o "/tmp/${TARBALL}" \
+         "https://ziglang.org/download/${ZIG_VERSION}/${TARBALL}" && \
+    tar -xJf "/tmp/${TARBALL}" -C /opt && \
+    rm "/tmp/${TARBALL}" && \
+    ln -s "/opt/zig-${ARCH}-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig && \
+    zig version
+
+WORKDIR /build
+COPY . .
+
+# Build geode server (default install target)
+# Note: Using -j1 to prevent resource exhaustion in Docker builds
+# Redirecting to /dev/null to prevent BrokenPipe from output buffer issues
+RUN echo "Building Geode server..." && \
+    zig build -Doptimize=ReleaseSafe -j1 2>&1 && \
+    ls -la zig-out/bin/ && \
+    echo "Build complete!"
+
+# Runtime stage
+FROM debian:bookworm-slim AS runtime
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* && \
+    useradd -m -u 1000 geode && \
+    mkdir -p /data /certs /logs/geode-server /var/log/geode && \
+    chown -R geode:geode /data /certs /logs /var/log/geode
+
+# Copy built binary
+COPY --from=builder /build/zig-out/bin/geode /usr/local/bin/geode
+
+# Switch to non-root user
+USER geode
+WORKDIR /home/geode
+
+# Default environment
+ENV GEODE_LOG_LEVEL=info \
+    GEODE_DATA_DIR=/data \
+    GEODE_LISTEN=0.0.0.0:8443
+
+# Expose ports (QUIC + metrics)
+EXPOSE 8443/udp 9090/tcp
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
+    CMD ["/usr/local/bin/geode", "query", "--server", "127.0.0.1:8443", "--insecure", "RETURN 1 AS health"]
+
+# Entrypoint
+ENTRYPOINT ["/usr/local/bin/geode", "serve"]
+CMD ["--data-dir", "/data", "--listen", "0.0.0.0:8443"]

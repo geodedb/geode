@@ -1,0 +1,101 @@
+-- Enterprise Network Schema - Seed Infrastructure
+-- Migration 007: Create servers, applications, and databases
+
+-- Servers in US West datacenter
+CREATE (:Server {
+  id: 'srv-web-001',
+  hostname: 'web-prod-001.us-west.acme.com',
+  ip_addr: '10.0.1.10',
+  mac: 'AA:BB:CC:DD:EE:01',
+  os: 'Ubuntu 22.04 LTS',
+  cpu_cores: 32,
+  memory_gb: 128,
+  datacenter_id: 'dc-us-west-1'
+});
+
+CREATE (:Server {
+  id: 'srv-db-001',
+  hostname: 'db-prod-001.us-west.acme.com',
+  ip_addr: '10.0.1.20',
+  mac: 'AA:BB:CC:DD:EE:02',
+  os: 'Rocky Linux 9',
+  cpu_cores: 64,
+  memory_gb: 512,
+  datacenter_id: 'dc-us-west-1'
+});
+
+CREATE (:Server {
+  id: 'srv-api-001',
+  hostname: 'api-prod-001.us-west.acme.com',
+  ip_addr: '10.0.1.30',
+  mac: 'AA:BB:CC:DD:EE:03',
+  os: 'Ubuntu 22.04 LTS',
+  cpu_cores: 16,
+  memory_gb: 64,
+  datacenter_id: 'dc-us-west-1'
+});
+
+-- Applications
+CREATE (:Application {
+  id: 'app-web-001',
+  name: 'Customer Portal',
+  version: '3.2.1',
+  port: 443,
+  health_status: 'healthy',
+  last_deploy: datetime('2024-11-15T10:30:00Z')
+});
+
+CREATE (:Application {
+  id: 'app-api-001',
+  name: 'Core API',
+  version: '5.1.0',
+  port: 8080,
+  health_status: 'healthy',
+  last_deploy: datetime('2024-11-10T14:00:00Z')
+});
+
+CREATE (:Application {
+  id: 'app-worker-001',
+  name: 'Background Worker',
+  version: '2.0.5',
+  port: 9000,
+  health_status: 'healthy',
+  last_deploy: datetime('2024-11-01T08:00:00Z')
+});
+
+-- Databases
+CREATE (:Database {
+  id: 'db-geode-001',
+  name: 'GraphDB Primary',
+  engine: 'Geode',
+  size_gb: 2048,
+  replica_count: 3,
+  connection_string: 'quic://db-prod-001:8443'
+});
+
+CREATE (:Database {
+  id: 'db-postgres-001',
+  name: 'Analytics',
+  engine: 'PostgreSQL 15',
+  size_gb: 512,
+  replica_count: 2,
+  connection_string: 'postgresql://analytics-db:5432/analytics'
+});
+
+-- Link applications to servers
+MATCH (a:Application {id: 'app-web-001'}), (s:Server {id: 'srv-web-001'}) CREATE (a)-[:RUNS_ON]->(s);
+MATCH (a:Application {id: 'app-api-001'}), (s:Server {id: 'srv-api-001'}) CREATE (a)-[:RUNS_ON]->(s);
+MATCH (a:Application {id: 'app-worker-001'}), (s:Server {id: 'srv-api-001'}) CREATE (a)-[:RUNS_ON]->(s);
+
+-- Link servers to datacenters
+MATCH (s:Server {datacenter_id: 'dc-us-west-1'}), (dc:Datacenter {id: 'dc-us-west-1'}) CREATE (s)-[:LOCATED_IN]->(dc);
+
+-- Link servers to networks
+MATCH (s:Server), (n:Network {id: 'net-prod-001'}) WHERE s.ip_addr STARTS WITH '10.0' CREATE (s)-[:IN_NETWORK]->(n);
+
+-- Link applications to databases
+MATCH (a:Application {id: 'app-api-001'}), (db:Database {id: 'db-geode-001'}) CREATE (a)-[:CONNECTS_TO]->(db);
+MATCH (a:Application {id: 'app-worker-001'}), (db:Database {id: 'db-postgres-001'}) CREATE (a)-[:CONNECTS_TO]->(db);
+
+-- Application dependencies
+MATCH (a1:Application {id: 'app-web-001'}), (a2:Application {id: 'app-api-001'}) CREATE (a1)-[:DEPENDS_ON]->(a2);

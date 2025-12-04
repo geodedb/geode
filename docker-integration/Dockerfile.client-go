@@ -1,0 +1,48 @@
+# Go Client Container for Integration Testing
+# Tests connection pooling, concurrent queries, and transaction handling
+
+FROM golang:1.24-bookworm AS builder
+
+WORKDIR /app
+
+# Copy Go client source
+COPY clients/go/ /app/clients/go/
+
+# Build Go client and tests
+WORKDIR /app/clients/go/gql
+RUN go mod tidy && \
+    go mod download && \
+    go build -v ./... && \
+    go test -c -o /app/geode_test .
+
+# Runtime stage
+FROM golang:1.24-bookworm AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    jq \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/* && \
+    useradd -m -u 1000 tester && \
+    mkdir -p /app/scripts /logs/client-go /results/go && \
+    chown -R tester:tester /app /logs /results
+
+# Copy built test binary
+COPY --from=builder /app/geode_test /app/
+COPY --from=builder /app/clients/go/ /app/clients/go/
+
+# Copy test scripts and fix permissions
+COPY docker-integration/scripts/run_go_tests.sh /app/scripts/
+RUN chmod +x /app/scripts/*.sh && \
+    chown -R tester:tester /app/scripts /app/clients
+
+USER tester
+WORKDIR /app
+
+# Default environment
+ENV GEODE_SERVER=geode-server:8443 \
+    TEST_MODE=standard \
+    GO111MODULE=on
+
+CMD ["/app/scripts/run_go_tests.sh"]

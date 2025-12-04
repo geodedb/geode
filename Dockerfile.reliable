@@ -80,7 +80,6 @@ RUN set -eux; \
         for i in 1 2 3; do apt-get update && break || { echo "apt-get update failed (attempt $i), retrying"; sleep 3; }; done; \
         apt-get install -y --no-install-recommends \
             ca-certificates \
-            openssl \
         ; \
         rm -rf /var/lib/apt/lists/*; \
         useradd -m -u 1000 geode; \

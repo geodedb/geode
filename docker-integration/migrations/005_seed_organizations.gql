@@ -1,0 +1,34 @@
+-- Enterprise Network Schema - Seed Organizations
+-- Migration 005: Create departments and link to organizations
+
+-- Departments for Acme Corporation
+CREATE (:Department {id: 'dept-eng-001', name: 'Engineering', budget: 50000000.00, cost_center: 'ENG-001', floor_number: 10});
+CREATE (:Department {id: 'dept-sales-001', name: 'Sales', budget: 30000000.00, cost_center: 'SAL-001', floor_number: 5});
+CREATE (:Department {id: 'dept-hr-001', name: 'Human Resources', budget: 10000000.00, cost_center: 'HR-001', floor_number: 3});
+CREATE (:Department {id: 'dept-finance-001', name: 'Finance', budget: 15000000.00, cost_center: 'FIN-001', floor_number: 8});
+CREATE (:Department {id: 'dept-ops-001', name: 'Operations', budget: 25000000.00, cost_center: 'OPS-001', floor_number: 6});
+
+-- Departments for TechStart Inc
+CREATE (:Department {id: 'dept-eng-002', name: 'Product Development', budget: 8000000.00, cost_center: 'PD-001', floor_number: 2});
+CREATE (:Department {id: 'dept-sales-002', name: 'Business Development', budget: 5000000.00, cost_center: 'BD-001', floor_number: 1});
+CREATE (:Department {id: 'dept-support-002', name: 'Customer Support', budget: 3000000.00, cost_center: 'CS-001', floor_number: 1});
+
+-- Departments for GlobalNet Systems
+CREATE (:Department {id: 'dept-eng-003', name: 'Network Engineering', budget: 100000000.00, cost_center: 'NE-001', floor_number: 15});
+CREATE (:Department {id: 'dept-sales-003', name: 'Enterprise Sales', budget: 80000000.00, cost_center: 'ES-001', floor_number: 12});
+CREATE (:Department {id: 'dept-research-003', name: 'Research & Development', budget: 150000000.00, cost_center: 'RD-001', floor_number: 20});
+
+-- Link departments to organizations
+MATCH (o:Organization {id: 'org-001'}), (d:Department {id: 'dept-eng-001'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+MATCH (o:Organization {id: 'org-001'}), (d:Department {id: 'dept-sales-001'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+MATCH (o:Organization {id: 'org-001'}), (d:Department {id: 'dept-hr-001'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+MATCH (o:Organization {id: 'org-001'}), (d:Department {id: 'dept-finance-001'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+MATCH (o:Organization {id: 'org-001'}), (d:Department {id: 'dept-ops-001'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+
+MATCH (o:Organization {id: 'org-002'}), (d:Department {id: 'dept-eng-002'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+MATCH (o:Organization {id: 'org-002'}), (d:Department {id: 'dept-sales-002'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+MATCH (o:Organization {id: 'org-002'}), (d:Department {id: 'dept-support-002'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+
+MATCH (o:Organization {id: 'org-003'}), (d:Department {id: 'dept-eng-003'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+MATCH (o:Organization {id: 'org-003'}), (d:Department {id: 'dept-sales-003'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);
+MATCH (o:Organization {id: 'org-003'}), (d:Department {id: 'dept-research-003'}) CREATE (o)-[:HAS_DEPARTMENT]->(d);

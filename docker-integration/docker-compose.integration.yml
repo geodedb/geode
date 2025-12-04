@@ -1,0 +1,283 @@
+# Docker Integration Test Suite for Geode
+# Comprehensive multi-client testing with persistent data
+#
+# Usage:
+#   docker-compose -f docker-integration/docker-compose.integration.yml up --build
+#
+# Environment Variables:
+#   TEST_MODE: quick|standard|extended|continuous (default: standard)
+#   GEODE_LOG_LEVEL: error|warn|info|debug (default: info)
+
+networks:
+  geode-integration-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  geode-data:
+    driver: local
+  geode-certs:
+    driver: local
+  integration-logs:
+    driver: local
+  integration-results:
+    driver: local
+
+services:
+  # =============================================================================
+  # Geode Server - Primary graph database
+  # =============================================================================
+  geode-server:
+    build:
+      context: ..
+      dockerfile: docker-integration/Dockerfile.server
+    container_name: geode-server
+    hostname: geode-server
+    networks:
+      geode-integration-network:
+        ipv4_address: 172.28.1.1
+    ports:
+      - "8443:8443/udp"   # QUIC+TLS
+      - "19090:9090/tcp"  # Metrics (host:19090 -> container:9090)
+    volumes:
+      - geode-data:/data
+      - geode-certs:/certs
+      - integration-logs:/logs
+    environment:
+      - GEODE_LOG_LEVEL=${GEODE_LOG_LEVEL:-info}
+      - GEODE_DATA_DIR=/data
+      - GEODE_LISTEN=0.0.0.0:8443
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/geode", "query", "--server", "127.0.0.1:8443", "--insecure", "RETURN 1 AS health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "4"
+        reservations:
+          memory: 1G
+          cpus: "1"
+
+  # =============================================================================
+  # Migration Runner - Runs schema and seed migrations
+  # =============================================================================
+  migration-runner:
+    build:
+      context: ..
+      dockerfile: docker-integration/Dockerfile.server
+    container_name: migration-runner
+    hostname: migration-runner
+    networks:
+      - geode-integration-network
+    volumes:
+      - ./migrations:/migrations:ro
+      - integration-logs:/logs
+    depends_on:
+      geode-server:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "=== Running Migrations ===" | tee /logs/migration-runner/migration.log
+        mkdir -p /logs/migration-runner
+        for f in /migrations/*.gql; do
+          if [ -f "$$f" ]; then
+            echo "Running migration: $$f" | tee -a /logs/migration-runner/migration.log
+            /usr/local/bin/geode query --server geode-server:8443 --insecure - < "$$f" 2>&1 | tee -a /logs/migration-runner/migration.log
+            if [ $$? -ne 0 ]; then
+              echo "ERROR: Migration $$f failed!" | tee -a /logs/migration-runner/migration.log
+            else
+              echo "SUCCESS: Migration $$f completed" | tee -a /logs/migration-runner/migration.log
+            fi
+          fi
+        done
+        echo "=== Migrations Complete ===" | tee -a /logs/migration-runner/migration.log
+    restart: "no"
+
+  # =============================================================================
+  # GeodeTestLab - Comprehensive black-box integration tests
+  # =============================================================================
+  geodetestlab:
+    build:
+      context: ..
+      dockerfile: docker-integration/Dockerfile.geodetestlab
+    container_name: geodetestlab
+    hostname: geodetestlab
+    networks:
+      - geode-integration-network
+    volumes:
+      - integration-logs:/logs
+      - integration-results:/results
+      - ../geodetestlab:/geodetestlab:ro
+    environment:
+      - GEODE_SERVER=geode-server:8443
+      - TEST_MODE=${TEST_MODE:-standard}
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/geodetestlab
+    depends_on:
+      migration-runner:
+        condition: service_completed_successfully
+    command: ["/app/scripts/run_geodetestlab_tests.sh"]
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+
+  # =============================================================================
+  # Go Client Tests
+  # =============================================================================
+  client-go:
+    build:
+      context: ..
+      dockerfile: docker-integration/Dockerfile.client-go
+    container_name: client-go
+    hostname: client-go
+    networks:
+      - geode-integration-network
+    volumes:
+      - integration-logs:/logs
+      - integration-results:/results
+      - ../clients/go:/app/clients/go:ro
+    environment:
+      - GEODE_SERVER=geode-server:8443
+      - TEST_MODE=${TEST_MODE:-standard}
+    depends_on:
+      migration-runner:
+        condition: service_completed_successfully
+    command: ["/app/scripts/run_go_tests.sh"]
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+
+  # =============================================================================
+  # Python Client Tests
+  # =============================================================================
+  client-python:
+    build:
+      context: ..
+      dockerfile: docker-integration/Dockerfile.client-python
+    container_name: client-python
+    hostname: client-python
+    networks:
+      - geode-integration-network
+    volumes:
+      - integration-logs:/logs
+      - integration-results:/results
+      - ../clients/python:/app/clients/python:ro
+    environment:
+      - GEODE_SERVER=geode-server:8443
+      - TEST_MODE=${TEST_MODE:-standard}
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      migration-runner:
+        condition: service_completed_successfully
+    command: ["/app/scripts/run_python_tests.sh"]
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+
+  # =============================================================================
+  # Rust Client Tests
+  # =============================================================================
+  client-rust:
+    build:
+      context: ..
+      dockerfile: docker-integration/Dockerfile.client-rust
+    container_name: client-rust
+    hostname: client-rust
+    networks:
+      - geode-integration-network
+    volumes:
+      - integration-logs:/logs
+      - integration-results:/results
+      - ../clients/rust:/app/clients/rust:ro
+    environment:
+      - GEODE_SERVER=geode-server:8443
+      - TEST_MODE=${TEST_MODE:-standard}
+      - RUST_LOG=info
+    depends_on:
+      migration-runner:
+        condition: service_completed_successfully
+    command: ["/app/scripts/run_rust_tests.sh"]
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+
+  # =============================================================================
+  # Zig Client Tests
+  # =============================================================================
+  client-zig:
+    build:
+      context: ..
+      dockerfile: docker-integration/Dockerfile.client-zig
+    container_name: client-zig
+    hostname: client-zig
+    networks:
+      - geode-integration-network
+    volumes:
+      - integration-logs:/logs
+      - integration-results:/results
+      - ../clients/zig:/app/clients/zig:ro
+    environment:
+      - GEODE_SERVER=geode-server:8443
+      - TEST_MODE=${TEST_MODE:-standard}
+    depends_on:
+      migration-runner:
+        condition: service_completed_successfully
+    command: ["/app/scripts/run_zig_tests.sh"]
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+
+  # =============================================================================
+  # Results Collector - Collects and summarizes test results
+  # =============================================================================
+  results-collector:
+    build:
+      context: ..
+      dockerfile: docker-integration/Dockerfile.geodetestlab
+    container_name: results-collector
+    hostname: results-collector
+    networks:
+      - geode-integration-network
+    volumes:
+      - integration-logs:/logs
+      - integration-results:/results
+      - ./scripts:/app/scripts:ro
+    environment:
+      - RESULTS_DIR=/results
+      - LOG_DIR=/logs
+    depends_on:
+      geodetestlab:
+        condition: service_started
+      client-go:
+        condition: service_started
+      client-python:
+        condition: service_started
+      client-rust:
+        condition: service_started
+      client-zig:
+        condition: service_started
+    command: ["/bin/sh", "-c", "echo 'Waiting for client tests to complete...'; sleep 10; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do if [ -f /results/go/summary.json ] && [ -f /results/python/summary.json ] && [ -f /results/rust/summary.json ] && [ -f /results/zig/summary.json ] && [ -f /results/geodetestlab/summary.json ]; then echo 'All results found, collecting...'; /app/scripts/collect_results.sh; exit 0; fi; echo 'Waiting for results... (attempt '$i'/20)'; sleep 10; done; echo 'Timeout waiting for results, collecting what we have...'; /app/scripts/collect_results.sh"]
+    restart: "no"

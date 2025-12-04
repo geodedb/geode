@@ -5,7 +5,6 @@ FROM nvidia/cuda:12.6.0-base-ubuntu24.04
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    openssl \
     libvulkan1 \
     vulkan-tools \
     && rm -rf /var/lib/apt/lists/* \

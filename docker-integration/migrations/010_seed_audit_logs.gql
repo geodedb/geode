@@ -1,0 +1,190 @@
+-- Enterprise Network Schema - Seed Audit Logs
+-- Migration 010: Create audit logs and final relationship connections
+
+-- Recent audit log entries
+CREATE (:AuditLog {
+  id: 'audit-001',
+  timestamp: datetime('2024-11-30T08:15:00Z'),
+  action: 'LOGIN',
+  resource_type: 'SESSION',
+  resource_id: 'session-admin-001',
+  user_id: 'user-001',
+  ip_address: '10.0.1.100',
+  user_agent: 'GeodeClient/2.0',
+  success: true,
+  details: 'Admin login from internal network'
+});
+
+CREATE (:AuditLog {
+  id: 'audit-002',
+  timestamp: datetime('2024-11-30T08:20:00Z'),
+  action: 'QUERY',
+  resource_type: 'DATABASE',
+  resource_id: 'db-geode-001',
+  user_id: 'user-001',
+  ip_address: '10.0.1.100',
+  user_agent: 'GeodeClient/2.0',
+  success: true,
+  details: 'MATCH (n) RETURN count(n)'
+});
+
+CREATE (:AuditLog {
+  id: 'audit-003',
+  timestamp: datetime('2024-11-30T09:30:00Z'),
+  action: 'LOGIN',
+  resource_type: 'SESSION',
+  resource_id: 'session-dev-001',
+  user_id: 'user-002',
+  ip_address: '10.0.1.101',
+  user_agent: 'GeodeClient/2.0',
+  success: true,
+  details: 'Developer login'
+});
+
+CREATE (:AuditLog {
+  id: 'audit-004',
+  timestamp: datetime('2024-11-30T09:35:00Z'),
+  action: 'CREATE',
+  resource_type: 'NODE',
+  resource_id: 'proj-new',
+  user_id: 'user-002',
+  ip_address: '10.0.1.101',
+  user_agent: 'GeodeClient/2.0',
+  success: true,
+  details: 'Created new project node'
+});
+
+CREATE (:AuditLog {
+  id: 'audit-005',
+  timestamp: datetime('2024-11-30T10:00:00Z'),
+  action: 'PERMISSION_DENIED',
+  resource_type: 'DATABASE',
+  resource_id: 'db-geode-001',
+  user_id: 'user-004',
+  ip_address: '10.0.1.102',
+  user_agent: 'GeodeClient/2.0',
+  success: false,
+  details: 'Viewer attempted to execute write operation'
+});
+
+CREATE (:AuditLog {
+  id: 'audit-006',
+  timestamp: datetime('2024-11-30T10:15:00Z'),
+  action: 'SCHEMA_CHANGE',
+  resource_type: 'INDEX',
+  resource_id: 'idx-new-001',
+  user_id: 'user-001',
+  ip_address: '10.0.1.100',
+  user_agent: 'GeodeClient/2.0',
+  success: true,
+  details: 'Created new B-tree index on Employee.salary'
+});
+
+CREATE (:AuditLog {
+  id: 'audit-007',
+  timestamp: datetime('2024-11-30T11:00:00Z'),
+  action: 'BACKUP',
+  resource_type: 'DATABASE',
+  resource_id: 'db-geode-001',
+  user_id: 'user-001',
+  ip_address: '10.0.1.100',
+  user_agent: 'GeodeBackup/1.0',
+  success: true,
+  details: 'Scheduled backup to S3 completed'
+});
+
+CREATE (:AuditLog {
+  id: 'audit-008',
+  timestamp: datetime('2024-11-30T12:00:00Z'),
+  action: 'UPDATE',
+  resource_type: 'NODE',
+  resource_id: 'emp-003',
+  user_id: 'user-001',
+  ip_address: '10.0.1.100',
+  user_agent: 'GeodeClient/2.0',
+  success: true,
+  details: 'Updated employee salary'
+});
+
+CREATE (:AuditLog {
+  id: 'audit-009',
+  timestamp: datetime('2024-11-30T14:00:00Z'),
+  action: 'LOGIN_FAILED',
+  resource_type: 'SESSION',
+  resource_id: 'session-unknown',
+  user_id: 'unknown',
+  ip_address: '192.168.1.50',
+  user_agent: 'curl/7.88.0',
+  success: false,
+  details: 'Invalid credentials from external IP'
+});
+
+CREATE (:AuditLog {
+  id: 'audit-010',
+  timestamp: datetime('2024-11-30T15:30:00Z'),
+  action: 'LOGOUT',
+  resource_type: 'SESSION',
+  resource_id: 'session-dev-001',
+  user_id: 'user-002',
+  ip_address: '10.0.1.101',
+  user_agent: 'GeodeClient/2.0',
+  success: true,
+  details: 'Developer session ended'
+});
+
+-- Link audit logs to users
+MATCH (al:AuditLog {user_id: 'user-001'}), (u:User {id: 'user-001'}) CREATE (al)-[:PERFORMED_BY]->(u);
+MATCH (al:AuditLog {user_id: 'user-002'}), (u:User {id: 'user-002'}) CREATE (al)-[:PERFORMED_BY]->(u);
+MATCH (al:AuditLog {user_id: 'user-004'}), (u:User {id: 'user-004'}) CREATE (al)-[:PERFORMED_BY]->(u);
+
+-- Policies
+CREATE (:Policy {
+  id: 'policy-rls-001',
+  name: 'Employee Salary Visibility',
+  type: 'ROW_LEVEL_SECURITY',
+  enabled: true,
+  expression: 'user.role IN ["admin", "hr"] OR user.id = row.manager_id',
+  priority: 100,
+  created_at: datetime('2024-01-01T00:00:00Z')
+});
+
+CREATE (:Policy {
+  id: 'policy-rls-002',
+  name: 'Project Access Control',
+  type: 'ROW_LEVEL_SECURITY',
+  enabled: true,
+  expression: 'user.department_id = row.department_id OR user.role = "admin"',
+  priority: 90,
+  created_at: datetime('2024-01-01T00:00:00Z')
+});
+
+CREATE (:Policy {
+  id: 'policy-audit-001',
+  name: 'Full Audit Logging',
+  type: 'AUDIT',
+  enabled: true,
+  expression: 'action IN ["LOGIN", "CREATE", "UPDATE", "DELETE", "SCHEMA_CHANGE"]',
+  priority: 100,
+  created_at: datetime('2024-01-01T00:00:00Z')
+});
+
+CREATE (:Policy {
+  id: 'policy-encryption-001',
+  name: 'PII Encryption',
+  type: 'ENCRYPTION',
+  enabled: true,
+  expression: 'property IN ["salary", "ssn", "password_hash"]',
+  priority: 100,
+  created_at: datetime('2024-01-01T00:00:00Z')
+});
+
+-- Link policies to roles
+MATCH (p:Policy {type: 'ROW_LEVEL_SECURITY'}), (r:Role {id: 'role-viewer'}) CREATE (p)-[:APPLIES_TO]->(r);
+MATCH (p:Policy {type: 'ROW_LEVEL_SECURITY'}), (r:Role {id: 'role-analyst'}) CREATE (p)-[:APPLIES_TO]->(r);
+MATCH (p:Policy {type: 'ROW_LEVEL_SECURITY'}), (r:Role {id: 'role-developer'}) CREATE (p)-[:APPLIES_TO]->(r);
+
+-- Database connections from applications to databases (additional)
+MATCH (a:Application {id: 'app-web-001'}), (db:Database {id: 'db-geode-001'}) CREATE (a)-[:CONNECTS_TO]->(db);
+
+-- Server monitoring relationships
+MATCH (i:Incident), (s:Server) WHERE i.id = 'inc-001' AND s.id = 'srv-api-001' CREATE (i)-[:OCCURRED_ON]->(s);

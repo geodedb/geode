@@ -1,0 +1,50 @@
+-- Enterprise Network Schema - Core Entities
+-- Migration 001: Core node types and constraints
+-- Creates: Organization, Department, Employee, Project, Document
+
+-- Organization nodes (100 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (o:Organization) REQUIRE o.id IS UNIQUE;
+
+-- Department nodes (1,000 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (d:Department) REQUIRE d.id IS UNIQUE;
+
+-- Employee nodes (25,000 expected with vector embeddings)
+CREATE CONSTRAINT IF NOT EXISTS FOR (e:Employee) REQUIRE e.id IS UNIQUE;
+CREATE CONSTRAINT IF NOT EXISTS FOR (e:Employee) REQUIRE e.email IS UNIQUE;
+
+-- Project nodes (5,000 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE;
+
+-- Document nodes (10,000 expected)
+CREATE CONSTRAINT IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE;
+
+-- Sample core entities
+CREATE (:Organization {
+  id: 'org-001',
+  name: 'Acme Corporation',
+  industry: 'Technology',
+  founded: date('1990-03-15'),
+  revenue: 5000000000.00,
+  employee_count: 25000,
+  headquarters: 'San Francisco, CA'
+});
+
+CREATE (:Organization {
+  id: 'org-002',
+  name: 'TechStart Inc',
+  industry: 'Software',
+  founded: date('2010-07-22'),
+  revenue: 150000000.00,
+  employee_count: 500,
+  headquarters: 'Austin, TX'
+});
+
+CREATE (:Organization {
+  id: 'org-003',
+  name: 'GlobalNet Systems',
+  industry: 'Networking',
+  founded: date('1985-11-03'),
+  revenue: 8500000000.00,
+  employee_count: 45000,
+  headquarters: 'New York, NY'
+});

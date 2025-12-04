@@ -94,7 +94,6 @@ FROM debian:bookworm-slim AS runtime
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    openssl \
     && rm -rf /var/lib/apt/lists/* && \
     useradd -m -u 1000 geode && \
     mkdir -p /data /certs /var/log/geode && \
