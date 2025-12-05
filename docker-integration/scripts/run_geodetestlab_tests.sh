@@ -22,12 +22,13 @@ echo "==============================================="
 # Create output directories
 mkdir -p "${LOG_DIR}/geodetestlab" "${RESULTS_DIR}/geodetestlab"
 
-# Wait for server to be ready
+# Wait for server to be ready (QUIC uses UDP)
 echo "Waiting for Geode server..."
 MAX_RETRIES=60
 RETRY_COUNT=0
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if nc -z -w 5 "${GEODE_HOST}" "${GEODE_PORT}" 2>/dev/null; then
+    # Use UDP check for QUIC server (-u flag)
+    if nc -z -u -w 2 "${GEODE_HOST}" "${GEODE_PORT}" 2>/dev/null; then
         echo "Server is ready!"
         break
     fi

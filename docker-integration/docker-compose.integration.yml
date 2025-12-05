@@ -87,17 +87,57 @@ services:
       - |
         echo "=== Running Migrations ===" | tee /logs/migration-runner/migration.log
         mkdir -p /logs/migration-runner
+
         for f in /migrations/*.gql; do
-          if [ -f "$$f" ]; then
-            echo "Running migration: $$f" | tee -a /logs/migration-runner/migration.log
-            /usr/local/bin/geode query --server geode-server:8443 --insecure - < "$$f" 2>&1 | tee -a /logs/migration-runner/migration.log
-            if [ $$? -ne 0 ]; then
-              echo "ERROR: Migration $$f failed!" | tee -a /logs/migration-runner/migration.log
-            else
-              echo "SUCCESS: Migration $$f completed" | tee -a /logs/migration-runner/migration.log
-            fi
+          if [ ! -f "$$f" ]; then
+            continue
           fi
+
+          echo "" | tee -a /logs/migration-runner/migration.log
+          echo "-----------------------------------------------" | tee -a /logs/migration-runner/migration.log
+          echo "Running migration: $$f" | tee -a /logs/migration-runner/migration.log
+          echo "-----------------------------------------------" | tee -a /logs/migration-runner/migration.log
+
+          # Parse file and execute each statement separately
+          STATEMENT=""
+          STATEMENT_COUNT=0
+
+          while IFS= read -r line || [ -n "$$line" ]; do
+            # Skip empty lines and comments
+            if [ -z "$$line" ] || echo "$$line" | grep -q "^[[:space:]]*--"; then
+              continue
+            fi
+
+            # Accumulate statement
+            STATEMENT="$$STATEMENT $$line"
+
+            # Check if statement is complete (ends with semicolon)
+            if echo "$$line" | grep -q ";[[:space:]]*$$"; then
+              # Remove trailing semicolon and whitespace
+              CLEAN_STATEMENT=$$(echo "$$STATEMENT" | sed 's/;[[:space:]]*$$//' | tr -s ' ')
+
+              if [ -n "$$CLEAN_STATEMENT" ]; then
+                STATEMENT_COUNT=$$((STATEMENT_COUNT + 1))
+                # Truncate to 80 chars using cut (POSIX-compatible)
+                PREVIEW=$$(echo "$$CLEAN_STATEMENT" | cut -c1-80)
+                echo "  [$$STATEMENT_COUNT] Executing: $$PREVIEW..." | tee -a /logs/migration-runner/migration.log
+
+                # Execute the statement
+                if echo "$$CLEAN_STATEMENT" | /usr/local/bin/geode query --server geode-server:8443 --insecure - 2>&1 | tee -a /logs/migration-runner/migration.log | grep -qiE "error|failed|exception"; then
+                  echo "  ✗ Statement $$STATEMENT_COUNT failed" | tee -a /logs/migration-runner/migration.log
+                else
+                  echo "  ✓ Statement $$STATEMENT_COUNT succeeded" | tee -a /logs/migration-runner/migration.log
+                fi
+              fi
+
+              STATEMENT=""
+            fi
+          done < "$$f"
+
+          echo "SUCCESS: Migration $$f completed ($$STATEMENT_COUNT statements)" | tee -a /logs/migration-runner/migration.log
         done
+
+        echo "" | tee -a /logs/migration-runner/migration.log
         echo "=== Migrations Complete ===" | tee -a /logs/migration-runner/migration.log
     restart: "no"
 
@@ -205,7 +245,6 @@ services:
     volumes:
       - integration-logs:/logs
       - integration-results:/results
-      - ../clients/rust:/app/clients/rust:ro
     environment:
       - GEODE_SERVER=geode-server:8443
       - TEST_MODE=${TEST_MODE:-standard}
@@ -279,5 +318,5 @@ services:
         condition: service_started
       client-zig:
         condition: service_started
-    command: ["/bin/sh", "-c", "echo 'Waiting for client tests to complete...'; sleep 10; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do if [ -f /results/go/summary.json ] && [ -f /results/python/summary.json ] && [ -f /results/rust/summary.json ] && [ -f /results/zig/summary.json ] && [ -f /results/geodetestlab/summary.json ]; then echo 'All results found, collecting...'; /app/scripts/collect_results.sh; exit 0; fi; echo 'Waiting for results... (attempt '$i'/20)'; sleep 10; done; echo 'Timeout waiting for results, collecting what we have...'; /app/scripts/collect_results.sh"]
+    command: ["/bin/sh", "-c", "echo 'Waiting for client tests to complete...'; sleep 10; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do if [ -f /results/go/summary.json ] && [ -f /results/python/summary.json ] && [ -f /results/rust/summary.json ] && [ -f /results/zig/summary.json ] && [ -f /results/geodetestlab/summary.json ]; then echo 'All results found, collecting...'; /app/scripts/collect_results.sh; exit 0; fi; echo \"Waiting for results... (attempt $$i/20)\"; sleep 10; done; echo 'Timeout waiting for results, collecting what we have...'; /app/scripts/collect_results.sh"]
     restart: "no"

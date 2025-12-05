@@ -20,12 +20,13 @@ echo "==============================================="
 # Create output directories
 mkdir -p "${LOG_DIR}/python" "${RESULTS_DIR}/python"
 
-# Wait for server to be ready
+# Wait for server to be ready (QUIC uses UDP)
 echo "Waiting for Geode server..."
 MAX_RETRIES=60
 RETRY_COUNT=0
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if nc -z -w 5 "${GEODE_HOST}" "${GEODE_PORT}" 2>/dev/null; then
+    # Use UDP check for QUIC server (-u flag)
+    if nc -z -u -w 2 "${GEODE_HOST}" "${GEODE_PORT}" 2>/dev/null; then
         echo "Server is ready!"
         break
     fi
@@ -50,26 +51,24 @@ echo ""
 echo "Running Python client tests..."
 echo ""
 
-# Run pytest with JSON output
+# Run pytest with verbose output
 python3 -m pytest \
     --tb=short \
-    --json-report \
-    --json-report-file="${RESULTS_DIR}/python/test_results.json" \
     -v \
     clients/python/tests/ 2>&1 | tee "${LOG_DIR}/python/test_output.txt"
 
 TEST_EXIT_CODE=${PIPESTATUS[0]}
 
-# Parse test results
-if [ -f "${RESULTS_DIR}/python/test_results.json" ]; then
-    PASSED_TESTS=$(python3 -c "import json; d=json.load(open('${RESULTS_DIR}/python/test_results.json')); print(d.get('summary', {}).get('passed', 0))" 2>/dev/null || echo "0")
-    FAILED_TESTS=$(python3 -c "import json; d=json.load(open('${RESULTS_DIR}/python/test_results.json')); print(d.get('summary', {}).get('failed', 0))" 2>/dev/null || echo "0")
-    TOTAL_TESTS=$((PASSED_TESTS + FAILED_TESTS))
-else
-    PASSED_TESTS=$(grep -c "PASSED" "${LOG_DIR}/python/test_output.txt" 2>/dev/null || echo "0")
-    FAILED_TESTS=$(grep -c "FAILED" "${LOG_DIR}/python/test_output.txt" 2>/dev/null || echo "0")
-    TOTAL_TESTS=$((PASSED_TESTS + FAILED_TESTS))
-fi
+# Parse test results (grep -c returns exit code 1 on zero matches)
+PASSED_TESTS=$(grep -c "PASSED" "${LOG_DIR}/python/test_output.txt" 2>/dev/null || true)
+FAILED_TESTS=$(grep -c "FAILED" "${LOG_DIR}/python/test_output.txt" 2>/dev/null || true)
+
+# Strip whitespace and ensure numeric (default to 0 if empty)
+PASSED_TESTS=$(echo "${PASSED_TESTS}" | tr -d '[:space:]')
+FAILED_TESTS=$(echo "${FAILED_TESTS}" | tr -d '[:space:]')
+PASSED_TESTS="${PASSED_TESTS:-0}"
+FAILED_TESTS="${FAILED_TESTS:-0}"
+TOTAL_TESTS=$((PASSED_TESTS + FAILED_TESTS))
 
 # Create summary JSON
 cat > "${RESULTS_DIR}/python/summary.json" << EOF

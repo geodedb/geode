@@ -62,10 +62,18 @@ if [ -f "${RESULTS_DIR}/go/coverage.out" ]; then
     go tool cover -func="${RESULTS_DIR}/go/coverage.out" > "${RESULTS_DIR}/go/coverage_summary.txt" 2>/dev/null || true
 fi
 
-# Parse results and create summary
-TOTAL_TESTS=$(grep -c '"Action":"run"' "${LOG_DIR}/go/test_output.json" 2>/dev/null || echo "0")
-PASSED_TESTS=$(grep -c '"Action":"pass"' "${LOG_DIR}/go/test_output.json" 2>/dev/null || echo "0")
-FAILED_TESTS=$(grep -c '"Action":"fail"' "${LOG_DIR}/go/test_output.json" 2>/dev/null || echo "0")
+# Parse results and create summary (grep -c exits with code 1 on zero matches)
+TOTAL_TESTS=$(grep -c '"Action":"run"' "${LOG_DIR}/go/test_output.json" 2>/dev/null || true)
+PASSED_TESTS=$(grep -c '"Action":"pass"' "${LOG_DIR}/go/test_output.json" 2>/dev/null || true)
+FAILED_TESTS=$(grep -c '"Action":"fail"' "${LOG_DIR}/go/test_output.json" 2>/dev/null || true)
+
+# Strip whitespace and ensure numeric (default to 0 if empty)
+TOTAL_TESTS=$(echo "${TOTAL_TESTS}" | tr -d '[:space:]')
+PASSED_TESTS=$(echo "${PASSED_TESTS}" | tr -d '[:space:]')
+FAILED_TESTS=$(echo "${FAILED_TESTS}" | tr -d '[:space:]')
+TOTAL_TESTS="${TOTAL_TESTS:-0}"
+PASSED_TESTS="${PASSED_TESTS:-0}"
+FAILED_TESTS="${FAILED_TESTS:-0}"
 
 # Create summary JSON
 cat > "${RESULTS_DIR}/go/summary.json" << EOF
