@@ -19,6 +19,7 @@ RUN go mod tidy && \
 FROM golang:1.24-bookworm AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    bc \
     ca-certificates \
     curl \
     jq \

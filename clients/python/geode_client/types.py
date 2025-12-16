@@ -295,6 +295,10 @@ def decode_value(raw: Any, type_name: str) -> Value:
         return Value(kind=ValueKind.OBJECT, object_value=obj)
     elif isinstance(raw, str):
         return Value(kind=ValueKind.STRING, str_value=raw)
+    # IMPORTANT: Check bool BEFORE int because Python's bool is a subclass of int
+    # isinstance(True, int) returns True, so we must handle bool first
+    elif isinstance(raw, bool):
+        return Value(kind=ValueKind.BOOL, bool_value=raw)
     elif isinstance(raw, (int, float)):
         if isinstance(raw, int):
             return Value(kind=ValueKind.INT, int_value=raw)

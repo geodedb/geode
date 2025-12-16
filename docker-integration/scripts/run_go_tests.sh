@@ -52,9 +52,9 @@ echo "Running Go client tests..."
 echo ""
 
 # Run tests with JSON output for parsing
+# Note: go test -json already outputs JSON, no need for go tool test2json
 go test -v -json -coverprofile="${RESULTS_DIR}/go/coverage.out" ./... 2>&1 | \
-    tee "${LOG_DIR}/go/test_output.json" | \
-    go tool test2json 2>/dev/null || true
+    tee "${LOG_DIR}/go/test_output.json" || true
 
 # Generate coverage report
 if [ -f "${RESULTS_DIR}/go/coverage.out" ]; then
@@ -62,18 +62,50 @@ if [ -f "${RESULTS_DIR}/go/coverage.out" ]; then
     go tool cover -func="${RESULTS_DIR}/go/coverage.out" > "${RESULTS_DIR}/go/coverage_summary.txt" 2>/dev/null || true
 fi
 
-# Parse results and create summary (grep -c exits with code 1 on zero matches)
-TOTAL_TESTS=$(grep -c '"Action":"run"' "${LOG_DIR}/go/test_output.json" 2>/dev/null || true)
-PASSED_TESTS=$(grep -c '"Action":"pass"' "${LOG_DIR}/go/test_output.json" 2>/dev/null || true)
-FAILED_TESTS=$(grep -c '"Action":"fail"' "${LOG_DIR}/go/test_output.json" 2>/dev/null || true)
+# Parse results and create summary
+# The Go test JSON output has nested JSON in the Output field, so we need to only match
+# the outer-level Action fields, not the ones inside nested JSON strings.
+# Use jq to properly parse the JSON and count actions at the top level.
+# Fall back to grep if jq is not available.
+if command -v jq &> /dev/null; then
+    # Use jq to properly parse top-level Action fields
+    TOTAL_TESTS=$(jq -r 'select(.Action == "run" and .Test != null) | .Action' "${LOG_DIR}/go/test_output.json" 2>/dev/null | wc -l || echo "0")
+    PASSED_TESTS=$(jq -r 'select(.Action == "pass" and .Test != null) | .Action' "${LOG_DIR}/go/test_output.json" 2>/dev/null | wc -l || echo "0")
+    FAILED_TESTS=$(jq -r 'select(.Action == "fail" and .Test != null) | .Action' "${LOG_DIR}/go/test_output.json" 2>/dev/null | wc -l || echo "0")
+else
+    # Fallback: use grep but only match at line start (top-level Action only)
+    # Lines look like: {"Action":"pass","Package":"...","Test":"..."}
+    # We match actions that have a "Test" field (individual test results, not package results)
+    TOTAL_TESTS=$(grep -E '^{"Action":"run".*"Test":' "${LOG_DIR}/go/test_output.json" 2>/dev/null | wc -l || echo "0")
+    PASSED_TESTS=$(grep -E '^{"Action":"pass".*"Test":' "${LOG_DIR}/go/test_output.json" 2>/dev/null | wc -l || echo "0")
+    FAILED_TESTS=$(grep -E '^{"Action":"fail".*"Test":' "${LOG_DIR}/go/test_output.json" 2>/dev/null | wc -l || echo "0")
+fi
 
-# Strip whitespace and ensure numeric (default to 0 if empty)
-TOTAL_TESTS=$(echo "${TOTAL_TESTS}" | tr -d '[:space:]')
-PASSED_TESTS=$(echo "${PASSED_TESTS}" | tr -d '[:space:]')
-FAILED_TESTS=$(echo "${FAILED_TESTS}" | tr -d '[:space:]')
+# Strip whitespace, remove non-digits, and ensure numeric (default to 0 if empty)
+TOTAL_TESTS=$(echo "${TOTAL_TESTS}" | tr -d '[:space:]' | tr -cd '0-9')
+PASSED_TESTS=$(echo "${PASSED_TESTS}" | tr -d '[:space:]' | tr -cd '0-9')
+FAILED_TESTS=$(echo "${FAILED_TESTS}" | tr -d '[:space:]' | tr -cd '0-9')
 TOTAL_TESTS="${TOTAL_TESTS:-0}"
 PASSED_TESTS="${PASSED_TESTS:-0}"
 FAILED_TESTS="${FAILED_TESTS:-0}"
+# Ensure they are valid integers (default to 0 if not)
+[[ "$TOTAL_TESTS" =~ ^[0-9]+$ ]] || TOTAL_TESTS=0
+[[ "$PASSED_TESTS" =~ ^[0-9]+$ ]] || PASSED_TESTS=0
+[[ "$FAILED_TESTS" =~ ^[0-9]+$ ]] || FAILED_TESTS=0
+
+# Calculate pass rate using bash arithmetic (avoid bc dependency)
+if [ "${TOTAL_TESTS}" -gt 0 ]; then
+    PASS_RATE=$((PASSED_TESTS * 100 / TOTAL_TESTS))
+else
+    PASS_RATE=0
+fi
+
+# Determine exit code based on failed tests
+if [ "${FAILED_TESTS}" -gt 0 ] 2>/dev/null; then
+    EXIT_CODE=1
+else
+    EXIT_CODE=0
+fi
 
 # Create summary JSON
 cat > "${RESULTS_DIR}/go/summary.json" << EOF
@@ -84,7 +116,8 @@ cat > "${RESULTS_DIR}/go/summary.json" << EOF
     "total_tests": ${TOTAL_TESTS},
     "passed": ${PASSED_TESTS},
     "failed": ${FAILED_TESTS},
-    "pass_rate": $(echo "scale=2; ${PASSED_TESTS} * 100 / (${TOTAL_TESTS} + 1)" | bc 2>/dev/null || echo "0")
+    "pass_rate": ${PASS_RATE},
+    "exit_code": ${EXIT_CODE}
 }
 EOF
 
@@ -101,7 +134,5 @@ echo "Completed: $(date -Iseconds)"
 echo "==============================================="
 
 # Exit with appropriate code
-if [ "${FAILED_TESTS}" -gt 0 ]; then
-    exit 1
-fi
-exit 0
+echo "Exiting with code ${EXIT_CODE}"
+exit ${EXIT_CODE}
