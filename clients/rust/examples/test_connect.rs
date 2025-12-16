@@ -16,8 +16,8 @@ async fn main() {
             println!("[TEST] Connection established with Quinn QUIC library");
 
             // Try a simple query
-            match conn.query("RETURN 1 AS x", None).await {
-                Ok(page) => {
+            match conn.query("RETURN 1 AS x").await {
+                Ok((page, _)) => {
                     println!("[TEST] ✓ Query successful!");
                     println!("[TEST] Columns: {:?}", page.columns);
                     println!("[TEST] Rows: {:?}", page.rows);

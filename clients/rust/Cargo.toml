@@ -54,10 +54,6 @@ name = "advanced"
 path = "examples/advanced.rs"
 
 [[example]]
-name = "transactions"
-path = "examples/transactions.rs"
-
-[[example]]
 name = "test_quinn"
 path = "examples/test_quinn.rs"
 

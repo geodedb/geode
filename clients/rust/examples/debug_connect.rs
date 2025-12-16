@@ -1,7 +1,8 @@
 // Debug connection test with verbose Quiche logging
-use geode_client::Client;
+use geode_client::{Client, Result};
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<()> {
     env_logger::init();
 
     eprintln!("=== Starting Quiche Connection Debug Test ===");
@@ -17,11 +18,12 @@ fn main() {
     eprintln!("Client configured. Attempting connection...");
     eprintln!("");
 
-    match client.connect() {
+    match client.connect().await {
         Ok(_conn) => {
             eprintln!("");
             eprintln!("✓ CONNECTION SUCCESSFUL!");
             eprintln!("Connection established successfully");
+            Ok(())
         }
         Err(e) => {
             eprintln!("");

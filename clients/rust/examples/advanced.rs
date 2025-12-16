@@ -1,7 +1,8 @@
 //! Advanced example demonstrating connection pooling and query builders with QUIC.
 
-use geode_client::{Client, ConnectionPool, EdgeDirection, PatternBuilder, QueryBuilder, Result};
+use geode_client::{Client, ConnectionPool, EdgeDirection, PatternBuilder, QueryBuilder, Result, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio;
 
 #[tokio::main]
@@ -57,9 +58,9 @@ async fn connection_pool_example() -> Result<()> {
     println!("\n=== Connection Pool Example ===\n");
 
     // Create connection pool
-    let pool = ConnectionPool::new("127.0.0.1", 3141, 10)
+    let pool = Arc::new(ConnectionPool::new("127.0.0.1", 3141, 10)
         .skip_verify(true)
-        .page_size(1000);
+        .page_size(1000));
 
     println!("Created connection pool with max_size=10");
 
@@ -67,19 +68,19 @@ async fn connection_pool_example() -> Result<()> {
     let mut handles = vec![];
 
     for i in 1..=5 {
-        let pool_clone = &pool;
+        let pool_clone = Arc::clone(&pool);
         let handle = tokio::spawn(async move {
             match pool_clone.acquire().await {
-                Ok(conn) => {
+                Ok(mut conn) => {
                     let mut params = HashMap::new();
-                    params.insert("id".to_string(), serde_json::json!(i));
-                    params.insert("msg".to_string(), serde_json::json!(format!("Query {}", i)));
+                    params.insert("id".to_string(), Value::int(i));
+                    params.insert("msg".to_string(), Value::string(format!("Query {}", i)));
 
                     match conn
-                        .query("RETURN $id AS id, $msg AS message", Some(params))
+                        .query_with_params("RETURN $id AS id, $msg AS message", &params)
                         .await
                     {
-                        Ok(page) => {
+                        Ok((page, _)) => {
                             if let Some(row) = page.rows.first() {
                                 if let (Ok(id), Ok(msg)) = (
                                     row.get("id").unwrap().as_int(),

@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
         .client_version("0.1.0");
 
     println!("[TEST] Connecting to server...");
-    let conn = client.connect().await?;
+    let mut conn = client.connect().await?;
 
     println!("[TEST] ✓ Connected successfully!");
 
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     println!("[TEST] Cursor: {:?}", cursor);
 
     println!("[TEST] Closing connection...");
-    conn.close().await;
+    conn.close()?;
 
     println!("[TEST] ✓ All tests passed!");
 

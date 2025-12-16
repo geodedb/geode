@@ -74,17 +74,20 @@ for spec in "${TEST_SPECS[@]}"; do
     echo "Running spec: ${SPEC_NAME}"
     echo "-----------------------------------------------"
 
-    # Run geodetestlab CLI
-    if python3 -m geodetestlab.cli run \
+    # Run geodetestlab CLI (server management is handled by the CLI itself)
+    # Use PIPESTATUS to get the actual command exit code, not the tee exit code
+    python3 -m geodetestlab.cli run \
         --spec "$spec" \
         --llm-provider mock \
-        --server "${GEODE_HOST}:${GEODE_PORT}" \
-        --insecure \
-        2>&1 | tee "${LOG_DIR}/geodetestlab/${SPEC_NAME}.log"; then
+        2>&1 | tee "${LOG_DIR}/geodetestlab/${SPEC_NAME}.log"
+
+    SPEC_EXIT_CODE=${PIPESTATUS[0]}
+
+    if [ "$SPEC_EXIT_CODE" -eq 0 ]; then
         echo "✓ ${SPEC_NAME} PASSED"
         PASSED_SPECS=$((PASSED_SPECS + 1))
     else
-        echo "✗ ${SPEC_NAME} FAILED"
+        echo "✗ ${SPEC_NAME} FAILED (exit code: $SPEC_EXIT_CODE)"
         FAILED_SPECS=$((FAILED_SPECS + 1))
     fi
     echo ""
