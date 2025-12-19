@@ -8,7 +8,7 @@ variables:
   DOCKER_DRIVER: overlay2
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
-  ZIG_VERSION: "0.15.1"
+  ZIG_VERSION: "0.15.2"
   ZIG_ARCH: "x86_64"
   DEB_DIST: "stable"
   DEB_COMPONENT: "main"
