@@ -119,7 +119,7 @@ pub fn main() !void {
         var saw_any = false;
         while (true) {
             var b: [1]u8 = undefined;
-            const n = file_reader.read(&b) catch break;
+            const n = file_reader.interface.readSliceShort(&b) catch break;
             if (n == 0) break;
             saw_any = true;
             if (b[0] == '\n') break;

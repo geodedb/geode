@@ -119,7 +119,7 @@ pub fn main() !void {
         // Read bytes until newline or EOF.
         while (true) {
             var byte: [1]u8 = undefined;
-            const n = reader.read(&byte) catch |e| switch (e) {
+            const n = reader.interface.readSliceShort(&byte) catch |e| switch (e) {
                 else => return e,
             };
             if (n == 0) break; // EOF

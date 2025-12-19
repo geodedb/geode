@@ -27,7 +27,7 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
         line_buf.clearRetainingCapacity();
         while (true) {
             var one: [1]u8 = undefined;
-            const n = rd.read(&one) catch return error.ReadError;
+            const n = rd.interface.readSliceShort(&one) catch return error.ReadError;
             if (n == 0) break;
             if (one[0] == '\n') break;
             line_buf.append(allocator, one[0]) catch return error.OutOfMemory;

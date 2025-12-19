@@ -416,7 +416,7 @@ pub fn main() !void {
             var r = file.reader(&arch_buf);
             while (true) {
                 var b: [1]u8 = undefined;
-                const n = r.read(&b) catch break;
+                const n = r.interface.readSliceShort(&b) catch break;
                 if (n == 0) break;
                 if (b[0] == '\n') {
                     count += 1;
