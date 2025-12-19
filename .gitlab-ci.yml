@@ -13,6 +13,9 @@ variables:
   DEB_DIST: "stable"
   DEB_COMPONENT: "main"
   PACKAGE_NAME: "geode"
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_FQDN}.insteadOf"
+  GIT_CONFIG_VALUE_0: "https://gitlab.com"
 
 .binary-build:
   stage: build
