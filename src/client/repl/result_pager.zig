@@ -114,7 +114,7 @@ pub const ResultPager = struct {
         const cyan = if (use_color) "\x1b[36m" else "";
         const reset = if (use_color) "\x1b[0m" else "";
 
-        try writer.writeAll("\n");
+        try writer.writeAll("\r\n");
         try writer.writeAll(cyan);
         var buf: [256]u8 = undefined;
         const info = try std.fmt.bufPrint(
@@ -124,7 +124,7 @@ pub const ResultPager = struct {
         );
         try writer.writeAll(info);
         try writer.writeAll(reset);
-        try writer.writeAll("\n");
+        try writer.writeAll("\r\n");
 
         if (current_page < total_pages) {
             const hint = try std.fmt.bufPrint(
@@ -133,7 +133,7 @@ pub const ResultPager = struct {
                 .{},
             );
             try writer.writeAll(hint);
-            try writer.writeAll("\n");
+            try writer.writeAll("\r\n");
         }
     }
 };
@@ -171,7 +171,7 @@ fn displayAsTable(writer: anytype, allocator: std.mem.Allocator, columns: std.js
         for (0..padding) |_| try writer.writeAll(" ");
         try writer.writeAll(" | ");
     }
-    try writer.writeAll("\n");
+    try writer.writeAll("\r\n");
 
     // Print separator
     try writer.writeAll("|");
@@ -180,7 +180,7 @@ fn displayAsTable(writer: anytype, allocator: std.mem.Allocator, columns: std.js
         for (0..width) |_| try writer.writeAll("-");
         try writer.writeAll("-|");
     }
-    try writer.writeAll("\n");
+    try writer.writeAll("\r\n");
 
     // Print data rows
     for (rows) |row| {
@@ -221,7 +221,7 @@ fn displayAsTable(writer: anytype, allocator: std.mem.Allocator, columns: std.js
             for (0..padding) |_| try writer.writeAll(" ");
             try writer.writeAll(" | ");
         }
-        try writer.writeAll("\n");
+        try writer.writeAll("\r\n");
     }
 }
 
@@ -233,7 +233,7 @@ fn displayAsCsv(writer: anytype, columns: std.json.Array, rows: []std.json.Value
         try writer.writeAll(col.string);
         try writer.writeAll("\"");
     }
-    try writer.writeAll("\n");
+    try writer.writeAll("\r\n");
 
     // Data rows
     for (rows) |row| {
@@ -265,7 +265,7 @@ fn displayAsCsv(writer: anytype, columns: std.json.Array, rows: []std.json.Value
                 else => {},
             }
         }
-        try writer.writeAll("\n");
+        try writer.writeAll("\r\n");
     }
 }
 

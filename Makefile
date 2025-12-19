@@ -1459,6 +1459,7 @@ docker-integration-test: docker-integration-up
 	$(DOCKER_COMPOSE_INTEGRATION) run --rm results-collector
 	@echo "==== Integration tests complete ===="
 	@$(MAKE) docker-integration-results
+	@$(MAKE) docker-integration-down
 
 # Show integration test results
 docker-integration-results:

@@ -54,7 +54,7 @@ const gql_keywords = [_][]const u8{
     "END",
 };
 
-const meta_commands = [_][]const u8{
+const meta_commands_backslash = [_][]const u8{
     "\\help",
     "\\quit",
     "\\history",
@@ -69,6 +69,23 @@ const meta_commands = [_][]const u8{
     "\\set",
     "\\echo",
     "\\source",
+};
+
+const meta_commands_slash = [_][]const u8{
+    "/help",
+    "/quit",
+    "/history",
+    "/clear",
+    "/connect",
+    "/disconnect",
+    "/begin",
+    "/commit",
+    "/rollback",
+    "/timing",
+    "/format",
+    "/set",
+    "/echo",
+    "/source",
 };
 
 pub fn complete(state: anytype) !void {
@@ -88,9 +105,10 @@ pub fn complete(state: anytype) !void {
     state.completion_ctx.candidates.clearRetainingCapacity();
     state.completion_ctx.current_index = 0;
 
-    // Check if completing meta-command
-    if (word_start == 0 and prefix.len > 0 and prefix[0] == '\\') {
-        for (meta_commands) |cmd| {
+    // Check if completing meta-command (supports both \ and / prefixes)
+    if (word_start == 0 and prefix.len > 0 and (prefix[0] == '\\' or prefix[0] == '/')) {
+        const commands = if (prefix[0] == '\\') &meta_commands_backslash else &meta_commands_slash;
+        for (commands) |cmd| {
             if (std.mem.startsWith(u8, cmd, prefix)) {
                 const candidate = try state.allocator.dupe(u8, cmd);
                 try state.completion_ctx.candidates.append(state.allocator, candidate);

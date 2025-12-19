@@ -4,54 +4,44 @@ const repl_loop = @import("repl_loop.zig");
 const platform = @import("platform.zig");
 
 pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
+    // Handle Ctrl+Alt combinations first (Ctrl+Home, Ctrl+End for history navigation)
+    if (key.ctrl and key.alt) {
+        return switch (key.key) {
+            'a' => .history_first, // Ctrl+Home: first history entry
+            'e' => .history_last, // Ctrl+End: last history entry
+            else => .none,
+        };
+    }
+
     if (key.ctrl) {
         return switch (key.key) {
-            'a' => .move_bol, // Ctrl+A: beginning of line
-            'e' => .move_eol, // Ctrl+E: end of line
-            'b' => .move_left, // Ctrl+B: backward char
-            'f' => .move_right, // Ctrl+F: forward char
-            'p' => .history_prev, // Ctrl+P: previous history
-            'n' => .history_next, // Ctrl+N: next history
-            'd' => blk: { // Ctrl+D: delete char or EOF
-                if (state.buffer.items.len == 0) {
-                    break :blk .quit;
-                } else if (state.cursor < state.buffer.items.len) {
-                    _ = state.buffer.orderedRemove(state.cursor);
-                }
-                break :blk .none;
-            },
+            'a' => .move_bol, // Ctrl+A / Home: beginning of line
+            'e' => .move_eol, // Ctrl+E / End: end of line
+            'b' => .move_left, // Ctrl+B / Left: backward char
+            'f' => .move_right, // Ctrl+F / Right: forward char
+            'p' => .history_prev, // Ctrl+P / Up: previous history
+            'n' => .history_next, // Ctrl+N / Down: next history
+            'd' => if (state.buffer.items.len == 0) .quit else .delete_char, // Ctrl+D: delete char or EOF
             'k' => .delete_to_eol, // Ctrl+K: kill to end of line
             'u' => .delete_to_bol, // Ctrl+U: kill to beginning of line
-            'w' => blk: { // Ctrl+W: kill word backward
-                const start = findWordStart(state.buffer.items, state.cursor);
-                state.kill_ring.clearRetainingCapacity();
-                state.kill_ring.appendSlice(state.allocator, state.buffer.items[start..state.cursor]) catch {};
-                while (state.cursor > start) {
-                    state.cursor -= 1;
-                    _ = state.buffer.orderedRemove(state.cursor);
-                }
-                state.last_was_kill = true;
-                break :blk .none;
-            },
+            'w' => .delete_word_backward, // Ctrl+W: kill word backward
             'y' => .yank, // Ctrl+Y: yank from kill ring
-            'l' => blk: { // Ctrl+L: clear screen
-                const stdout = platform.getStdoutHandle();
-                stdout.writeAll("\x1b[2J\x1b[H") catch {};
-                break :blk .none;
-            },
+            'l' => .clear_screen, // Ctrl+L: clear screen
             'r' => .search, // Ctrl+R: reverse search
             'c' => .cancel, // Ctrl+C: cancel
             'i', '\t' => .complete, // Tab: complete
             'j', 'm', '\r', '\n' => .execute, // Enter: execute
+            0x7f - 'a' + 1 => .delete_char_forward, // Delete key (mapped from ESC[3~)
             else => .none,
         };
     }
 
     if (key.alt) {
         return switch (key.key) {
-            'b' => .move_word_left, // Alt+B: backward word
-            'f' => .move_word_right, // Alt+F: forward word
+            'b' => .move_word_left, // Alt+B / Ctrl+Left: backward word
+            'f' => .move_word_right, // Alt+F / Ctrl+Right: forward word
             'd' => .delete_word, // Alt+D: delete word forward
+            'w' => .delete_word_backward, // Alt+W: delete word backward (alternative)
             else => .none,
         };
     }
@@ -63,16 +53,13 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
         return .insert;
     }
 
-    // Special keys
+    // Special keys (codes from parseKeyEvent)
     return switch (key.key) {
         0x1b => .none, // ESC: do nothing in Emacs mode
-        0x7f, 0x08 => blk: { // Backspace
-            if (state.cursor > 0) {
-                state.cursor -= 1;
-                _ = state.buffer.orderedRemove(state.cursor);
-            }
-            break :blk .none;
-        },
+        0x7f, 0x08 => .backspace, // Backspace (DEL or BS)
+        0x02 => .none, // Insert key - no action in emacs mode
+        0x05 => .history_first, // Page Up - go to first history
+        0x06 => .history_last, // Page Down - go to last history
         else => .none,
     };
 }

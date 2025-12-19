@@ -185,7 +185,7 @@ pub const ClientSession = struct {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
         // Send HELLO handshake
-        const hello_msg = "{{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\"}}\n";
+        const hello_msg = "{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\"}\n";
         try self.connection.?.writeAll(hello_msg);
 
         // Read and discard HELLO acknowledgment
@@ -215,7 +215,7 @@ pub const ClientSession = struct {
     pub fn begin(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
-        try self.connection.?.writeAll("{{\"type\":\"BEGIN\"}}\n");
+        try self.connection.?.writeAll("{\"type\":\"BEGIN\"}\n");
 
         // Read and check response
         const response = try self.connection.?.readLine(self.allocator, 1 << 16);
@@ -229,7 +229,7 @@ pub const ClientSession = struct {
     pub fn commit(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
-        try self.connection.?.writeAll("{{\"type\":\"COMMIT\"}}\n");
+        try self.connection.?.writeAll("{\"type\":\"COMMIT\"}\n");
 
         // Read and check response
         const response = try self.connection.?.readLine(self.allocator, 1 << 16);
@@ -243,7 +243,7 @@ pub const ClientSession = struct {
     pub fn rollback(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
-        try self.connection.?.writeAll("{{\"type\":\"ROLLBACK\"}}\n");
+        try self.connection.?.writeAll("{\"type\":\"ROLLBACK\"}\n");
 
         // Read and check response
         const response = try self.connection.?.readLine(self.allocator, 1 << 16);
@@ -258,7 +258,7 @@ pub const ClientSession = struct {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
         // Send PULL request for results
-        const pull_msg = "{{\"type\":\"PULL\",\"request_id\":1,\"page_size\":1000}}\n";
+        const pull_msg = "{\"type\":\"PULL\",\"request_id\":1,\"page_size\":1000}\n";
         try self.connection.?.writeAll(pull_msg);
 
         // Read BINDINGS response
@@ -271,6 +271,9 @@ pub const ClientSession = struct {
 
 pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     const stdout = platform.getStdoutHandle();
+
+    // Move to new line before displaying any output
+    try stdout.writeAll("\r\n");
 
     // Parse command
     const space_idx = std.mem.indexOf(u8, input[1..], " ");
@@ -285,147 +288,145 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         const reset = if (use_color) "\x1b[0m" else "";
         const bold = if (use_color) "\x1b[1m" else "";
 
-        try stdout.writeAll("\n");
         try stdout.writeAll(green);
         try stdout.writeAll(bold);
-        try stdout.writeAll("=== Geode Shell Commands ===\n");
+        try stdout.writeAll("=== Geode Shell Commands ===\r\n");
         try stdout.writeAll(reset);
-        try stdout.writeAll("\n");
+        try stdout.writeAll("\r\n");
 
         try stdout.writeAll(cyan);
-        try stdout.writeAll("Meta-Commands (start with \\):\n");
+        try stdout.writeAll("Meta-Commands (start with \\ or /):\r\n");
         try stdout.writeAll(reset);
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\help, \\h, \\?");
         try stdout.writeAll(reset);
-        try stdout.writeAll("     Show this help\n");
+        try stdout.writeAll("     Show this help\r\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\quit, \\q, \\exit");
         try stdout.writeAll(reset);
-        try stdout.writeAll(" Exit the shell\n");
+        try stdout.writeAll(" Exit the shell\r\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\clear");
         try stdout.writeAll(reset);
-        try stdout.writeAll("            Clear screen\n");
-        try stdout.writeAll("\n");
+        try stdout.writeAll("            Clear screen\r\n");
+        try stdout.writeAll("\r\n");
 
         try stdout.writeAll(cyan);
-        try stdout.writeAll("History:\n");
+        try stdout.writeAll("History:\r\n");
         try stdout.writeAll(reset);
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\history [n]");
         try stdout.writeAll(reset);
-        try stdout.writeAll("      Show last n history entries\n");
+        try stdout.writeAll("      Show last n history entries\r\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\history -c");
         try stdout.writeAll(reset);
-        try stdout.writeAll("       Clear history\n");
-        try stdout.writeAll("\n");
+        try stdout.writeAll("       Clear history\r\n");
+        try stdout.writeAll("\r\n");
 
         try stdout.writeAll(cyan);
-        try stdout.writeAll("Connection:\n");
+        try stdout.writeAll("Connection:\r\n");
         try stdout.writeAll(reset);
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\connect <addr>");
         try stdout.writeAll(reset);
-        try stdout.writeAll("   Connect to server\n");
+        try stdout.writeAll("   Connect to server\r\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\disconnect");
         try stdout.writeAll(reset);
-        try stdout.writeAll("       Disconnect from server\n");
-        try stdout.writeAll("\n");
+        try stdout.writeAll("       Disconnect from server\r\n");
+        try stdout.writeAll("\r\n");
 
         try stdout.writeAll(cyan);
-        try stdout.writeAll("Transactions:\n");
+        try stdout.writeAll("Transactions:\r\n");
         try stdout.writeAll(reset);
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\begin");
         try stdout.writeAll(reset);
-        try stdout.writeAll("            Start transaction\n");
+        try stdout.writeAll("            Start transaction\r\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\commit");
         try stdout.writeAll(reset);
-        try stdout.writeAll("           Commit transaction\n");
+        try stdout.writeAll("           Commit transaction\r\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\rollback");
         try stdout.writeAll(reset);
-        try stdout.writeAll("         Rollback transaction\n");
-        try stdout.writeAll("\n");
+        try stdout.writeAll("         Rollback transaction\r\n");
+        try stdout.writeAll("\r\n");
 
         try stdout.writeAll(cyan);
-        try stdout.writeAll("Settings:\n");
+        try stdout.writeAll("Settings:\r\n");
         try stdout.writeAll(reset);
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\timing on|off");
         try stdout.writeAll(reset);
-        try stdout.writeAll("    Toggle query timing\n");
+        try stdout.writeAll("    Toggle query timing\r\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\format <fmt>");
         try stdout.writeAll(reset);
-        try stdout.writeAll("     Set output format (table|csv|json)\n");
+        try stdout.writeAll("     Set output format (table|csv|json)\r\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\set <opt> <val>");
         try stdout.writeAll(reset);
-        try stdout.writeAll("  Set option (e.g., keymap emacs|vi)\n");
-        try stdout.writeAll("\n");
+        try stdout.writeAll("  Set option (e.g., keymap emacs|vi)\r\n");
+        try stdout.writeAll("\r\n");
 
         try stdout.writeAll(cyan);
-        try stdout.writeAll("Other:\n");
+        try stdout.writeAll("Other:\r\n");
         try stdout.writeAll(reset);
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\echo <text>");
         try stdout.writeAll(reset);
-        try stdout.writeAll("      Echo text\n");
+        try stdout.writeAll("      Echo text\r\n");
         try stdout.writeAll("  ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("\\source <file>");
         try stdout.writeAll(reset);
-        try stdout.writeAll("    Execute commands from file\n");
-        try stdout.writeAll("\n");
+        try stdout.writeAll("    Execute commands from file\r\n");
+        try stdout.writeAll("\r\n");
 
         try stdout.writeAll(green);
-        try stdout.writeAll("Keyboard Shortcuts:\n");
+        try stdout.writeAll("Keyboard Shortcuts:\r\n");
         try stdout.writeAll(reset);
-        try stdout.writeAll("  Ctrl+C            Cancel current input\n");
-        try stdout.writeAll("  Ctrl+D            Exit (on empty line)\n");
-        try stdout.writeAll("  Ctrl+L            Clear screen\n");
-        try stdout.writeAll("  Ctrl+P/N          Navigate history\n");
-        try stdout.writeAll("  Ctrl+A/E          Move to beginning/end of line\n");
-        try stdout.writeAll("\n");
+        try stdout.writeAll("  Ctrl+C            Exit (on empty line) or cancel input\r\n");
+        try stdout.writeAll("  Ctrl+D            Exit (on empty line)\r\n");
+        try stdout.writeAll("  Ctrl+L            Clear screen\r\n");
+        try stdout.writeAll("  Ctrl+P/N          Navigate history\r\n");
+        try stdout.writeAll("  Ctrl+A/E          Move to beginning/end of line\r\n");
+        try stdout.writeAll("\r\n");
 
         try stdout.writeAll(green);
-        try stdout.writeAll("GQL Queries:\n");
+        try stdout.writeAll("GQL Queries:\r\n");
         try stdout.writeAll(reset);
-        try stdout.writeAll("  Type GQL directly and end with semicolon (;)\n");
+        try stdout.writeAll("  Type GQL directly and end with semicolon (;)\r\n");
         try stdout.writeAll("  Example: ");
         try stdout.writeAll(yellow);
         try stdout.writeAll("MATCH (n) RETURN n LIMIT 5;");
         try stdout.writeAll(reset);
-        try stdout.writeAll("\n");
-        try stdout.writeAll("\n");
+        try stdout.writeAll("\r\n");
+        try stdout.writeAll("\r\n");
 
-        // CRITICAL FIX: Flush stdout after help message
-        try stdout.sync();
+        // Note: Don't sync() stdout - causes panics on ttys
     } else if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "exit")) {
         state.quit_requested = true;
     } else if (std.mem.eql(u8, cmd, "history")) {
         if (std.mem.eql(u8, args, "-c")) {
             try state.history.clear();
-            try stdout.writeAll("History cleared\n");
+            try stdout.writeAll("History cleared\r\n");
         } else {
             const n = if (args.len > 0) std.fmt.parseInt(usize, args, 10) catch 10 else 10;
             const start = if (state.history.entries.items.len > n)
@@ -435,57 +436,55 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
 
             for (state.history.entries.items[start..], start..) |entry, i| {
                 var buf: [1024]u8 = undefined;
-                const line = try std.fmt.bufPrint(&buf, "{d:4}: {s}\n", .{ i + 1, entry });
+                const line = try std.fmt.bufPrint(&buf, "{d:4}: {s}\r\n", .{ i + 1, entry });
                 try stdout.writeAll(line);
             }
         }
-        // CRITICAL FIX: Flush stdout after history command
-        try stdout.sync();
     } else if (std.mem.eql(u8, cmd, "clear")) {
         try stdout.writeAll("\x1b[2J\x1b[H"); // Clear screen and home cursor
-        // CRITICAL FIX: Flush stdout after clear command
-        try stdout.sync();
     } else if (std.mem.eql(u8, cmd, "connect")) {
         if (args.len > 0) {
+            // Save the current transport before deinit
+            const current_transport = state.session.transport orelse return error.NoTransport;
             state.session.deinit();
-            state.session.* = try ClientSession.init(state.allocator, args, &mock_transport);
+            state.session.* = try ClientSession.init(state.allocator, args, current_transport);
             try state.session.connect();
             try state.session.hello();
             var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Connected to {s}\n", .{args});
+            const msg = try std.fmt.bufPrint(&buf, "Connected to {s}\r\n", .{args});
             try stdout.writeAll(msg);
         } else {
             const stderr = platform.getStderrHandle();
             var buf: [512]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\connect <host:port>\n", .{});
+            const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\connect <host:port>\r\n", .{});
             try stderr.writeAll(msg);
         }
     } else if (std.mem.eql(u8, cmd, "disconnect")) {
         state.session.connected = false;
-        try stdout.writeAll("Disconnected\n");
+        try stdout.writeAll("Disconnected\r\n");
     } else if (std.mem.eql(u8, cmd, "begin")) {
         try state.session.begin();
         state.in_txn = true;
-        try stdout.writeAll("Transaction started\n");
+        try stdout.writeAll("Transaction started\r\n");
     } else if (std.mem.eql(u8, cmd, "commit")) {
         try state.session.commit();
         state.in_txn = false;
-        try stdout.writeAll("Transaction committed\n");
+        try stdout.writeAll("Transaction committed\r\n");
     } else if (std.mem.eql(u8, cmd, "rollback")) {
         try state.session.rollback();
         state.in_txn = false;
-        try stdout.writeAll("Transaction rolled back\n");
+        try stdout.writeAll("Transaction rolled back\r\n");
     } else if (std.mem.eql(u8, cmd, "timing")) {
         if (std.mem.eql(u8, args, "on")) {
             state.show_timing = true;
-            try stdout.writeAll("Timing is on\n");
+            try stdout.writeAll("Timing is on\r\n");
         } else if (std.mem.eql(u8, args, "off")) {
             state.show_timing = false;
-            try stdout.writeAll("Timing is off\n");
+            try stdout.writeAll("Timing is off\r\n");
         } else {
             const stderr = platform.getStderrHandle();
             var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\timing on|off\n", .{});
+            const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\timing on|off\r\n", .{});
             try stderr.writeAll(msg);
         }
     } else if (std.mem.eql(u8, cmd, "format")) {
@@ -498,12 +497,12 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         } else {
             const stderr = platform.getStderrHandle();
             var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\format table|csv|json\n", .{});
+            const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\format table|csv|json\r\n", .{});
             try stderr.writeAll(msg);
             return;
         }
         var buf: [256]u8 = undefined;
-        const msg = try std.fmt.bufPrint(&buf, "Output format set to {s}\n", .{args});
+        const msg = try std.fmt.bufPrint(&buf, "Output format set to {s}\r\n", .{args});
         try stdout.writeAll(msg);
     } else if (std.mem.eql(u8, cmd, "set")) {
         const parts = try splitOnce(state.allocator, args, ' ');
@@ -513,36 +512,36 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         if (std.mem.eql(u8, parts[0], "keymap")) {
             if (std.mem.eql(u8, parts[1], "emacs")) {
                 state.keymap = .emacs;
-                try stdout.writeAll("Keymap set to emacs\n");
+                try stdout.writeAll("Keymap set to emacs\r\n");
             } else if (std.mem.eql(u8, parts[1], "vi")) {
                 state.keymap = .vi;
                 state.vi_mode = .insert;
-                try stdout.writeAll("Keymap set to vi\n");
+                try stdout.writeAll("Keymap set to vi\r\n");
             } else {
                 const stderr = platform.getStderrHandle();
                 var buf: [256]u8 = undefined;
-                const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\set keymap emacs|vi\n", .{});
+                const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\set keymap emacs|vi\r\n", .{});
                 try stderr.writeAll(msg);
             }
         } else {
             var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Unknown option: {s}\n", .{parts[0]});
+            const msg = try std.fmt.bufPrint(&buf, "Unknown option: {s}\r\n", .{parts[0]});
             try stdout.writeAll(msg);
         }
     } else if (std.mem.eql(u8, cmd, "echo")) {
         var buf: [512]u8 = undefined;
-        const msg = try std.fmt.bufPrint(&buf, "{s}\n", .{args});
+        const msg = try std.fmt.bufPrint(&buf, "{s}\r\n", .{args});
         try stdout.writeAll(msg);
     } else if (std.mem.eql(u8, cmd, "source")) {
         const stderr = platform.getStderrHandle();
-        try stderr.writeAll("Error [GEODE-E2004]: \\source not yet implemented\n");
+        try stderr.writeAll("Error [GEODE-E2004]: \\source not yet implemented\r\n");
     } else if (std.mem.eql(u8, cmd, "connet")) { // Typo detection
         const stderr = platform.getStderrHandle();
-        try stderr.writeAll("Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\n");
+        try stderr.writeAll("Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\r\n");
     } else {
         const stderr = platform.getStderrHandle();
         var buf: [256]u8 = undefined;
-        const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2001]: Unknown command '\\{s}'\n", .{cmd});
+        const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2001]: Unknown command '\\{s}'\r\n", .{cmd});
         try stderr.writeAll(msg);
     }
 }
@@ -552,7 +551,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
 
     // CRITICAL FIX: Move to new line before displaying results
     // This prevents overlapping with the prompt
-    try stdout.writeAll("\n");
+    try stdout.writeAll("\r\n");
 
     // Start timing the query execution
     var timer = try std.time.Timer.start();
@@ -578,14 +577,13 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             const stderr = platform.getStderrHandle();
             try stderr.writeAll("Error: ");
             try stderr.writeAll(schema_response);
-            try stderr.writeAll("\n");
-            try stderr.sync(); // Flush error output
+            try stderr.writeAll("\r\n");
             return;
         }
 
         // Display schema (don't format, just show as JSON for now)
         try stdout.writeAll(schema_response);
-        try stdout.writeAll("\n");
+        try stdout.writeAll("\r\n");
     }
 
     // Format and output the response data based on the current format setting
@@ -600,18 +598,15 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             // Non-query response (status messages), output as-is
             try stdout.writeAll(response);
         }
-        try stdout.writeAll("\n");
+        try stdout.writeAll("\r\n");
     }
 
     // Display timing information
     if (state.show_timing) {
         var buf: [256]u8 = undefined;
-        const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\n", .{duration_ms});
+        const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\r\n", .{duration_ms});
         try stdout.writeAll(timing_msg);
     }
-
-    // CRITICAL FIX: Flush stdout to ensure all output is displayed
-    try stdout.sync();
 }
 
 fn formatQueryResult(stdout: anytype, allocator: std.mem.Allocator, response: []const u8, format: anytype) !void {
@@ -653,7 +648,7 @@ fn formatResultAsCsv(stdout: anytype, allocator: std.mem.Allocator, response: []
                 try stdout.writeAll(col.string);
                 try stdout.writeAll("\"");
             }
-            try stdout.writeAll("\n");
+            try stdout.writeAll("\r\n");
 
             // Data rows
             for (rows.items) |row| {
@@ -685,7 +680,7 @@ fn formatResultAsCsv(stdout: anytype, allocator: std.mem.Allocator, response: []
                         else => {},
                     }
                 }
-                try stdout.writeAll("\n");
+                try stdout.writeAll("\r\n");
             }
             return;
         }
@@ -742,7 +737,7 @@ fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: 
                 for (0..padding) |_| try stdout.writeAll(" ");
                 try stdout.writeAll(" | ");
             }
-            try stdout.writeAll("\n");
+            try stdout.writeAll("\r\n");
 
             // Print separator
             try stdout.writeAll("|");
@@ -751,7 +746,7 @@ fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: 
                 for (0..width) |_| try stdout.writeAll("-");
                 try stdout.writeAll("-|");
             }
-            try stdout.writeAll("\n");
+            try stdout.writeAll("\r\n");
 
             // Print data rows
             for (rows.items) |row| {
@@ -792,7 +787,7 @@ fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: 
                     for (0..padding) |_| try stdout.writeAll(" ");
                     try stdout.writeAll(" | ");
                 }
-                try stdout.writeAll("\n");
+                try stdout.writeAll("\r\n");
             }
             return;
         }

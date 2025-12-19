@@ -1,5 +1,5 @@
-# Multi-stage build for geode database with vendored QUIC+TLS
-# Uses vendored zig-quic and ztls - no external OpenSSL or MsQUIC required
+# Multi-stage build for geode database
+# Uses vendored zig-quic and ztls, requires OpenSSL for crypto operations
 
 # Stage 1: Build Geode
 FROM debian:bookworm-slim AS builder
@@ -7,7 +7,8 @@ FROM debian:bookworm-slim AS builder
 # ARG needs to be declared at the beginning of the stage
 ARG TARGETARCH
 
-# Install build dependencies (no OpenSSL/MsQUIC - using vendored implementations)
+# Install build dependencies
+# Note: libvulkan-dev and glslang-tools removed - GPU acceleration is optional and not available in containers
 RUN apt-get update && apt-get install -y \
     curl \
     xz-utils \
@@ -15,8 +16,7 @@ RUN apt-get update && apt-get install -y \
     git \
     build-essential \
     file \
-    libvulkan-dev \
-    glslang-tools \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy pre-downloaded Zig archive (avoids entropy issues in Docker build)
@@ -40,19 +40,21 @@ WORKDIR /build
 # Copy all source code (includes vendored quic and ztls)
 COPY . .
 
-# Build geode binaries with vendored QUIC+TLS
+# Build geode binaries
 RUN echo "Building with Zig $(zig version)..." && \
-    zig build -Doptimize=ReleaseSafe --summary all 2>&1 | tee /tmp/build.log && \
-    echo "✓ Build successful!" && \
+    zig build -Doptimize=ReleaseSafe --summary all && \
+    test -f /build/zig-out/bin/geode && \
+    echo "✓ Build successful - geode binary created" && \
     (zig build tools -Doptimize=ReleaseSafe --summary all 2>&1 || \
      echo "Note: Some tools may not have built")
 
 # Stage 2: Runtime stage (minimal)
 FROM debian:bookworm-slim AS runtime
 
-# Install runtime dependencies only - no OpenSSL or MsQUIC needed
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/* && \
     useradd -m -u 1000 geode && \
     mkdir -p /data /certs /var/log/geode && \
@@ -72,11 +74,11 @@ WORKDIR /home/geode
 ENV LOG_LEVEL=error
 
 # Expose ports (QUIC-only + metrics)
-EXPOSE 8443/udp 9090/tcp
+EXPOSE 3141/udp 9091/tcp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:8443", "--insecure"]
+    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:3141", "--insecure"]
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]

@@ -131,8 +131,120 @@ fn tcpConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.Tr
     return transport_conn;
 }
 
-const quic_transport = repl_dispatch.Transport{
+// TCP transport (legacy, not used for server communication)
+const tcp_transport = repl_dispatch.Transport{
     .connectFn = tcpConnect,
+};
+
+// QUIC Transport for REPL - proper QUIC/UDP connection
+const QuicTransportConnection = struct {
+    allocator: std.mem.Allocator,
+    client: *quic.QuicClient,
+    stream: *quic.QuicClientStream,
+    owns_client: bool,
+};
+
+fn quicWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !void {
+    const ctx = self.context orelse return error.NotConnected;
+    const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
+    impl.stream.writeAll(data) catch |err| {
+        return err;
+    };
+}
+
+fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
+    const ctx = self.context orelse return error.NotConnected;
+    const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
+
+    // Use polling approach for QUIC (async transport)
+    const start = std.time.milliTimestamp();
+    const timeout_ms: i64 = 30000; // 30 second timeout for REPL
+    while (true) {
+        const line = impl.stream.readLine(max_size) catch |err| {
+            if (err == error.WouldBlock or err == error.EndOfStream) {
+                if (std.time.milliTimestamp() - start >= timeout_ms) return err;
+                impl.client.poll(50) catch {};
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        // Copy line to provided allocator since stream uses internal allocator
+        const result = try allocator.dupe(u8, line);
+        impl.client.allocator.free(line);
+        return result;
+    }
+}
+
+fn quicDeinit(self: *repl_dispatch.TransportConnection) void {
+    const ctx = self.context orelse {
+        if (self.allocator) |alloc| alloc.destroy(self);
+        return;
+    };
+    const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
+    impl.stream.deinit();
+    if (impl.owns_client) {
+        impl.client.deinit();
+        impl.allocator.destroy(impl.client);
+    }
+    impl.allocator.destroy(impl);
+    if (self.allocator) |conn_alloc| conn_alloc.destroy(self);
+}
+
+fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.TransportConnection {
+    const colon_idx = std.mem.lastIndexOf(u8, addr, ":") orelse return error.InvalidAddress;
+    const host = addr[0..colon_idx];
+    const port = try std.fmt.parseInt(u16, addr[colon_idx + 1 ..], 10);
+
+    // Create QUIC client
+    const client = try allocator.create(quic.QuicClient);
+    client.* = quic.QuicClient.init(allocator);
+    errdefer {
+        client.deinit();
+        allocator.destroy(client);
+    }
+
+    // Connect (insecure mode for local development)
+    _ = client.connectInsecure(host, port, true) catch |err| {
+        return err;
+    };
+
+    // Wait for handshake
+    _ = client.waitForHandshake(10) catch |err| {
+        return err;
+    };
+
+    // Get stream
+    var stream = client.getStream() catch |err| {
+        return err;
+    };
+    errdefer stream.deinit();
+
+    // Note: HELLO handshake is done by ClientSession.hello(), not here
+    // This keeps the transport layer separate from the protocol layer
+
+    // Create transport connection wrapper
+    const impl = try allocator.create(QuicTransportConnection);
+    impl.* = .{
+        .allocator = allocator,
+        .client = client,
+        .stream = stream,
+        .owns_client = true,
+    };
+
+    const transport_conn = try allocator.create(repl_dispatch.TransportConnection);
+    transport_conn.* = .{
+        .writeAllFn = quicWriteAll,
+        .readLineFn = quicReadLine,
+        .deinitFn = quicDeinit,
+        .context = impl,
+        .allocator = allocator,
+    };
+    return transport_conn;
+}
+
+const quic_transport = repl_dispatch.Transport{
+    .connectFn = quicConnect,
 };
 
 // Cross-platform file handle helpers

@@ -32,9 +32,7 @@ ruler:
 # Retention configuration
 limits_config:
   retention_period: 744h  # 31 days
-
-chunk_store_config:
-  max_look_back_period: 0s
+  allow_structured_metadata: false
 
 table_manager:
   retention_deletes_enabled: true

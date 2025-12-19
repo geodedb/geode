@@ -90,8 +90,9 @@ pub fn highlight(allocator: std.mem.Allocator, input: []const u8, use_colors: bo
     while (i < input.len) {
         const c = input[i];
 
-        // Meta commands (starting with backslash)
-        if (c == '\\') {
+        // Meta commands (starting with backslash or forward slash at position 0)
+        // Note: check for // comment before treating / as meta-command
+        if (c == '\\' or (c == '/' and i == 0 and (i + 1 >= input.len or input[i + 1] != '/'))) {
             try result.appendSlice(alloc, Color.bright_magenta);
             while (i < input.len and !std.ascii.isWhitespace(input[i])) : (i += 1) {
                 try result.append(alloc, input[i]);

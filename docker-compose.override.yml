@@ -28,7 +28,7 @@ services:
       - "--data-dir"
       - "/data"
       - "--listen"
-      - "0.0.0.0:8443"
+      - "0.0.0.0:3141"
       - "--cert"
       - "/certs/server.crt"
       - "--key"

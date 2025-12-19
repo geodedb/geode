@@ -12,10 +12,34 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
 }
 
 fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
+    // Handle Ctrl+Alt combinations first
+    if (key.ctrl and key.alt) {
+        return switch (key.key) {
+            'a' => .history_first, // Ctrl+Home
+            'e' => .history_last, // Ctrl+End
+            else => .none,
+        };
+    }
+
     if (key.ctrl) {
         return switch (key.key) {
             'c' => .cancel,
-            'd' => if (state.buffer.items.len == 0) .quit else .none,
+            'd' => if (state.buffer.items.len == 0) .quit else .delete_char, // Ctrl+D: delete or EOF
+            'a' => .move_bol, // Home
+            'e' => .move_eol, // End
+            'b' => .move_left, // Left arrow
+            'f' => .move_right, // Right arrow
+            'p' => .history_prev, // Up arrow
+            'n' => .history_next, // Down arrow
+            'l' => .clear_screen, // Ctrl+L
+            else => .none,
+        };
+    }
+
+    if (key.alt) {
+        return switch (key.key) {
+            'b' => .move_word_left, // Ctrl+Left
+            'f' => .move_word_right, // Ctrl+Right
             else => .none,
         };
     }
@@ -71,12 +95,7 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
         },
 
         // Deletion
-        'x' => {
-            if (state.cursor < state.buffer.items.len) {
-                _ = state.buffer.orderedRemove(state.cursor);
-            }
-            return .none;
-        },
+        'x' => return .delete_char_forward, // Delete char at cursor
         'd' => {
             // Wait for motion (simplified: dd deletes line)
             state.pending_operator = 'd';
@@ -178,30 +197,44 @@ fn handleInsertMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
         return .vi_normal_mode;
     }
 
+    // Handle Ctrl+Alt combinations first
+    if (key.ctrl and key.alt) {
+        return switch (key.key) {
+            'a' => .history_first, // Ctrl+Home
+            'e' => .history_last, // Ctrl+End
+            else => .none,
+        };
+    }
+
     // Ctrl keys work in insert mode
     if (key.ctrl) {
         return switch (key.key) {
             'c' => .cancel,
-            'd' => if (state.buffer.items.len == 0) .quit else .none,
-            'w' => blk: {
-                // Delete word backward
-                const start = findWordStart(state.buffer.items, state.cursor);
-                while (state.cursor > start) {
-                    state.cursor -= 1;
-                    _ = state.buffer.orderedRemove(state.cursor);
-                }
-                break :blk .none;
-            },
-            'u' => blk: {
-                // Delete to beginning of line
-                while (state.cursor > 0) {
-                    state.cursor -= 1;
-                    _ = state.buffer.orderedRemove(state.cursor);
-                }
-                break :blk .none;
-            },
+            'd' => if (state.buffer.items.len == 0) .quit else .delete_char, // Ctrl+D: delete or EOF
+            'a' => .move_bol, // Home
+            'e' => .move_eol, // End
+            'b' => .move_left, // Left arrow
+            'f' => .move_right, // Right arrow
+            'p' => .history_prev, // Up arrow
+            'n' => .history_next, // Down arrow
+            'w' => .delete_word_backward, // Ctrl+W: delete word backward
+            'u' => .delete_to_bol, // Ctrl+U: delete to beginning of line
+            'k' => .delete_to_eol, // Ctrl+K: delete to end of line
+            'y' => .yank, // Ctrl+Y: yank
+            'l' => .clear_screen, // Ctrl+L: clear screen
             'i', '\t' => .complete,
             'j', 'm', '\r', '\n' => .execute,
+            0x7f - 'a' + 1 => .delete_char_forward, // Delete key
+            else => .none,
+        };
+    }
+
+    // Alt keys for word movement
+    if (key.alt) {
+        return switch (key.key) {
+            'b' => .move_word_left, // Ctrl+Left / Alt+B
+            'f' => .move_word_right, // Ctrl+Right / Alt+F
+            'd' => .delete_word, // Alt+D: delete word forward
             else => .none,
         };
     }
@@ -213,16 +246,13 @@ fn handleInsertMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
         return .insert;
     }
 
-    // Backspace
-    if (key.key == 0x7f or key.key == 0x08) {
-        if (state.cursor > 0) {
-            state.cursor -= 1;
-            _ = state.buffer.orderedRemove(state.cursor);
-        }
-        return .none;
-    }
-
-    return .none;
+    // Special keys
+    return switch (key.key) {
+        0x7f, 0x08 => .backspace, // Backspace
+        0x05 => .history_first, // Page Up
+        0x06 => .history_last, // Page Down
+        else => .none,
+    };
 }
 
 fn findWordStart(text: []const u8, pos: usize) usize {
