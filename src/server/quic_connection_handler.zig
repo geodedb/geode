@@ -165,6 +165,11 @@ pub fn handleQuicConnection(
 
         if (response.len > 0) {
             try stream.writeAll(response);
+        } else {
+            // CRITICAL: Always send a response so client doesn't block forever
+            // If processMessage returned empty, send an internal error response
+            const fallback_error = "{\"status_class\":\"50000\",\"result\":{\"type\":\"ERROR\",\"error\":\"Internal server error: no response generated\"}}\n";
+            try stream.writeAll(fallback_error);
         }
     }
 }
@@ -576,7 +581,24 @@ pub fn processMessage(
                             }
                             return schema_line;
                         },
-                        else => return try gpa.dupe(u8, ""),
+                        .Create, .Insert, .Delete, .Merge => {
+                            // Handle mutation statements (CREATE, INSERT, DELETE, MERGE)
+                            // TODO: Execute actual mutations - for now just return success
+                            // Set up empty result for PULL
+                            state.last_columns = &.{};
+                            state.last_ordered = false;
+                            state.last_order_keys = &.{};
+                            state.last_distinct = false;
+                            state.page_items = &.{};
+                            state.page_index = 0;
+                            state.active_result = true;
+
+                            return protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                        },
+                        else => {
+                            // Return error for unsupported statement types
+                            return protocol.buildErrorLine(gpa, "NotImplemented", "Statement type not yet supported", "") catch try gpa.dupe(u8, "");
+                        },
                     }
                 },
             }

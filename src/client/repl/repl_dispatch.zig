@@ -205,11 +205,16 @@ pub const ClientSession = struct {
         defer self.allocator.free(msg);
         try self.connection.?.writeAll(msg);
 
-        // Read SCHEMA response and store it
+        // Clear previous response
         if (self.last_response) |resp| {
             self.allocator.free(resp);
+            self.last_response = null;
         }
-        self.last_response = try self.connection.?.readLine(self.allocator, 1 << 16);
+
+        // Read the response - server returns exactly one response per RUN_GQL
+        // (either SCHEMA on success or error response)
+        const response = try self.connection.?.readLine(self.allocator, 1 << 16);
+        self.last_response = response;
     }
 
     pub fn begin(self: *ClientSession) !void {
@@ -257,15 +262,35 @@ pub const ClientSession = struct {
     pub fn pullAll(self: *ClientSession, sink: anytype) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
-        // Send PULL request for results
-        const pull_msg = "{\"type\":\"PULL\",\"request_id\":1,\"page_size\":1000}\n";
+        // Send PULL request for all results at once (page_size:-1)
+        // With page_size:-1, the server returns ALL results in a single response
+        const pull_msg = "{\"type\":\"PULL\",\"request_id\":1,\"page_size\":-1}\n";
         try self.connection.?.writeAll(pull_msg);
 
-        // Read BINDINGS response
-        const response = try self.connection.?.readLine(self.allocator, 1 << 16);
+        // Read the single response containing all results
+        // Note: Server strips "final":true from responses for compatibility,
+        // so we can't rely on that marker. With page_size:-1, we get exactly one response.
+        const response = try self.connection.?.readLine(self.allocator, 1 << 20); // 1MB max
         defer self.allocator.free(response);
 
-        try sink.appendSlice(self.allocator, response);
+        if (response.len > 0) {
+            try sink.appendSlice(self.allocator, response);
+        }
+    }
+
+    /// Drain any pending responses from the connection (cleanup after errors)
+    /// Note: This function attempts to discard stale data but may not fully drain
+    /// since the server strips "final" markers. Use sparingly.
+    pub fn drain(self: *ClientSession) void {
+        if (!self.connected or self.connection == null) return;
+
+        // Try to read and discard a few pending messages
+        // This is a best-effort cleanup, not guaranteed to work perfectly
+        var iterations: usize = 0;
+        while (iterations < 3) : (iterations += 1) {
+            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch break;
+            self.allocator.free(response);
+        }
     }
 };
 
@@ -548,6 +573,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
 
 pub fn executeGql(state: anytype, gql: []const u8) !void {
     const stdout = platform.getStdoutHandle();
+    const stderr = platform.getStderrHandle();
 
     // CRITICAL FIX: Move to new line before displaying results
     // This prevents overlapping with the prompt
@@ -557,48 +583,60 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     var timer = try std.time.Timer.start();
 
     // Execute query via QUIC
-    try state.session.runGql(gql);
+    state.session.runGql(gql) catch |err| {
+        try stderr.writeAll("Error executing query: ");
+        try stderr.writeAll(@errorName(err));
+        try stderr.writeAll("\r\n");
+        return;
+    };
 
-    // Get response data from QUIC client
+    // Check if the schema response indicates an error - if so, don't PULL
+    var has_error = false;
+    if (state.session.last_response) |schema_response| {
+        // Check for error status codes (4xxxx or 5xxxx)
+        if (std.mem.indexOf(u8, schema_response, "\"status_class\":\"4") != null or
+            std.mem.indexOf(u8, schema_response, "\"status_class\":\"5") != null)
+        {
+            has_error = true;
+        }
+    }
+
+    // Get response data from QUIC client (only if no error in schema)
     var response_data = std.ArrayList(u8).initCapacity(state.allocator, 0) catch unreachable;
     defer response_data.deinit(state.allocator);
 
-    // Use pullAll to get the complete response
-    try state.session.pullAll(&response_data);
+    if (!has_error) {
+        // Use pullAll to get the complete response
+        state.session.pullAll(&response_data) catch |err| {
+            // Check if we at least got a schema response with an error
+            if (state.session.last_response) |schema_response| {
+                if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
+                    return; // Error was displayed
+                }
+            }
+            try stderr.writeAll("Error fetching results: ");
+            try stderr.writeAll(@errorName(err));
+            try stderr.writeAll("\r\n");
+            return;
+        };
+    }
 
     // Stop timing and calculate duration
     const duration_ns = timer.read();
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
 
-    // Output schema response first (if we have last_response from runGql)
+    // Check schema response for errors first
     if (state.session.last_response) |schema_response| {
-        // Check for errors in schema response
-        if (std.mem.indexOf(u8, schema_response, "\"type\":\"ERROR\"") != null) {
-            const stderr = platform.getStderrHandle();
-            try stderr.writeAll("Error: ");
-            try stderr.writeAll(schema_response);
-            try stderr.writeAll("\r\n");
+        // Parse the response to extract the result
+        if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
+            // Error was found and displayed, don't continue
             return;
         }
-
-        // Display schema (don't format, just show as JSON for now)
-        try stdout.writeAll(schema_response);
-        try stdout.writeAll("\r\n");
     }
 
-    // Format and output the response data based on the current format setting
+    // Format and output the response data (BINDINGS/result)
     if (response_data.items.len > 0) {
-        const response = response_data.items;
-
-        // Check if this is a query result that should be formatted
-        if (std.mem.indexOf(u8, response, "\"columns\":") != null and std.mem.indexOf(u8, response, "\"data\":") != null) {
-            // Format and display query results based on current format setting
-            try formatQueryResult(stdout, state.allocator, response, state.format);
-        } else {
-            // Non-query response (status messages), output as-is
-            try stdout.writeAll(response);
-        }
-        try stdout.writeAll("\r\n");
+        _ = try extractAndDisplayResult(state.allocator, response_data.items, stdout, stderr, state.format);
     }
 
     // Display timing information
@@ -606,6 +644,375 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
         var buf: [256]u8 = undefined;
         const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\r\n", .{duration_ms});
         try stdout.writeAll(timing_msg);
+    }
+}
+
+/// Extract the result from a response and display it appropriately
+/// Returns true if an error was found and displayed
+fn extractAndDisplayResult(allocator: std.mem.Allocator, response: []const u8, stdout: anytype, stderr: anytype, format: anytype) !bool {
+    // Parse the JSON response
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch {
+        // If parsing fails, output as-is
+        try stdout.writeAll(response);
+        try stdout.writeAll("\r\n");
+        return false;
+    };
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+
+    // Check status_class for errors (non-00xxx codes indicate errors)
+    if (root.get("status_class")) |status_value| {
+        const status = status_value.string;
+        if (status.len >= 2 and !std.mem.startsWith(u8, status, "00")) {
+            // Error response - extract and display the error
+            if (root.get("result")) |result_value| {
+                if (result_value == .object) {
+                    if (result_value.object.get("error")) |error_value| {
+                        try stderr.writeAll("Error: ");
+                        try stderr.writeAll(error_value.string);
+                        try stderr.writeAll("\r\n");
+                        return true;
+                    }
+                }
+            }
+            // Generic error with status code
+            try stderr.writeAll("Error (");
+            try stderr.writeAll(status);
+            try stderr.writeAll(")\r\n");
+            return true;
+        }
+    }
+
+    // Extract and display the result
+    if (root.get("result")) |result_value| {
+        if (result_value == .object) {
+            const result_obj = result_value.object;
+
+            // Check result type
+            if (result_obj.get("type")) |type_value| {
+                const result_type = type_value.string;
+
+                // Skip SCHEMA responses silently (they're metadata)
+                if (std.mem.eql(u8, result_type, "SCHEMA")) {
+                    return false;
+                }
+
+                // Handle BINDINGS (query results with rows)
+                if (std.mem.eql(u8, result_type, "BINDINGS")) {
+                    if (result_obj.get("rows")) |rows_value| {
+                        try displayRows(allocator, rows_value, stdout, format);
+                    }
+                    return false;
+                }
+
+                // Handle RESULT type (may have rows or error)
+                if (std.mem.eql(u8, result_type, "RESULT")) {
+                    if (result_obj.get("error")) |error_value| {
+                        try stderr.writeAll("Error: ");
+                        try stderr.writeAll(error_value.string);
+                        try stderr.writeAll("\r\n");
+                        return true;
+                    }
+                    if (result_obj.get("rows")) |rows_value| {
+                        try displayRows(allocator, rows_value, stdout, format);
+                    }
+                    return false;
+                }
+            }
+
+            // Unknown result type - pretty print the result object
+            try prettyPrintJson(allocator, result_value, stdout, 0);
+            try stdout.writeAll("\r\n");
+        }
+    }
+
+    return false;
+}
+
+/// Display rows from a query result
+fn displayRows(allocator: std.mem.Allocator, rows_value: std.json.Value, stdout: anytype, format: anytype) !void {
+    if (rows_value != .array) return;
+
+    const rows = rows_value.array;
+    if (rows.items.len == 0) {
+        try stdout.writeAll("(0 rows)\r\n");
+        return;
+    }
+
+    switch (format) {
+        .table => try displayRowsAsTable(allocator, rows, stdout),
+        .csv => try displayRowsAsCsv(allocator, rows, stdout),
+        .json => {
+            // Pretty print the rows array
+            try prettyPrintJson(allocator, rows_value, stdout, 0);
+            try stdout.writeAll("\r\n");
+        },
+    }
+
+    // Show row count
+    var buf: [64]u8 = undefined;
+    const count_msg = std.fmt.bufPrint(&buf, "({d} row{s})\r\n", .{ rows.items.len, if (rows.items.len == 1) "" else "s" }) catch return;
+    try stdout.writeAll(count_msg);
+}
+
+/// Display rows as a formatted table
+fn displayRowsAsTable(allocator: std.mem.Allocator, rows: std.json.Array, stdout: anytype) !void {
+    if (rows.items.len == 0) return;
+
+    // Get column names from first row (assuming all rows have same keys)
+    const first_row = rows.items[0];
+    if (first_row != .object) {
+        // Not an object row, fall back to JSON
+        try prettyPrintJson(allocator, std.json.Value{ .array = rows }, stdout, 0);
+        return;
+    }
+
+    const keys = first_row.object.keys();
+    if (keys.len == 0) return;
+
+    // Calculate column widths
+    var col_widths = try allocator.alloc(usize, keys.len);
+    defer allocator.free(col_widths);
+
+    for (keys, 0..) |key, i| {
+        col_widths[i] = key.len;
+    }
+
+    // Check each row for max widths
+    for (rows.items) |row| {
+        if (row != .object) continue;
+        for (keys, 0..) |key, i| {
+            if (row.object.get(key)) |val| {
+                const width = getValueDisplayWidth(val);
+                col_widths[i] = @max(col_widths[i], @min(width, 50)); // Cap at 50 chars
+            }
+        }
+    }
+
+    // Print header
+    try stdout.writeAll("| ");
+    for (keys, 0..) |key, i| {
+        try stdout.writeAll(key);
+        const padding = col_widths[i] -| key.len;
+        for (0..padding) |_| try stdout.writeAll(" ");
+        try stdout.writeAll(" | ");
+    }
+    try stdout.writeAll("\r\n");
+
+    // Print separator
+    try stdout.writeAll("|");
+    for (col_widths) |width| {
+        try stdout.writeAll("-");
+        for (0..width) |_| try stdout.writeAll("-");
+        try stdout.writeAll("-|");
+    }
+    try stdout.writeAll("\r\n");
+
+    // Print data rows
+    for (rows.items) |row| {
+        if (row != .object) continue;
+        try stdout.writeAll("| ");
+        for (keys, 0..) |key, i| {
+            var val_buf: [256]u8 = undefined;
+            var printed_len: usize = 0;
+            if (row.object.get(key)) |val| {
+                const str = formatValueCompact(&val_buf, val);
+                const display_str = if (str.len > col_widths[i]) str[0..col_widths[i]] else str;
+                try stdout.writeAll(display_str);
+                printed_len = display_str.len;
+            }
+            const padding = col_widths[i] -| printed_len;
+            for (0..padding) |_| try stdout.writeAll(" ");
+            try stdout.writeAll(" | ");
+        }
+        try stdout.writeAll("\r\n");
+    }
+}
+
+/// Display rows as CSV
+fn displayRowsAsCsv(allocator: std.mem.Allocator, rows: std.json.Array, stdout: anytype) !void {
+    _ = allocator;
+    if (rows.items.len == 0) return;
+
+    // Get column names from first row
+    const first_row = rows.items[0];
+    if (first_row != .object) return;
+
+    const keys = first_row.object.keys();
+
+    // Print header
+    for (keys, 0..) |key, i| {
+        if (i > 0) try stdout.writeAll(",");
+        try stdout.writeAll(key);
+    }
+    try stdout.writeAll("\r\n");
+
+    // Print data rows
+    for (rows.items) |row| {
+        if (row != .object) continue;
+        for (keys, 0..) |key, i| {
+            if (i > 0) try stdout.writeAll(",");
+            var val_buf: [256]u8 = undefined;
+            if (row.object.get(key)) |val| {
+                const str = formatValueCompact(&val_buf, val);
+                // Escape quotes in CSV
+                if (std.mem.indexOf(u8, str, "\"") != null or std.mem.indexOf(u8, str, ",") != null) {
+                    try stdout.writeAll("\"");
+                    for (str) |c| {
+                        if (c == '"') {
+                            try stdout.writeAll("\"\"");
+                        } else {
+                            try stdout.writeAll(&[_]u8{c});
+                        }
+                    }
+                    try stdout.writeAll("\"");
+                } else {
+                    try stdout.writeAll(str);
+                }
+            }
+        }
+        try stdout.writeAll("\r\n");
+    }
+}
+
+/// Get the display width of a JSON value
+fn getValueDisplayWidth(val: std.json.Value) usize {
+    return switch (val) {
+        .string => |s| s.len,
+        .integer => 12,
+        .float => 12,
+        .number_string => |s| s.len,
+        .bool => |b| if (b) 4 else 5,
+        .null => 4,
+        .object => 40, // Compact object representation (nodes with properties)
+        .array => 20, // Compact array representation
+    };
+}
+
+/// Format a JSON value compactly for table display
+fn formatValueCompact(buf: []u8, val: std.json.Value) []const u8 {
+    switch (val) {
+        .string => |s| return s,
+        .integer => |n| {
+            return std.fmt.bufPrint(buf, "{d}", .{n}) catch "?";
+        },
+        .float => |f| {
+            return std.fmt.bufPrint(buf, "{d:.2}", .{f}) catch "?";
+        },
+        .number_string => |s| return s,
+        .bool => |b| return if (b) "true" else "false",
+        .null => return "null",
+        .object => |obj| {
+            // Compact object display for nodes - show just properties, not label wrapper
+            if (obj.get("id")) |id_val| {
+                if (obj.get("labels")) |_| {
+                    // Node-like object - get id as UUIDv7-style hex
+                    const id_num: u64 = switch (id_val) {
+                        .integer => |n| @bitCast(n),
+                        else => 0,
+                    };
+
+                    // Check for properties and show them
+                    if (obj.get("properties")) |props_val| {
+                        if (props_val == .object) {
+                            const props = props_val.object;
+                            // Show id and name if available
+                            if (props.get("name")) |name_val| {
+                                if (name_val == .string) {
+                                    return std.fmt.bufPrint(buf, "{{id:\"{x:0>16}\", name:\"{s}\"}}", .{ id_num, name_val.string }) catch "{...}";
+                                }
+                            }
+                        }
+                    }
+
+                    return std.fmt.bufPrint(buf, "{{id:\"{x:0>16}\"}}", .{id_num}) catch "{...}";
+                }
+            }
+            return "{...}";
+        },
+        .array => |arr| {
+            if (arr.items.len == 0) return "[]";
+            return std.fmt.bufPrint(buf, "[{d} items]", .{arr.items.len}) catch "[...]";
+        },
+    }
+}
+
+/// Pretty print a JSON value with indentation
+fn prettyPrintJson(allocator: std.mem.Allocator, value: std.json.Value, writer: anytype, indent: usize) !void {
+    const indent_str = "  ";
+
+    switch (value) {
+        .object => |obj| {
+            if (obj.count() == 0) {
+                try writer.writeAll("{}");
+                return;
+            }
+            try writer.writeAll("{\r\n");
+            var first = true;
+            var iter = obj.iterator();
+            while (iter.next()) |entry| {
+                if (!first) try writer.writeAll(",\r\n");
+                first = false;
+                for (0..indent + 1) |_| try writer.writeAll(indent_str);
+                try writer.writeAll("\"");
+                try writer.writeAll(entry.key_ptr.*);
+                try writer.writeAll("\": ");
+                try prettyPrintJson(allocator, entry.value_ptr.*, writer, indent + 1);
+            }
+            try writer.writeAll("\r\n");
+            for (0..indent) |_| try writer.writeAll(indent_str);
+            try writer.writeAll("}");
+        },
+        .array => |arr| {
+            if (arr.items.len == 0) {
+                try writer.writeAll("[]");
+                return;
+            }
+            try writer.writeAll("[\r\n");
+            for (arr.items, 0..) |item, i| {
+                if (i > 0) try writer.writeAll(",\r\n");
+                for (0..indent + 1) |_| try writer.writeAll(indent_str);
+                try prettyPrintJson(allocator, item, writer, indent + 1);
+            }
+            try writer.writeAll("\r\n");
+            for (0..indent) |_| try writer.writeAll(indent_str);
+            try writer.writeAll("]");
+        },
+        .string => |s| {
+            try writer.writeAll("\"");
+            // Escape special characters
+            for (s) |c| {
+                switch (c) {
+                    '"' => try writer.writeAll("\\\""),
+                    '\\' => try writer.writeAll("\\\\"),
+                    '\n' => try writer.writeAll("\\n"),
+                    '\r' => try writer.writeAll("\\r"),
+                    '\t' => try writer.writeAll("\\t"),
+                    else => try writer.writeAll(&[_]u8{c}),
+                }
+            }
+            try writer.writeAll("\"");
+        },
+        .integer => |n| {
+            var buf: [32]u8 = undefined;
+            const str = std.fmt.bufPrint(&buf, "{d}", .{n}) catch return;
+            try writer.writeAll(str);
+        },
+        .float => |f| {
+            var buf: [32]u8 = undefined;
+            const str = std.fmt.bufPrint(&buf, "{d}", .{f}) catch return;
+            try writer.writeAll(str);
+        },
+        .bool => |b| {
+            try writer.writeAll(if (b) "true" else "false");
+        },
+        .null => {
+            try writer.writeAll("null");
+        },
+        .number_string => |s| {
+            try writer.writeAll(s);
+        },
     }
 }
 

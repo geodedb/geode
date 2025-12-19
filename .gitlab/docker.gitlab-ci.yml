@@ -1,0 +1,189 @@
+stages:
+  - build
+  - docker
+  - publish
+
+variables:
+  DOCKER_BUILDKIT: 1
+  DOCKER_DRIVER: overlay2
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  ZIG_VERSION: "0.15.1"
+  ZIG_ARCH: "x86_64"
+  DEB_DIST: "stable"
+  DEB_COMPONENT: "main"
+  PACKAGE_NAME: "geode"
+
+.binary-build:
+  stage: build
+  image: debian:bookworm-slim
+  variables:
+    GIT_STRATEGY: fetch
+  before_script:
+    - apt-get update
+    - apt-get install -y curl xz-utils ca-certificates build-essential pkg-config dpkg-dev git
+    - update-ca-certificates
+    - |
+      set -euo pipefail
+      DETECTED_ARCH="${ZIG_ARCH:-$(uname -m)}"
+      case "$DETECTED_ARCH" in
+        x86_64|amd64) ZIG_DL_ARCH="x86_64" ;;
+        aarch64|arm64) ZIG_DL_ARCH="aarch64" ;;
+        *) echo "Unsupported architecture: $DETECTED_ARCH" >&2; exit 1 ;;
+      esac
+      ZIG_TARBALL="zig-linux-${ZIG_DL_ARCH}-${ZIG_VERSION}.tar.xz"
+      curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_TARBALL}" -o "${ZIG_TARBALL}"
+      tar -xf "${ZIG_TARBALL}"
+      mv "zig-linux-${ZIG_DL_ARCH}-${ZIG_VERSION}" /opt/zig
+      export PATH="/opt/zig:$PATH"
+      zig version
+  script:
+    - zig build -Doptimize=ReleaseSafe
+    - mkdir -p artifacts/zig-out
+    - cp -r zig-out/* artifacts/zig-out/
+    - |
+      set -euo pipefail
+      VERSION="${CI_COMMIT_TAG:-0.0.0+${CI_COMMIT_SHORT_SHA}}"
+      ARCH="$(dpkg --print-architecture)"
+      PKG_ROOT="build/deb/pkgroot"
+      mkdir -p "${PKG_ROOT}/DEBIAN" "${PKG_ROOT}/usr/local/bin"
+      cp zig-out/bin/* "${PKG_ROOT}/usr/local/bin/"
+      cat > "${PKG_ROOT}/DEBIAN/control" <<'EOF'
+      Package: ${PACKAGE_NAME}
+      Version: ${VERSION}
+      Section: database
+      Priority: optional
+      Architecture: ${ARCH}
+      Maintainer: ${DEB_MAINTAINER:-Geode CI}
+      Description: Geode database binary build
+      EOF
+      dpkg-deb --build "${PKG_ROOT}" "build/deb/${PACKAGE_NAME}_${VERSION}_${ARCH}.deb"
+    - mkdir -p artifacts/deb
+    - cp build/deb/*.deb artifacts/deb/
+  artifacts:
+    paths:
+      - artifacts/zig-out/
+      - artifacts/deb/*.deb
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+
+binaries-build:
+  extends: .binary-build
+
+.debian-publish:
+  stage: publish
+  image: debian:bookworm-slim
+  needs:
+    - job: binaries-build
+      artifacts: true
+  before_script:
+    - apt-get update
+    - apt-get install -y dpkg-dev curl gzip
+  script:
+    - |
+      set -euo pipefail
+      ARCH="$(dpkg --print-architecture)"
+      PKG_LETTER="$(printf %.1s "${PACKAGE_NAME}")"
+      POOL_PATH="repo/pool/${DEB_COMPONENT}/${PKG_LETTER}/${PACKAGE_NAME}"
+      DIST_PATH="repo/dists/${DEB_DIST}/${DEB_COMPONENT}/binary-${ARCH}"
+
+      mkdir -p "${POOL_PATH}"
+      cp artifacts/deb/*.deb "${POOL_PATH}/"
+
+      mkdir -p "${DIST_PATH}"
+      dpkg-scanpackages --arch "${ARCH}" repo/pool > "${DIST_PATH}/Packages"
+      gzip -fk "${DIST_PATH}/Packages"
+
+      cat > "repo/dists/${DEB_DIST}/Release" <<'EOF'
+      Origin: ${PACKAGE_NAME}
+      Label: ${PACKAGE_NAME}
+      Suite: ${DEB_DIST}
+      Codename: ${DEB_DIST}
+      Architectures: ${ARCH}
+      Components: ${DEB_COMPONENT}
+      Description: ${PACKAGE_NAME} Debian repository
+      EOF
+
+      for pkg in ${POOL_PATH}/*.deb; do
+        curl --fail --show-error --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$pkg" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/debian/pool/${DEB_COMPONENT}/${PKG_LETTER}/${PACKAGE_NAME}/$(basename "$pkg")"
+      done
+
+      for meta in \
+        "${DIST_PATH}/Packages" \
+        "${DIST_PATH}/Packages.gz" \
+        "repo/dists/${DEB_DIST}/Release"; do
+        DEST_PATH="$(echo "$meta" | sed 's#^repo/##')"
+        curl --fail --show-error --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$meta" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/debian/${DEST_PATH}"
+      done
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_TAG'
+
+debian-publish:
+  extends: .debian-publish
+
+.docker-build-template:
+  image: docker:cli
+  stage: docker
+  services:
+    - name: docker:dind
+      alias: docker
+      command: ["--tls=false"]
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - |
+      IMAGE_TAG="$CI_COMMIT_REF_SLUG"
+      if [[ -n "$VARIANT_SUFFIX" ]]; then
+        IMAGE_TAG="${CI_COMMIT_REF_SLUG}-${VARIANT_SUFFIX}"
+      fi
+
+      echo "Building ${DOCKERFILE} -> ${CI_REGISTRY_IMAGE}:${IMAGE_TAG}"
+      docker build --pull -f "$DOCKERFILE" -t "$CI_REGISTRY_IMAGE:${IMAGE_TAG}" .
+
+      echo "Pushing ${CI_REGISTRY_IMAGE}:${IMAGE_TAG}"
+      docker push "$CI_REGISTRY_IMAGE:${IMAGE_TAG}"
+
+      if [[ "$CI_COMMIT_BRANCH" == "$CI_DEFAULT_BRANCH" && -n "$RELEASE_TAGS" ]]; then
+        for tag in $RELEASE_TAGS; do
+          echo "Tagging default branch build as ${CI_REGISTRY_IMAGE}:${tag}"
+          docker tag "$CI_REGISTRY_IMAGE:${IMAGE_TAG}" "$CI_REGISTRY_IMAGE:${tag}"
+          docker push "$CI_REGISTRY_IMAGE:${tag}"
+        done
+      fi
+  rules:
+    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+
+docker-build:
+  extends: .docker-build-template
+  parallel:
+    matrix:
+      - DOCKERFILE: Dockerfile.ci
+        VARIANT_SUFFIX: "ci"
+        RELEASE_TAGS: "latest ci"
+      - DOCKERFILE: Dockerfile.ci.alpine
+        VARIANT_SUFFIX: "ci-alpine"
+        RELEASE_TAGS: "alpine"
+      - DOCKERFILE: Dockerfile.ci.gpu
+        VARIANT_SUFFIX: "ci-gpu"
+        RELEASE_TAGS: "gpu-ci"
+      - DOCKERFILE: Dockerfile
+        VARIANT_SUFFIX: "full"
+        RELEASE_TAGS: "full"
+      - DOCKERFILE: Dockerfile.dev
+        VARIANT_SUFFIX: "dev"
+        RELEASE_TAGS: "dev"
+      - DOCKERFILE: Dockerfile.gpu
+        VARIANT_SUFFIX: "gpu"
+        RELEASE_TAGS: "gpu"
+      - DOCKERFILE: Dockerfile.prod
+        VARIANT_SUFFIX: "prod"
+        RELEASE_TAGS: "prod"
+      - DOCKERFILE: Dockerfile.reliable
+        VARIANT_SUFFIX: "reliable"
+        RELEASE_TAGS: "reliable"
+      - DOCKERFILE: Dockerfile.simple
+        VARIANT_SUFFIX: "simple"
+        RELEASE_TAGS: "simple"

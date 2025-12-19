@@ -1,6 +1,5 @@
 {
   "zig.path": "zig",
-  "zig.buildOnSave": false,
   "zig.buildFilePath": "${workspaceFolder}/build.zig",
   "rust-analyzer.check.command": "clippy",
   "python.defaultInterpreterPath": "/usr/bin/python3",
@@ -22,5 +21,6 @@
     "rust": true,
     "go": true,
     "python": true
-  }
+  },
+  "zig.buildOnSaveProvider": false
 }

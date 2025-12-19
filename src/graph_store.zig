@@ -1,5 +1,19 @@
 const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
+const uuid = @import("uuid.zig");
+
+/// Generate a time-based unique 64-bit ID (UUIDv7-compatible lower 64 bits)
+/// Structure: 48-bit timestamp (ms) | 16-bit random
+/// This provides time-sortable, unique IDs without changing the NodeId type
+fn generateTimeBasedId() u64 {
+    const timestamp_ms: u64 = @intCast(std.time.milliTimestamp());
+    // Use nanosecond timestamp as seed for randomness
+    const seed: u64 = @intCast(std.time.nanoTimestamp());
+    var prng = std.Random.DefaultPrng.init(seed);
+    const random_bits: u16 = prng.random().int(u16);
+    // Combine: 48-bit timestamp | 16-bit random
+    return (timestamp_ms << 16) | @as(u64, random_bits);
+}
 
 // CANARY: FLE_STORAGE_INTEGRATION - Field-Level Encryption Storage Hooks
 // CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FieldLevelEncryption"; ASPECT=STORAGE; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
@@ -159,8 +173,8 @@ pub const GraphStore = struct {
     }
 
     pub fn createNode(self: *GraphStore, labels: [][]const u8) !u64 {
-        const id = self.next_node_id;
-        self.next_node_id += 1;
+        // Generate UUIDv7-style time-based unique ID
+        const id = generateTimeBasedId();
 
         const labels_copy = try self.allocator.alloc([]const u8, labels.len);
         for (labels, 0..) |label, i| {
@@ -344,8 +358,8 @@ pub const GraphStore = struct {
     }
 
     pub fn createEdge(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8) !u64 {
-        const id = self.next_edge_id;
-        self.next_edge_id += 1;
+        // Generate UUIDv7-style time-based unique ID
+        const id = generateTimeBasedId();
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
 

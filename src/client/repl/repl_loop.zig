@@ -119,6 +119,7 @@ pub const ReplState = struct {
     multi_line_buffer: std.ArrayList(u8),
     is_continuation: bool,
     in_bracketed_paste: bool = false, // Track bracketed paste mode
+    paste_strip_leading: bool = false, // Track if we should strip leading whitespace from paste
     content_changed: bool = true, // Track if buffer content changed (need full re-render)
     last_buffer_len: usize = 0, // Track previous buffer length
     last_visual_lines: usize = 0, // Track previous render's visual line count
@@ -398,6 +399,7 @@ fn processInput(state: *ReplState) !void {
             // Check for bracketed paste start sequence: \x1b[200~
             if (i + 5 < n and buf[i] == 0x1b and buf[i + 1] == '[' and buf[i + 2] == '2' and buf[i + 3] == '0' and buf[i + 4] == '0' and buf[i + 5] == '~') {
                 state.in_bracketed_paste = true;
+                state.paste_strip_leading = true; // Strip leading whitespace from first line
                 i += 6;
                 continue;
             }
@@ -405,6 +407,7 @@ fn processInput(state: *ReplState) !void {
             // Check for bracketed paste end sequence: \x1b[201~
             if (i + 5 < n and buf[i] == 0x1b and buf[i + 1] == '[' and buf[i + 2] == '2' and buf[i + 3] == '0' and buf[i + 4] == '1' and buf[i + 5] == '~') {
                 state.in_bracketed_paste = false;
+                state.paste_strip_leading = false;
                 i += 6;
                 continue;
             }
@@ -417,6 +420,16 @@ fn processInput(state: *ReplState) !void {
                 if (c == '\r') {
                     i += 1;
                     continue;
+                }
+                // Strip leading whitespace from first line of paste
+                if (state.paste_strip_leading) {
+                    if (c == ' ' or c == '\t') {
+                        // Skip leading whitespace
+                        i += 1;
+                        continue;
+                    }
+                    // Non-whitespace character found, stop stripping
+                    state.paste_strip_leading = false;
                 }
                 // Insert printable characters, tabs, and newlines
                 if (c == '\n' or c == '\t' or c >= 0x20) {
