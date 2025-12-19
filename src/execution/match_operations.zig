@@ -608,6 +608,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     var left_node_var: ?[]const u8 = null;
     var right_node_var: ?[]const u8 = null;
     var rel_var: ?[]const u8 = null;
+    var right_labels: [][]const u8 = &.{}; // Labels required on right/target node
+    var right_props: ?[]ast.Property = null; // Properties required on right/target node
 
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PatternExtraction; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
     // Variable-length path pattern support
@@ -640,6 +642,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
             // Get right node info
             right_node_var = hop.right.name;
+            right_labels = hop.right.labels; // Extract right node labels for filtering
+            right_props = hop.right.props; // Extract right node properties for filtering
 
             // For now, use left node as the main match variable
             match_variable = left_node_var;
@@ -655,12 +659,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
     // CANARY: REQ=REQ-GQL-PATH-ASSIGNMENT; FEATURE="PathVariableAssignment"; ASPECT=ShortestPathBinding; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
     // Handle path variable assignment: MATCH p = shortestPath((a)-[*]-(c))
+    // Only trigger for actual shortestPath/allShortestPaths function calls, not regular path assignments
     if (q.path_variable) |path_var| {
         // This is a path assignment - check if it's a shortestPath pattern
         if (q.match.chains.len > 0) {
             const chain = q.match.chains[0];
             if (chain.name) |chain_name| {
-                if (std.mem.eql(u8, chain_name, path_var) and chain.hops.len > 0) {
+                // Only use shortestPath handling if the chain is explicitly marked as a shortest path pattern
+                if (chain.is_shortest and std.mem.eql(u8, chain_name, path_var) and chain.hops.len > 0) {
                     // This is a shortestPath pattern assignment
                     // Build environment from inline_let_bindings (which come from WITH clause)
                     const env = Env{
@@ -1432,6 +1438,61 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         const right_node_id = path.nodes.items[path.nodes.items.len - 1];
                         const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
 
+                        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=LabelFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-18
+                        // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[*]->(b:Product))
+                        if (right_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (right_node_ptr.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-18
+                        // Filter right node by inline properties if specified
+                        if (right_props) |props| {
+                            var passes_props = true;
+                            for (props) |prop| {
+                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => Value{ .Null = {} },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    };
+                                    const prop_env = eval.Env{
+                                        .names = param_names,
+                                        .values = param_values,
+                                        .allocator = allocator,
+                                    };
+                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                                        passes_props = false;
+                                        break;
+                                    };
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        passes_props = false;
+                                        break;
+                                    }
+                                } else {
+                                    passes_props = false;
+                                    break;
+                                }
+                            }
+                            if (!passes_props) continue;
+                        }
+
                         // CANARY: REQ=REQ-GQL-167; FEATURE="Variable-Length Path Binding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
                         // For variable-length paths, bind the entire path or the last edge
                         const last_edge_id = if (path.edges.items.len > 0) path.edges.items[path.edges.items.len - 1] else continue;
@@ -1469,20 +1530,25 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
                         if (chain_path_var) |var_name| {
                             // Build the path value from the PathInfo
-                            var path_nodes = try allocator.alloc(*const graph_store.Node, path.nodes.items.len);
-                            var path_edges = try allocator.alloc(*const graph_store.Edge, path.edges.items.len);
+                            // Use dynamic arrays to handle missing nodes/edges gracefully
+                            var path_nodes_list = std.ArrayList(*const graph_store.Node).initCapacity(allocator, path.nodes.items.len) catch unreachable;
+                            var path_edges_list = std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len) catch unreachable;
 
-                            for (path.nodes.items, 0..) |node_id, i| {
-                                path_nodes[i] = store.nodes.getPtr(node_id) orelse continue;
+                            for (path.nodes.items) |node_id| {
+                                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                                    path_nodes_list.append(allocator, node_ptr) catch {};
+                                }
                             }
-                            for (path.edges.items, 0..) |edge_id, i| {
-                                path_edges[i] = store.edges.getPtr(edge_id) orelse continue;
+                            for (path.edges.items) |edge_id| {
+                                if (store.edges.getPtr(edge_id)) |path_edge_ptr| {
+                                    path_edges_list.append(allocator, path_edge_ptr) catch {};
+                                }
                             }
 
                             env_names[env_idx] = var_name;
                             env_values[env_idx] = Value{ .Path = .{
-                                .nodes = path_nodes,
-                                .edges = path_edges,
+                                .nodes = path_nodes_list.toOwnedSlice(allocator) catch &.{},
+                                .edges = path_edges_list.toOwnedSlice(allocator) catch &.{},
                             } };
                             env_idx += 1;
                         }
@@ -1555,6 +1621,61 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node
                         const right_node_ptr = store.nodes.getPtr(edge.to_id) orelse continue;
+
+                        // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-18
+                        // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[:REL]->(b:Product))
+                        if (right_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (right_node_ptr.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-18
+                        // Filter right node by inline properties if specified
+                        if (right_props) |props| {
+                            var passes_props = true;
+                            for (props) |prop| {
+                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => Value{ .Null = {} },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    };
+                                    const prop_env = eval.Env{
+                                        .names = param_names,
+                                        .values = param_values,
+                                        .allocator = allocator,
+                                    };
+                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                                        passes_props = false;
+                                        break;
+                                    };
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        passes_props = false;
+                                        break;
+                                    }
+                                } else {
+                                    passes_props = false;
+                                    break;
+                                }
+                            }
+                            if (!passes_props) continue;
+                        }
 
                         // Create environment with all matched elements
                         var env_count: usize = 0;

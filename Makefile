@@ -33,7 +33,7 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 .PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset go-build go-test go-clean go-example fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
-.PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test quic-test-msquic client-test-python client-test-go client-test-rust client-test-zig rust-build-docker rust-test-docker
+.PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-python client-test-go client-test-rust client-test-zig rust-build-docker rust-test-docker
 .PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
 .PHONY: geodetestlab geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
 .PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
@@ -58,7 +58,7 @@ help:
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test        - Run all tests (Zig + Go + QUIC + clients)"
-	@echo "  make quic-test   - Run QUIC/msquic tests"
+	@echo "  make quic-test   - Run QUIC protocol tests"
 	@echo "  make client-test-python - Test Python client"
 	@echo "  make client-test-go     - Test Go client"
 	@echo "  make client-test-rust   - Test Rust client"
@@ -98,7 +98,7 @@ help:
 	@echo "  make help        - Show this help"
 	@echo ""
 	@echo "Dependency targets:"
-	@echo "  make deps        - Install all system dependencies (libmsquic, etc.)"
+	@echo "  make deps        - Install all system dependencies"
 	@echo "  make deps-check  - Verify all dependencies are installed"
 	@echo ""
 
@@ -110,14 +110,6 @@ deps:
 # Check if dependencies are installed
 deps-check:
 	@echo "=== Checking Geode Dependencies ==="
-	@echo -n "Checking libmsquic... "
-	@if ldconfig -p 2>/dev/null | grep -q libmsquic; then \
-		echo "✓ installed"; \
-	else \
-		echo "✗ missing"; \
-		echo "Run 'make deps' to install dependencies"; \
-		exit 1; \
-	fi
 	@echo -n "Checking Zig... "
 	@if command -v zig >/dev/null 2>&1; then \
 		echo "✓ $(shell zig version)"; \
@@ -213,26 +205,26 @@ test:
 	$(ZIG) build test $(ZIG_FLAGS)
 	@echo "Running Go tests..."
 	$(MAKE) go-test
-	@echo "Running QUIC/msquic tests..."
+	@echo "Running QUIC protocol tests..."
 	@$(MAKE) quic-test || echo "⚠ QUIC tests skipped (may require server)"
 	@echo "Running client tests..."
 	@$(MAKE) client-test-python || echo "⚠ Python client tests skipped"
 	@$(MAKE) client-test-go || echo "⚠ Go client tests skipped"
 	@echo "✓ Core tests completed"
 
-# QUIC/msquic test target (replaces vendor-specific tests)
+# QUIC test target (uses vendor QUIC implementation)
 quic-test: build
-	@echo "Running QUIC/msquic integration tests..."
-	@if [ -x "test_msquic_protocol.py" ]; then \
-		python3 test_msquic_protocol.py || echo "QUIC protocol test failed (server may need to be running)"; \
+	@echo "Running QUIC integration tests..."
+	@if [ -x "test_quic_protocol.py" ]; then \
+		python3 test_quic_protocol.py || echo "QUIC protocol test failed (server may need to be running)"; \
 	fi
 	@echo "✓ QUIC tests completed"
 
 # Client test targets
 client-test-python: build
 	@echo "Testing Python client..."
-	@if [ -f "test_msquic_protocol.py" ] && [ -x "scripts/test_client_with_server.sh" ]; then \
-		scripts/test_client_with_server.sh test_msquic_protocol.py; \
+	@if [ -f "test_quic_protocol.py" ] && [ -x "scripts/test_client_with_server.sh" ]; then \
+		scripts/test_client_with_server.sh test_quic_protocol.py; \
 	elif [ -f "clients/python/test_client.py" ] && [ -x "scripts/test_client_with_server.sh" ]; then \
 		cd clients/python && ../../scripts/test_client_with_server.sh test_client.py; \
 	else \

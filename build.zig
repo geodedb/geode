@@ -384,35 +384,20 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("client/repl.zig", repl_mod_tests);
 
     // Add transport/quic module for QUIC canary tests
-    // New: msquic wrapper module
-    const msquic_wrapper_mod = b.createModule(.{ .root_source_file = b.path("src/transport/msquic_wrapper.zig"), .target = target, .optimize = optimize });
-    const transport_quic_msquic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic_msquic.zig"), .target = target, .optimize = optimize });
-    transport_quic_msquic_mod.addImport("msquic_wrapper.zig", msquic_wrapper_mod);
-    
     // Vendor QUIC for tests - using vendor_setup.zig modules
     const transport_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     transport_quic_mod_tests.addImport("vendor_quic", quic_modules.quic_api);
 
     custom_tests.root_module.addImport("transport/quic", transport_quic_mod_tests);
-    custom_tests.root_module.addImport("transport/quic_msquic", transport_quic_msquic_mod);
     custom_tests.root_module.addImport("vendor_quic", quic_modules.quic_api);
-    custom_tests.root_module.addImport("msquic_wrapper", msquic_wrapper_mod);
-    
-    // Link with msquic and OpenSSL
+
+    // Link with OpenSSL
     custom_tests.linkLibC();
-    custom_tests.linkSystemLibrary("msquic");
     custom_tests.linkSystemLibrary("ssl");
     custom_tests.linkSystemLibrary("crypto");
     if (target.result.os.tag == .linux) {
         custom_tests.linkSystemLibrary("dl");
     }
-    
-    // Add msquic include and lib paths
-    // Use local fork headers and system library (Ubuntu libmsquic package)
-    const msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "forks/msquic/src/inc";
-    const msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/usr/lib/x86_64-linux-gnu";
-    custom_tests.addIncludePath(.{ .cwd_relative = msquic_include });
-    custom_tests.addLibraryPath(.{ .cwd_relative = msquic_lib });
     const run_custom_tests = b.addRunArtifact(custom_tests);
 
     const test_step = b.step("test", "Run unit tests");

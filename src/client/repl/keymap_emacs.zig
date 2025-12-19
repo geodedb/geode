@@ -9,6 +9,7 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
         return switch (key.key) {
             'a' => .history_first, // Ctrl+Home: first history entry
             'e' => .history_last, // Ctrl+End: last history entry
+            'i' => .reverse_tab, // Shift+Tab: unindent (remove leading spaces/tab)
             else => .none,
         };
     }
@@ -29,7 +30,7 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
             'l' => .clear_screen, // Ctrl+L: clear screen
             'r' => .search, // Ctrl+R: reverse search
             'c' => .cancel, // Ctrl+C: cancel
-            'i', '\t' => .complete, // Tab: complete
+            'i', '\t' => .insert_tab, // Tab: insert tab character
             'j', 'm', '\r', '\n' => .execute, // Enter: execute
             0x7f - 'a' + 1 => .delete_char_forward, // Delete key (mapped from ESC[3~)
             else => .none,

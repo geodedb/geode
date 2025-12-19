@@ -17,6 +17,7 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
         return switch (key.key) {
             'a' => .history_first, // Ctrl+Home
             'e' => .history_last, // Ctrl+End
+            'i' => .reverse_tab, // Shift+Tab: unindent
             else => .none,
         };
     }
@@ -32,6 +33,7 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
             'p' => .history_prev, // Up arrow
             'n' => .history_next, // Down arrow
             'l' => .clear_screen, // Ctrl+L
+            'i', '\t' => .insert_tab, // Tab: insert tab character
             else => .none,
         };
     }
@@ -202,6 +204,7 @@ fn handleInsertMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
         return switch (key.key) {
             'a' => .history_first, // Ctrl+Home
             'e' => .history_last, // Ctrl+End
+            'i' => .reverse_tab, // Shift+Tab: unindent
             else => .none,
         };
     }
@@ -222,7 +225,7 @@ fn handleInsertMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
             'k' => .delete_to_eol, // Ctrl+K: delete to end of line
             'y' => .yank, // Ctrl+Y: yank
             'l' => .clear_screen, // Ctrl+L: clear screen
-            'i', '\t' => .complete,
+            'i', '\t' => .insert_tab, // Tab: insert tab character
             'j', 'm', '\r', '\n' => .execute,
             0x7f - 'a' + 1 => .delete_char_forward, // Delete key
             else => .none,

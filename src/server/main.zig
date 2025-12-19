@@ -372,7 +372,7 @@ pub fn main() !void {
                 return;
             };
 
-            // msquic uses event-driven callbacks, no polling needed
+            // QUIC transport uses event-driven callbacks, no polling needed
             log.debug("Test mode - calling handleQuicConnection", .{});
 
             quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {
@@ -386,7 +386,7 @@ pub fn main() !void {
                     continue;
                 };
 
-                // msquic uses event-driven callbacks, no polling needed
+                // QUIC transport uses event-driven callbacks, no polling needed
                 log.debug("Main loop - calling handleQuicConnection", .{});
 
                 quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false) catch |err| {

@@ -141,6 +141,9 @@ pub const Chain = struct {
     // the parser records that standalone node here so executors can perform a NodeScan.
     // For chains with one or more hops, this remains null and executors should ignore it.
     head: ?NodePattern = null,
+    // Flag to indicate this is a shortestPath/allShortestPaths pattern
+    // Set by parser when parsing shortestPath((pattern)) syntax
+    is_shortest: bool = false,
 };
 
 pub const GraphPattern = struct { chains: []Chain };

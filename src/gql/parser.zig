@@ -2181,9 +2181,11 @@ pub const Parser = struct {
                         _ = is_all; // Will use this in execution
 
                         // For now, just return the inner pattern with the path name
+                        // Mark as shortestPath so execution can distinguish from regular path assignments
                         for (inner_pattern.chains) |chain| {
                             var modified_chain = chain;
                             modified_chain.name = chain_name;
+                            modified_chain.is_shortest = true;
                             try chains.append(self.arena.allocator(), modified_chain);
                         }
 

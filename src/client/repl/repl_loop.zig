@@ -142,6 +142,8 @@ pub const KeyEvent = struct {
 pub const KeyAction = enum {
     none,
     insert,
+    insert_tab, // Insert a tab character
+    reverse_tab, // Remove leading indentation (shift+tab)
     backspace, // Delete char before cursor
     delete_char, // Delete char at cursor (Ctrl+D behavior)
     delete_char_forward, // Delete key
@@ -185,6 +187,13 @@ fn getTerminalWidth() usize {
     }
 }
 
+/// Calculate the visual width of a tab character at a given column
+/// Tabs expand to the next multiple of 8 columns
+fn tabWidth(col: usize) usize {
+    const tab_stop = 8;
+    return tab_stop - (col % tab_stop);
+}
+
 /// Calculate number of visual lines (accounting for terminal width wrapping)
 fn calculateVisualLines(prompt_len: usize, buffer: []const u8, term_width: usize) usize {
     if (term_width == 0) return 1;
@@ -196,6 +205,14 @@ fn calculateVisualLines(prompt_len: usize, buffer: []const u8, term_width: usize
         if (c == '\n') {
             lines += 1;
             col = 0; // Continuation lines have no prompt
+        } else if (c == '\t') {
+            // Tab expands to next tab stop
+            const width = tabWidth(col);
+            col += width;
+            if (col >= term_width) {
+                lines += 1;
+                col = 0;
+            }
         } else {
             col += 1;
             if (col >= term_width) {
@@ -229,6 +246,14 @@ fn calculateCursorPosition(prompt_len: usize, buffer: []const u8, cursor: usize,
         if (c == '\n') {
             total_lines += 1;
             col = 0;
+        } else if (c == '\t') {
+            // Tab expands to next tab stop
+            const width = tabWidth(col);
+            col += width;
+            if (col >= term_width) {
+                total_lines += 1;
+                col = 0;
+            }
         } else {
             col += 1;
             if (col >= term_width) {
@@ -431,9 +456,36 @@ fn processInput(state: *ReplState) !void {
         if (last_action == .execute) {
             const input = state.buffer.items;
             if (input.len > 0) {
+                // Check for backslash-newline continuation (line ends with \ and is not a meta-command)
+                // This allows multi-line input by typing \ at the end of a line
+                const is_meta_command = (input[0] == '\\' or input[0] == '/');
+                if (!is_meta_command and input[input.len - 1] == '\\') {
+                    // Remove the trailing backslash and enter continuation mode
+                    _ = state.buffer.pop();
+                    // Build multi-line input (backslash removed, content joined with newline)
+                    if (state.is_continuation) {
+                        // Add newline separator then current line (without backslash)
+                        try state.multi_line_buffer.append(state.allocator, '\n');
+                        try state.multi_line_buffer.appendSlice(state.allocator, state.buffer.items);
+                    } else {
+                        // First line - just copy content without backslash
+                        state.multi_line_buffer.clearRetainingCapacity();
+                        try state.multi_line_buffer.appendSlice(state.allocator, state.buffer.items);
+                    }
+                    state.is_continuation = true;
+                    state.buffer.clearRetainingCapacity();
+                    state.cursor = 0;
+                    state.last_visual_lines = 0;
+                    state.last_cursor_row = 0;
+                    state.content_changed = true;
+                    const stdout = platform.getStdoutHandle();
+                    try stdout.writeAll("\r\n");
+                    break :outer; // Exit input loop for new line
+                }
+
                 // Check for meta-command (always single line)
                 // Support both \ and / as meta-command prefixes for user convenience
-                if (input[0] == '\\' or input[0] == '/') {
+                if (is_meta_command) {
                     // Save meta-command to history (if not starting with space)
                     if (input[0] != ' ' and state.history.enabled) {
                         state.history.append(input) catch {};
@@ -703,6 +755,40 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
         .none => {},
         .insert => {
             // Handled by keymap - content_changed already set
+        },
+        .insert_tab => {
+            // Insert a tab character at cursor position
+            state.buffer.insert(state.allocator, state.cursor, '\t') catch return;
+            state.cursor += 1;
+        },
+        .reverse_tab => {
+            // Remove leading indentation from current line (shift+tab)
+            // Find the start of the current line
+            var line_start: usize = state.cursor;
+            while (line_start > 0 and state.buffer.items[line_start - 1] != '\n') {
+                line_start -= 1;
+            }
+
+            // Check if there's a tab or spaces at the start of the line
+            if (line_start < state.buffer.items.len) {
+                if (state.buffer.items[line_start] == '\t') {
+                    // Remove the tab
+                    _ = state.buffer.orderedRemove(line_start);
+                    if (state.cursor > line_start) {
+                        state.cursor -= 1;
+                    }
+                } else if (state.buffer.items[line_start] == ' ') {
+                    // Remove up to 4 spaces (or until non-space)
+                    var spaces_removed: usize = 0;
+                    while (spaces_removed < 4 and line_start < state.buffer.items.len and state.buffer.items[line_start] == ' ') {
+                        _ = state.buffer.orderedRemove(line_start);
+                        spaces_removed += 1;
+                        if (state.cursor > line_start) {
+                            state.cursor -= 1;
+                        }
+                    }
+                }
+            }
         },
         .backspace => {
             // Backspace - delete character before cursor
