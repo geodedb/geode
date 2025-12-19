@@ -31,10 +31,10 @@ variables:
         aarch64|arm64) ZIG_DL_ARCH="aarch64" ;;
         *) echo "Unsupported architecture: $DETECTED_ARCH" >&2; exit 1 ;;
       esac
-      ZIG_TARBALL="zig-linux-${ZIG_DL_ARCH}-${ZIG_VERSION}.tar.xz"
+      ZIG_TARBALL="zig-${ZIG_DL_ARCH}-linux-${ZIG_VERSION}.tar.xz"
       curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_TARBALL}" -o "${ZIG_TARBALL}"
       tar -xf "${ZIG_TARBALL}"
-      mv "zig-linux-${ZIG_DL_ARCH}-${ZIG_VERSION}" /opt/zig
+      mv "zig-${ZIG_DL_ARCH}-linux-${ZIG_VERSION}" /opt/zig
       export PATH="/opt/zig:$PATH"
       zig version
   script:
