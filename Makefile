@@ -31,6 +31,7 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 
 .PHONY: go-prep go-vendor-sync go-vendor-check go-matrix
 .PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset go-build go-test go-clean go-example fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl
+.PHONY: goreleaser goreleaser-test goreleaser-snapshot goreleaser-check
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-python client-test-go client-test-rust client-test-zig rust-build-docker rust-test-docker
@@ -55,6 +56,12 @@ help:
 	@echo "  make tools       - Build all tools"
 	@echo "  make clean       - Clean build artifacts"
 	@echo "  make fmt         - Format all code"
+	@echo ""
+	@echo "Release targets:"
+	@echo "  make goreleaser         - Run GoReleaser (create release)"
+	@echo "  make goreleaser-test    - Test GoReleaser (snapshot mode)"
+	@echo "  make goreleaser-snapshot - Same as goreleaser-test"
+	@echo "  make goreleaser-check   - Validate GoReleaser config"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test        - Run all tests (Zig + Go + QUIC + clients)"
@@ -198,6 +205,27 @@ build:
 release:
 	$(ZIG) build $(ZIG_RELEASE_FLAGS)
 	$(MAKE) go-build
+
+# GoReleaser targets
+GORELEASER ?= goreleaser
+GORELEASER_FLAGS ?=
+
+goreleaser: release
+	@echo "Running GoReleaser release..."
+	$(GORELEASER) release --clean $(GORELEASER_FLAGS)
+
+goreleaser-test: goreleaser-snapshot
+
+goreleaser-snapshot: release
+	@echo "Running GoReleaser in snapshot mode (testing)..."
+	$(GORELEASER) release --snapshot --clean --skip=publish $(GORELEASER_FLAGS)
+	@echo "✓ GoReleaser test build completed"
+	@echo "Artifacts available in: dist/"
+
+goreleaser-check:
+	@echo "Checking GoReleaser configuration..."
+	$(GORELEASER) check
+	@echo "✓ GoReleaser configuration is valid"
 
 # Run Zig tests
 test:
@@ -1209,10 +1237,10 @@ test-cross-clients:
 	@echo "Testing cross-compiled clients..."
 	@# Test native Zig client builds
 	$(ZIG) build test-clients $(ZIG_FLAGS)
-	
+
 	@# Test cross-compiled binaries with QEMU if available
 	@echo "Testing cross-compiled binaries with QEMU (if available)..."
-	
+
 	@# Test Linux ARM64 binaries with qemu-aarch64
 	@if command -v qemu-aarch64 >/dev/null 2>&1 && [ -f "zig-out/clients/linux-arm64/geode-zig-example-linux-arm64" ]; then \
 		echo "Testing Linux ARM64 Zig client with QEMU..."; \
@@ -1221,7 +1249,7 @@ test-cross-clients:
 	else \
 		echo "⚠ qemu-aarch64 not available or binary not found, skipping Linux ARM64 test"; \
 	fi
-	
+
 	@# Test Windows x86_64 binaries with Wine if available
 	@if [ -n "$(WINE_CMD)" ] && [ -f "zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe" ]; then \
 		echo "Testing Windows x86_64 Zig client with Wine ($(WINE_CMD))..."; \
@@ -1230,7 +1258,7 @@ test-cross-clients:
 	else \
 		echo "⚠ Wine not available or binary not found, skipping Windows x86_64 test"; \
 	fi
-	
+
 	@# Test Windows x86_64 Go client with Wine
 	@if [ -n "$(WINE_CMD)" ] && [ -f "zig-out/clients/windows-x86_64/gql-example.exe" ]; then \
 		echo "Testing Windows x86_64 Go client with Wine ($(WINE_CMD))..."; \
@@ -1239,7 +1267,7 @@ test-cross-clients:
 	else \
 		echo "⚠ Wine not available or Go binary not found, skipping Windows Go test"; \
 	fi
-	
+
 	@# Test Linux ARM64 Go client with QEMU
 	@if command -v qemu-aarch64 >/dev/null 2>&1 && [ -f "zig-out/clients/linux-arm64/gql-example" ]; then \
 		echo "Testing Linux ARM64 Go client with QEMU..."; \
@@ -1248,7 +1276,7 @@ test-cross-clients:
 	else \
 		echo "⚠ qemu-aarch64 not available or Go binary not found, skipping Linux ARM64 Go test"; \
 	fi
-	
+
 	@# Compilation tests for platforms where we can't run the binaries
 	@if [ -d "clients/go/gql/example" ]; then \
 		echo "Verifying Go cross-compilation for all targets..."; \
@@ -1259,7 +1287,7 @@ test-cross-clients:
 		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /dev/null . && \
 		echo "✓ Go cross-compilation verification passed"; \
 	fi
-	
+
 	@echo "✓ All client cross-compilation tests completed"
 
 # Test cross-compiled clients with QEMU emulation
@@ -1268,7 +1296,7 @@ test-cross-clients:
 qemu-test-clients: cross-clients
 	@echo "=== Testing Cross-Compiled Clients with QEMU ==="
 	@echo ""
-	
+
 	@# Check for required QEMU user-mode emulators
 	@echo "Checking for QEMU emulators..."
 	@if command -v qemu-aarch64 >/dev/null 2>&1; then \
@@ -1287,7 +1315,7 @@ qemu-test-clients: cross-clients
 		echo "✗ qemu-riscv64 not found (install qemu-user or qemu-user-static)"; \
 	fi
 	@echo ""
-	
+
 	@# Linux ARM64 testing
 	@if command -v qemu-aarch64 >/dev/null 2>&1; then \
 		echo "=== Linux ARM64 Testing ==="; \
@@ -1304,7 +1332,7 @@ qemu-test-clients: cross-clients
 		fi; \
 		echo ""; \
 	fi
-	
+
 	@# Windows testing with Wine
 	@if [ -n "$(WINE_CMD)" ]; then \
 		echo "=== Windows x86_64 Testing (Wine: $(WINE_CMD)) ==="; \
@@ -1321,7 +1349,7 @@ qemu-test-clients: cross-clients
 		fi; \
 		echo ""; \
 	fi
-	
+
 	@# Native Linux x86_64 testing (for comparison)
 	@echo "=== Native Linux x86_64 Testing ==="
 	@if [ -f "zig-out/clients/linux-x86_64/geode-zig-example-linux-x86_64" ]; then \
@@ -1334,7 +1362,7 @@ qemu-test-clients: cross-clients
 		zig-out/clients/linux-x86_64/gql-example -h 2>&1 | head -10 || true; \
 	fi
 	@echo ""
-	
+
 	@echo "=== QEMU Client Testing Complete ==="
 	@echo "Note: Connection failures are expected if the server is not running."
 	@echo "The test verifies that the binaries can execute on their target platforms."
