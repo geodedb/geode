@@ -19,6 +19,7 @@ variables:
   image: debian:bookworm-slim
   variables:
     GIT_STRATEGY: fetch
+    GIT_SUBMODULE_STRATEGY: recursive
   before_script:
     - apt-get update
     - apt-get install -y curl xz-utils ca-certificates build-essential pkg-config dpkg-dev git
