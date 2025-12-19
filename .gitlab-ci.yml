@@ -6,7 +6,7 @@ variables:
   DOCKER_BUILDKIT: 1
   ZIG_VERSION: "0.15.2"
   ZIG_ARCH: "x86_64"
-  GORELEASER_VERSION: "v2.5.1"
+  GORELEASER_VERSION: "latest"
   GIT_CONFIG_COUNT: 1
   GIT_CONFIG_KEY_0: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_FQDN}.insteadOf"
   GIT_CONFIG_VALUE_0: "https://gitlab.com"
