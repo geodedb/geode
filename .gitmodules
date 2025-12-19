@@ -3,19 +3,19 @@
 	url = https://gitlab.com/devnw/spyder/quic.git
 [submodule "specs/raft/zaft"]
 	path = specs/raft/zaft
-	url = git@github.com:LVala/zaft.git
+	url = https://github.com/LVala/zaft.git
 [submodule "grammar/ebnfparser"]
 	path = grammar/ebnfparser
-	url = git@github.com:zmajeed/ebnfparser.git
+	url = https://github.com/zmajeed/ebnfparser.git
 [submodule "grammar/gql-grammar"]
 	path = grammar/gql-grammar
-	url = git@github.com:TuGraph-family/gql-grammar.git
+	url = https://github.com/TuGraph-family/gql-grammar.git
 [submodule "specs/lsp/language-server-protocol"]
 	path = specs/lsp/language-server-protocol
-	url = git@github.com:microsoft/language-server-protocol.git
+	url = https://github.com/microsoft/language-server-protocol.git
 [submodule "forks/msquic"]
 	path = forks/msquic
-	url = git@github.com:microsoft/msquic.git
+	url = https://github.com/microsoft/msquic.git
 [submodule "vendor/ztls"]
 	path = vendor/ztls
 	url = https://gitlab.com/devnw/spyder/ztls.git
