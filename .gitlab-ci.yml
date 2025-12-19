@@ -68,13 +68,6 @@ release:
       else
         goreleaser release --snapshot --skip=publish --clean
       fi
-  environment:
-    name: production
-    deployment_tier: production
-  secrets:
-    GORELEASER_KEY:
-      vault: GORELEASER_KEY
-      file: false
   artifacts:
     paths:
       - dist/
