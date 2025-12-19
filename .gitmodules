@@ -1,21 +1,6 @@
 [submodule "vendor/quic"]
 	path = vendor/quic
 	url = https://gitlab.com/devnw/spyder/quic.git
-[submodule "specs/raft/zaft"]
-	path = specs/raft/zaft
-	url = https://github.com/LVala/zaft.git
-[submodule "grammar/ebnfparser"]
-	path = grammar/ebnfparser
-	url = https://github.com/zmajeed/ebnfparser.git
-[submodule "grammar/gql-grammar"]
-	path = grammar/gql-grammar
-	url = https://github.com/TuGraph-family/gql-grammar.git
-[submodule "specs/lsp/language-server-protocol"]
-	path = specs/lsp/language-server-protocol
-	url = https://github.com/microsoft/language-server-protocol.git
-[submodule "forks/msquic"]
-	path = forks/msquic
-	url = https://github.com/microsoft/msquic.git
 [submodule "vendor/ztls"]
 	path = vendor/ztls
 	url = https://gitlab.com/devnw/spyder/ztls.git
