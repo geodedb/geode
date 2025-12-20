@@ -2,14 +2,6 @@ version: 2
 
 project_name: geode
 
-# Disable Go module loading since this is a Zig project
-# GoReleaser is only used for packaging pre-built binaries
-gomod:
-  gobinary: go
-  env:
-    - CGO_ENABLED=0
-  mod: mod
-
 # Note: GoReleaser Pro features enabled via CI/CD with GORELEASER_KEY
 # Pro features used: GitHub attestations, enhanced caching, improved performance
 

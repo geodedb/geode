@@ -1,6 +1,6 @@
 # Simple Makefile to wrap Zig build/test/fuzz/bench/tools
 
-ZIG ?= zig
+ZIG ?= $(shell command -v zig 2>/dev/null || echo zig)
 ZIG_FLAGS ?=
 ZIG_RELEASE_FLAGS ?= -Doptimize=ReleaseSafe
 
