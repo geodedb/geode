@@ -370,6 +370,26 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeAll("\r\n");
 
         try stdout.writeAll(cyan);
+        try stdout.writeAll("Graphs:\r\n");
+        try stdout.writeAll(reset);
+        try stdout.writeAll("  ");
+        try stdout.writeAll(yellow);
+        try stdout.writeAll("\\use <graph>");
+        try stdout.writeAll(reset);
+        try stdout.writeAll("      Switch to graph\r\n");
+        try stdout.writeAll("  ");
+        try stdout.writeAll(yellow);
+        try stdout.writeAll("\\graph");
+        try stdout.writeAll(reset);
+        try stdout.writeAll("            Show current graph\r\n");
+        try stdout.writeAll("  ");
+        try stdout.writeAll(yellow);
+        try stdout.writeAll("\\graphs");
+        try stdout.writeAll(reset);
+        try stdout.writeAll("           List all graphs\r\n");
+        try stdout.writeAll("\r\n");
+
+        try stdout.writeAll(cyan);
         try stdout.writeAll("Transactions:\r\n");
         try stdout.writeAll(reset);
         try stdout.writeAll("  ");
@@ -487,6 +507,38 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "disconnect")) {
         state.session.connected = false;
         try stdout.writeAll("Disconnected\r\n");
+    } else if (std.mem.eql(u8, cmd, "use")) {
+        // \use <graph> - Switch to a different graph
+        if (args.len > 0) {
+            // Send USE GRAPH statement to server
+            const use_stmt = try std.fmt.allocPrint(state.allocator, "USE GRAPH {s};", .{args});
+            defer state.allocator.free(use_stmt);
+            try executeGql(state, use_stmt);
+
+            // Update local state on success
+            if (state.current_graph) |old| {
+                state.allocator.free(old);
+            }
+            state.current_graph = try state.allocator.dupe(u8, args);
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{args});
+            try stdout.writeAll(msg);
+        } else {
+            const stderr = platform.getStderrHandle();
+            try stderr.writeAll("Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");
+        }
+    } else if (std.mem.eql(u8, cmd, "graph")) {
+        // \graph - Show current graph
+        if (state.current_graph) |graph| {
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Current graph: {s}\r\n", .{graph});
+            try stdout.writeAll(msg);
+        } else {
+            try stdout.writeAll("No graph selected (using default)\r\n");
+        }
+    } else if (std.mem.eql(u8, cmd, "graphs")) {
+        // \graphs - List all graphs
+        try executeGql(state, "SHOW GRAPHS;");
     } else if (std.mem.eql(u8, cmd, "begin")) {
         try state.session.begin();
         state.in_txn = true;

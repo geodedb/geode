@@ -757,8 +757,29 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .UseGraph => |ug| {
+            // CANARY: REQ=REQ-MULTI-GRAPH-001; FEATURE="MultiGraphSupport"; ASPECT=UseGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
             // USE GRAPH implementation - switch active graph context
-            _ = ug;
+            const graph_name = ug.graph_name;
+
+            // Verify graph exists in catalog
+            const cat = getCatalog(allocator, context);
+            cat.rwlock.lockShared();
+            defer cat.rwlock.unlockShared();
+
+            if (!cat.graphs.contains(graph_name)) {
+                return error.GraphNotFound;
+            }
+
+            // Update session state with new graph
+            if (context.session_state) |session| {
+                // Free old graph name if present
+                if (session.graph) |old_graph| {
+                    session.allocator.free(old_graph);
+                }
+                // Set new graph
+                session.graph = try session.allocator.dupe(u8, graph_name);
+            }
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),

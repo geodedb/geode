@@ -124,8 +124,10 @@ pub const ReplState = struct {
     last_buffer_len: usize = 0, // Track previous buffer length
     last_visual_lines: usize = 0, // Track previous render's visual line count
     last_cursor_row: usize = 0, // Track which row the cursor was on (0 = first line)
+    current_graph: ?[]const u8 = null, // Current graph context
 
     pub fn deinit(self: *ReplState) void {
+        if (self.current_graph) |g| self.allocator.free(g);
         self.buffer.deinit(self.allocator);
         self.kill_ring.deinit(self.allocator);
         self.search_buffer.deinit(self.allocator);

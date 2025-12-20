@@ -372,6 +372,7 @@ pub const ExecutionError = error{
     SearchNotPermitted,
     DuplicateIndex,
     IncompatibleIndexDataType,
+    GraphNotFound,
 };
 
 pub const ExecutionResult = struct {
