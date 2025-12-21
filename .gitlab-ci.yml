@@ -62,6 +62,8 @@ release:
     DOCKER_REGISTRY: $CI_REGISTRY
     DOCKER_USERNAME: $CI_REGISTRY_USER
     DOCKER_PASSWORD: $CI_REGISTRY_PASSWORD
+    # Use CI_JOB_TOKEN as GITLAB_TOKEN for creating releases
+    GITLAB_TOKEN: $CI_JOB_TOKEN
     # Disable shallow cloning so that goreleaser can diff between tags to generate a changelog
     GIT_DEPTH: 0
   rules:

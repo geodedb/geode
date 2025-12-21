@@ -642,6 +642,7 @@ pub fn processMessage(
                         },
                         .DropGraph => |dg| {
                             // Drop graph storage
+                            std.log.err("QUIC handler: DropGraph for '{s}'", .{dg.name});
                             graph_storage_mgr.dropGraphStorage(dg.name) catch |err| {
                                 if (err == error.GraphNotFound and dg.if_exists) {
                                     // Silently succeed if IF EXISTS
@@ -669,7 +670,9 @@ pub fn processMessage(
                         .Show => |sh| {
                             // Handle SHOW GRAPHS
                             if (sh.show_type == .graphs) {
+                                std.log.err("QUIC handler: SHOW GRAPHS", .{});
                                 const graph_names = graph_storage_mgr.listGraphNames(gpa) catch &.{};
+                                std.log.err("QUIC handler: listGraphNames returned {d} graphs", .{graph_names.len});
                                 defer gpa.free(graph_names);
                                 var rows = std.ArrayList([]const u8).init(gpa);
                                 for (graph_names) |name| {
