@@ -3,7 +3,7 @@ version: 2
 project_name: geode
 
 # Note: GoReleaser Pro features enabled via CI/CD with GORELEASER_KEY
-# Pro features used: GitHub attestations, enhanced caching, improved performance
+# Pro features used: enhanced caching, improved performance
 
 before:
   hooks:
@@ -46,20 +46,16 @@ snapshot:
 
 # Nightly builds (GoReleaser Pro feature)
 # Automatic nightly releases for development/testing
-# Triggered via GitHub Actions workflow (.github/workflows/nightly.yml) on schedule
 # Note: This configuration is handled by the nightly workflow with --nightly flag
-# The workflow uses: goreleaser release --nightly --clean
 # Features:
-# - Automatic nightly releases at 2 AM UTC
-# - Only builds if commits in last 24 hours
-# - Names: geode-nightly-YYYYMMDD
+# - Automatic nightly releases
 # - Publishes as pre-release
 # - Docker images tagged as :nightly
 # - Keeps last 7 nightly releases
 
 changelog:
   sort: asc
-  use: github
+  use: git
   groups:
     - title: "Breaking Changes"
       regexp: '^.*!:.*$'
@@ -100,34 +96,55 @@ changelog:
       - 'Merge pull request'
       - 'Merge branch'
 
-# Docker images for multiple variants
-# Only runs in CI with CI_REGISTRY_IMAGE environment variable
-# Disabled for local testing - enable in CI by uncommenting
-dockers: []
-# dockers:
-#   # Debian-based image (default) - uses pre-built binaries from GitLab CI
-#   - id: geode-debian-amd64
-#     goos: linux
-#     goarch: amd64
-#     image_templates:
-#       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}"
-#       - "{{ .Env.CI_REGISTRY_IMAGE }}:latest"
-#       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}.{{ .Minor }}"
-#       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}"
-#     dockerfile: Dockerfile.ci
-#     use: buildx
-#     build_flag_templates:
-#       - "--pull"
-#       - "--platform=linux/amd64"
-#       - "--label=org.opencontainers.image.created={{.Date}}"
-#       - "--label=org.opencontainers.image.title={{.ProjectName}}"
-#       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-#       - "--label=org.opencontainers.image.version={{.Version}}"
-#       - "--label=org.opencontainers.image.source={{.GitURL}}"
-#       - "--label=org.opencontainers.image.description=Geode Graph Database - GQL-compliant property-graph database"
-#       - "--label=org.opencontainers.image.licenses=MIT"
-#     extra_files:
-#       - dist/
+# Docker images for GitLab Container Registry
+# Uses CI_REGISTRY_IMAGE environment variable from GitLab CI
+# Pre-built binaries from dist/ directory are packaged into Docker images
+dockers:
+  # Debian-based image (default) - uses pre-built binaries from GitLab CI
+  - id: geode-debian-amd64
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:latest"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}.{{ .Minor }}"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}"
+    dockerfile: Dockerfile.ci
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source={{.GitURL}}"
+      - "--label=org.opencontainers.image.description=Geode Graph Database - GQL-compliant property-graph database"
+      - "--label=org.opencontainers.image.licenses=MIT"
+    extra_files:
+      - dist/
+
+  # Alpine-based image (smaller) - uses pre-built binaries from GitLab CI
+  - id: geode-alpine-amd64
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:alpine"
+    dockerfile: Dockerfile.ci.alpine
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source={{.GitURL}}"
+      - "--label=org.opencontainers.image.description=Geode Graph Database (Alpine) - GQL-compliant property-graph database"
+      - "--label=org.opencontainers.image.licenses=MIT"
+    extra_files:
+      - dist/
 
 # System packages (deb, rpm)
 # Disabled for local snapshot testing - will work in CI with dist/ populated

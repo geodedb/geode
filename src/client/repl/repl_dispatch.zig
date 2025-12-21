@@ -515,14 +515,28 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             defer state.allocator.free(use_stmt);
             try executeGql(state, use_stmt);
 
-            // Update local state on success
-            if (state.current_graph) |old| {
-                state.allocator.free(old);
+            // Check if server returned an error before updating local state
+            var has_error = false;
+            if (state.session.last_response) |response| {
+                // Check for error status codes (4xxxx or 5xxxx) which indicate graph not found, etc.
+                if (std.mem.indexOf(u8, response, "\"status_class\":\"4") != null or
+                    std.mem.indexOf(u8, response, "\"status_class\":\"5") != null)
+                {
+                    has_error = true;
+                }
             }
-            state.current_graph = try state.allocator.dupe(u8, args);
-            var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{args});
-            try stdout.writeAll(msg);
+
+            // Only update local state if server accepted the graph switch
+            if (!has_error) {
+                if (state.current_graph) |old| {
+                    state.allocator.free(old);
+                }
+                state.current_graph = try state.allocator.dupe(u8, args);
+                var buf: [256]u8 = undefined;
+                const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{args});
+                try stdout.writeAll(msg);
+            }
+            // Error message is already displayed by executeGql
         } else {
             const stderr = platform.getStderrHandle();
             try stderr.writeAll("Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");

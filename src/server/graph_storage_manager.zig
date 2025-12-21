@@ -396,22 +396,35 @@ pub fn listGraphNames(allocator: std.mem.Allocator) ![][]const u8 {
 
 /// Drop a graph storage by name
 pub fn dropGraphStorage(name: []const u8) !void {
+    std.log.err("DEBUG dropGraphStorage called for: '{s}'", .{name});
+
     if (std.mem.eql(u8, name, DEFAULT_GRAPH_NAME)) {
+        std.log.err("DEBUG Cannot drop default graph", .{});
         return error.CannotDropDefaultGraph;
     }
 
     if (g_graph_storages) |*storages| {
+        std.log.err("DEBUG g_graph_storages exists, has {d} entries", .{storages.count()});
+
+        // Debug: list all keys
+        var key_it = storages.keyIterator();
+        while (key_it.next()) |key| {
+            std.log.err("DEBUG   existing graph: '{s}'", .{key.*});
+        }
+
         if (storages.fetchRemove(name)) |entry| {
             // Free the graph storage
             const alloc = g_allocator orelse return;
             entry.value.deinit();
             alloc.destroy(entry.value);
             alloc.free(entry.key);
-            std.log.info("Dropped graph storage: '{s}'", .{name});
+            std.log.err("DEBUG Dropped graph storage: '{s}', remaining: {d}", .{ name, storages.count() });
         } else {
+            std.log.err("DEBUG Graph not found in storage: '{s}'", .{name});
             return error.GraphNotFound;
         }
     } else {
+        std.log.err("DEBUG g_graph_storages is null", .{});
         return error.GraphNotFound;
     }
 }

@@ -1964,7 +1964,7 @@ fn executeCreateGraphStatement(allocator: std.mem.Allocator, state: *ServerState
         }
     }
 
-    // Create new graph
+    // Create new graph - register in both catalog and graph storage manager
     const graph_name = try allocator.dupe(u8, stmt.name);
     const new_graph = CatalogGraph{
         .name = graph_name,
@@ -1977,6 +1977,17 @@ fn executeCreateGraphStatement(allocator: std.mem.Allocator, state: *ServerState
     };
 
     try state.catalog_graphs.put(graph_name, new_graph);
+
+    // CRITICAL: Also create graph storage so graphExists() returns true
+    // and queries can be executed against this graph
+    _ = graph_storage_mgr.createGraphStorage(allocator, stmt.name) catch |err| {
+        // If storage creation fails (e.g., already exists), remove from catalog
+        _ = state.catalog_graphs.fetchRemove(stmt.name);
+        if (err == error.GraphAlreadyExists) {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42P07\",\"message\":\"{s} {s} already exists in storage\"}}\n", .{ graph_type, stmt.name });
+        }
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42000\",\"message\":\"Failed to create graph storage: {s}\"}}\n", .{@errorName(err)});
+    };
 
     const action = if (stmt.or_replace) "replaced" else "created";
     return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} {s} successfully\"}}\n", .{ graph_type, stmt.name, action });
@@ -2000,8 +2011,17 @@ fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, 
     if (state.catalog_graphs.fetchRemove(stmt.name)) |entry| {
         // Free the allocated graph name
         allocator.free(entry.key);
+
+        // Also remove from graph storage manager
+        graph_storage_mgr.dropGraphStorage(stmt.name) catch |err| {
+            std.log.warn("Failed to drop graph storage for '{s}': {s}", .{ stmt.name, @errorName(err) });
+        };
+
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} dropped successfully\"}}\n", .{ graph_type, stmt.name });
     } else {
+        // Also try to drop from graph storage (might exist there but not in catalog)
+        graph_storage_mgr.dropGraphStorage(stmt.name) catch {};
+
         if (stmt.if_exists) {
             return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} does not exist\"}}\n", .{ graph_type, stmt.name });
         } else {
