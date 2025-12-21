@@ -689,13 +689,23 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             cat.rwlock.lock();
             defer cat.rwlock.unlock();
 
-            // Check if graph exists (unless IF EXISTS is used)
-            if (!dg.if_exists and !cat.graphs.contains(graph_name)) {
+            // Check if graph exists in either catalog or storage (unless IF EXISTS is used)
+            const in_catalog = cat.graphs.contains(graph_name);
+            const in_storage = graph_storage_manager.graphExists(graph_name);
+
+            if (!dg.if_exists and !in_catalog and !in_storage) {
                 return error.GraphNotFound;
             }
 
             // Remove from catalog if it exists
             _ = cat.graphs.remove(graph_name);
+
+            // CRITICAL: Also remove from graph storage manager
+            // This ensures SHOW GRAPHS no longer lists this graph
+            graph_storage_manager.dropGraphStorage(graph_name) catch |err| {
+                // Log but don't fail - graph might only exist in one place
+                std.log.warn("dropGraphStorage for '{s}': {s}", .{ graph_name, @errorName(err) });
+            };
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),

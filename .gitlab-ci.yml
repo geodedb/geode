@@ -52,9 +52,9 @@ build:
 
 release:
   stage: release
-  image: docker:stable
+  image: docker:29
   services:
-    - docker:dind
+    - docker:29-dind
   needs:
     - job: build
       artifacts: true
