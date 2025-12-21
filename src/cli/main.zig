@@ -2630,6 +2630,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             };
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--log-level")) {
+            // Handle --log-level flag (ignored for query command but must consume its argument)
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --log-level requires a level (debug, info, warn, error)\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            // Just skip the log level value - query command doesn't use it but we need to consume it
+            i += 1;
         } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {
             // First non-option argument is the query text, or "-" for stdin
             if (query_text == null) {
@@ -3039,6 +3047,14 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             verbose = true;
         } else if (std.mem.eql(u8, argv[i], "--non-interactive")) {
             non_interactive = true;
+        } else if (std.mem.eql(u8, argv[i], "--log-level")) {
+            // Handle --log-level flag (ignored for shell command but must consume its argument)
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --log-level requires a level (debug, info, warn, error)\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            // Just skip the log level value - shell command doesn't use it but we need to consume it
+            i += 1;
         } else {
             std.debug.print("Error: unknown option '{s}'\n", .{argv[i]});
             std.debug.print("Run 'geode shell --help' to see available options\n", .{});

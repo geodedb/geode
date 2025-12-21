@@ -413,10 +413,17 @@ class ParallelTestRunner:
         if len(processed_args) > 0:
             command = processed_args[0]
             # Detect query commands: explicit "query" subcommand OR query-like strings (starting with GQL keywords)
+            # But first exclude known CLI commands (e.g., "user" starts with "USE" but is NOT a GQL query)
+            geode_cli_commands = {"query", "shell", "serve", "auth", "user", "role", "policy",
+                                  "grant", "revoke", "backup", "restore", "migrate", "lsp"}
             gql_keywords = ["MATCH", "RETURN", "CREATE", "DELETE", "MERGE", "WITH", "UNWIND", "CALL",
                            "INSERT", "SHOW", "EXPLAIN", "PROFILE", "USE", "SET", "BEGIN", "COMMIT",
                            "ROLLBACK", "START", "SELECT", "OPTIONAL", "DROP", "ALTER", "GRANT", "REVOKE"]
-            is_query_like = any(command.upper().startswith(kw) for kw in gql_keywords)
+            # Only check GQL keywords if not a known CLI command
+            if command in geode_cli_commands:
+                is_query_like = False
+            else:
+                is_query_like = any(command.upper().startswith(kw) for kw in gql_keywords)
             is_query_command = command == "query" or is_query_like
             is_shell_command = command == "shell"
             # Only attach connection flags to commands that support them
@@ -439,13 +446,34 @@ class ParallelTestRunner:
                         processed_args.insert(insert_pos, flag)
                         insert_pos += 1
             else:
-                # Some management commands support --server
-                server_capable_commands = {"auth", "user", "role", "policy", "grant", "revoke", "backup", "restore", "migrate"}
-                if command in server_capable_commands and server_address:
-                    if "--server" not in processed_args:
-                        insert_pos = 2 if len(processed_args) >= 2 else len(processed_args)
+                # Only "auth login" command supports --server for authentication
+                # Other management commands (user, role, etc.) are local operations
+                # that don't connect to a server
+                if command == "auth" and len(processed_args) > 1 and processed_args[1] == "login":
+                    if server_address and "--server" not in processed_args:
+                        # For "auth login -U alice", we want ["auth", "login", "--server", "addr", "-U", "alice"]
+                        insert_pos = 2
                         processed_args.insert(insert_pos, "--server")
                         processed_args.insert(insert_pos + 1, server_address)
+
+        # Final cleanup: remove any --insecure or --log-level flags from non-query/shell commands
+        # These flags should only be added to query and shell commands
+        if len(processed_args) > 0:
+            command = processed_args[0]
+            is_query_command = command == "query" or any(command.upper().startswith(kw) for kw in ["MATCH", "RETURN", "CREATE", "DELETE", "MERGE", "WITH", "UNWIND", "CALL", "INSERT", "SHOW", "EXPLAIN", "PROFILE", "USE", "SET", "BEGIN", "COMMIT", "ROLLBACK", "START", "SELECT", "OPTIONAL", "DROP", "ALTER", "GRANT", "REVOKE"])
+            is_shell_command = command == "shell"
+            if not is_query_command and not is_shell_command:
+                # Remove --insecure and --log-level flags that shouldn't be here
+                i = 0
+                while i < len(processed_args):
+                    if processed_args[i] == "--insecure":
+                        processed_args.pop(i)
+                    elif processed_args[i] == "--log-level":
+                        processed_args.pop(i)
+                        if i < len(processed_args):
+                            processed_args.pop(i)  # Also remove the log level value
+                    else:
+                        i += 1
 
         return processed_args
 
