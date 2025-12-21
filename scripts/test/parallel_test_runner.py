@@ -150,17 +150,17 @@ class PortAllocator:
 
 class ParallelTestRunner:
     def __init__(self,
-                 specs_dir: Path = Path("/home/benji/src/spyder/geode/geodetestlab/specs"),
-                 binary: str = "/home/benji/src/spyder/geode/zig-out/bin/geode",
-                 log_dir: Path = Path("/home/benji/src/spyder/geode/test_logs"),
+                 specs_dir: Path = None,
+                 binary: str = None,
+                 log_dir: Path = None,
                  max_workers: int = 4,
                  test_timeout: int = 30):  # Increased for QUIC handshake + query execution
-        self.specs_dir = specs_dir
-        self.binary = binary
-        self.log_dir = log_dir
+        self.project_root = Path(__file__).resolve().parents[2]
+        self.specs_dir = specs_dir if specs_dir else self.project_root / "geodetestlab" / "specs"
+        self.binary = binary if binary else str(self.project_root / "zig-out" / "bin" / "geode")
+        self.log_dir = log_dir if log_dir else self.project_root / "test_logs"
         self.max_workers = max_workers
         self.test_timeout = test_timeout
-        self.project_root = Path(__file__).resolve().parents[2]
         self.default_cert = str(self.project_root / "certs" / "server.crt")
         self.default_key = str(self.project_root / "certs" / "server.key")
         self.child_procs: List[subprocess.Popen] = []
@@ -1252,24 +1252,27 @@ class ParallelTestRunner:
 
 def main():
     import argparse
-    
+
+    # Calculate project root from script location
+    project_root = Path(__file__).resolve().parents[2]
+
     parser = argparse.ArgumentParser(description="Parallel Geodetestlab Test Runner")
-    parser.add_argument("--specs-dir", type=Path, 
-                        default=Path("/home/benji/src/spyder/geode/geodetestlab/specs"),
+    parser.add_argument("--specs-dir", type=Path,
+                        default=project_root / "geodetestlab" / "specs",
                         help="Directory containing test specifications")
     parser.add_argument("--binary", type=str,
-                        default="/home/benji/src/spyder/geode/zig-out/bin/geode",
+                        default=str(project_root / "zig-out" / "bin" / "geode"),
                         help="Path to geode binary")
     parser.add_argument("--log-dir", type=Path,
-                        default=Path("/home/benji/src/spyder/geode/test_logs"),
+                        default=project_root / "test_logs",
                         help="Directory for test logs")
     parser.add_argument("--max-workers", type=int, default=4,
                         help="Maximum number of parallel workers")
     parser.add_argument("--timeout", type=int, default=10,
                         help="Test timeout in seconds")
-    
+
     args = parser.parse_args()
-    
+
     runner = ParallelTestRunner(
         specs_dir=args.specs_dir,
         binary=args.binary,
