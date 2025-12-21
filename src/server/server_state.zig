@@ -294,6 +294,10 @@ pub const ServerState = struct {
     authenticated_user: ?[]const u8 = null,
     authenticated_role: ?@import("../security/user_management.zig").Role = null,
 
+    // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphSupport"; ASPECT=SessionGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+    // Current graph for this session (set by USE GRAPH command)
+    current_graph: ?[]const u8 = null,
+
     pub fn resetResult(self: *ServerState) void {
         // Free row fragments
         var i: usize = 0;

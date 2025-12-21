@@ -19,6 +19,18 @@ const union_advanced = @import("../union_advanced.zig");
 // Import types from other modules
 const UnionMetrics = server_state.UnionMetrics;
 const getOrCreateGraphStorage = graph_storage_mgr.getOrCreateGraphStorage;
+const getGraphStorageByName = graph_storage_mgr.getGraphStorageByName;
+
+// CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphSupport"; ASPECT=QueryRouting; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+/// Get graph storage for the current session, falling back to default if no graph selected
+fn getSessionGraphStorage(allocator: std.mem.Allocator, state: *server_state.ServerState) *graph_exec.GraphStorage {
+    // Try to get graph by session's current_graph name
+    if (getGraphStorageByName(state.current_graph)) |storage| {
+        return storage;
+    }
+    // Fall back to default graph
+    return getOrCreateGraphStorage(allocator);
+}
 
 // Global configuration for MATCH query execution guards (set by server initialization)
 pub var g_match_max_results_override: ?usize = null;
@@ -1040,8 +1052,8 @@ pub fn evaluateBinarySet(
 }
 fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateStatement) ![]const u8 {
 
-    // Get or create graph storage
-    const graph = getOrCreateGraphStorage(allocator);
+    // Get graph storage for current session
+    const graph = getSessionGraphStorage(allocator, state);
 
     // Start transaction if not already in one
     var started_auto = false;
@@ -1153,8 +1165,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
 
 // Execute DELETE statement
 fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DeleteStatement) ![]const u8 {
-    // Get graph storage
-    const graph = getOrCreateGraphStorage(allocator);
+    // Get graph storage for current session
+    const graph = getSessionGraphStorage(allocator, state);
 
     // Start transaction if not already in one
     var started_auto = false;
@@ -1250,8 +1262,8 @@ fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stm
 
 // Execute MERGE statement
 fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.MergeStatement) ![]const u8 {
-    // Get graph storage
-    const graph = getOrCreateGraphStorage(allocator);
+    // Get graph storage for current session
+    const graph = getSessionGraphStorage(allocator, state);
 
     // Start transaction if not already in one
     var started_auto = false;
@@ -1400,8 +1412,8 @@ test "TestCANARY_REQ_GQL_004_PaginationStreamingScaffold" {
 }
 
 /// Detect vector dimension from existing data in the graph
-fn detectVectorDimension(allocator: std.mem.Allocator, label: []const u8, property_name: []const u8) !u16 {
-    const graph = getOrCreateGraphStorage(allocator);
+fn detectVectorDimension(allocator: std.mem.Allocator, state: *server_state.ServerState, label: []const u8, property_name: []const u8) !u16 {
+    const graph = getSessionGraphStorage(allocator, state);
 
     // Scan existing nodes to find vector properties and detect dimension
     var node_iterator = graph.nodes.iterator();
@@ -1485,7 +1497,7 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
     switch (index_type) {
         .vector_f32 => {
             // Vector indexes require dimension parameter - detect from existing data
-            const dimension = detectVectorDimension(allocator, stmt.label, stmt.properties[0]) catch 128; // Default to 128 if detection fails
+            const dimension = detectVectorDimension(allocator, state, stmt.label, stmt.properties[0]) catch 128; // Default to 128 if detection fails
             std.log.info("Creating vector index with detected dimension: {d}", .{dimension});
             try index_manager.createAdvancedVectorIndex(stmt.name, dimension, .l2);
         },
@@ -1517,7 +1529,7 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
 
     // Populate index with existing data
     // Scan all nodes with the given label and add their property values to the index
-    const graph = getOrCreateGraphStorage(allocator);
+    const graph = getSessionGraphStorage(allocator, state);
 
     var population_count: u32 = 0;
 

@@ -14,6 +14,9 @@ const IndexInfo = execution.IndexInfo;
 const fle_catalog = @import("../schema/catalog.zig");
 const fle_annotations = @import("../schema/annotations.zig");
 
+// Import graph storage manager for multi-graph support
+const graph_storage_manager = @import("../server/graph_storage_manager.zig");
+
 // Import helper functions used by statement dispatcher
 const checkPermission = execution.checkPermission;
 const getCatalog = execution.getCatalog;
@@ -553,7 +556,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return result;
         },
         .CreateGraph => |cg| {
-            // CREATE GRAPH implementation with duplicate detection
+            // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphSupport"; ASPECT=CreateGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+            // CREATE GRAPH implementation with duplicate detection and storage creation
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
             const cat = getCatalog(allocator, context);
@@ -574,6 +578,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     // P2-3: Use catalog's allocator
                     cat.allocator.free(entry.key);
                 }
+                // Also drop the storage
+                graph_storage_manager.dropGraphStorage(graph_name) catch {};
             } else {
                 // Check if graph already exists
                 const graph_exists = cat.graphs.contains(graph_name);
@@ -596,6 +602,15 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // Add to catalog
             // P2-3: Use catalog's allocator (owned by catalog)
             try cat.graphs.put(try cat.allocator.dupe(u8, graph_name), {});
+
+            // Create actual graph storage for this graph
+            _ = graph_storage_manager.createGraphStorage(allocator, graph_name) catch |err| {
+                std.log.err("Failed to create graph storage for '{s}': {any}", .{ graph_name, err });
+                // Remove from catalog on failure
+                _ = cat.graphs.remove(graph_name);
+                return err;
+            };
+
             // Save catalog to disk after creating graph
             cat.save() catch |err| {
                 std.log.err("CRITICAL: Failed to persist catalog after graph creation  '{s}': {any}", .{ graph_name, err });

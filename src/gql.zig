@@ -1,9 +1,12 @@
 const std = @import("std");
-const lib = @import("lib.zig");
-const ast = lib.ast;
-// Access GQL components through lib module
-const ParseOptions = lib.ParseOptions;
-const ParseResult = lib.ParseResult;
+const geode = @import("geode");
+const ast = geode.ast;
+// Access GQL components through geode module
+const ParseOptions = geode.ParseOptions;
+const ParseResult = geode.ParseResult;
+
+// Alias for parse function
+const lib = geode;
 
 test "parse simple MATCH ... RETURN" {
     const src = "MATCH (a)-[r]->(b) RETURN a";

@@ -1475,6 +1475,13 @@ REQ-ML-EMBEDDINGS-003,Graph Neural Networks,GraphSAGE,IMPL,TestCANARY_ML_EMBEDDI
 REQ-ML-EMBEDDINGS-TEST-001,ML Embeddings Unit Tests,CoreFunctionality,TESTED,TestCANARY_ML_EMBEDDINGS_TEST_001,,ml,2025-10-05,tests/test_ml_graph_embeddings.zig
 REQ-ML-EMBEDDINGS-TEST-002,Node2Vec Algorithm Tests,Training,TESTED,TestCANARY_ML_EMBEDDINGS_TEST_002,,ml,2025-10-05,tests/test_ml_graph_embeddings.zig
 REQ-ML-EMBEDDINGS-TEST-003,GraphSAGE Algorithm Tests,NeighborAggregation,TESTED,TestCANARY_ML_EMBEDDINGS_TEST_003,,ml,2025-10-05,tests/test_ml_graph_embeddings.zig
+REQ-MULTI-GRAPH-001,MultiGraphSupport,UseGraph,IMPL,,,engine,2025-12-20,src/execution/statement_dispatcher.zig
+REQ-MULTI-GRAPH-002,MultiGraphSupport,PerGraphStorage,IMPL,,,engine,2025-12-20,src/server/graph_storage_manager.zig
+REQ-MULTI-GRAPH-003,MultiGraphSupport,CreateGraph,IMPL,,,engine,2025-12-20,src/execution/statement_dispatcher.zig
+REQ-MULTI-GRAPH-004,MultiGraphSupport,SessionGraph,IMPL,,,engine,2025-12-20,src/server/server_state.zig
+REQ-MULTI-GRAPH-005,MultiGraphSupport,QueryRouting,IMPL,,,engine,2025-12-20,src/server/query_executor.zig
+REQ-MULTI-GRAPH-006,MultiGraphSupport,ServerHandler,IMPL,,,engine,2025-12-20,src/server/quic_connection_handler.zig
+REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,IMPL,,,security,2025-12-20,src/security/multi_graph_security.zig
 REQ-PERF-ANALYSIS-001,PerformanceAnalysis,Benchmarking,IMPL,TestCANARY_PerformanceBenchmark,,performance,2025-10-04,tests/benchmark_performance_analysis.zig
 REQ-PERF-ASYNC-001,AsynchronousIO,Performance,IMPL,TestCANARY_AsynchronousIO,,performance,2025-10-04,src/performance/async_io.zig
 REQ-PERF-ASYNC-001,SimpleAsyncIO,Performance,IMPL,TestCANARY_SimpleAsyncIO,,performance,2025-10-04,src/performance/async_io_simple.zig

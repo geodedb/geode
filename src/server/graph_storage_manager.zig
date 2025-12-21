@@ -1,14 +1,22 @@
 const std = @import("std");
-const graph_exec = @import("../execution/graph_execution.zig");
+const graph_exec = @import("graph/exec.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-005; FEATURE="ServerRefactoring"; ASPECT=GRAPH_STORAGE; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=PerGraphStorage; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
 // Phase 3 M3.1 - Graph Storage Management Module (Incremental Extraction)
-// Extracted graph storage persistence and initialization functions from server/main.zig
+// Extended to support multiple named graphs with per-graph storage
 
-/// Global graph storage singleton (temporary - should be persistent)
+/// Default graph name used when no graph is selected
+pub const DEFAULT_GRAPH_NAME = "default";
+
+/// Global graph storage singleton (legacy - now points to default graph)
 var g_graph_storage: ?*graph_exec.GraphStorage = null;
 /// Global data directory for persistence
 var g_data_dir: ?[]const u8 = null;
+/// Per-graph storage map (graph_name -> GraphStorage)
+var g_graph_storages: ?std.StringHashMap(*graph_exec.GraphStorage) = null;
+/// Allocator for graph storage map
+var g_allocator: ?std.mem.Allocator = null;
 
 /// Get or create the global graph storage instance
 /// Attempts to load from persistent storage if data directory is set
@@ -290,4 +298,120 @@ pub fn getCurrentGraphStorage() ?*graph_exec.GraphStorage {
 /// Clear the global graph storage instance (for testing)
 pub fn clearGraphStorage() void {
     g_graph_storage = null;
+}
+
+// ============================================================================
+// Multi-Graph Storage Support
+// ============================================================================
+
+/// Initialize the multi-graph storage system
+/// Must be called before using getGraphStorageByName or createGraphStorage
+pub fn initMultiGraphStorage(allocator: std.mem.Allocator) void {
+    if (g_graph_storages == null) {
+        g_allocator = allocator;
+        g_graph_storages = std.StringHashMap(*graph_exec.GraphStorage).init(allocator);
+
+        // Register the default graph (created by getOrCreateGraphStorage)
+        if (g_graph_storage) |default_storage| {
+            const name_copy = allocator.dupe(u8, DEFAULT_GRAPH_NAME) catch return;
+            g_graph_storages.?.put(name_copy, default_storage) catch {};
+        }
+    }
+}
+
+/// Get graph storage by name
+/// Returns the storage for the specified graph, or the default graph if name is null
+/// Returns null if the graph doesn't exist
+pub fn getGraphStorageByName(name: ?[]const u8) ?*graph_exec.GraphStorage {
+    const graph_name = name orelse DEFAULT_GRAPH_NAME;
+
+    // Check multi-graph storage first
+    if (g_graph_storages) |storages| {
+        if (storages.get(graph_name)) |storage| {
+            return storage;
+        }
+    }
+
+    // Fall back to default for legacy compatibility
+    if (std.mem.eql(u8, graph_name, DEFAULT_GRAPH_NAME)) {
+        return g_graph_storage;
+    }
+
+    return null;
+}
+
+/// Create a new empty graph storage with the given name
+/// Returns error if graph already exists
+pub fn createGraphStorage(allocator: std.mem.Allocator, name: []const u8) !*graph_exec.GraphStorage {
+    // Initialize multi-graph storage if needed
+    if (g_graph_storages == null) {
+        initMultiGraphStorage(allocator);
+    }
+
+    // Check if graph already exists
+    if (g_graph_storages) |storages| {
+        if (storages.contains(name)) {
+            return error.GraphAlreadyExists;
+        }
+    }
+
+    // Create new empty graph storage
+    const graph = try allocator.create(graph_exec.GraphStorage);
+    graph.* = graph_exec.GraphStorage.init(allocator);
+
+    // Register in multi-graph storage
+    if (g_graph_storages) |*storages| {
+        const name_copy = try allocator.dupe(u8, name);
+        try storages.put(name_copy, graph);
+    }
+
+    std.log.info("Created new graph storage: '{s}'", .{name});
+    return graph;
+}
+
+/// Check if a graph exists
+pub fn graphExists(name: []const u8) bool {
+    if (g_graph_storages) |storages| {
+        return storages.contains(name);
+    }
+    return std.mem.eql(u8, name, DEFAULT_GRAPH_NAME) and g_graph_storage != null;
+}
+
+/// List all graph names
+pub fn listGraphNames(allocator: std.mem.Allocator) ![][]const u8 {
+    var names = std.ArrayList([]const u8).init(allocator);
+    errdefer names.deinit();
+
+    if (g_graph_storages) |storages| {
+        var it = storages.keyIterator();
+        while (it.next()) |key| {
+            try names.append(try allocator.dupe(u8, key.*));
+        }
+    } else if (g_graph_storage != null) {
+        try names.append(try allocator.dupe(u8, DEFAULT_GRAPH_NAME));
+    }
+
+    return names.toOwnedSlice();
+}
+
+/// Drop a graph storage by name
+pub fn dropGraphStorage(name: []const u8) !void {
+    if (std.mem.eql(u8, name, DEFAULT_GRAPH_NAME)) {
+        return error.CannotDropDefaultGraph;
+    }
+
+    if (g_graph_storages) |*storages| {
+        if (storages.fetchRemove(name)) |entry| {
+            // Free the graph storage
+            const alloc = g_allocator orelse return;
+            entry.value.deinit();
+            alloc.destroy(entry.value);
+            alloc.free(entry.key);
+            std.log.info("Dropped graph storage: '{s}'", .{name});
+        } else {
+            return error.GraphNotFound;
+        }
+    } else {
+        return error.GraphNotFound;
+    }
 }

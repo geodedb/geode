@@ -1,9 +1,10 @@
 const std = @import("std");
 const testing = std.testing;
-const graph_store = @import("graph_store.zig");
-const execution = @import("execution.zig");
-const lib = @import("lib.zig");
-const ast = @import("gql/ast.zig");
+const geode = @import("geode");
+const graph_store = geode.graph_store;
+const execution = geode.execution;
+const lib = geode;
+const ast = geode.ast;
 
 // Test that MATCH with labels works
 test "MATCH - Labels only" {

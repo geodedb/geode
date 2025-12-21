@@ -1,0 +1,44 @@
+-- Multi-Graph Integration Test Setup
+-- Creates multiple graphs for isolation and security testing
+
+-- Create the sales graph
+CREATE GRAPH IF NOT EXISTS sales;
+
+-- Create the hr graph
+CREATE GRAPH IF NOT EXISTS hr;
+
+-- Create the finance graph
+CREATE GRAPH IF NOT EXISTS finance;
+
+-- Create data in sales graph
+USE GRAPH sales;
+
+CREATE (c:Customer {name: 'Acme Corp', industry: 'Technology', revenue: 1500000});
+CREATE (c:Customer {name: 'Global Inc', industry: 'Manufacturing', revenue: 2300000});
+CREATE (c:Customer {name: 'Local Shop', industry: 'Retail', revenue: 450000});
+
+CREATE (p:Product {name: 'Widget Pro', price: 99.99, category: 'Hardware'});
+CREATE (p:Product {name: 'Software Suite', price: 299.99, category: 'Software'});
+
+-- Create data in hr graph
+USE GRAPH hr;
+
+CREATE (e:Employee {name: 'John Smith', department: 'Engineering', salary: 95000});
+CREATE (e:Employee {name: 'Jane Doe', department: 'Marketing', salary: 85000});
+CREATE (e:Employee {name: 'Bob Wilson', department: 'Engineering', salary: 102000});
+
+CREATE (d:Department {name: 'Engineering', budget: 500000});
+CREATE (d:Department {name: 'Marketing', budget: 300000});
+
+-- Create data in finance graph
+USE GRAPH finance;
+
+CREATE (a:Account {name: 'Operating Account', balance: 1250000, type: 'checking'});
+CREATE (a:Account {name: 'Payroll Account', balance: 350000, type: 'checking'});
+CREATE (a:Account {name: 'Investment Account', balance: 5000000, type: 'investment'});
+
+CREATE (t:Transaction {amount: 50000, description: 'Q4 Bonus Payout', date: '2025-12-15'});
+CREATE (t:Transaction {amount: 125000, description: 'Equipment Purchase', date: '2025-12-10'});
+
+-- Switch back to default graph
+USE GRAPH default;

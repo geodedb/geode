@@ -16,6 +16,7 @@ const cost_explain = @import("cost_explain.zig");
 const server_flags = @import("server_flags.zig");
 const message_handlers = @import("message_handlers.zig");
 const protocol_handler = @import("protocol_handler.zig");
+const graph_storage_mgr = @import("graph_storage_manager.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
@@ -594,6 +595,98 @@ pub fn processMessage(
                             state.active_result = true;
 
                             return protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                        },
+                        // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphSupport"; ASPECT=ServerHandler; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+                        .UseGraph => |ug| {
+                            // Update ServerState.current_graph for session
+                            if (state.current_graph) |old| {
+                                gpa.free(old);
+                            }
+                            // Check if graph exists
+                            if (!graph_storage_mgr.graphExists(ug.graph_name)) {
+                                return protocol.buildErrorLine(gpa, "GraphNotFound", "Graph does not exist", "") catch try gpa.dupe(u8, "");
+                            }
+                            state.current_graph = gpa.dupe(u8, ug.graph_name) catch null;
+                            // Set up empty result for PULL
+                            state.last_columns = &.{};
+                            state.last_ordered = false;
+                            state.last_order_keys = &.{};
+                            state.last_distinct = false;
+                            state.page_items = &.{};
+                            state.page_index = 0;
+                            state.active_result = true;
+                            return protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                        },
+                        .CreateGraph => |cg| {
+                            // Create new graph storage
+                            _ = graph_storage_mgr.createGraphStorage(gpa, cg.name) catch |err| {
+                                if (err == error.GraphAlreadyExists and cg.if_not_exists) {
+                                    // Silently succeed if IF NOT EXISTS
+                                    state.last_columns = &.{};
+                                    state.page_items = &.{};
+                                    state.page_index = 0;
+                                    state.active_result = true;
+                                    return protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                                }
+                                return protocol.buildErrorLine(gpa, "GraphAlreadyExists", "Graph already exists", "") catch try gpa.dupe(u8, "");
+                            };
+                            // Set up empty result for PULL
+                            state.last_columns = &.{};
+                            state.last_ordered = false;
+                            state.last_order_keys = &.{};
+                            state.last_distinct = false;
+                            state.page_items = &.{};
+                            state.page_index = 0;
+                            state.active_result = true;
+                            return protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                        },
+                        .DropGraph => |dg| {
+                            // Drop graph storage
+                            graph_storage_mgr.dropGraphStorage(dg.name) catch |err| {
+                                if (err == error.GraphNotFound and dg.if_exists) {
+                                    // Silently succeed if IF EXISTS
+                                    state.last_columns = &.{};
+                                    state.page_items = &.{};
+                                    state.page_index = 0;
+                                    state.active_result = true;
+                                    return protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                                }
+                                if (err == error.CannotDropDefaultGraph) {
+                                    return protocol.buildErrorLine(gpa, "CannotDropDefault", "Cannot drop the default graph", "") catch try gpa.dupe(u8, "");
+                                }
+                                return protocol.buildErrorLine(gpa, "GraphNotFound", "Graph does not exist", "") catch try gpa.dupe(u8, "");
+                            };
+                            // Set up empty result for PULL
+                            state.last_columns = &.{};
+                            state.last_ordered = false;
+                            state.last_order_keys = &.{};
+                            state.last_distinct = false;
+                            state.page_items = &.{};
+                            state.page_index = 0;
+                            state.active_result = true;
+                            return protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                        },
+                        .Show => |sh| {
+                            // Handle SHOW GRAPHS
+                            if (sh.show_type == .graphs) {
+                                const graph_names = graph_storage_mgr.listGraphNames(gpa) catch &.{};
+                                defer gpa.free(graph_names);
+                                var rows = std.ArrayList([]const u8).init(gpa);
+                                for (graph_names) |name| {
+                                    const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\"}}", .{name}) catch continue;
+                                    rows.append(gpa, row) catch continue;
+                                }
+                                const cols: []const protocol.SchemaCol = &.{.{ .name = "name", .type = "STRING" }};
+                                state.last_columns = cols;
+                                state.last_ordered = false;
+                                state.last_order_keys = &.{};
+                                state.last_distinct = false;
+                                state.page_items = rows.toOwnedSlice(gpa) catch &.{};
+                                state.page_index = 0;
+                                state.active_result = true;
+                                return protocol.buildSchemaLine(gpa, cols, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                            }
+                            return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW type not yet supported", "") catch try gpa.dupe(u8, "");
                         },
                         else => {
                             // Return error for unsupported statement types

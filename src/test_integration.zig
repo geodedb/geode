@@ -1,8 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
-const eval = @import("eval.zig");
-const heap = @import("storage/heap.zig");
-const evaluator_functions = @import("types/evaluator_functions.zig");
+const geode = @import("geode");
+const eval = geode.eval;
+const heap = geode.storage.heap;
+const evaluator_functions = geode.types.evaluator_functions;
 
 test "Integration: Math function composition" {
     const allocator = testing.allocator;

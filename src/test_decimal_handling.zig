@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
-const eval = @import("eval.zig");
+const geode = @import("geode");
+const eval = geode.eval;
 
 test "Decimal creation and basic operations" {
     // Test basic decimal value

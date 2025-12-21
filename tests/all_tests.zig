@@ -92,6 +92,7 @@ const _canary_backup_restore = @import("canary_backup_restore.zig");
 
 // Newly added feature scaffold tests (security, FTS, parallel exec, CBO, graph algos)
 const _e2e_security_tde_mfa = @import("e2e_security_tde_mfa.zig");
+const _e2e_multi_graph_security = @import("e2e_multi_graph_security.zig");
 const _e2e_fts_advanced = @import("e2e_fts_advanced.zig");
 const _e2e_parallel_execution = @import("e2e_parallel_execution.zig");
 const _e2e_cbo_v0 = @import("e2e_cbo_v0.zig");
