@@ -9,6 +9,9 @@ const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 
+// Import graph storage manager for SHOW GRAPHS
+const graph_storage_manager = @import("../server/graph_storage_manager.zig");
+
 // Import helper functions used by statement handlers
 const getCatalog = execution.getCatalog;
 const executeMatchQueryWithParams = execution.executeMatchQueryWithParams;
@@ -70,11 +73,18 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             }
         },
         .graphs => {
-            // Return graph names from catalog
-            var iter = cat.graphs.iterator();
-            while (iter.next()) |entry| {
+            // Return graph names from graph storage manager (authoritative source)
+            // This ensures SHOW GRAPHS reflects actual graph state after CREATE/DROP
+            const graph_names = graph_storage_manager.listGraphNames(allocator) catch &.{};
+            defer {
+                for (graph_names) |name| {
+                    allocator.free(name);
+                }
+                allocator.free(graph_names);
+            }
+            for (graph_names) |name| {
                 var row = try allocator.alloc(Value, 1);
-                row[0] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
+                row[0] = Value{ .Str = try allocator.dupe(u8, name) };
                 try rows_list.append(allocator, row);
             }
         },

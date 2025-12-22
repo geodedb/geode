@@ -386,25 +386,25 @@ pub fn graphExists(name: []const u8) bool {
 /// List all graph names
 pub fn listGraphNames(allocator: std.mem.Allocator) ![][]const u8 {
     std.debug.print("[GRAPH] listGraphNames called\n", .{});
-    var names = std.ArrayList([]const u8).init(allocator);
-    errdefer names.deinit();
+    var names = try std.ArrayList([]const u8).initCapacity(allocator, 32);
+    errdefer names.deinit(allocator);
 
     if (g_graph_storages) |storages| {
         std.debug.print("[GRAPH] listGraphNames: g_graph_storages has {d} entries\n", .{storages.count()});
         var it = storages.keyIterator();
         while (it.next()) |key| {
             std.debug.print("[GRAPH]   - listing: '{s}'\n", .{key.*});
-            try names.append(try allocator.dupe(u8, key.*));
+            try names.append(allocator, try allocator.dupe(u8, key.*));
         }
     } else if (g_graph_storage != null) {
         std.debug.print("[GRAPH] listGraphNames: g_graph_storages is null, using default\n", .{});
-        try names.append(try allocator.dupe(u8, DEFAULT_GRAPH_NAME));
+        try names.append(allocator, try allocator.dupe(u8, DEFAULT_GRAPH_NAME));
     } else {
         std.debug.print("[GRAPH] listGraphNames: no storages at all\n", .{});
     }
 
     std.debug.print("[GRAPH] listGraphNames returning {d} names\n", .{names.items.len});
-    return names.toOwnedSlice();
+    return names.toOwnedSlice(allocator);
 }
 
 /// Drop a graph storage by name
