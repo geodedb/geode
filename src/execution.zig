@@ -1559,7 +1559,154 @@ pub fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []co
 
     return .{ .columns = columns, .buffer = buffer };
 }
+
+// CANARY: REQ=REQ-GQL-WITH-GROUPBY-002; FEATURE="WithGroupByAggregation"; ASPECT=AggregationComputation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+/// Compute aggregation function over a group of rows
+fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []const Value, columns: []const []const u8) !Value {
+    // expr should be a Call expression for aggregation functions
+    if (expr != .Call) return Value{ .Null = {} };
+
+    const call = expr.Call;
+    if (call.callee.* != .Ident) return Value{ .Null = {} };
+
+    const func_name = call.callee.Ident.orig;
+    const arg_ptr: ?*ast.Expr = if (call.args.len > 0) call.args[0] else null;
+
+    // Handle count(*)
+    if (std.ascii.eqlIgnoreCase(func_name, "count")) {
+        if (arg_ptr == null or (arg_ptr.?.* == .Ident and std.mem.eql(u8, arg_ptr.?.Ident.orig, "*"))) {
+            return Value{ .Int = @intCast(group_rows.len) };
+        }
+        // count(expr) - count non-null values
+        var count: i64 = 0;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (val != .Null) count += 1;
+        }
+        return Value{ .Int = count };
+    }
+
+    // Handle sum(expr)
+    if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
+        if (arg_ptr == null) return Value{ .Null = {} };
+        var sum: i64 = 0;
+        var has_value = false;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (val == .Int) {
+                sum += val.Int;
+                has_value = true;
+            }
+        }
+        return if (has_value) Value{ .Int = sum } else Value{ .Null = {} };
+    }
+
+    // Handle avg(expr)
+    if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
+        if (arg_ptr == null) return Value{ .Null = {} };
+        var sum: i64 = 0;
+        var count: i64 = 0;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (val == .Int) {
+                sum += val.Int;
+                count += 1;
+            }
+        }
+        return if (count > 0) Value{ .Int = @divTrunc(sum, count) } else Value{ .Null = {} };
+    }
+
+    // Handle min(expr)
+    if (std.ascii.eqlIgnoreCase(func_name, "min")) {
+        if (arg_ptr == null) return Value{ .Null = {} };
+        var min_val: ?Value = null;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (val == .Null) continue;
+            if (min_val == null) {
+                min_val = val;
+            } else if (val == .Int and min_val.? == .Int and val.Int < min_val.?.Int) {
+                min_val = val;
+            } else if (val == .Str and min_val.? == .Str) {
+                if (std.mem.order(u8, val.Str, min_val.?.Str) == .lt) {
+                    min_val = val;
+                }
+            }
+        }
+        return min_val orelse Value{ .Null = {} };
+    }
+
+    // Handle max(expr)
+    if (std.ascii.eqlIgnoreCase(func_name, "max")) {
+        if (arg_ptr == null) return Value{ .Null = {} };
+        var max_val: ?Value = null;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (val == .Null) continue;
+            if (max_val == null) {
+                max_val = val;
+            } else if (val == .Int and max_val.? == .Int and val.Int > max_val.?.Int) {
+                max_val = val;
+            } else if (val == .Str and max_val.? == .Str) {
+                if (std.mem.order(u8, val.Str, max_val.?.Str) == .gt) {
+                    max_val = val;
+                }
+            }
+        }
+        return max_val orelse Value{ .Null = {} };
+    }
+
+    // Handle collect(expr)
+    if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
+        if (arg_ptr == null) return Value{ .List = &.{} };
+        var list = std.ArrayList(Value).initCapacity(allocator, group_rows.len) catch unreachable;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            list.append(allocator, val) catch {};
+        }
+        return Value{ .List = list.toOwnedSlice(allocator) catch &.{} };
+    }
+
+    return Value{ .Null = {} };
+}
+
 pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause) !ExecutionResult {
+    return executeWithClauseWithGroupBy(allocator, input_result, with_clause, null, null);
+}
+
+// CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+/// Execute WITH clause with optional GROUP BY aggregation
+pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
     if (input_result.columns.len > MAX_COLUMNS_PER_RESULT) {
         std.log.err("Corrupted input_result.columns.len = {d} in executeWithClause (max: {d})", .{ input_result.columns.len, MAX_COLUMNS_PER_RESULT });
@@ -1583,22 +1730,134 @@ pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionRe
     // Transform each row according to WITH items
     var new_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
 
-    for (input_result.rows) |input_row| {
-        var new_row = try allocator.alloc(Value, with_items.len);
-
-        // Create environment from input row for expression evaluation
-        const env = Env{
-            .names = input_result.columns,
-            .values = input_row,
-            .allocator = allocator,
-        };
-
-        for (with_items, 0..) |item, i| {
-            // Evaluate the WITH expression in the context of the current row
-            new_row[i] = try eval.evalExpr(allocator, item.expr, env);
+    // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=GroupingLogic; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+    // Handle GROUP BY if present - group rows and compute aggregations per group
+    if (group_by) |gb| {
+        // Group input rows by the GROUP BY key(s)
+        // Use a string key for grouping (serialize key values)
+        var groups = std.StringHashMap(std.ArrayList([]const Value)).init(allocator);
+        var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        defer {
+            var iter = groups.iterator();
+            while (iter.next()) |entry| {
+                entry.value_ptr.deinit(allocator);
+            }
+            groups.deinit();
+            for (group_keys_list.items) |key| {
+                allocator.free(key);
+            }
+            group_keys_list.deinit(allocator);
         }
 
-        try new_rows.append(allocator, new_row);
+        // Group rows by GROUP BY key values
+        for (input_result.rows) |input_row| {
+            // Create environment for evaluating GROUP BY key
+            const env = Env{
+                .names = input_result.columns,
+                .values = input_row,
+                .allocator = allocator,
+            };
+
+            // Evaluate GROUP BY key(s) and serialize to string
+            var key_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+            const key_writer = key_buf.writer(allocator);
+            for (gb.keys, 0..) |key_expr, k| {
+                if (k > 0) key_writer.writeAll("|") catch {};
+                const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
+                // Serialize key value to string
+                switch (key_val) {
+                    .Int => |i| key_writer.print("{d}", .{i}) catch {},
+                    .Str => |s| key_writer.writeAll(s) catch {},
+                    .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
+                    .Null => key_writer.writeAll("null") catch {},
+                    .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
+                    .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
+                    else => key_writer.writeAll("?") catch {},
+                }
+            }
+            const group_key = key_buf.toOwnedSlice(allocator) catch "";
+
+            // Add row to its group
+            if (groups.getPtr(group_key)) |group_list| {
+                group_list.append(allocator, input_row) catch {};
+                allocator.free(group_key);
+            } else {
+                var new_list = std.ArrayList([]const Value).initCapacity(allocator, 4) catch unreachable;
+                new_list.append(allocator, input_row) catch {};
+                groups.put(group_key, new_list) catch {};
+                group_keys_list.append(allocator, group_key) catch {};
+            }
+        }
+
+        // For each group, compute aggregations and produce one output row
+        var group_iter = groups.iterator();
+        while (group_iter.next()) |group_entry| {
+            const group_rows = group_entry.value_ptr.items;
+            if (group_rows.len == 0) continue;
+
+            // Use first row as the base for non-aggregated expressions
+            const first_row = group_rows[0];
+            const base_env = Env{
+                .names = input_result.columns,
+                .values = first_row,
+                .allocator = allocator,
+            };
+
+            var new_row = try allocator.alloc(Value, with_items.len);
+
+            // Evaluate each WITH item
+            for (with_items, 0..) |item, i| {
+                // Check if this is an aggregation expression
+                if (return_and_sorting.isAggregationExpr(item.expr)) {
+                    // Compute aggregation over all rows in the group
+                    new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns);
+                } else {
+                    // Non-aggregation expression: evaluate with first row
+                    new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                }
+            }
+
+            // Apply HAVING filter if present
+            if (having) |having_expr| {
+                // Create environment from the aggregated row
+                const having_env = Env{
+                    .names = new_columns.items,
+                    .values = new_row,
+                    .allocator = allocator,
+                };
+                const having_result = eval.evalExpr(allocator, having_expr, having_env) catch Value{ .Bool = false };
+                const passes_having = switch (having_result) {
+                    .Bool => |b| b,
+                    .Int => |i| i != 0,
+                    else => false,
+                };
+                if (!passes_having) {
+                    allocator.free(new_row);
+                    continue;
+                }
+            }
+
+            try new_rows.append(allocator, new_row);
+        }
+    } else {
+        // No GROUP BY - transform each row individually
+        for (input_result.rows) |input_row| {
+            var new_row = try allocator.alloc(Value, with_items.len);
+
+            // Create environment from input row for expression evaluation
+            const env = Env{
+                .names = input_result.columns,
+                .values = input_row,
+                .allocator = allocator,
+            };
+
+            for (with_items, 0..) |item, i| {
+                // Evaluate the WITH expression in the context of the current row
+                new_row[i] = try eval.evalExpr(allocator, item.expr, env);
+            }
+
+            try new_rows.append(allocator, new_row);
+        }
     }
 
     // Apply ORDER BY if present

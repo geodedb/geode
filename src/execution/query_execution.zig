@@ -471,7 +471,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
         // If there's a WITH clause, apply it to the CALL results
         if (q.with_clause) |with_clause| {
-            const with_result = try executeWithClause(allocator, call_result, with_clause);
+            // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+            const with_result = try execution.executeWithClauseWithGroupBy(allocator, call_result, with_clause, q.group_by, q.having);
 
             // Apply WHERE filter if present
             const filtered_result = if (q.where_clause) |where_expr| blk: {
@@ -661,7 +662,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         initial_result.rows[0] = try allocator.alloc(Value, 0);
 
         // Apply WITH clause to transform the empty row into WITH variables
-        const with_result = try executeWithClause(allocator, initial_result, with_clause);
+        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+        const with_result = try execution.executeWithClauseWithGroupBy(allocator, initial_result, with_clause, q.group_by, q.having);
 
         // Check if there's a FOR statement to execute with WITH bindings
         if (q.for_statement) |for_stmt| {

@@ -1384,7 +1384,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Apply WITH clause for query pipelining if present
             if (q.with_clause) |with_clause| {
                 // Apply WITH clause to transform matched variables
-                const with_result = try executeWithClause(allocator, result, with_clause);
+                // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+                const with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, q.having);
 
                 // Clean up original result since it's been transformed by WITH
                 for (result.columns) |col| {
@@ -1694,10 +1695,19 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             }
                         }
 
-                        // Evaluate return items
-                        var row = try allocator.alloc(Value, items.len);
-                        for (items, 0..) |item, i| {
-                            row[i] = try eval.evalExpr(allocator, item.expr, env);
+                        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-005; FEATURE="WithGroupByAggregation"; ASPECT=VarLenRowBuilding; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+                        // When WITH clause is present, build rows containing matched node values
+                        var row: []Value = undefined;
+                        if (has_with) {
+                            row = try allocator.alloc(Value, env_values.len);
+                            for (env_values, 0..) |val, i| {
+                                row[i] = val;
+                            }
+                        } else {
+                            row = try allocator.alloc(Value, items.len);
+                            for (items, 0..) |item, i| {
+                                row[i] = try eval.evalExpr(allocator, item.expr, env);
+                            }
                         }
 
                         allocator.free(env_names);
@@ -1943,10 +1953,23 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             }
                         }
 
-                        // Evaluate return items
-                        var row = try allocator.alloc(Value, items.len);
-                        for (items, 0..) |item, i| {
-                            row[i] = try eval.evalExpr(allocator, item.expr, env);
+                        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-004; FEATURE="WithGroupByAggregation"; ASPECT=RowBuilding; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+                        // When WITH clause is present, build rows containing matched node values
+                        // These rows will be transformed by executeWithClauseWithGroupBy later
+                        // When no WITH clause, evaluate RETURN expressions directly
+                        var row: []Value = undefined;
+                        if (has_with) {
+                            // Build row from matched variables (env contains them)
+                            row = try allocator.alloc(Value, env_values.len);
+                            for (env_values, 0..) |val, i| {
+                                row[i] = val;
+                            }
+                        } else {
+                            // Evaluate return items directly
+                            row = try allocator.alloc(Value, items.len);
+                            for (items, 0..) |item, i| {
+                                row[i] = try eval.evalExpr(allocator, item.expr, env);
+                            }
                         }
 
                         allocator.free(env_names);
@@ -2322,7 +2345,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // Apply WITH clause for query pipelining if present
         if (q.with_clause) |with_clause| {
             // Apply WITH clause to transform matched variables
-            const with_result = try executeWithClause(allocator, result, with_clause);
+            // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+            const with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, q.having);
 
             // Clean up original result since it's been transformed by WITH
             for (result.columns) |col| {
