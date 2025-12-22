@@ -40,6 +40,7 @@ const return_and_sorting = @import("execution/return_and_sorting.zig");
 const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
+const graph_storage_manager = @import("server/graph_storage_manager.zig");
 
 // Re-export catalog functionality for backward compatibility
 // Using direct aliases instead of usingnamespace for Zig 0.15.1 compatibility
@@ -1095,13 +1096,23 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             catalog_mutex.lock();
             defer catalog_mutex.unlock();
 
-            // Check if graph exists (unless IF EXISTS is used)
-            if (!dg.if_exists and !catalog.graphs.contains(graph_name)) {
+            // Check if graph exists in catalog or storage (unless IF EXISTS is used)
+            const in_catalog = catalog.graphs.contains(graph_name);
+            const in_storage = graph_storage_manager.graphExists(graph_name);
+
+            if (!dg.if_exists and !in_catalog and !in_storage) {
                 return error.GraphNotFound;
             }
 
             // Remove from catalog if it exists
             _ = catalog.graphs.remove(graph_name);
+
+            // CRITICAL: Also remove from graph storage manager
+            // This ensures SHOW GRAPHS no longer lists this graph
+            graph_storage_manager.dropGraphStorage(graph_name) catch |err| {
+                // Log but don't fail - graph might only exist in one place
+                std.log.warn("dropGraphStorage for '{s}': {s}", .{ graph_name, @errorName(err) });
+            };
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),

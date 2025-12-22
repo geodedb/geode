@@ -1,6 +1,7 @@
 const std = @import("std");
-const protocol = @import("../lib.zig").protocol;
-const BackupConfig = @import("../storage/backup.zig").BackupConfig;
+const geode = @import("geode");
+const protocol = geode.protocol;
+const BackupConfig = @import("storage/backup").BackupConfig;
 const SimplifiedBackupManager = @import("backup_manager.zig").SimplifiedBackupManager;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=PROTOCOL_HANDLER; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12

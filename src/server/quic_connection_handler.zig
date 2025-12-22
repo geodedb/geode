@@ -11,7 +11,7 @@ const SessionConfiguration = @import("server_state.zig").SessionConfiguration;
 const CatalogSchema = @import("server_state.zig").CatalogSchema;
 const CatalogGraph = @import("server_state.zig").CatalogGraph;
 const query_executor = @import("query_executor.zig");
-const execution = @import("../execution.zig");
+const execution = geode.execution;
 const cost_explain = @import("cost_explain.zig");
 const server_flags = @import("server_flags.zig");
 const message_handlers = @import("message_handlers.zig");
@@ -326,6 +326,7 @@ pub fn processMessage(
                         if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| return line else |_| return try gpa.dupe(u8, "");
                     }
                     const st = ok.program.statements[0];
+                    std.debug.print("[QUIC] Statement type: {s}\n", .{@tagName(st)});
                     switch (st) {
                         .Union => |u_stmt| {
                             var pn: [][]const u8 = &.{};
@@ -642,7 +643,7 @@ pub fn processMessage(
                         },
                         .DropGraph => |dg| {
                             // Drop graph storage
-                            std.log.err("QUIC handler: DropGraph for '{s}'", .{dg.name});
+                            std.debug.print("[QUIC] DropGraph handler for '{s}'\n", .{dg.name});
                             graph_storage_mgr.dropGraphStorage(dg.name) catch |err| {
                                 if (err == error.GraphNotFound and dg.if_exists) {
                                     // Silently succeed if IF EXISTS
@@ -670,9 +671,9 @@ pub fn processMessage(
                         .Show => |sh| {
                             // Handle SHOW GRAPHS
                             if (sh.show_type == .graphs) {
-                                std.log.err("QUIC handler: SHOW GRAPHS", .{});
+                                std.debug.print("[QUIC] SHOW GRAPHS handler\n", .{});
                                 const graph_names = graph_storage_mgr.listGraphNames(gpa) catch &.{};
-                                std.log.err("QUIC handler: listGraphNames returned {d} graphs", .{graph_names.len});
+                                std.debug.print("[QUIC] listGraphNames returned {d} graphs\n", .{graph_names.len});
                                 defer gpa.free(graph_names);
                                 var rows = std.ArrayList([]const u8).init(gpa);
                                 for (graph_names) |name| {

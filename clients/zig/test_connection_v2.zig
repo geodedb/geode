@@ -1,5 +1,5 @@
 const std = @import("std");
-const GeodeClient = @import("geode_client_v2.zig").GeodeClient;
+const GeodeClient = @import("geode_client").GeodeClient;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

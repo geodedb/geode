@@ -1,5 +1,6 @@
 const std = @import("std");
-const protocol = @import("../lib.zig").protocol;
+const geode = @import("geode");
+const protocol = geode.protocol;
 const ServerState = @import("server_state.zig").ServerState;
 const TextFormatter = @import("text_formatter").TextFormatter;
 const query_executor = @import("query_executor.zig");

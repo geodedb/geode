@@ -85,6 +85,7 @@ pub const BindingValue = union(enum) {
 
 // Graph storage interface (forward declaration)
 pub const GraphStorage = struct {
+    allocator: std.mem.Allocator,
     nodes: std.AutoHashMap(NodeId, Node),
     edges: std.ArrayList(Edge),
     // Adjacency lists for efficient traversal
@@ -95,6 +96,7 @@ pub const GraphStorage = struct {
 
     pub fn init(allocator: std.mem.Allocator) GraphStorage {
         return .{
+            .allocator = allocator,
             .nodes = std.AutoHashMap(NodeId, Node).init(allocator),
             .edges = std.ArrayList(Edge).initCapacity(allocator, 0) catch unreachable,
             .outgoing = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
@@ -104,18 +106,19 @@ pub const GraphStorage = struct {
     }
 
     pub fn deinit(self: *GraphStorage) void {
+        const allocator = self.allocator;
         self.nodes.deinit();
-        self.edges.deinit();
+        self.edges.deinit(allocator);
 
         var outgoing_iter = self.outgoing.iterator();
         while (outgoing_iter.next()) |entry| {
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(allocator);
         }
         self.outgoing.deinit();
 
         var incoming_iter = self.incoming.iterator();
         while (incoming_iter.next()) |entry| {
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(allocator);
         }
         self.incoming.deinit();
     }

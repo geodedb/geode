@@ -1,5 +1,8 @@
 const std = @import("std");
-const mvcc = @import("../server/txn/mvcc.zig");
+// Note: mvcc types defined as opaque to avoid circular dependency with server module
+// The actual MVCCManager is in server/txn/mvcc.zig
+const TxnId = u64;
+const MVCCManager = opaque {}; // Forward declaration to avoid import conflict
 // const query_coordinator = @import("../distributed/query_coordinator.zig");
 // const enhanced_query_transport = @import("../distributed/enhanced_query_transport.zig");
 const ast = @import("../gql/ast.zig");
@@ -215,7 +218,7 @@ pub const MaterializedViewManager = struct {
     dependency_tracker: DependencyTracker,
     // query_coordinator: ?*query_coordinator.QueryCoordinator,
     // enhanced_transport: ?*enhanced_query_transport.EnhancedQueryTransport,
-    mvcc_manager: ?*mvcc.MVCCManager,
+    mvcc_manager: ?*MVCCManager,
     config: ViewManagerConfig,
     statistics: ManagerStatistics,
 

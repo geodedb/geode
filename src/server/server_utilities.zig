@@ -1,10 +1,11 @@
 const std = @import("std");
+const geode = @import("geode");
 const ServerState = @import("server_state.zig").ServerState;
 const mvcc = @import("txn/mvcc.zig");
-const eval = @import("../lib.zig").eval;
+const eval = geode.eval;
 const wal_mod = @import("wal");
-const protocol = @import("../lib.zig").protocol;
-const diagnostics = @import("../lib.zig").diagnostics;
+const protocol = geode.protocol;
+const diagnostics = geode.diagnostics;
 const server_flags = @import("server_flags.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-011; FEATURE="ServerRefactoring"; ASPECT=SERVER_UTILITIES; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14

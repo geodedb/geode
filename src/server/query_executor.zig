@@ -1,16 +1,16 @@
 const std = @import("std");
-const eval = @import("../eval.zig");
-const exec = @import("../execution.zig");
-const protocol = @import("../lib.zig").protocol;
 const geode = @import("geode");
+const eval = geode.eval;
+const exec = geode.exec;
+const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
 const ast = geode.ast;
-const graph_exec = @import("../graph_exec.zig");
-const eval_extended = @import("../eval_extended.zig");
+const graph_exec = @import("graph/exec.zig");
+const eval_extended = geode.eval_ext;
 const server_state = @import("server_state.zig");
 const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
-const union_advanced = @import("../union_advanced.zig");
+const union_advanced = geode.union_advanced;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=QUERY_EXECUTOR; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.3 - Query Executor Module (Incremental Extraction - Eighth Increment)

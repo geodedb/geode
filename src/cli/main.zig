@@ -1577,78 +1577,6 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
-
-// Direct server function (eliminates subprocess spawning)
-fn runEmbeddedServer(allocator: std.mem.Allocator, config: ServerConfig) !void {
-    // Unified binary approach - direct server startup without subprocess spawning
-
-    // Build argument array for server main function
-    var server_args = std.ArrayList([]const u8).initCapacity(allocator, 16) catch return error.OutOfMemory;
-    defer server_args.deinit(allocator);
-
-    // Program name
-    try server_args.append(allocator, "geode-server");
-
-    if (config.listen_quic) |addr| {
-        try server_args.append(allocator, "--listen");
-        try server_args.append(allocator, addr);
-    }
-
-    if (config.data_dir) |data_dir| {
-        try server_args.append(allocator, "--data-dir");
-        try server_args.append(allocator, data_dir);
-    }
-
-    if (config.cert_path) |cert| {
-        try server_args.append(allocator, "--cert");
-        try server_args.append(allocator, cert);
-    }
-
-    if (config.key_path) |key| {
-        try server_args.append(allocator, "--key");
-        try server_args.append(allocator, key);
-    }
-
-    if (config.force_no_tls) {
-        try server_args.append(allocator, "--no-tls");
-    }
-
-    if (config.result_format_txt) {
-        try server_args.append(allocator, "--result-format");
-        try server_args.append(allocator, "txt");
-    }
-
-    // Set log level
-    try server_args.append(allocator, "--log-level");
-    try server_args.append(allocator, config.log_level);
-
-    // Create null-terminated strings for argv compatibility
-    var argv = std.ArrayList([:0]u8).initCapacity(allocator, server_args.items.len) catch return error.OutOfMemory;
-    defer {
-        for (argv.items) |arg| {
-            allocator.free(arg);
-        }
-        argv.deinit(allocator);
-    }
-
-    for (server_args.items) |arg| {
-        const null_terminated = try allocator.dupeZ(u8, arg);
-        try argv.append(allocator, null_terminated);
-    }
-
-    // Set up environment for server main
-    std.debug.print("Geode server starting with unified binary (no subprocess spawning)\n", .{});
-    if (config.listen_quic) |addr| {
-        std.debug.print("Listen address: {s}\n", .{addr});
-    }
-    if (config.data_dir) |data_dir| {
-        std.debug.print("Data directory: {s}\n", .{data_dir});
-    }
-
-    // Call server startup function directly
-    try startServer(allocator, argv.items);
-}
-
 // Direct client function (eliminates subprocess spawning)
 fn runEmbeddedClient(allocator: std.mem.Allocator, config: ClientConfig) !void {
     // Unified binary approach - no subprocess spawning required
@@ -2510,6 +2438,7 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     std.debug.print("Starting Geode server...\n", .{});
+    std.debug.print(">>> BUILD VERSION: 2025-12-21-MULTIGRAPH-DEBUG <<<\n", .{});
     if (config.listen_quic) |addr| {
         std.debug.print("Listening on: {s}\n", .{addr});
     }
@@ -2517,11 +2446,9 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.debug.print("Data directory: {s}\n", .{dd});
     }
 
-    // Run the embedded server
-    runEmbeddedServer(allocator, config) catch |err| {
-        std.debug.print("Server error: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
+    // Run the QUIC server directly (unified binary - no subprocess spawning)
+    // This uses the startServer function which implements proper QUIC handling
+    try startServer(allocator, argv);
 }
 
 fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {

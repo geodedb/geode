@@ -32,7 +32,7 @@ const index_catalog = @import("index_catalog.zig");
 // Import server flags (M3.1 Phase 3 modularization)
 const server_flags = @import("server_flags.zig");
 // Import graph storage manager (M3.1 Phase 3 modularization)
-const graph_storage_mgr = @import("graph_storage_manager.zig");
+const graph_storage_mgr = geode.graph_storage_manager;
 // Import protocol handler (M3.2 Phase 3 modularization)
 const protocol_handler = @import("protocol_handler.zig");
 // Import CLI argument parsing (M3.2 Phase 3 CLI extraction)
@@ -238,8 +238,6 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 
 // Removed: AllocTracker struct (~1 line) now in query_executor module (M3.3 Phase 3 sixth increment)
 // Removed: trackerGet() function (~5 lines) now in query_executor module (M3.3 Phase 3 sixth increment)
-
-const graph_exec = @import("graph/exec.zig");
 
 // Global test override for MATCH guard max results (set via --match-max-results)
 var g_match_max_results_override: ?usize = null;

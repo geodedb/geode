@@ -50,6 +50,9 @@ pub const QuicTransport = struct {
         cert_path: []const u8 = "certs/server.crt",
         key_path: []const u8 = "certs/server.key",
         ca_path: ?[]const u8 = null,
+        /// Allow insecure TLS connections (skip certificate validation)
+        /// For testing with self-signed certificates
+        allow_insecure: bool = true,
     };
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !QuicTransport {
@@ -139,7 +142,7 @@ pub const QuicTransport = struct {
             .cert_path = self.config.cert_path,
             .key_path = self.config.key_path,
             .ca_path = self.config.ca_path,
-            .allow_insecure = false,
+            .allow_insecure = self.config.allow_insecure,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
             .inline_server_cert_der = self.cert_der,

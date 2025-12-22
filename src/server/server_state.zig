@@ -191,11 +191,11 @@ pub const UnionMetrics = struct {
     hash_size: ?usize,
 };
 
-// Additional imports needed for ServerState
-const protocol = @import("../lib.zig").protocol;
+// Additional imports needed for ServerState (use geode module instead of relative imports)
+const geode = @import("geode");
+const protocol = geode.protocol;
 const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
-const geode = @import("../lib.zig");
 const txn_mgr = @import("txn");
 
 /// Main server state structure managing all server-side state
@@ -292,7 +292,7 @@ pub const ServerState = struct {
 
     // Authentication state for current session (set by HELLO message handler)
     authenticated_user: ?[]const u8 = null,
-    authenticated_role: ?@import("../security/user_management.zig").Role = null,
+    authenticated_role: ?geode.user_management.Role = null,
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphSupport"; ASPECT=SessionGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
     // Current graph for this session (set by USE GRAPH command)

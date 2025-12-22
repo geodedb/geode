@@ -1,5 +1,5 @@
 const std = @import("std");
-const GeodeClient = @import("geode_client.zig").GeodeClient;
+const GeodeClient = @import("geode_client").GeodeClient;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -35,7 +35,7 @@ pub fn main() !void {
     std.debug.print("✓ HELLO sent!\n", .{});
 
     std.debug.print("Receiving response...\n", .{});
-    const response = client.receiveMessage() catch |err| {
+    const response = client.receiveMessage(30000) catch |err| {
         std.debug.print("Receive failed: {}\n", .{err});
         return err;
     };

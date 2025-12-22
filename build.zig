@@ -684,7 +684,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_quic_tls_tests.step);
     test_step.dependOn(&zig_client_quic_test.step);
 
-    // Legacy geoded binary removed - functionality now in unified geode binary
+    // Note: geoded server binary was removed to avoid module conflicts.
+    // The CLI binary (geode) now handles 'serve' by directly invoking server functions
+    // since the server code is already part of the geode module through statement_dispatcher.
+
     // Shared modules needed by various executables
     //    const sentinel_mod = b.createModule(.{ .root_source_file = b.path("src/sentinel.zig"), .target = target, .optimize = optimize });
 
@@ -714,12 +717,6 @@ pub fn build(b: *std.Build) void {
     wal_mod.addImport("commit_coordinator", commit_coord_mod);
     //    const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
     //    const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
-
-    //    const util_tracking_mod = b.createModule(.{ .root_source_file = b.path("src/util/tracking_alloc.zig"), .target = target, .optimize = optimize });
-    //    const util_memory_gov_mod = b.createModule(.{ .root_source_file = b.path("src/util/memory_governor.zig"), .target = target, .optimize = optimize });
-    //    const index_selectivity_mod = b.createModule(.{ .root_source_file = b.path("src/index/selectivity.zig"), .target = target, .optimize = optimize });
-    //    const util_text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
-    //    const server_txn_mvcc_mod = b.createModule(.{ .root_source_file = b.path("src/server/txn/mvcc.zig"), .target = target, .optimize = optimize });
 
     // Create transport QUIC module for unified binary - using vendor/quic via vendor_setup.zig
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });

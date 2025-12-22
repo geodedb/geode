@@ -1,13 +1,15 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GQL-017; FEATURE="Property Access"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_PropertyAccess; OWNER=engine; UPDATED=2025-09-20
-const geode = @import("geode");
-const eval = geode.eval;
-const protocol = geode.protocol;
-const ast = geode.ast;
-const exec = geode.exec;
+// Use relative imports to avoid circular dependency when execution.zig imports graph_storage_manager.zig
+const eval = @import("../../eval.zig");
+const ast = @import("../../gql/ast.zig");
+const diagnostics = @import("../../diagnostics.zig");
+const eval_ext = @import("../../eval_extended.zig");
+const evaluator_functions = @import("../../types/evaluator_functions.zig");
+const heap = @import("../../storage/heap.zig");
 
 // Import shared types from common module
-const graph_common = geode.graph_common;
+const graph_common = @import("../../types/graph_common.zig");
 
 // Re-export types for compatibility
 pub const NodeId = graph_common.NodeId;
@@ -250,7 +252,7 @@ pub fn executeMatch(
     query: *const ast.Query,
     where_clause: ?ast.Expr,
     opts_opt: ?MatchOptions,
-    eval_diag: ?*geode.diagnostics.Code,
+    eval_diag: ?*diagnostics.Code,
     index_optimizer: ?*IndexOptimizer,
 ) ![]Binding {
     const opts: MatchOptions = opts_opt orelse .{};
@@ -429,7 +431,7 @@ fn evaluateExpressionInBinding(
             const function_name = call.callee.Ident.orig;
 
             // Try to use the extended function registry (like eval.zig does)
-            const eval_ext = geode.eval_ext;
+            // eval_ext is already imported at the module level
 
             // Initialize function registry
             var registry = eval_ext.initFunctionRegistry(allocator) catch break :blk_call .Null;
@@ -495,10 +497,10 @@ fn evaluateExpressionInBinding(
                 }
             } else {
                 // Try basic function fallback (like toString, toInteger from evaluator_functions.zig)
-                const eval_functions = geode.types.evaluator_functions;
+                // evaluator_functions is already imported at the module level
 
                 // Convert arguments to eval.Value format for basic functions
-                var eval_args = allocator.alloc(geode.eval.Value, call.args.len) catch break :blk_call .Null;
+                var eval_args = allocator.alloc(eval.Value, call.args.len) catch break :blk_call .Null;
                 defer allocator.free(eval_args);
 
                 for (call.args, 0..) |arg, i| {
@@ -506,37 +508,37 @@ fn evaluateExpressionInBinding(
 
                     eval_args[i] = switch (arg_result) {
                         .Value => |v| switch (v) {
-                            .String => |s| geode.eval.Value{ .Str = s },
-                            .Int => |int_val| geode.eval.Value{ .Int = int_val },
-                            .Bool => |b| geode.eval.Value{ .Bool = b },
-                            .Null => geode.eval.Value{ .Null = {} },
-                            .Decimal => |dec| geode.eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
-                            .VectorF32 => geode.eval.Value{ .Null = {} }, // VectorF32 not supported in eval.Value
+                            .String => |s| eval.Value{ .Str = s },
+                            .Int => |int_val| eval.Value{ .Int = int_val },
+                            .Bool => |b| eval.Value{ .Bool = b },
+                            .Null => eval.Value{ .Null = {} },
+                            .Decimal => |dec| eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                            .VectorF32 => eval.Value{ .Null = {} }, // VectorF32 not supported in eval.Value
                         },
                         .Property => |p| switch (p) {
-                            .String => |s| geode.eval.Value{ .Str = s },
-                            .Int => |int_val| geode.eval.Value{ .Int = int_val },
-                            .Bool => |b| geode.eval.Value{ .Bool = b },
-                            .Null => geode.eval.Value{ .Null = {} },
-                            .Decimal => |dec| geode.eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
-                            .VectorF32 => geode.eval.Value{ .Null = {} }, // VectorF32 not supported in eval.Value
+                            .String => |s| eval.Value{ .Str = s },
+                            .Int => |int_val| eval.Value{ .Int = int_val },
+                            .Bool => |b| eval.Value{ .Bool = b },
+                            .Null => eval.Value{ .Null = {} },
+                            .Decimal => |dec| eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+                            .VectorF32 => eval.Value{ .Null = {} }, // VectorF32 not supported in eval.Value
                         },
-                        .Node => geode.eval.Value{ .Null = {} },
-                        .Edge => geode.eval.Value{ .Null = {} },
-                        .Path => geode.eval.Value{ .Null = {} },
-                        .Null => geode.eval.Value{ .Null = {} },
+                        .Node => eval.Value{ .Null = {} },
+                        .Edge => eval.Value{ .Null = {} },
+                        .Path => eval.Value{ .Null = {} },
+                        .Null => eval.Value{ .Null = {} },
                     };
                 }
 
                 // Convert eval.Value to heap.Value for function calls
                 const convertEvalToHeap = struct {
-                    fn convert(val: eval.Value) geode.storage.heap.Value {
+                    fn convert(val: eval.Value) heap.Value {
                         return switch (val) {
-                            .Null => geode.storage.heap.Value{ .Null = {} },
-                            .Bool => |b| geode.storage.heap.Value{ .Bool = b },
-                            .Int => |i| geode.storage.heap.Value{ .Int = i },
-                            .Str => |s| geode.storage.heap.Value{ .Str = s },
-                            .Decimal => |dec| geode.storage.heap.Value{ .Decimal128 = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                            .Null => heap.Value{ .Null = {} },
+                            .Bool => |b| heap.Value{ .Bool = b },
+                            .Int => |i| heap.Value{ .Int = i },
+                            .Str => |s| heap.Value{ .Str = s },
+                            .Decimal => |dec| heap.Value{ .Decimal128 = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
                         };
                     }
                 }.convert;
@@ -544,7 +546,7 @@ fn evaluateExpressionInBinding(
                 // Try basic function calls
                 if (std.ascii.eqlIgnoreCase(function_name, "toString") and eval_args.len == 1) {
                     const heap_arg = convertEvalToHeap(eval_args[0]);
-                    if (eval_functions.toString_val(allocator, heap_arg)) |result| {
+                    if (evaluator_functions.toString_val(allocator, heap_arg)) |result| {
                         // Convert heap.Value to PropertyValue
                         const property_value = switch (result) {
                             .Text => |s| PropertyValue{ .String = s },
@@ -560,7 +562,7 @@ fn evaluateExpressionInBinding(
                     } else |_| {}
                 } else if (std.ascii.eqlIgnoreCase(function_name, "toInteger") and eval_args.len == 1) {
                     const heap_arg = convertEvalToHeap(eval_args[0]);
-                    if (eval_functions.toInteger_val(heap_arg)) |result| {
+                    if (evaluator_functions.toInteger_val(heap_arg)) |result| {
                         // Convert heap.Value to PropertyValue
                         const property_value = switch (result) {
                             .Text => |s| PropertyValue{ .String = s },
@@ -576,7 +578,7 @@ fn evaluateExpressionInBinding(
                     } else |_| {}
                 } else if (std.ascii.eqlIgnoreCase(function_name, "type") and eval_args.len == 1) {
                     const heap_arg = convertEvalToHeap(eval_args[0]);
-                    if (eval_functions.type_val(heap_arg)) |result| {
+                    if (evaluator_functions.type_val(heap_arg)) |result| {
                         // Convert heap.Value to PropertyValue
                         const property_value = switch (result) {
                             .Text => |s| PropertyValue{ .String = s },
