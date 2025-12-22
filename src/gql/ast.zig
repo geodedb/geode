@@ -144,6 +144,10 @@ pub const Chain = struct {
     // Flag to indicate this is a shortestPath/allShortestPaths pattern
     // Set by parser when parsing shortestPath((pattern)) syntax
     is_shortest: bool = false,
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-001; FEATURE="OptionalMatchChain"; ASPECT=AST; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-22
+    // Flag to indicate this chain is from an OPTIONAL MATCH clause
+    // Optional chains should be treated as left outer joins during execution
+    is_optional: bool = false,
 };
 
 pub const GraphPattern = struct { chains: []Chain };

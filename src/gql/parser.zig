@@ -1612,10 +1612,14 @@ pub const Parser = struct {
             }
 
             // Check for additional MATCH or OPTIONAL MATCH clauses and combine their chains
+            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-002; FEATURE="OptionalMatchParsing"; ASPECT=ChainMarking; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-22
             while (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
+                // Track whether current chains are optional (for OPTIONAL MATCH)
+                var is_currently_optional = false;
                 // Handle OPTIONAL MATCH
                 if (self.cur.kind == .OPTIONAL) {
                     self.advance();
+                    is_currently_optional = true;
                     // Check for OPTIONAL { ... } or OPTIONAL (...) block syntax
                     if (self.cur.kind == .l_brace or self.cur.kind == .l_paren) {
                         const is_paren = self.cur.kind == .l_paren;
@@ -1627,7 +1631,10 @@ pub const Parser = struct {
                                 self.advance();
                                 const block_gp = try self.parseGraphPattern();
                                 for (block_gp.chains) |chain| {
-                                    try all_chains.append(self.arena.allocator(), chain);
+                                    // Mark chain as optional
+                                    var optional_chain = chain;
+                                    optional_chain.is_optional = true;
+                                    try all_chains.append(self.arena.allocator(), optional_chain);
                                 }
                                 // Optional semicolon separator
                                 if (self.cur.kind == .semicolon) {
@@ -1654,7 +1661,14 @@ pub const Parser = struct {
                 self.advance(); // consume MATCH
                 const additional_gp = try self.parseGraphPattern();
                 for (additional_gp.chains) |chain| {
-                    try all_chains.append(self.arena.allocator(), chain);
+                    // Mark chain as optional if from OPTIONAL MATCH
+                    if (is_currently_optional) {
+                        var optional_chain = chain;
+                        optional_chain.is_optional = true;
+                        try all_chains.append(self.arena.allocator(), optional_chain);
+                    } else {
+                        try all_chains.append(self.arena.allocator(), chain);
+                    }
                 }
             }
 
