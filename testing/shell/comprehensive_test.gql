@@ -180,8 +180,7 @@ RETURN sign(0) AS sign_zero;
 -- 6.2 Rounding
 RETURN ceil(3.2) AS ceiling;
 RETURN floor(3.8) AS floored;
--- NOTE: round(x, precision) not yet implemented, only round(x)
--- RETURN round(3.14159, 2) AS rounded;
+RETURN round(3.14159, 2) AS rounded;
 RETURN round(3.5) AS round_half;
 
 -- 6.3 Powers and Roots
@@ -272,45 +271,45 @@ RETURN size([1, 2, 3, 4, 5]) AS collection_size;
 -- SECTION 9: DATE AND TIME FUNCTIONS
 -- ============================================================================
 
--- NOTE: Date/time functions not yet fully implemented
 -- 9.1 Current Time
--- RETURN datetime() AS current_datetime;
--- RETURN date() AS current_date;
--- RETURN time() AS current_time;
--- RETURN timestamp() AS current_timestamp;
--- RETURN localdatetime() AS local_datetime;
+RETURN datetime() AS current_datetime;
+RETURN date() AS current_date;
+RETURN time() AS current_time;
+RETURN timestamp() AS current_timestamp;
+RETURN localdatetime() AS local_datetime;
 
 -- 9.2 Date Construction
--- RETURN date('2024-01-15') AS parsed_date;
--- RETURN datetime('2024-01-15T10:30:00') AS parsed_datetime;
+RETURN date('2024-01-15') AS parsed_date;
+RETURN datetime('2024-01-15T10:30:00') AS parsed_datetime;
+-- NOTE: Map-based date construction not yet implemented
 -- RETURN date({year: 2024, month: 6, day: 15}) AS constructed_date;
 
 -- 9.3 Date Components
--- RETURN date().year AS current_year;
--- RETURN date().month AS current_month;
--- RETURN date().day AS current_day;
--- RETURN datetime().hour AS current_hour;
--- RETURN datetime().minute AS current_minute;
--- RETURN datetime().second AS current_second;
+RETURN date().year AS current_year;
+RETURN date().month AS current_month;
+RETURN date().day AS current_day;
+RETURN datetime().hour AS current_hour;
+RETURN datetime().minute AS current_minute;
+RETURN datetime().second AS current_second;
 
--- 9.4 Duration
--- RETURN duration('P1Y2M3D') AS duration_period;
--- RETURN duration('PT2H30M') AS duration_time;
+-- 9.4 Duration (returns duration in seconds)
+RETURN duration('P1Y2M3D') AS duration_period;
+RETURN duration('PT2H30M') AS duration_time;
+-- NOTE: Map-based duration construction not yet implemented
 -- RETURN duration({days: 5, hours: 3}) AS duration_map;
 
 -- ============================================================================
 -- SECTION 10: TYPE FUNCTIONS AND COERCION
 -- ============================================================================
 
--- NOTE: type() function not yet implemented for literals
 -- 10.1 Type Checking
--- RETURN type(5) AS type_int;
--- RETURN type(3.14) AS type_float;
--- RETURN type('hello') AS type_string;
--- RETURN type(true) AS type_bool;
--- RETURN type([1, 2, 3]) AS type_list;
--- RETURN type({a: 1}) AS type_map;
--- RETURN type(null) AS type_null;
+RETURN type(5) AS type_int;
+RETURN type(3.14) AS type_float;
+RETURN type('hello') AS type_string;
+RETURN type(true) AS type_bool;
+RETURN type([1, 2, 3]) AS type_list;
+RETURN type({a: 1}) AS type_map;
+RETURN type(null) AS type_null;
 
 -- 10.2 Type Conversion
 RETURN toInteger('42') AS str_to_int;
@@ -529,9 +528,10 @@ MATCH (p:Person) RETURN p.name ORDER BY p.name SKIP 1 LIMIT 2;
 -- 18.1 Count
 MATCH (p:Person) RETURN count(p) AS total_people;
 
--- 18.2 Count with Grouping
+-- 18.2 Count with Grouping (GQL requires explicit GROUP BY)
 MATCH (p:Person)-[:WORKS_FOR]->(c:Company)
 RETURN c.name AS company, count(p) AS employees
+GROUP BY c.name
 ORDER BY employees DESC;
 
 -- 18.3 Sum
@@ -543,9 +543,10 @@ MATCH (p:Person) RETURN avg(p.age) AS average_age;
 -- 18.5 Min/Max
 MATCH (p:Person) RETURN min(p.age) AS youngest, max(p.age) AS oldest;
 
--- 18.6 Collect
+-- 18.6 Collect (GQL requires explicit GROUP BY)
 MATCH (p:Person)-[:WORKS_FOR]->(c:Company {name: 'TechCorp'})
-RETURN c.name AS company, collect(p.name) AS employees;
+RETURN c.name AS company, collect(p.name) AS employees
+GROUP BY c.name;
 
 -- 18.7 DISTINCT
 MATCH (p:Person)-[:WORKS_FOR]->(c:Company)
@@ -633,14 +634,16 @@ MATCH (t:Temporary) DETACH DELETE t;
 -- SECTION 23: WITH CLAUSE
 -- ============================================================================
 
--- 23.1 Basic WITH
+-- 23.1 Basic WITH (GQL requires explicit GROUP BY)
 MATCH (p:Person)
 WITH p.age AS age, count(*) AS count
+GROUP BY p.age
 RETURN age, count ORDER BY age;
 
--- 23.2 WITH for Filtering Aggregations
+-- 23.2 WITH for Filtering Aggregations (GQL requires explicit GROUP BY)
 MATCH (p:Person)-[:WORKS_FOR]->(c:Company)
 WITH c, count(p) AS emp_count
+GROUP BY c
 WHERE emp_count > 1
 RETURN c.name, emp_count;
 

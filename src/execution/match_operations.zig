@@ -29,6 +29,56 @@ const expandVariableLengthPaths = execution.expandVariableLengthPaths;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+// CANARY: REQ=REQ-GQL-DISTINCT-001; FEATURE="DISTINCT"; ASPECT=DEDUPLICATION; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+/// Apply DISTINCT deduplication to result rows
+fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
+    if (result.rows.len <= 1) return;
+
+    var seen = std.StringHashMap(void).init(allocator);
+    defer seen.deinit();
+
+    var unique_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
+    defer unique_rows.deinit(allocator);
+
+    for (result.rows) |row| {
+        // Create a hash key from row values
+        var key_buf = std.ArrayList(u8).initCapacity(allocator, 256) catch continue;
+        defer key_buf.deinit(allocator);
+        const writer = key_buf.writer(allocator);
+
+        for (row, 0..) |val, i| {
+            if (i > 0) writer.writeAll("|") catch {};
+            switch (val) {
+                .Null => writer.writeAll("NULL") catch {},
+                .Bool => |b| writer.print("{}", .{b}) catch {},
+                .Int => |n| writer.print("{}", .{n}) catch {},
+                .Str => |s| writer.writeAll(s) catch {},
+                .Decimal => |d| writer.print("{}.{}", .{ d.coeff, d.scale }) catch {},
+                .Node => |node| writer.print("Node:{}", .{node.id}) catch {},
+                .Edge => |e| writer.print("Edge:{}", .{e.id}) catch {},
+                .List => writer.writeAll("List") catch {},
+                .Map => writer.writeAll("Map") catch {},
+                .Path => writer.writeAll("Path") catch {},
+                .ExtValue => writer.writeAll("ExtValue") catch {},
+            }
+        }
+
+        const key = key_buf.toOwnedSlice(allocator) catch continue;
+        defer allocator.free(key);
+
+        if (!seen.contains(key)) {
+            seen.put(key, {}) catch continue;
+            try unique_rows.append(allocator, row);
+        } else {
+            allocator.free(row);
+        }
+    }
+
+    // Free the old rows slice and replace with deduplicated rows
+    allocator.free(result.rows);
+    result.rows = try unique_rows.toOwnedSlice(allocator);
+}
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=MATCH_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted MATCH operations from execution.zig for better modularity (M1 Phase 6)
 
@@ -984,6 +1034,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 try sortRows(allocator, &result, order);
             }
 
+            // Apply DISTINCT deduplication if requested
+            if (q.ret.distinct) {
+                try applyDistinct(allocator, &result);
+            }
+
             return result;
         } else {
             // No GROUP BY - aggregate all matching rows into single result
@@ -1343,6 +1398,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .rows = return_rows,
                     .flags = with_result.flags,
                 };
+            }
+
+            // Apply DISTINCT deduplication if requested
+            if (q.ret.distinct) {
+                try applyDistinct(allocator, &result);
             }
 
             return result;
@@ -2293,6 +2353,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 .rows = return_rows,
                 .flags = with_result.flags,
             };
+        }
+
+        // Apply DISTINCT deduplication if requested
+        if (q.ret.distinct) {
+            try applyDistinct(allocator, &result);
         }
 
         return result;

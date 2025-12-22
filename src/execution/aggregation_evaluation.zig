@@ -118,15 +118,25 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             null;
 
                         if (field_name) |field| {
-                            var sum: i64 = 0;
+                            var sum_int: i64 = 0;
+                            var sum_float: f64 = 0;
+                            var has_float = false;
                             for (nodes) |node| {
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
-                                        sum += val.Int;
+                                        sum_int += val.Int;
+                                        sum_float += @floatFromInt(val.Int);
+                                    } else if (val == .Float) {
+                                        has_float = true;
+                                        sum_float += val.Float;
                                     }
                                 }
                             }
-                            return Value{ .Int = sum };
+                            if (has_float) {
+                                // Return as Decimal with 2 decimal places
+                                return Value{ .Decimal = .{ .coeff = @intFromFloat(sum_float * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } };
+                            }
+                            return Value{ .Int = sum_int };
                         }
                     }
                     return Value{ .Int = 0 };
@@ -215,6 +225,45 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                         }
                     }
                     return Value{ .Null = {} };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
+                    // CANARY: REQ=REQ-AGG-COLLECT-001; FEATURE="AggregationFunctions"; ASPECT=COLLECT; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-22
+                    // COLLECT aggregation - collect values into a list
+                    if (call.args.len == 1) {
+                        const field_name = if (call.args[0].* == .PropertyAccess)
+                            call.args[0].PropertyAccess.property
+                        else if (call.args[0].* == .Member)
+                            call.args[0].Member.field
+                        else if (call.args[0].* == .Ident)
+                            call.args[0].Ident.orig
+                        else
+                            null;
+
+                        if (field_name) |field| {
+                            var list = try std.ArrayList(Value).initCapacity(allocator, nodes.len);
+                            for (nodes) |node| {
+                                // Check if the field matches the node variable name
+                                if (call.args[0].* == .Ident) {
+                                    // collect(n) - collect node references
+                                    try list.append(allocator, Value{ .Node = node });
+                                } else {
+                                    // collect(n.prop) - collect property values
+                                    if (node.properties.get(field)) |val| {
+                                        const value = switch (val) {
+                                            .String => |s| Value{ .Str = s },
+                                            .Int => |n| Value{ .Int = n },
+                                            .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } },
+                                            .Bool => |b| Value{ .Bool = b },
+                                            .Null => Value{ .Null = {} },
+                                            .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        };
+                                        try list.append(allocator, value);
+                                    }
+                                }
+                            }
+                            return Value{ .List = try list.toOwnedSlice(allocator) };
+                        }
+                    }
+                    return Value{ .List = &.{} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "stddev")) {
                     // CANARY: REQ=REQ-MATH-STATS-001; FEATURE="StatisticalFunctions"; ASPECT=STDDEV; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
                     // STDDEV aggregation - population standard deviation
@@ -538,17 +587,27 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                             null;
 
                         if (field_name) |field| {
-                            var sum: i64 = 0;
+                            var sum_int: i64 = 0;
+                            var sum_float: f64 = 0;
+                            var has_float = false;
                             var iter = store.nodes.iterator();
                             while (iter.next()) |entry| {
                                 const node = entry.value_ptr;
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
-                                        sum += val.Int;
+                                        sum_int += val.Int;
+                                        sum_float += @floatFromInt(val.Int);
+                                    } else if (val == .Float) {
+                                        has_float = true;
+                                        sum_float += val.Float;
                                     }
                                 }
                             }
-                            return Value{ .Int = sum };
+                            if (has_float) {
+                                // Return as Decimal with 2 decimal places
+                                return Value{ .Decimal = .{ .coeff = @intFromFloat(sum_float * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } };
+                            }
+                            return Value{ .Int = sum_int };
                         }
                     }
                     return Value{ .Int = 0 };
@@ -644,6 +703,47 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                         }
                     }
                     return Value{ .Null = {} };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
+                    // CANARY: REQ=REQ-AGG-COLLECT-002; FEATURE="AggregationFunctions"; ASPECT=COLLECT_STORE; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-22
+                    // COLLECT aggregation - collect values into a list
+                    if (call.args.len == 1) {
+                        const field_name = if (call.args[0].* == .PropertyAccess)
+                            call.args[0].PropertyAccess.property
+                        else if (call.args[0].* == .Member)
+                            call.args[0].Member.field
+                        else if (call.args[0].* == .Ident)
+                            call.args[0].Ident.orig
+                        else
+                            null;
+
+                        if (field_name) |field| {
+                            var list = try std.ArrayList(Value).initCapacity(allocator, store.getNodeCount());
+                            var iter = store.nodes.iterator();
+                            while (iter.next()) |entry| {
+                                const node = entry.value_ptr;
+                                // Check if the field matches the node variable name
+                                if (call.args[0].* == .Ident) {
+                                    // collect(n) - collect node references
+                                    try list.append(allocator, Value{ .Node = node });
+                                } else {
+                                    // collect(n.prop) - collect property values
+                                    if (node.properties.get(field)) |val| {
+                                        const value = switch (val) {
+                                            .String => |s| Value{ .Str = s },
+                                            .Int => |n| Value{ .Int = n },
+                                            .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } },
+                                            .Bool => |b| Value{ .Bool = b },
+                                            .Null => Value{ .Null = {} },
+                                            .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        };
+                                        try list.append(allocator, value);
+                                    }
+                                }
+                            }
+                            return Value{ .List = try list.toOwnedSlice(allocator) };
+                        }
+                    }
+                    return Value{ .List = &.{} };
                 }
             }
         },

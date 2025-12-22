@@ -195,7 +195,8 @@ pub fn isAggregationExpr(expr: ast.Expr) bool {
                     std.ascii.eqlIgnoreCase(func_name, "sum") or
                     std.ascii.eqlIgnoreCase(func_name, "avg") or
                     std.ascii.eqlIgnoreCase(func_name, "min") or
-                    std.ascii.eqlIgnoreCase(func_name, "max");
+                    std.ascii.eqlIgnoreCase(func_name, "max") or
+                    std.ascii.eqlIgnoreCase(func_name, "collect");
             }
             return false;
         },

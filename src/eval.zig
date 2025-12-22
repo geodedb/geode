@@ -1258,22 +1258,81 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
+            // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=ROUND; STATUS=IMPL; OWNER=math; UPDATED=2025-12-22
             if (std.mem.eql(u8, function_name, "round")) {
-                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                if (call.args.len < 1 or call.args.len > 2) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
+
+                // Get precision (default 0 for rounding to integer)
+                var precision: i64 = 0;
+                if (call.args.len == 2) {
+                    const prec_arg = try evalExpr(allocator, call.args[1].*, env);
+                    precision = switch (prec_arg) {
+                        .Int => |i| i,
+                        else => 0,
+                    };
+                }
+
                 switch (arg) {
-                    .Int => |i| break :blk_call .{ .Int = i },
-                    .Decimal => |d| {
-                        const divisor = std.math.pow(i128, 10, d.scale);
-                        const whole = @divTrunc(d.coeff, divisor);
-                        const frac = @rem(d.coeff, divisor);
-                        const half_divisor = @divTrunc(divisor, 2);
-                        if (frac >= half_divisor) {
-                            break :blk_call .{ .Int = @intCast(whole + 1) };
-                        } else if (frac <= -half_divisor) {
-                            break :blk_call .{ .Int = @intCast(whole - 1) };
+                    .Int => |i| {
+                        if (precision >= 0) {
+                            // Integer with positive precision stays the same
+                            break :blk_call .{ .Int = i };
                         } else {
-                            break :blk_call .{ .Int = @intCast(whole) };
+                            // Negative precision: round to tens, hundreds, etc.
+                            const scale_factor = std.math.pow(i64, 10, @intCast(-precision));
+                            const rounded = @divTrunc(i + @divTrunc(scale_factor, 2), scale_factor) * scale_factor;
+                            break :blk_call .{ .Int = rounded };
+                        }
+                    },
+                    .Decimal => |d| {
+                        if (precision == 0) {
+                            // Round to integer
+                            const divisor = std.math.pow(i128, 10, d.scale);
+                            const whole = @divTrunc(d.coeff, divisor);
+                            const frac = @rem(d.coeff, divisor);
+                            const half_divisor = @divTrunc(divisor, 2);
+                            if (frac >= half_divisor) {
+                                break :blk_call .{ .Int = @intCast(whole + 1) };
+                            } else if (frac <= -half_divisor) {
+                                break :blk_call .{ .Int = @intCast(whole - 1) };
+                            } else {
+                                break :blk_call .{ .Int = @intCast(whole) };
+                            }
+                        } else if (precision > 0) {
+                            // Round to specified decimal places
+                            const target_scale: u8 = @intCast(@min(precision, 38));
+                            if (target_scale >= d.scale) {
+                                // Already has fewer decimal places than requested
+                                break :blk_call .{ .Decimal = d };
+                            }
+                            // Need to reduce decimal places
+                            const scale_diff = d.scale - target_scale;
+                            const divisor = std.math.pow(i128, 10, scale_diff);
+                            const half = @divTrunc(divisor, 2);
+                            const remainder = @rem(d.coeff, divisor);
+                            var new_coeff = @divTrunc(d.coeff, divisor);
+                            if (remainder >= half) {
+                                new_coeff += 1;
+                            } else if (remainder <= -half) {
+                                new_coeff -= 1;
+                            }
+                            break :blk_call .{ .Decimal = .{ .coeff = new_coeff, .scale = target_scale } };
+                        } else {
+                            // Negative precision: round to tens, hundreds, etc.
+                            const total_scale = d.scale + @as(u8, @intCast(-precision));
+                            const divisor = std.math.pow(i128, 10, total_scale);
+                            const half = @divTrunc(divisor, 2);
+                            const remainder = @rem(d.coeff, divisor);
+                            var new_coeff = @divTrunc(d.coeff, divisor);
+                            if (remainder >= half) {
+                                new_coeff += 1;
+                            } else if (remainder <= -half) {
+                                new_coeff -= 1;
+                            }
+                            // Result is an integer (scale 0) multiplied by power of 10
+                            const result = new_coeff * std.math.pow(i128, 10, @intCast(-precision));
+                            break :blk_call .{ .Int = @intCast(result) };
                         }
                     },
                     else => break :blk_call .{ .Null = {} },
@@ -2073,13 +2132,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // Handle type() function - returns relationship type
+    // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=IMPL; OWNER=types; UPDATED=2025-12-22
+    // Handle type() function - returns relationship type for edges, type name for other values
     if (std.mem.eql(u8, function_name, "type")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Edge => |e| return Value{ .Str = e.label },
-            else => return Value{ .Null = {} },
+            else => return Value{ .Str = getTypeName(arg) },
         }
     }
 
@@ -2380,23 +2440,66 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return heapValueToEvalValue(result);
     }
 
-    // Handle datetime(string) function that parses ISO datetime strings
+    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=datetime; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
+    // Handle datetime() function - returns current datetime or parses ISO datetime string
     if (std.mem.eql(u8, function_name, "datetime")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        const str = switch (arg) {
-            .Str => |s| s,
-            else => return null,
-        };
-
-        // Parse the datetime string using the Timestamp parser
         const datetime_module = @import("types/datetime.zig");
-        const ts = datetime_module.Timestamp.fromStr(str) catch return null;
-
-        // Convert to TimestampTZ ExtValue
         const eval_ext = @import("eval_extended.zig");
-        const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = ts.micros_since_epoch } };
-        return Value{ .ExtValue = tz_ts };
+
+        if (args.len == 0) {
+            // datetime() with no args returns current datetime
+            const result = evaluator_functions.current_timestamp();
+            return heapValueToEvalValue(result);
+        } else if (args.len == 1) {
+            const arg = try evalExpr(allocator, args[0].*, env);
+            const str = switch (arg) {
+                .Str => |s| s,
+                else => return null,
+            };
+
+            // Parse the datetime string using the Timestamp parser
+            const ts = datetime_module.Timestamp.fromStr(str) catch return null;
+
+            // Convert to TimestampTZ ExtValue
+            const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = ts.micros_since_epoch } };
+            return Value{ .ExtValue = tz_ts };
+        } else {
+            return null;
+        }
+    }
+
+    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=timestamp; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
+    // Handle timestamp() function - returns current timestamp as integer (epoch millis)
+    if (std.mem.eql(u8, function_name, "timestamp")) {
+        if (args.len != 0) return null;
+        const ts = std.time.milliTimestamp();
+        return Value{ .Int = ts };
+    }
+
+    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=localdatetime; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
+    // Handle localdatetime() function - returns current local datetime
+    if (std.mem.eql(u8, function_name, "localdatetime")) {
+        if (args.len == 0) {
+            // localdatetime() with no args returns current local datetime (same as datetime for now)
+            const result = evaluator_functions.current_timestamp();
+            return heapValueToEvalValue(result);
+        } else if (args.len == 1) {
+            // localdatetime(string) parses ISO datetime string
+            const datetime_module = @import("types/datetime.zig");
+            const eval_ext = @import("eval_extended.zig");
+
+            const arg = try evalExpr(allocator, args[0].*, env);
+            const str = switch (arg) {
+                .Str => |s| s,
+                else => return null,
+            };
+
+            const ts = datetime_module.Timestamp.fromStr(str) catch return null;
+            const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = ts.micros_since_epoch } };
+            return Value{ .ExtValue = tz_ts };
+        } else {
+            return null;
+        }
     }
 
     // Handle date(string) function that parses ISO date strings
@@ -2447,6 +2550,30 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         } else {
             return null;
         }
+    }
+
+    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
+    // Handle duration() function - parses ISO 8601 duration string
+    if (std.mem.eql(u8, function_name, "duration")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(allocator, args[0].*, env);
+        const str = switch (arg) {
+            .Str => |s| s,
+            else => return null,
+        };
+
+        // Parse ISO 8601 duration format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
+        const duration_val = parseDurationString(str) catch return null;
+        return Value{ .Int = duration_val };
+    }
+
+    // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=IMPL; OWNER=types; UPDATED=2025-12-22
+    // Handle type() function - returns the type name of a value
+    if (std.mem.eql(u8, function_name, "type")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(allocator, args[0].*, env);
+        const type_name = getTypeName(arg);
+        return Value{ .Str = type_name };
     }
 
     // CANARY: REQ=REQ-GQL-088; FEATURE="GraphSimilarityFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
@@ -2861,6 +2988,110 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // Function not recognized
     return null;
+}
+
+// CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration_parsing; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
+/// Parse ISO 8601 duration string (e.g., "P1Y2M3D", "PT2H30M", "P1DT12H")
+/// Returns duration in seconds
+fn parseDurationString(str: []const u8) !i64 {
+    if (str.len == 0 or str[0] != 'P') return error.InvalidFormat;
+
+    var seconds: i64 = 0;
+    var idx: usize = 1;
+    var in_time_part = false;
+    var current_num: i64 = 0;
+    var has_num = false;
+
+    while (idx < str.len) {
+        const c = str[idx];
+
+        if (c == 'T') {
+            in_time_part = true;
+            idx += 1;
+            continue;
+        }
+
+        if (c >= '0' and c <= '9') {
+            current_num = current_num * 10 + @as(i64, c - '0');
+            has_num = true;
+            idx += 1;
+            continue;
+        }
+
+        if (!has_num) {
+            idx += 1;
+            continue;
+        }
+
+        // Apply the designator
+        if (!in_time_part) {
+            switch (c) {
+                'Y' => seconds += current_num * 365 * 24 * 60 * 60, // Approximate year
+                'M' => seconds += current_num * 30 * 24 * 60 * 60, // Approximate month
+                'W' => seconds += current_num * 7 * 24 * 60 * 60,
+                'D' => seconds += current_num * 24 * 60 * 60,
+                else => {},
+            }
+        } else {
+            switch (c) {
+                'H' => seconds += current_num * 60 * 60,
+                'M' => seconds += current_num * 60,
+                'S' => seconds += current_num,
+                else => {},
+            }
+        }
+
+        current_num = 0;
+        has_num = false;
+        idx += 1;
+    }
+
+    return seconds;
+}
+
+// CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type_name; STATUS=IMPL; OWNER=types; UPDATED=2025-12-22
+/// Get the type name of a Value for the type() function
+fn getTypeName(value: Value) []const u8 {
+    return switch (value) {
+        .Null => "NULL",
+        .Bool => "BOOLEAN",
+        .Int => "INTEGER",
+        .Decimal => "FLOAT",
+        .Str => "STRING",
+        .List => "LIST",
+        .Map => "MAP",
+        .Node => "NODE",
+        .Edge => "RELATIONSHIP",
+        .Path => "PATH",
+        .ExtValue => |ext| getExtTypeName(ext),
+    };
+}
+
+/// Get the type name for extended values
+fn getExtTypeName(ext: @import("eval_extended.zig").ExtValue) []const u8 {
+    return switch (ext) {
+        .Null => "NULL",
+        .Int => "INTEGER",
+        .Bool => "BOOLEAN",
+        .Str => "STRING",
+        .Decimal => "FLOAT",
+        .Date => "DATE",
+        .Time => "TIME",
+        .TimestampTZ => "DATETIME",
+        .VectorF32 => "VECTOR",
+        .IpAddr => "INET",
+        .Subnet => "CIDR",
+        .Mac => "MAC",
+        .Hash => "HASH",
+        .Currency => "CURRENCY",
+        .LanguageTag => "LANGUAGE_TAG",
+        .LatLon => "POINT",
+        .LatLonAlt => "POINT3D",
+        .Geometry => "GEOMETRY",
+        .Temperature => "TEMPERATURE",
+        .Pressure => "PRESSURE",
+        .List => "LIST",
+    };
 }
 
 fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env) EvalError!Value {
