@@ -1,4 +1,5 @@
 const std = @import("std");
+const graph_storage_manager = @import("../server/graph_storage_manager.zig");
 
 // CANARY: PERF_PHASE3_RWLOCK - RwLock for concurrent catalog access
 // CANARY: REQ=REQ-PERF-PHASE3-001; FEATURE="ConcurrencyOptimization"; ASPECT=CATALOG_LOCK; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-17
@@ -504,6 +505,11 @@ pub fn loadCatalog() !void {
         if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
 
         try catalog.graphs.put(name, {});
+
+        // CRITICAL: Also register with graph storage manager so DROP GRAPH works
+        _ = graph_storage_manager.createGraphStorage(allocator, name) catch {
+            // If storage creation fails (e.g., already exists), that's OK
+        };
     }
 
     // Read indexes

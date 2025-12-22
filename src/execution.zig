@@ -1072,6 +1072,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // Save catalog to disk after creating graph
             saveCatalog() catch {};
 
+            // CRITICAL: Also create graph storage so DROP GRAPH can find it
+            // and queries can be executed against this graph
+            _ = graph_storage_manager.createGraphStorage(allocator, graph_name) catch |err| {
+                // If storage creation fails (e.g., already exists), that's OK - log and continue
+                std.log.debug("Graph storage creation for '{s}': {s}", .{ graph_name, @errorName(err) });
+            };
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),

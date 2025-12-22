@@ -37,13 +37,21 @@ fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
 
+    // Track keys for cleanup - StringHashMap doesn't own its keys
+    var keys_to_free = try std.ArrayList([]u8).initCapacity(allocator, result.rows.len);
+    defer {
+        for (keys_to_free.items) |key| {
+            allocator.free(key);
+        }
+        keys_to_free.deinit(allocator);
+    }
+
     var unique_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
     defer unique_rows.deinit(allocator);
 
     for (result.rows) |row| {
         // Create a hash key from row values
         var key_buf = std.ArrayList(u8).initCapacity(allocator, 256) catch continue;
-        defer key_buf.deinit(allocator);
         const writer = key_buf.writer(allocator);
 
         for (row, 0..) |val, i| {
@@ -63,13 +71,22 @@ fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
             }
         }
 
-        const key = key_buf.toOwnedSlice(allocator) catch continue;
-        defer allocator.free(key);
+        const key = key_buf.toOwnedSlice(allocator) catch {
+            key_buf.deinit(allocator);
+            continue;
+        };
 
         if (!seen.contains(key)) {
-            seen.put(key, {}) catch continue;
+            seen.put(key, {}) catch {
+                allocator.free(key);
+                continue;
+            };
+            // Track key for cleanup at end of function
+            keys_to_free.append(allocator, key) catch {};
             try unique_rows.append(allocator, row);
         } else {
+            // Duplicate - free the key immediately since we don't need it
+            allocator.free(key);
             allocator.free(row);
         }
     }
