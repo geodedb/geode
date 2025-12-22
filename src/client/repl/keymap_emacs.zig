@@ -30,7 +30,7 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
             'l' => .clear_screen, // Ctrl+L: clear screen
             'r' => .search, // Ctrl+R: reverse search
             'c' => .cancel, // Ctrl+C: cancel
-            'i', '\t' => .insert_tab, // Tab: insert tab character
+            'i', '\t' => .complete, // Tab: trigger tab completion
             'j', 'm', '\r', '\n' => .execute, // Enter: execute
             0x7f - 'a' + 1 => .delete_char_forward, // Delete key (mapped from ESC[3~)
             else => .none,

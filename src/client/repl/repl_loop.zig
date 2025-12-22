@@ -766,6 +766,12 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
         state.content_changed = true;
     }
 
+    // Reset completion context when content is modified by anything other than Tab completion
+    // This ensures cycling restarts when user types new characters
+    if (content_modifying and action != .complete) {
+        state.completion_ctx.reset();
+    }
+
     switch (action) {
         .none => {},
         .insert => {

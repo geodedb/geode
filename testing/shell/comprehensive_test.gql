@@ -1,0 +1,834 @@
+-- ============================================================================
+-- GEODE COMPREHENSIVE GQL TEST FILE
+-- ============================================================================
+-- This file contains extensive GQL queries for testing in the geode shell.
+-- Can be run as: geode query < comprehensive_test.gql
+-- Or use individual lines for manual testing in: geode shell
+-- ============================================================================
+
+-- ============================================================================
+-- SECTION 1: BASIC EXPRESSIONS AND LITERALS
+-- ============================================================================
+
+-- 1.1 Numeric Literals
+RETURN 42 AS integer_literal;
+RETURN -17 AS negative_integer;
+RETURN 3.14159 AS float_literal;
+RETURN -0.001 AS negative_float;
+RETURN 1e10 AS scientific_notation;
+RETURN 2.5e-3 AS scientific_small;
+
+-- 1.2 String Literals
+RETURN 'hello world' AS single_quoted;
+RETURN "double quoted" AS double_quoted;
+RETURN 'it''s escaped' AS escaped_quote;
+RETURN '' AS empty_string;
+
+-- 1.3 Boolean Literals
+RETURN true AS bool_true;
+RETURN false AS bool_false;
+
+-- 1.4 Null Literal
+RETURN null AS null_value;
+
+-- 1.5 List Literals
+RETURN [1, 2, 3, 4, 5] AS number_list;
+RETURN ['a', 'b', 'c'] AS string_list;
+RETURN [1, 'mixed', true, null] AS mixed_list;
+RETURN [] AS empty_list;
+RETURN [[1, 2], [3, 4]] AS nested_list;
+
+-- 1.6 Map Literals
+RETURN {name: 'Alice', age: 30} AS simple_map;
+RETURN {nested: {inner: 'value'}} AS nested_map;
+RETURN {} AS empty_map;
+
+-- ============================================================================
+-- SECTION 2: ARITHMETIC OPERATIONS
+-- ============================================================================
+
+-- 2.1 Basic Arithmetic
+RETURN 5 + 3 AS addition;
+RETURN 10 - 4 AS subtraction;
+RETURN 6 * 7 AS multiplication;
+RETURN 15 / 3 AS division;
+RETURN 17 % 5 AS modulo;
+
+-- 2.2 Operator Precedence
+RETURN 2 + 3 * 4 AS precedence_mult_first;
+RETURN (2 + 3) * 4 AS precedence_parens;
+RETURN 10 - 4 + 2 AS left_to_right;
+RETURN 100 / 10 / 2 AS division_chain;
+
+-- 2.3 Unary Operators
+RETURN -42 AS unary_minus;
+RETURN +42 AS unary_plus;
+RETURN -(-5) AS double_negative;
+
+-- 2.4 Complex Expressions
+RETURN ((10 + 5) * 2 - 8) / 2 AS complex_expr;
+RETURN (100 - 20) % 7 + 3 * 2 AS mixed_operators;
+
+-- ============================================================================
+-- SECTION 3: COMPARISON OPERATIONS
+-- ============================================================================
+
+-- 3.1 Equality
+RETURN 5 = 5 AS equal_true;
+RETURN 5 = 6 AS equal_false;
+RETURN 'hello' = 'hello' AS string_equal;
+RETURN null = null AS null_equal;
+
+-- 3.2 Inequality
+RETURN 5 <> 6 AS not_equal_true;
+RETURN 5 <> 5 AS not_equal_false;
+RETURN 5 != 6 AS not_equal_alt;
+
+-- 3.3 Ordering
+RETURN 5 < 10 AS less_than;
+RETURN 10 > 5 AS greater_than;
+RETURN 5 <= 5 AS less_equal;
+RETURN 5 >= 5 AS greater_equal;
+RETURN 'apple' < 'banana' AS string_compare;
+
+-- 3.4 IS NULL / IS NOT NULL
+RETURN null IS NULL AS is_null_true;
+RETURN 5 IS NULL AS is_null_false;
+RETURN 5 IS NOT NULL AS is_not_null_true;
+RETURN null IS NOT NULL AS is_not_null_false;
+
+-- ============================================================================
+-- SECTION 4: LOGICAL OPERATIONS
+-- ============================================================================
+
+-- 4.1 AND Operations
+RETURN true AND true AS and_tt;
+RETURN true AND false AS and_tf;
+RETURN false AND true AS and_ft;
+RETURN false AND false AS and_ff;
+
+-- 4.2 OR Operations
+RETURN true OR true AS or_tt;
+RETURN true OR false AS or_tf;
+RETURN false OR true AS or_ft;
+RETURN false OR false AS or_ff;
+
+-- 4.3 NOT Operations
+RETURN NOT true AS not_true;
+RETURN NOT false AS not_false;
+RETURN NOT NOT true AS double_not;
+
+-- 4.4 XOR Operations
+RETURN true XOR false AS xor_tf;
+RETURN true XOR true AS xor_tt;
+RETURN false XOR false AS xor_ff;
+
+-- 4.5 Complex Logical
+RETURN (true AND false) OR true AS complex_logic1;
+RETURN NOT (true AND false) AS complex_logic2;
+RETURN (5 > 3) AND (10 < 20) AS comparison_logic;
+
+-- ============================================================================
+-- SECTION 5: STRING FUNCTIONS
+-- ============================================================================
+
+-- 5.1 Case Functions
+RETURN upper('hello') AS uppercase;
+RETURN lower('WORLD') AS lowercase;
+
+-- 5.2 String Manipulation
+RETURN length('hello world') AS str_length;
+RETURN substring('hello world', 0, 5) AS substr;
+-- NOTE: left(), right(), ltrim(), rtrim() not yet implemented
+-- RETURN left('hello', 3) AS left_chars;
+-- RETURN right('hello', 3) AS right_chars;
+RETURN trim('  spaced  ') AS trimmed;
+-- RETURN ltrim('  left') AS left_trimmed;
+-- RETURN rtrim('right  ') AS right_trimmed;
+
+-- 5.3 String Search
+-- NOTE: contains(), startsWith(), endsWith(), indexOf() scalar functions not yet implemented
+-- Use pattern predicates in WHERE clause instead: STARTS WITH, ENDS WITH, CONTAINS
+-- RETURN contains('hello world', 'world') AS str_contains;
+-- RETURN startsWith('hello', 'he') AS starts_with;
+-- RETURN endsWith('hello', 'lo') AS ends_with;
+-- RETURN indexOf('hello world', 'o') AS index_of;
+
+-- 5.4 String Transformation
+RETURN replace('hello world', 'world', 'geode') AS replaced;
+RETURN reverse('hello') AS reversed;
+-- NOTE: repeat() not yet implemented
+-- RETURN repeat('ab', 3) AS repeated;
+
+-- 5.5 String Concatenation
+RETURN 'hello' + ' ' + 'world' AS concatenated;
+
+-- 5.6 String Splitting and Joining
+-- NOTE: split() not yet implemented
+-- RETURN split('a,b,c', ',') AS split_result;
+
+-- ============================================================================
+-- SECTION 6: MATHEMATICAL FUNCTIONS
+-- ============================================================================
+
+-- 6.1 Basic Math
+RETURN abs(-42) AS absolute;
+RETURN sign(-5) AS sign_neg;
+RETURN sign(5) AS sign_pos;
+RETURN sign(0) AS sign_zero;
+
+-- 6.2 Rounding
+RETURN ceil(3.2) AS ceiling;
+RETURN floor(3.8) AS floored;
+-- NOTE: round(x, precision) not yet implemented, only round(x)
+-- RETURN round(3.14159, 2) AS rounded;
+RETURN round(3.5) AS round_half;
+
+-- 6.3 Powers and Roots
+RETURN sqrt(16) AS square_root;
+RETURN pow(2, 10) AS power;
+RETURN exp(1) AS euler;
+RETURN log(2.71828) AS natural_log;
+-- NOTE: log10() not yet implemented
+-- RETURN log10(100) AS log_base10;
+
+-- 6.4 Trigonometric
+RETURN sin(0) AS sine_zero;
+RETURN cos(0) AS cosine_zero;
+RETURN tan(0) AS tangent_zero;
+RETURN asin(0) AS arc_sine;
+RETURN acos(1) AS arc_cosine;
+RETURN atan(0) AS arc_tangent;
+RETURN atan2(1, 1) AS arc_tangent2;
+
+-- 6.5 Min/Max
+-- NOTE: min/max with multiple args not yet implemented (only works in aggregation context)
+-- RETURN min(5, 10, 3, 8) AS minimum;
+-- RETURN max(5, 10, 3, 8) AS maximum;
+
+-- 6.6 Random (results vary)
+-- NOTE: rand() and randomUUID() not yet implemented
+-- RETURN rand() AS random_value;
+-- RETURN randomUUID() AS uuid_value;
+
+-- 6.7 Constants
+-- NOTE: pi() and e() not yet implemented
+-- RETURN pi() AS pi_value;
+-- RETURN e() AS euler_number;
+
+-- ============================================================================
+-- SECTION 7: LIST FUNCTIONS
+-- ============================================================================
+
+-- 7.1 List Access
+RETURN [1, 2, 3, 4, 5][0] AS first_element;
+RETURN [1, 2, 3, 4, 5][2] AS third_element;
+-- NOTE: negative indexing not yet implemented
+-- RETURN [1, 2, 3, 4, 5][-1] AS last_element;
+
+-- 7.2 List Properties
+RETURN size([1, 2, 3]) AS list_size;
+RETURN head([1, 2, 3]) AS list_head;
+-- NOTE: last() not yet implemented
+-- RETURN last([1, 2, 3]) AS list_last;
+RETURN tail([1, 2, 3]) AS list_tail;
+
+-- 7.3 List Manipulation
+-- Note: List concatenation with + not supported, use list functions instead
+RETURN reverse([1, 2, 3]) AS list_reversed;
+
+-- 7.4 List Predicates
+RETURN 2 IN [1, 2, 3] AS element_in_list;
+RETURN 5 IN [1, 2, 3] AS element_not_in;
+RETURN all(x IN [1, 2, 3] WHERE x > 0) AS all_positive;
+RETURN any(x IN [1, 2, 3] WHERE x > 2) AS any_greater;
+-- Note: none() and single() predicates not yet supported
+-- RETURN none(x IN [1, 2, 3] WHERE x < 0) AS none_negative;
+-- RETURN single(x IN [1, 2, 3] WHERE x = 2) AS single_match;
+
+-- 7.5 List Comprehension
+-- Note: List comprehension syntax [x FOR x IN list] not yet supported
+-- RETURN [x * 2 FOR x IN [1, 2, 3]] AS doubled;
+-- RETURN [x FOR x IN [1, 2, 3, 4, 5] WHERE x > 2] AS filtered;
+
+-- 7.6 Range
+RETURN range(1, 5) AS range_1_to_5;
+RETURN range(0, 10, 2) AS range_step;
+
+-- ============================================================================
+-- SECTION 8: AGGREGATION FUNCTIONS
+-- ============================================================================
+
+-- Note: UNWIND with aggregations tested later in graph context
+-- Basic aggregation functions are tested in SECTION 18 with MATCH
+
+-- 8.1 Count on literal (simple test)
+RETURN count([1, 2, 3]) AS list_count;
+
+-- 8.2 Size function for collections
+RETURN size([1, 2, 3, 4, 5]) AS collection_size;
+
+-- ============================================================================
+-- SECTION 9: DATE AND TIME FUNCTIONS
+-- ============================================================================
+
+-- NOTE: Date/time functions not yet fully implemented
+-- 9.1 Current Time
+-- RETURN datetime() AS current_datetime;
+-- RETURN date() AS current_date;
+-- RETURN time() AS current_time;
+-- RETURN timestamp() AS current_timestamp;
+-- RETURN localdatetime() AS local_datetime;
+
+-- 9.2 Date Construction
+-- RETURN date('2024-01-15') AS parsed_date;
+-- RETURN datetime('2024-01-15T10:30:00') AS parsed_datetime;
+-- RETURN date({year: 2024, month: 6, day: 15}) AS constructed_date;
+
+-- 9.3 Date Components
+-- RETURN date().year AS current_year;
+-- RETURN date().month AS current_month;
+-- RETURN date().day AS current_day;
+-- RETURN datetime().hour AS current_hour;
+-- RETURN datetime().minute AS current_minute;
+-- RETURN datetime().second AS current_second;
+
+-- 9.4 Duration
+-- RETURN duration('P1Y2M3D') AS duration_period;
+-- RETURN duration('PT2H30M') AS duration_time;
+-- RETURN duration({days: 5, hours: 3}) AS duration_map;
+
+-- ============================================================================
+-- SECTION 10: TYPE FUNCTIONS AND COERCION
+-- ============================================================================
+
+-- NOTE: type() function not yet implemented for literals
+-- 10.1 Type Checking
+-- RETURN type(5) AS type_int;
+-- RETURN type(3.14) AS type_float;
+-- RETURN type('hello') AS type_string;
+-- RETURN type(true) AS type_bool;
+-- RETURN type([1, 2, 3]) AS type_list;
+-- RETURN type({a: 1}) AS type_map;
+-- RETURN type(null) AS type_null;
+
+-- 10.2 Type Conversion
+RETURN toInteger('42') AS str_to_int;
+RETURN toFloat('3.14') AS str_to_float;
+RETURN toString(42) AS int_to_str;
+-- NOTE: toBoolean() not yet implemented
+-- RETURN toBoolean('true') AS str_to_bool;
+-- RETURN toBoolean(1) AS int_to_bool;
+
+-- 10.3 Type Coalescing
+RETURN coalesce(null, null, 'default') AS first_non_null;
+RETURN coalesce('value', 'default') AS has_value;
+
+-- ============================================================================
+-- SECTION 11: CONDITIONAL EXPRESSIONS
+-- ============================================================================
+
+-- 11.1 CASE Expression
+RETURN CASE WHEN 5 > 3 THEN 'greater' ELSE 'less' END AS simple_case;
+RETURN CASE 5 WHEN 1 THEN 'one' WHEN 5 THEN 'five' ELSE 'other' END AS value_case;
+
+-- 11.2 Nested CASE
+RETURN CASE
+    WHEN 10 > 20 THEN 'a'
+    WHEN 10 > 5 THEN 'b'
+    ELSE 'c'
+END AS nested_case;
+
+-- 11.3 CASE with Multiple Conditions
+RETURN CASE
+    WHEN 5 > 10 THEN 'too high'
+    WHEN 5 < 0 THEN 'negative'
+    WHEN 5 >= 0 AND 5 <= 10 THEN 'in range'
+    ELSE 'unknown'
+END AS range_case;
+
+-- ============================================================================
+-- SECTION 12: GRAPH MANAGEMENT
+-- ============================================================================
+
+-- 12.1 Show Available Graphs
+SHOW GRAPHS;
+
+-- 12.2 Create New Graph
+CREATE GRAPH IF NOT EXISTS test_comprehensive;
+
+-- 12.3 Switch to Graph
+USE GRAPH test_comprehensive;
+
+-- 12.4 Create Another Graph for Isolation Test
+CREATE GRAPH IF NOT EXISTS test_secondary;
+
+-- ============================================================================
+-- SECTION 13: NODE OPERATIONS
+-- ============================================================================
+
+-- 13.1 Create Nodes with Labels
+CREATE (p:Person {name: 'Alice', age: 30, email: 'alice@example.com'});
+CREATE (p:Person {name: 'Bob', age: 25, email: 'bob@example.com'});
+CREATE (p:Person {name: 'Charlie', age: 35, email: 'charlie@example.com'});
+CREATE (p:Person {name: 'Diana', age: 28, email: 'diana@example.com'});
+CREATE (p:Person {name: 'Eve', age: 32});
+
+-- 13.2 Create Nodes with Multiple Labels
+CREATE (e:Person:Employee {name: 'Frank', employeeId: 'E001'});
+
+-- 13.3 Create Company Nodes
+CREATE (c:Company {name: 'TechCorp', founded: 2010, industry: 'Technology'});
+CREATE (c:Company {name: 'DataInc', founded: 2015, industry: 'Data'});
+CREATE (c:Company {name: 'StartupXYZ', founded: 2020, industry: 'Fintech'});
+
+-- 13.4 Create Product Nodes
+CREATE (p:Product {name: 'Widget', price: 29.99, stock: 100});
+CREATE (p:Product {name: 'Gadget', price: 49.99, stock: 50});
+CREATE (p:Product {name: 'Gizmo', price: 19.99, stock: 200});
+
+-- 13.5 Return Created Nodes
+-- NOTE: Cannot mix non-aggregated labels(n) with count(n) without GROUP BY
+-- Separate queries to verify nodes created
+MATCH (n) RETURN count(n) AS total_nodes;
+
+-- ============================================================================
+-- SECTION 14: RELATIONSHIP OPERATIONS
+-- ============================================================================
+
+-- 14.1 Create Relationships
+MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+CREATE (a)-[:KNOWS {since: 2020}]->(b);
+
+MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Charlie'})
+CREATE (a)-[:KNOWS {since: 2019}]->(b);
+
+MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Diana'})
+CREATE (b)-[:KNOWS {since: 2021}]->(c);
+
+-- 14.2 Create Employment Relationships
+MATCH (p:Person {name: 'Alice'}), (c:Company {name: 'TechCorp'})
+CREATE (p)-[:WORKS_FOR {since: 2018, role: 'Engineer'}]->(c);
+
+MATCH (p:Person {name: 'Bob'}), (c:Company {name: 'TechCorp'})
+CREATE (p)-[:WORKS_FOR {since: 2020, role: 'Designer'}]->(c);
+
+MATCH (p:Person {name: 'Charlie'}), (c:Company {name: 'DataInc'})
+CREATE (p)-[:WORKS_FOR {since: 2017, role: 'Manager'}]->(c);
+
+MATCH (p:Person {name: 'Diana'}), (c:Company {name: 'StartupXYZ'})
+CREATE (p)-[:WORKS_FOR {since: 2021, role: 'CTO'}]->(c);
+
+-- 14.3 Create Purchase Relationships
+MATCH (p:Person {name: 'Alice'}), (pr:Product {name: 'Widget'})
+CREATE (p)-[:PURCHASED {date: '2024-01-15', quantity: 2}]->(pr);
+
+MATCH (p:Person {name: 'Bob'}), (pr:Product {name: 'Gadget'})
+CREATE (p)-[:PURCHASED {date: '2024-02-20', quantity: 1}]->(pr);
+
+-- 14.4 Count Relationships
+-- NOTE: type(r) function not yet implemented; count all relationships instead
+MATCH ()-[r]->() RETURN count(r) AS relationship_count;
+
+-- ============================================================================
+-- SECTION 15: PATTERN MATCHING
+-- ============================================================================
+
+-- 15.1 Simple Node Match
+MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY p.name;
+
+-- 15.2 Match with Properties
+MATCH (p:Person {age: 30}) RETURN p.name AS name;
+
+-- 15.3 Match with WHERE
+MATCH (p:Person) WHERE p.age > 30 RETURN p.name AS name, p.age AS age;
+
+-- 15.4 Match Relationships
+MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name AS from, b.name AS to;
+
+-- 15.5 Match with Relationship Properties
+MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE r.since > 2019 RETURN a.name AS from, b.name AS to, r.since AS since;
+
+-- 15.6 Match Paths
+MATCH path = (a:Person)-[:KNOWS*1..3]->(b:Person)
+WHERE a.name = 'Alice'
+RETURN a.name AS start, b.name AS end, length(path) AS hops;
+
+-- 15.7 Variable Length Patterns
+MATCH (a:Person)-[:KNOWS*2]->(c:Person)
+RETURN DISTINCT a.name AS start, c.name AS two_hops_away;
+
+-- 15.8 Optional Match
+MATCH (p:Person)
+OPTIONAL MATCH (p)-[:WORKS_FOR]->(c:Company)
+RETURN p.name AS person, c.name AS company;
+
+-- 15.9 Multiple Patterns
+MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
+RETURN p.name AS person, c.name AS employer, pr.name AS purchased;
+
+-- ============================================================================
+-- SECTION 16: FILTERING AND PREDICATES
+-- ============================================================================
+
+-- 16.1 Comparison Predicates
+MATCH (p:Person) WHERE p.age >= 28 AND p.age <= 32 RETURN p.name, p.age;
+
+-- 16.2 String Predicates
+MATCH (p:Person) WHERE p.name STARTS WITH 'A' RETURN p.name;
+MATCH (p:Person) WHERE p.name ENDS WITH 'e' RETURN p.name;
+MATCH (p:Person) WHERE p.name CONTAINS 'li' RETURN p.name;
+
+-- 16.3 List Predicates
+MATCH (p:Person) WHERE p.age IN [25, 30, 35] RETURN p.name, p.age;
+
+-- 16.4 Null Predicates
+MATCH (p:Person) WHERE p.email IS NOT NULL RETURN p.name, p.email;
+MATCH (p:Person) WHERE p.email IS NULL RETURN p.name;
+
+-- 16.5 Pattern Predicates (EXISTS)
+-- NOTE: EXISTS subquery syntax not yet implemented
+-- MATCH (p:Person) WHERE EXISTS { (p)-[:WORKS_FOR]->(:Company) } RETURN p.name AS employed;
+-- Alternative: Use pattern matching directly
+MATCH (p:Person)-[:WORKS_FOR]->(:Company) RETURN DISTINCT p.name AS employed;
+
+-- 16.6 NOT Predicates
+MATCH (p:Person) WHERE NOT p.age > 30 RETURN p.name, p.age;
+
+-- 16.7 Complex Predicates
+MATCH (p:Person)-[:WORKS_FOR]->(c:Company)
+WHERE (p.age > 25 AND c.founded > 2010) OR p.name = 'Alice'
+RETURN p.name, c.name;
+
+-- ============================================================================
+-- SECTION 17: ORDERING AND PAGINATION
+-- ============================================================================
+
+-- 17.1 Order By Single Column
+MATCH (p:Person) RETURN p.name, p.age ORDER BY p.age;
+
+-- 17.2 Order By Descending
+MATCH (p:Person) RETURN p.name, p.age ORDER BY p.age DESC;
+
+-- 17.3 Order By Multiple Columns
+MATCH (p:Person) RETURN p.name, p.age ORDER BY p.age DESC, p.name ASC;
+
+-- 17.4 LIMIT
+MATCH (p:Person) RETURN p.name ORDER BY p.name LIMIT 3;
+
+-- 17.5 SKIP
+MATCH (p:Person) RETURN p.name ORDER BY p.name SKIP 2;
+
+-- 17.6 SKIP and LIMIT Combined
+MATCH (p:Person) RETURN p.name ORDER BY p.name SKIP 1 LIMIT 2;
+
+-- ============================================================================
+-- SECTION 18: AGGREGATION
+-- ============================================================================
+
+-- 18.1 Count
+MATCH (p:Person) RETURN count(p) AS total_people;
+
+-- 18.2 Count with Grouping
+MATCH (p:Person)-[:WORKS_FOR]->(c:Company)
+RETURN c.name AS company, count(p) AS employees
+ORDER BY employees DESC;
+
+-- 18.3 Sum
+MATCH (pr:Product) RETURN sum(pr.price) AS total_value;
+
+-- 18.4 Average
+MATCH (p:Person) RETURN avg(p.age) AS average_age;
+
+-- 18.5 Min/Max
+MATCH (p:Person) RETURN min(p.age) AS youngest, max(p.age) AS oldest;
+
+-- 18.6 Collect
+MATCH (p:Person)-[:WORKS_FOR]->(c:Company {name: 'TechCorp'})
+RETURN c.name AS company, collect(p.name) AS employees;
+
+-- 18.7 DISTINCT
+MATCH (p:Person)-[:WORKS_FOR]->(c:Company)
+RETURN DISTINCT c.industry AS industries;
+
+-- ============================================================================
+-- SECTION 19: UNION OPERATIONS
+-- ============================================================================
+
+-- 19.1 UNION (removes duplicates)
+MATCH (p:Person) WHERE p.age < 30 RETURN p.name AS name
+UNION
+MATCH (p:Person) WHERE p.name STARTS WITH 'A' RETURN p.name AS name;
+
+-- 19.2 UNION ALL (keeps duplicates)
+MATCH (p:Person) WHERE p.age < 30 RETURN p.name AS name
+UNION ALL
+MATCH (p:Person) WHERE p.name STARTS WITH 'A' RETURN p.name AS name;
+
+-- ============================================================================
+-- SECTION 20: DATA MODIFICATION
+-- ============================================================================
+
+-- 20.1 SET Properties
+MATCH (p:Person {name: 'Alice'}) SET p.nickname = 'Ali' RETURN p.name, p.nickname;
+
+-- 20.2 SET Multiple Properties
+MATCH (p:Person {name: 'Bob'}) SET p.nickname = 'Bobby', p.verified = true RETURN p;
+
+-- 20.3 SET with += (merge properties)
+-- NOTE: SET += syntax not yet supported
+-- MATCH (c:Company {name: 'TechCorp'}) SET c += {employees: 500, public: true} RETURN c;
+
+-- 20.4 REMOVE Property
+MATCH (p:Person {name: 'Alice'}) REMOVE p.nickname RETURN p.name, p.nickname;
+
+-- 20.5 Add Label
+MATCH (p:Person {name: 'Charlie'}) SET p:Manager RETURN labels(p);
+
+-- 20.6 Remove Label
+MATCH (p:Person {name: 'Charlie'}) REMOVE p:Manager RETURN labels(p);
+
+-- ============================================================================
+-- SECTION 21: MERGE OPERATIONS
+-- ============================================================================
+
+-- 21.1 MERGE Node (create if not exists)
+-- NOTE: MERGE with ON CREATE/ON MATCH not yet supported
+-- MERGE (p:Person {name: 'Zara'})
+-- ON CREATE SET p.age = 27, p.created = timestamp()
+-- RETURN p;
+
+-- 21.2 MERGE with ON MATCH
+-- NOTE: MERGE with ON CREATE/ON MATCH not yet supported
+-- MERGE (p:Person {name: 'Alice'})
+-- ON MATCH SET p.lastSeen = timestamp()
+-- RETURN p.name, p.lastSeen;
+
+-- 21.3 MERGE Relationship
+-- NOTE: MERGE relationship with ON CREATE not yet supported
+-- MATCH (a:Person {name: 'Eve'}), (c:Company {name: 'StartupXYZ'})
+-- MERGE (a)-[r:WORKS_FOR]->(c)
+-- ON CREATE SET r.since = 2024
+-- RETURN a.name, c.name, r.since;
+
+-- 21.4 Basic MERGE (without ON CREATE/ON MATCH - should work)
+MERGE (p:Person {name: 'Zara', age: 27}) RETURN p;
+
+-- ============================================================================
+-- SECTION 22: DELETE OPERATIONS
+-- ============================================================================
+
+-- 22.1 Delete Node (must have no relationships)
+CREATE (temp:Temporary {data: 'delete me'});
+MATCH (t:Temporary) DELETE t;
+
+-- 22.2 Delete with DETACH (removes relationships too)
+CREATE (temp:Temporary {data: 'delete me with rels'});
+CREATE (temp2:Temporary {data: 'connected'});
+MATCH (a:Temporary {data: 'delete me with rels'}), (b:Temporary {data: 'connected'})
+CREATE (a)-[:TEMP_REL]->(b);
+MATCH (t:Temporary) DETACH DELETE t;
+
+-- ============================================================================
+-- SECTION 23: WITH CLAUSE
+-- ============================================================================
+
+-- 23.1 Basic WITH
+MATCH (p:Person)
+WITH p.age AS age, count(*) AS count
+RETURN age, count ORDER BY age;
+
+-- 23.2 WITH for Filtering Aggregations
+MATCH (p:Person)-[:WORKS_FOR]->(c:Company)
+WITH c, count(p) AS emp_count
+WHERE emp_count > 1
+RETURN c.name, emp_count;
+
+-- 23.3 WITH for Chained Queries
+MATCH (p:Person)
+WITH p ORDER BY p.age DESC LIMIT 3
+MATCH (p)-[:WORKS_FOR]->(c:Company)
+RETURN p.name, c.name;
+
+-- ============================================================================
+-- SECTION 24: UNWIND
+-- ============================================================================
+
+-- NOTE: UNWIND is Cypher-specific and not part of GQL standard
+-- GQL uses different syntax for list operations
+-- 24.1 Basic UNWIND
+-- UNWIND [1, 2, 3, 4, 5] AS num RETURN num * 2 AS doubled;
+
+-- 24.2 UNWIND with Filtering
+-- UNWIND range(1, 10) AS num
+-- WITH num WHERE num % 2 = 0
+-- RETURN num AS even_numbers;
+
+-- 24.3 UNWIND to Create Nodes
+-- UNWIND ['Red', 'Green', 'Blue'] AS color
+-- CREATE (c:Color {name: color})
+-- RETURN c.name;
+
+-- ============================================================================
+-- SECTION 25: SUBQUERIES
+-- ============================================================================
+
+-- 25.1 EXISTS Subquery
+-- NOTE: EXISTS subquery with MATCH inside not yet supported
+-- MATCH (p:Person)
+-- WHERE EXISTS {
+--     MATCH (p)-[:WORKS_FOR]->(:Company {industry: 'Technology'})
+-- }
+-- RETURN p.name AS tech_employee;
+
+-- 25.2 COUNT Subquery
+-- NOTE: COUNT subquery syntax not yet supported
+-- MATCH (p:Person)
+-- RETURN p.name,
+--     COUNT { (p)-[:KNOWS]->() } AS knows_count,
+--     COUNT { (p)-[:PURCHASED]->() } AS purchase_count;
+
+-- 25.3 Simple EXISTS (pattern predicate)
+-- NOTE: EXISTS pattern predicate syntax not yet implemented
+-- Alternative: Use direct pattern matching
+MATCH (p:Person)-[:KNOWS]->() RETURN DISTINCT p.name AS person_with_connections;
+
+-- ============================================================================
+-- SECTION 26: VECTOR OPERATIONS (if supported)
+-- ============================================================================
+
+-- 26.1 Create Vector
+RETURN vectorf32('[1.0, 2.0, 3.0]') AS vec;
+
+-- 26.2 Vector Distance
+RETURN vector_l2(vectorf32('[1.0, 0.0]'), vectorf32('[0.0, 1.0]')) AS l2_distance;
+
+-- 26.3 Cosine Similarity
+RETURN vector_cosine(vectorf32('[1.0, 0.0]'), vectorf32('[1.0, 0.0]')) AS similarity;
+
+-- 26.4 Dot Product
+RETURN vector_dot(vectorf32('[1.0, 2.0, 3.0]'), vectorf32('[4.0, 5.0, 6.0]')) AS dot_product;
+
+-- 26.5 Create Node with Vector
+CREATE (doc:Document {title: 'Vector Test', embedding: vectorf32('[0.1, 0.2, 0.3, 0.4]')});
+
+-- 26.6 Query by Vector Similarity
+MATCH (d:Document)
+WHERE vector_cosine(d.embedding, vectorf32('[0.1, 0.2, 0.3, 0.4]')) > 0.9
+RETURN d.title;
+
+-- ============================================================================
+-- SECTION 27: PATH FUNCTIONS
+-- ============================================================================
+
+-- 27.1 Path Length
+MATCH path = (a:Person {name: 'Alice'})-[:KNOWS*1..3]->(b:Person)
+RETURN length(path) AS path_length, b.name AS destination;
+
+-- 27.2 Nodes in Path
+MATCH path = (a:Person {name: 'Alice'})-[:KNOWS*1..2]->(b:Person)
+RETURN nodes(path) AS path_nodes;
+
+-- 27.3 Relationships in Path
+MATCH path = (a:Person {name: 'Alice'})-[:KNOWS*1..2]->(b:Person)
+RETURN relationships(path) AS path_rels;
+
+-- ============================================================================
+-- SECTION 28: GRAPH ALGORITHMS (basic)
+-- ============================================================================
+
+-- 28.1 Shortest Path (if supported)
+MATCH path = shortestPath((a:Person {name: 'Alice'})-[:KNOWS*]->(b:Person {name: 'Diana'}))
+RETURN path, length(path) AS hops;
+
+-- 28.2 All Shortest Paths
+MATCH paths = allShortestPaths((a:Person {name: 'Alice'})-[:KNOWS*]->(b:Person {name: 'Diana'}))
+RETURN paths;
+
+-- ============================================================================
+-- SECTION 29: INDEX OPERATIONS
+-- ============================================================================
+
+-- 29.1 Create Index
+CREATE INDEX IF NOT EXISTS idx_person_name FOR (p:Person) ON (p.name);
+
+-- 29.2 Create Composite Index
+CREATE INDEX IF NOT EXISTS idx_person_age_email FOR (p:Person) ON (p.age, p.email);
+
+-- 29.3 Show Indexes (if supported)
+SHOW INDEXES;
+
+-- 29.4 Drop Index
+DROP INDEX idx_person_name;
+
+-- ============================================================================
+-- SECTION 30: CONSTRAINT OPERATIONS
+-- ============================================================================
+
+-- 30.1 Create Unique Constraint
+CREATE CONSTRAINT IF NOT EXISTS unique_person_email FOR (p:Person) REQUIRE p.email IS UNIQUE;
+
+-- 30.2 Create Node Key Constraint
+CREATE CONSTRAINT IF NOT EXISTS person_key FOR (p:Person) REQUIRE (p.name, p.age) IS NODE KEY;
+
+-- 30.3 Show Constraints (if supported)
+SHOW CONSTRAINTS;
+
+-- 30.4 Drop Constraint
+DROP CONSTRAINT unique_person_email;
+
+-- ============================================================================
+-- SECTION 31: TRANSACTION CONTROL
+-- ============================================================================
+
+-- 31.1 Explicit Transaction (in shell)
+-- BEGIN;
+-- CREATE (t:TransactionTest {id: 1});
+-- COMMIT;
+
+-- 31.2 Rollback Test
+-- BEGIN;
+-- CREATE (t:TransactionTest {id: 2});
+-- ROLLBACK;
+
+-- ============================================================================
+-- SECTION 32: ERROR HANDLING TESTS
+-- ============================================================================
+
+-- 32.1 Division by Zero
+RETURN 10 / 0 AS div_by_zero;
+
+-- 32.2 Invalid Type Conversion
+RETURN toInteger('not a number') AS invalid_conversion;
+
+-- 32.3 Property on Null
+WITH null AS n RETURN n.property AS null_property;
+
+-- 32.4 Index Out of Bounds
+RETURN [1, 2, 3][10] AS out_of_bounds;
+
+-- ============================================================================
+-- SECTION 33: CLEANUP
+-- ============================================================================
+
+-- 33.1 Delete All Test Data
+MATCH (n) DETACH DELETE n;
+
+-- 33.2 Verify Cleanup
+MATCH (n) RETURN count(n) AS remaining_nodes;
+
+-- 33.3 Drop Test Graphs
+DROP GRAPH IF EXISTS test_comprehensive;
+DROP GRAPH IF EXISTS test_secondary;
+
+-- 33.4 Final Verification
+SHOW GRAPHS;
+
+-- ============================================================================
+-- END OF COMPREHENSIVE TEST FILE
+-- ============================================================================
+-- Total Sections: 33
+-- Coverage: Expressions, Functions, Graph Management, Pattern Matching,
+--           Data Modification, Aggregation, Subqueries, Indexes, Constraints,
+--           Transactions, Error Handling, Vectors, Paths, and more.
+-- ============================================================================

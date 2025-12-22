@@ -510,8 +510,16 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "use")) {
         // \use <graph> - Switch to a different graph
         if (args.len > 0) {
+            // Strip trailing semicolon if present (user might type "/use mydb;")
+            const graph_name = std.mem.trimRight(u8, args, ";");
+            if (graph_name.len == 0) {
+                const stderr = platform.getStderrHandle();
+                try stderr.writeAll("Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");
+                return;
+            }
+
             // Send USE GRAPH statement to server
-            const use_stmt = try std.fmt.allocPrint(state.allocator, "USE GRAPH {s};", .{args});
+            const use_stmt = try std.fmt.allocPrint(state.allocator, "USE GRAPH {s};", .{graph_name});
             defer state.allocator.free(use_stmt);
             try executeGql(state, use_stmt);
 
@@ -531,9 +539,9 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 if (state.current_graph) |old| {
                     state.allocator.free(old);
                 }
-                state.current_graph = try state.allocator.dupe(u8, args);
+                state.current_graph = try state.allocator.dupe(u8, graph_name);
                 var buf: [256]u8 = undefined;
-                const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{args});
+                const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{graph_name});
                 try stdout.writeAll(msg);
             }
             // Error message is already displayed by executeGql
@@ -624,8 +632,13 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         const msg = try std.fmt.bufPrint(&buf, "{s}\r\n", .{args});
         try stdout.writeAll(msg);
     } else if (std.mem.eql(u8, cmd, "source")) {
-        const stderr = platform.getStderrHandle();
-        try stderr.writeAll("Error [GEODE-E2004]: \\source not yet implemented\r\n");
+        // \source <file> - Execute commands from a GQL file
+        if (args.len > 0) {
+            try executeSourceFile(state, args);
+        } else {
+            const stderr = platform.getStderrHandle();
+            try stderr.writeAll("Error [GEODE-E2002]: Usage: \\source <filename>\r\n");
+        }
     } else if (std.mem.eql(u8, cmd, "connet")) { // Typo detection
         const stderr = platform.getStderrHandle();
         try stderr.writeAll("Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\r\n");
@@ -711,6 +724,180 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
         const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\r\n", .{duration_ms});
         try stdout.writeAll(timing_msg);
     }
+}
+
+/// Execute commands from a GQL source file
+/// Supports:
+/// - GQL statements (terminated by semicolons)
+/// - Meta-commands (\help, \use, etc.)
+/// - Comments (lines starting with -- or # are ignored)
+pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
+    const stdout = platform.getStdoutHandle();
+    const stderr = platform.getStderrHandle();
+
+    // Expand ~ to home directory if present
+    var path_buf: [4096]u8 = undefined;
+    const resolved_path = if (filename.len > 0 and filename[0] == '~') blk: {
+        const home = std.posix.getenv("HOME") orelse {
+            try stderr.writeAll("Error [GEODE-E2005]: Cannot expand ~: HOME not set\r\n");
+            return;
+        };
+        const rest = if (filename.len > 1) filename[1..] else "";
+        const path = std.fmt.bufPrint(&path_buf, "{s}{s}", .{ home, rest }) catch {
+            try stderr.writeAll("Error [GEODE-E2005]: Path too long\r\n");
+            return;
+        };
+        break :blk path;
+    } else filename;
+
+    // Open the file
+    const file = std.fs.cwd().openFile(resolved_path, .{}) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot open file '{s}': {s}\r\n", .{ resolved_path, @errorName(err) }) catch return;
+        try stderr.writeAll(msg);
+        return;
+    };
+    defer file.close();
+
+    // Read file contents
+    const contents = file.readToEndAlloc(state.allocator, 1 << 24) catch |err| { // 16MB max
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot read file: {s}\r\n", .{@errorName(err)}) catch return;
+        try stderr.writeAll(msg);
+        return;
+    };
+    defer state.allocator.free(contents);
+
+    // Display source file info
+    var info_buf: [512]u8 = undefined;
+    const info_msg = std.fmt.bufPrint(&info_buf, "Sourcing: {s}\r\n", .{resolved_path}) catch return;
+    try stdout.writeAll(info_msg);
+
+    // Process the file content
+    var statement_count: usize = 0;
+    var error_count: usize = 0;
+
+    // Parse and execute statements
+    var statement_buffer = std.ArrayList(u8).initCapacity(state.allocator, 0) catch unreachable;
+    defer statement_buffer.deinit(state.allocator);
+
+    var line_iter = std.mem.splitSequence(u8, contents, "\n");
+    var line_number: usize = 0;
+
+    while (line_iter.next()) |raw_line| {
+        line_number += 1;
+
+        // Handle \r\n line endings
+        const line = std.mem.trimRight(u8, raw_line, "\r");
+
+        // Trim whitespace for checking
+        const trimmed = std.mem.trim(u8, line, " \t");
+
+        // Skip empty lines and comments
+        if (trimmed.len == 0) continue;
+        if (std.mem.startsWith(u8, trimmed, "--")) continue;
+        if (std.mem.startsWith(u8, trimmed, "#")) continue;
+
+        // Check for meta-command (must be at start of statement)
+        // Note: We don't support nested \source commands to avoid recursion
+        if (statement_buffer.items.len == 0 and (trimmed[0] == '\\' or trimmed[0] == '/')) {
+            // Check if this is a nested source command (skip it)
+            const cmd_end = std.mem.indexOf(u8, trimmed[1..], " ") orelse (trimmed.len - 1);
+            const cmd_name = trimmed[1 .. cmd_end + 1];
+            if (std.mem.eql(u8, cmd_name, "source")) {
+                stderr.writeAll("Warning: Nested \\source commands not supported, skipping\r\n") catch {};
+                continue;
+            }
+
+            // Execute the meta-command directly instead of recursing
+            // This is a simplified handler for common commands in source files
+            if (std.mem.eql(u8, cmd_name, "use")) {
+                const args_start = cmd_end + 2;
+                if (args_start < trimmed.len) {
+                    const use_args = std.mem.trim(u8, trimmed[args_start..], " \t;");
+                    if (use_args.len > 0) {
+                        const use_stmt = std.fmt.allocPrint(state.allocator, "USE GRAPH {s};", .{use_args}) catch continue;
+                        defer state.allocator.free(use_stmt);
+                        executeGql(state, use_stmt) catch |err| {
+                            var buf: [256]u8 = undefined;
+                            const msg = std.fmt.bufPrint(&buf, "Error at line {d}: {s}\r\n", .{ line_number, @errorName(err) }) catch continue;
+                            stderr.writeAll(msg) catch {};
+                            error_count += 1;
+                        };
+                    }
+                }
+            } else if (std.mem.eql(u8, cmd_name, "echo")) {
+                const args_start = cmd_end + 2;
+                if (args_start < trimmed.len) {
+                    const echo_args = std.mem.trim(u8, trimmed[args_start..], " \t");
+                    stdout.writeAll(echo_args) catch {};
+                    stdout.writeAll("\r\n") catch {};
+                }
+            } else if (std.mem.eql(u8, cmd_name, "timing")) {
+                const args_start = cmd_end + 2;
+                if (args_start < trimmed.len) {
+                    const timing_arg = std.mem.trim(u8, trimmed[args_start..], " \t");
+                    if (std.mem.eql(u8, timing_arg, "on")) {
+                        state.show_timing = true;
+                    } else if (std.mem.eql(u8, timing_arg, "off")) {
+                        state.show_timing = false;
+                    }
+                }
+            }
+            // Skip other meta-commands in source files
+            statement_count += 1;
+            continue;
+        }
+
+        // Accumulate line into statement buffer
+        if (statement_buffer.items.len > 0) {
+            try statement_buffer.append(state.allocator, ' '); // Join lines with space
+        }
+        try statement_buffer.appendSlice(state.allocator, trimmed);
+
+        // Check if statement is complete (ends with semicolon)
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            // Execute the complete statement
+            const stmt = statement_buffer.items;
+
+            // Show the statement being executed (if verbose)
+            if (state.verbose) {
+                var stmt_buf: [256]u8 = undefined;
+                const preview = if (stmt.len > 60) stmt[0..60] else stmt;
+                const ellipsis = if (stmt.len > 60) "..." else "";
+                const stmt_msg = std.fmt.bufPrint(&stmt_buf, ">> {s}{s}\r\n", .{ preview, ellipsis }) catch "";
+                stdout.writeAll(stmt_msg) catch {};
+            }
+
+            executeGql(state, stmt) catch |err| {
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "Error at line {d}: {s}\r\n", .{ line_number, @errorName(err) }) catch continue;
+                stderr.writeAll(msg) catch {};
+                error_count += 1;
+            };
+
+            statement_count += 1;
+            statement_buffer.clearRetainingCapacity();
+        }
+    }
+
+    // Check for incomplete statement at end of file
+    if (statement_buffer.items.len > 0) {
+        const remaining = std.mem.trim(u8, statement_buffer.items, " \t");
+        if (remaining.len > 0) {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Warning: Incomplete statement at end of file (missing ';')\r\n", .{}) catch return;
+            try stderr.writeAll(msg);
+        }
+    }
+
+    // Summary
+    var summary_buf: [256]u8 = undefined;
+    const summary = if (error_count > 0)
+        std.fmt.bufPrint(&summary_buf, "Executed {d} statement(s) with {d} error(s)\r\n", .{ statement_count, error_count }) catch return
+    else
+        std.fmt.bufPrint(&summary_buf, "Executed {d} statement(s) successfully\r\n", .{statement_count}) catch return;
+    try stdout.writeAll(summary);
 }
 
 /// Extract the result from a response and display it appropriately
