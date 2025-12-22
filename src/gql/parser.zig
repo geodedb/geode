@@ -1869,7 +1869,8 @@ pub const Parser = struct {
             }
             group_by = .{ .keys = try keys_list.toOwnedSlice(self.arena.allocator()) };
             // Optional HAVING predicate directly after GROUP BY
-            if (self.cur.kind == .HAVING) {
+            // Also accept WHERE after GROUP BY as post-aggregation filter (common user expectation)
+            if (self.cur.kind == .HAVING or self.cur.kind == .WHERE) {
                 self.advance();
                 having_expr = try self.parseOrExpr();
             }
@@ -1949,7 +1950,8 @@ pub const Parser = struct {
                     self.advance();
                 }
                 group_by = .{ .keys = try keys_list2.toOwnedSlice(self.arena.allocator()) };
-                if (self.cur.kind == .HAVING) {
+                // Also accept WHERE after GROUP BY as post-aggregation filter
+                if (self.cur.kind == .HAVING or self.cur.kind == .WHERE) {
                     self.advance();
                     having_expr = try self.parseOrExpr();
                 }

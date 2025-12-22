@@ -11,6 +11,10 @@ const ExecutionContext = execution.ExecutionContext;
 // Import helper functions used by return and sorting
 const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
 
+// Import for unique column name generation
+const match_operations = @import("match_operations.zig");
+const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
+
 // Local type aliases
 const Value = value_types.Value;
 const Env = value_types.Env;
@@ -262,26 +266,8 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
         };
     }
 
-    // Collect column names
-    var columns = try allocator.alloc([]const u8, items.len);
-    for (items, 0..) |item, i| {
-        const column_name = item.alias orelse blk: {
-            // Use expression-based column name if no alias provided
-            switch (item.expr) {
-                .Ident => |ident| break :blk ident.orig,
-                .PropertyAccess => |prop| break :blk prop.property,
-                .Member => |mem| break :blk mem.field,
-                .Call => |call| {
-                    if (call.callee.* == .Ident) {
-                        break :blk call.callee.Ident.orig;
-                    }
-                    break :blk "column";
-                },
-                else => break :blk "column",
-            }
-        };
-        columns[i] = try allocator.dupe(u8, column_name);
-    }
+    // Collect column names (with disambiguation for duplicates)
+    const columns = try generateUniqueColumnNames(allocator, items);
 
     // Evaluate expressions with provided environment
     var row = try allocator.alloc(Value, items.len);

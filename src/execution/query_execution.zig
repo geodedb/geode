@@ -27,6 +27,10 @@ const isAggregationExpr = execution.isAggregationExpr;
 const evaluateAggregation = execution.evaluateAggregation;
 const allocateColumnStrings = execution.allocateColumnStrings;
 
+// Import for unique column name generation
+const match_operations = @import("match_operations.zig");
+const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
+
 // Local type aliases
 const Value = value_types.Value;
 const Env = value_types.Env;
@@ -318,18 +322,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     // If there's no MATCH clause, just evaluate RETURN with bindings
     if (q.match.chains.len == 0 and binding_names.len > 0) {
         const items = q.ret.items;
-        var columns = try allocator.alloc([]const u8, items.len);
-        for (items, 0..) |item, i| {
-            const column_name = item.alias orelse blk: {
-                switch (item.expr) {
-                    .Ident => |ident| break :blk ident.orig,
-                    .PropertyAccess => |prop| break :blk prop.property,
-                    .Member => |mem| break :blk mem.field,
-                    else => break :blk "column",
-                }
-            };
-            columns[i] = try allocator.dupe(u8, column_name);
-        }
+        const columns = try generateUniqueColumnNames(allocator, items);
 
         // Create a single row by evaluating RETURN expressions with bindings
         var row = try allocator.alloc(Value, items.len);
@@ -365,18 +358,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     // If all MATCH variables are bound, we can skip matching and just evaluate RETURN
     if (all_vars_bound and bound_var_env_names.items.len > 0) {
         const items = q.ret.items;
-        var columns = try allocator.alloc([]const u8, items.len);
-        for (items, 0..) |item, i| {
-            const column_name = item.alias orelse blk: {
-                switch (item.expr) {
-                    .Ident => |ident| break :blk ident.orig,
-                    .PropertyAccess => |prop| break :blk prop.property,
-                    .Member => |mem| break :blk mem.field,
-                    else => break :blk "column",
-                }
-            };
-            columns[i] = try allocator.dupe(u8, column_name);
-        }
+        const columns = try generateUniqueColumnNames(allocator, items);
 
         // Create a single row by evaluating RETURN expressions with bound variables
         var row = try allocator.alloc(Value, items.len);

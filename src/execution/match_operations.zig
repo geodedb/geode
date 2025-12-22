@@ -29,6 +29,98 @@ const expandVariableLengthPaths = execution.expandVariableLengthPaths;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+// CANARY: REQ=REQ-GQL-COLNAME-001; FEATURE="UniqueColumnNames"; ASPECT=DEDUP; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+/// Generate unique column names for RETURN items, using qualified names for duplicates
+/// For example, if both p.name and c.name exist, they become "p.name" and "c.name"
+pub fn generateUniqueColumnNames(allocator: std.mem.Allocator, items: []const ast.ReturnItem) ![][]const u8 {
+    var columns = try allocator.alloc([]const u8, items.len);
+    errdefer allocator.free(columns);
+
+    // First pass: collect raw column names and their qualified forms
+    var raw_names = try allocator.alloc([]const u8, items.len);
+    defer allocator.free(raw_names);
+    var qualified_names = try allocator.alloc([]const u8, items.len);
+    defer allocator.free(qualified_names);
+
+    for (items, 0..) |item, i| {
+        if (item.alias) |alias| {
+            raw_names[i] = alias;
+            qualified_names[i] = alias;
+        } else {
+            switch (item.expr) {
+                .Ident => |ident| {
+                    raw_names[i] = ident.orig;
+                    qualified_names[i] = ident.orig;
+                },
+                .PropertyAccess => |prop| {
+                    raw_names[i] = prop.property;
+                    // Build qualified name: object.property
+                    const qualified = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prop.object, prop.property });
+                    qualified_names[i] = qualified;
+                },
+                .Member => |mem| {
+                    raw_names[i] = mem.field;
+                    // Build qualified name if target is an identifier (e.g., p.name -> "p.name")
+                    if (mem.target.* == .Ident) {
+                        const qualified = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ mem.target.Ident.orig, mem.field });
+                        qualified_names[i] = qualified;
+                    } else {
+                        qualified_names[i] = mem.field;
+                    }
+                },
+                .Call => |call| {
+                    if (call.callee.* == .Ident) {
+                        raw_names[i] = call.callee.Ident.orig;
+                        qualified_names[i] = call.callee.Ident.orig;
+                    } else {
+                        raw_names[i] = "column";
+                        qualified_names[i] = "column";
+                    }
+                },
+                else => {
+                    raw_names[i] = "column";
+                    qualified_names[i] = "column";
+                },
+            }
+        }
+    }
+
+    // Second pass: detect duplicates and use qualified names where needed
+    for (items, 0..) |_, i| {
+        var is_duplicate = false;
+        for (0..items.len) |j| {
+            if (i != j and std.mem.eql(u8, raw_names[i], raw_names[j])) {
+                is_duplicate = true;
+                break;
+            }
+        }
+        if (is_duplicate) {
+            // Use qualified name for duplicates
+            columns[i] = try allocator.dupe(u8, qualified_names[i]);
+        } else {
+            // Use raw name when no conflict
+            columns[i] = try allocator.dupe(u8, raw_names[i]);
+        }
+    }
+
+    // Clean up allocated qualified names (PropertyAccess and Member with Ident target allocate)
+    for (items, 0..) |item, i| {
+        if (item.alias == null) {
+            switch (item.expr) {
+                .PropertyAccess => allocator.free(qualified_names[i]),
+                .Member => |mem| {
+                    if (mem.target.* == .Ident) {
+                        allocator.free(qualified_names[i]);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    return columns;
+}
+
 // CANARY: REQ=REQ-GQL-DISTINCT-001; FEATURE="DISTINCT"; ASPECT=DEDUPLICATION; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
 /// Apply DISTINCT deduplication to result rows
 fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
@@ -371,16 +463,8 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             try transformed_rows.append(allocator, return_row);
         }
 
-        // Get column names from RETURN clause
-        var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
-        for (q.ret.items, 0..) |item, i| {
-            const col_name = item.alias orelse switch (item.expr) {
-                .Ident => |ident| ident.orig,
-                .Member => |member| member.field,
-                else => "column",
-            };
-            return_columns[i] = try allocator.dupe(u8, col_name);
-        }
+        // Get column names from RETURN clause (with disambiguation for duplicates)
+        const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
 
         // Free original call_result columns
         for (call_result.columns) |col| {
@@ -548,19 +632,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         }
         columns = try col_list.toOwnedSlice(allocator);
     } else {
-        // RETURN clause exists - use expression names
-        columns = try allocator.alloc([]const u8, items.len);
-        for (items, 0..) |item, i| {
-            const column_name = item.alias orelse blk: {
-                switch (item.expr) {
-                    .Ident => |ident| break :blk ident.orig,
-                    .PropertyAccess => |prop| break :blk prop.property,
-                    .Member => |mem| break :blk mem.field,
-                    else => break :blk "column",
-                }
-            };
-            columns[i] = try allocator.dupe(u8, column_name);
-        }
+        // RETURN clause exists - use unique column names (qualified for duplicates)
+        columns = try generateUniqueColumnNames(allocator, items);
     }
 
     // Generate Cartesian product of all matching nodes
@@ -747,24 +820,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     const path_result = try findShortestPath(allocator, pattern, false, env);
 
                     // Create result with path bound to path_variable
-                    const columns = try allocator.alloc([]const u8, q.ret.items.len);
-                    for (q.ret.items, 0..) |item, i| {
-                        const column_name = item.alias orelse blk: {
-                            switch (item.expr) {
-                                .Ident => |ident| break :blk ident.orig,
-                                .PropertyAccess => |prop| break :blk prop.property,
-                                .Member => |mem| break :blk mem.field,
-                                .Call => |call| {
-                                    if (call.callee.* == .Ident) {
-                                        break :blk call.callee.Ident.orig;
-                                    }
-                                    break :blk "column";
-                                },
-                                else => break :blk "column",
-                            }
-                        };
-                        columns[i] = try allocator.dupe(u8, column_name);
-                    }
+                    const columns = try generateUniqueColumnNames(allocator, q.ret.items);
 
                     // Build environment with path variable
                     var path_env_names = try allocator.alloc([]const u8, param_names.len + 1);
@@ -825,25 +881,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const has_with = q.with_clause != null;
     // CANARY(memory-safety): Always initialize columns from RETURN items
     // Even with WITH clauses, we need column names for the intermediate result
-    var columns = try allocator.alloc([]const u8, items.len);
-    for (items, 0..) |item, i| {
-        const column_name = item.alias orelse blk: {
-            // Use expression-based column name if no alias provided
-            switch (item.expr) {
-                .Ident => |ident| break :blk ident.orig,
-                .PropertyAccess => |prop| break :blk prop.property,
-                .Member => |mem| break :blk mem.field,
-                .Call => |call| {
-                    if (call.callee.* == .Ident) {
-                        break :blk call.callee.Ident.orig;
-                    }
-                    break :blk "column";
-                },
-                else => break :blk "column",
-            }
-        };
-        columns[i] = try allocator.dupe(u8, column_name);
-    }
+    var columns = try generateUniqueColumnNames(allocator, items);
 
     // Check if we have any aggregations
     var has_aggregation = false;
@@ -1359,25 +1397,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 allocator.free(result.rows);
 
                 // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
-                // Now evaluate RETURN expressions using WITH result as environment
-                var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
-                for (q.ret.items, 0..) |item, i| {
-                    const col_name = item.alias orelse blk: {
-                        switch (item.expr) {
-                            .Ident => |ident| break :blk ident.orig,
-                            .PropertyAccess => |prop| break :blk prop.property,
-                            .Member => |mem| break :blk mem.field,
-                            .Call => |call| {
-                                if (call.callee.* == .Ident) {
-                                    break :blk call.callee.Ident.orig;
-                                }
-                                break :blk "column";
-                            },
-                            else => break :blk "column",
-                        }
-                    };
-                    return_columns[i] = try allocator.dupe(u8, col_name);
-                }
+                // Now evaluate RETURN expressions using WITH result as environment (with disambiguation for duplicates)
+                const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
 
                 // Evaluate RETURN items using WITH result as environment
                 var return_rows = try allocator.alloc([]Value, with_result.rows.len);
@@ -2314,25 +2335,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             allocator.free(result.rows);
 
             // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
-            // Now evaluate RETURN expressions using WITH result as environment
-            var return_columns = try allocator.alloc([]const u8, q.ret.items.len);
-            for (q.ret.items, 0..) |item, i| {
-                const col_name = item.alias orelse blk: {
-                    switch (item.expr) {
-                        .Ident => |ident| break :blk ident.orig,
-                        .PropertyAccess => |prop| break :blk prop.property,
-                        .Member => |mem| break :blk mem.field,
-                        .Call => |call| {
-                            if (call.callee.* == .Ident) {
-                                break :blk call.callee.Ident.orig;
-                            }
-                            break :blk "column";
-                        },
-                        else => break :blk "column",
-                    }
-                };
-                return_columns[i] = try allocator.dupe(u8, col_name);
-            }
+            // Now evaluate RETURN expressions using WITH result as environment (with disambiguation for duplicates)
+            const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
 
             // Evaluate RETURN items using WITH result as environment
             var return_rows = try allocator.alloc([]Value, with_result.rows.len);

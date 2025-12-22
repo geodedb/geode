@@ -11,6 +11,10 @@ const encryptPropertyIfNeeded = execution.encryptPropertyIfNeeded;
 const encryptEdgePropertyIfNeeded = execution.encryptEdgePropertyIfNeeded;
 const executeReturnClauseWithEnv = execution.executeReturnClauseWithEnv;
 
+// Import for unique column name generation
+const match_operations = @import("match_operations.zig");
+const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
+
 // Local type aliases
 const Value = value_types.Value;
 const Env = value_types.Env;
@@ -1674,25 +1678,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !Execut
 
         // Return the node if there's a RETURN clause
         if (m.return_clause) |ret| {
-            var columns = try allocator.alloc([]const u8, ret.items.len);
-            for (ret.items, 0..) |item, i| {
-                const column_name = item.alias orelse blk: {
-                    // Use expression-based column name if no alias provided
-                    switch (item.expr) {
-                        .Ident => |ident| break :blk ident.orig,
-                        .PropertyAccess => |prop| break :blk prop.property,
-                        .Member => |mem| break :blk mem.field,
-                        .Call => |call| {
-                            if (call.callee.* == .Ident) {
-                                break :blk call.callee.Ident.orig;
-                            }
-                            break :blk "column";
-                        },
-                        else => break :blk "column",
-                    }
-                };
-                columns[i] = try allocator.dupe(u8, column_name);
-            }
+            const columns = try generateUniqueColumnNames(allocator, ret.items);
 
             var rows = try allocator.alloc([]Value, 1);
             var row = try allocator.alloc(Value, ret.items.len);
