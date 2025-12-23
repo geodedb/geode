@@ -869,7 +869,9 @@ MATCH (n) DETACH DELETE n;
 DROP GRAPH IF EXISTS isolation_graph_a;
 DROP GRAPH IF EXISTS isolation_graph_b;
 
--- Switch back to main test graph after isolation tests (fixes Issue 8 - cleanup leaving nodes)
+-- Re-create main test graph after isolation tests (it was dropped in Section 33)
+-- This is needed for Sections 35-46 to have a proper graph context
+CREATE GRAPH IF NOT EXISTS test_comprehensive;
 USE GRAPH test_comprehensive;
 
 -- ============================================================================
