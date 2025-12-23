@@ -2276,9 +2276,19 @@ pub const Parser = struct {
                 } else {
                     break;
                 }
-                const rel = try self.parseRelPattern(dir);
+                // Parse the relationship pattern first, then determine final direction from trailing connector
+                var rel = try self.parseRelPattern(dir);
                 // trailing connector to right node: -, ->, or <-
-                if (self.cur.kind == .minus or self.cur.kind == .arrow_r or self.cur.kind == .arrow_l) {
+                // CRITICAL FIX: For patterns like -[*]-> or -[:R*1]->, the direction should come from
+                // the TRAILING connector (->), not the leading one (-). Update the direction here.
+                if (self.cur.kind == .arrow_r) {
+                    rel.dir = .right;
+                    self.advance();
+                } else if (self.cur.kind == .arrow_l) {
+                    rel.dir = .left;
+                    self.advance();
+                } else if (self.cur.kind == .minus) {
+                    // Trailing - means undirected (already the default)
                     self.advance();
                 }
                 const right = try self.parseNodePattern();

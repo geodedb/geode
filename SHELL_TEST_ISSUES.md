@@ -2,13 +2,13 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`).
 
-## Current Test Run: 2025-12-23 (Sixth Run)
+## Current Test Run: 2025-12-23 (Eighth Run)
 
 **Statements Executed**: 441
 **Explicit Errors**: 3 (2 expected, 1 syntax limitation)
-**Status**: ✅ ALL CRITICAL ISSUES RESOLVED - VERIFIED
+**Status**: ✅ ALL CRITICAL ISSUES RESOLVED
 
-**Final Verification**: All 13 issues independently verified using isolated graph sessions.
+**Previous Finding (FIXED)**: Variable-length path patterns (`*`) were ignoring direction constraints. Fixed in parser.zig by updating the direction from the trailing connector (`->`, `<-`, or `-`) after parsing the relationship pattern.
 
 ## Issue Summary
 
@@ -668,4 +668,72 @@ geode query "CREATE (n:Test)"       # NEW connection - uses default graph
 **Issue 8 (P3): Cleanup 2 remaining** - FIXED (but needs verification)
 - Root cause: After isolation graph tests, current graph is wrong for cleanup
 - Fix: Added `USE GRAPH test_comprehensive;` before final cleanup in test file
+
+
+
+---
+
+## Issue 14: Variable-Length Path Direction Bug (P0 - FIXED)
+
+**Section**: 43.4 (and other variable-length path tests)
+
+**Symptom**: Variable-length path patterns like `(a)-[:R*1]->(b)` were traversing edges in BOTH directions instead of just the forward direction indicated by `->`.
+
+**Test Query**:
+```gql
+-- Graph: 1 -[:R]-> 2 -[:R]-> 3
+MATCH (a:N)-[:R*1]->(b:N) RETURN a.id AS from_id, b.id AS to_id;
+```
+
+**Expected**: 
+```
+| from_id | to_id |
+|---------|-------|
+| 1       | 2     |
+| 2       | 3     |
+```
+
+**Actual (Before Fix)**:
+```
+| from_id | to_id |
+|---------|-------|
+| 1       | 2     |
+| 2       | 3     |
+| 2       | 1     |  <-- WRONG: reverse direction
+| 3       | 2     |  <-- WRONG: reverse direction
+```
+
+**Root Cause**: 
+In `src/gql/parser.zig`, when parsing a pattern like `-[:R*1]->`:
+1. The leading `-` was consumed (line 2237)
+2. `parseRelPattern(dir)` was called with `dir = .undirected` (the default)
+3. The trailing `->` was consumed AFTER the call (lines 2281-2283)
+4. The direction was never updated on the RelPattern
+
+**Fix** (in `src/gql/parser.zig`, lines 2279-2293):
+Changed from consuming the trailing connector without updating direction, to:
+1. Parse relationship pattern
+2. Check trailing connector (`->`, `<-`, or `-`)
+3. Update `rel.dir` based on the trailing connector
+
+```zig
+// CRITICAL FIX: For patterns like -[*]-> or -[:R*1]->, the direction should come from
+// the TRAILING connector (->), not the leading one (-). Update the direction here.
+if (self.cur.kind == .arrow_r) {
+    rel.dir = .right;
+    self.advance();
+} else if (self.cur.kind == .arrow_l) {
+    rel.dir = .left;
+    self.advance();
+} else if (self.cur.kind == .minus) {
+    self.advance();
+}
+```
+
+**Status**: FIXED (2025-12-23)
+
+**Verification**:
+- `(a)-[:R*1]->(b)` now only returns forward edges ✓
+- `(a)<-[:R*1]-(b)` correctly returns reverse edges ✓
+- Single-hop patterns `(a)-[:R]->(b)` continue to work correctly ✓
 
