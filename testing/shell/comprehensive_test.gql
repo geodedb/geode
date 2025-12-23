@@ -1336,6 +1336,9 @@ ORDER BY hops DESC LIMIT 10;
 -- SECTION 46: FINAL COMPREHENSIVE CLEANUP
 -- ============================================================================
 
+-- Switch back to main test graph for cleanup (fixes Issue 8)
+USE GRAPH test_comprehensive;
+
 -- 46.1 Delete All Vector Documents
 MATCH (d:VectorDocument) DETACH DELETE d;
 

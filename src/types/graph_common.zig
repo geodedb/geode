@@ -244,6 +244,88 @@ pub const GraphStorage = struct {
             return error.EdgeNotFound;
         }
     }
+
+    // CANARY: REQ=REQ-TXN-UNDO-SERVER-012; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageRemoveNode; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // Remove a node from the graph (for rollback support)
+    pub fn removeNode(self: *GraphStorage, node_id: NodeId) void {
+        // Remove from adjacency lists
+        if (self.outgoing.fetchRemove(node_id)) |entry| {
+            entry.value.deinit(self.allocator);
+        }
+        if (self.incoming.fetchRemove(node_id)) |entry| {
+            entry.value.deinit(self.allocator);
+        }
+        // Also remove references to this node from other adjacency lists
+        // (edges pointing to this node)
+        var out_iter = self.outgoing.iterator();
+        while (out_iter.next()) |entry| {
+            // Filter out edges that reference the removed node
+            var i: usize = 0;
+            while (i < entry.value_ptr.items.len) {
+                const edge_id = entry.value_ptr.items[i];
+                if (edge_id < self.edges.items.len) {
+                    const edge = &self.edges.items[edge_id];
+                    if (edge.target == node_id) {
+                        _ = entry.value_ptr.orderedRemove(i);
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+        }
+        var in_iter = self.incoming.iterator();
+        while (in_iter.next()) |entry| {
+            var i: usize = 0;
+            while (i < entry.value_ptr.items.len) {
+                const edge_id = entry.value_ptr.items[i];
+                if (edge_id < self.edges.items.len) {
+                    const edge = &self.edges.items[edge_id];
+                    if (edge.source == node_id) {
+                        _ = entry.value_ptr.orderedRemove(i);
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+        }
+        // Remove the node itself
+        _ = self.nodes.remove(node_id);
+    }
+
+    // CANARY: REQ=REQ-TXN-UNDO-SERVER-013; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageRemoveEdge; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // Mark an edge as deleted (for rollback support) - we can't actually remove from ArrayList
+    // without reindexing, so we mark it by setting source/target to max value
+    pub fn removeEdge(self: *GraphStorage, edge_id: EdgeId) void {
+        if (edge_id < self.edges.items.len) {
+            const edge = &self.edges.items[edge_id];
+            const source = edge.source;
+            const target = edge.target;
+            // Mark as deleted
+            edge.source = std.math.maxInt(NodeId);
+            edge.target = std.math.maxInt(NodeId);
+            // Remove from adjacency lists
+            if (self.outgoing.getPtr(source)) |list| {
+                var i: usize = 0;
+                while (i < list.items.len) {
+                    if (list.items[i] == edge_id) {
+                        _ = list.orderedRemove(i);
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            if (self.incoming.getPtr(target)) |list| {
+                var i: usize = 0;
+                while (i < list.items.len) {
+                    if (list.items[i] == edge_id) {
+                        _ = list.orderedRemove(i);
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+        }
+    }
 };
 
 // Index optimization types

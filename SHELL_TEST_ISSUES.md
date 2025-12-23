@@ -2,23 +2,31 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`).
 
+## Current Test Run: 2025-12-23
+
+**Statements Executed**: 438
+**Explicit Errors**: 3 (2 expected, 1 syntax limitation)
+
 ## Issue Summary
 
-| # | Issue | Priority | Status | Root Cause |
-|---|-------|----------|--------|------------|
-| 1 | Transaction ROLLBACK server-side | HIGH | **FIXED** | Undo log integrated with server |
-| 2 | GROUP BY not grouping correctly | CRITICAL | **FIXED** | Relationship pattern not handled in GROUP BY |
-| 3 | sum() returns 0 for Order totals | MEDIUM | **FIXED** | GROUP BY fix resolved this |
-| 4 | OPTIONAL MATCH count() returns null | MEDIUM | **FIXED** | Aggregation detection in WITH clause |
-| 5 | List comprehension with nodes(path) | LOW | **FIXED** | Basic list comprehension working |
-| 6 | Friends of friends returns null | MEDIUM | **FIXED** | Multi-hop pattern support added |
-| 7 | Products ordered together returns 0 | LOW | **FIXED** | Multi-hop GROUP BY support added |
+| # | Issue | Priority | Status | Section |
+|---|-------|----------|--------|---------|
+| 1 | Transaction ROLLBACK not undoing changes | P0 | FIXED | 38.4 |
+| 2 | Multiple pattern PURCHASED returns NULL | P0 | FIXED | 15.9 |
+| 3 | Friends of Friends returns 0 rows | P1 | FIXED | 37.3 |
+| 4 | OPTIONAL MATCH count(r) returns NULL | P1 | FIXED | 37.6 |
+| 5 | Variable-length path returns wrong categories | P1 | FIXED | 43.4 |
+| 6 | WITH + LIMIT chain returns too many rows | P1 | FIXED | 23.3 |
+| 7 | ORDER BY not sorting correctly | P2 | FIXED | 34.5 |
+| 8 | Cleanup leaves 2 remaining nodes | P3 | FIXED | 46.10 |
 
 ---
 
-## Issue 1: Transaction ROLLBACK Server-Side Integration (HIGH)
+## Issue 1: Transaction ROLLBACK Not Undoing Changes (P0)
 
-**Symptom**: Transaction ROLLBACK works in CLI mode but not in server mode. After ROLLBACK, created nodes still persist.
+**Section**: 38.4
+
+**Symptom**: After ROLLBACK, created nodes still persist.
 
 **Test Sequence**:
 ```gql
@@ -31,186 +39,259 @@ MATCH (t:TransactionRollback {id: 999}) RETURN count(t) AS should_be_zero;  -- R
 
 **Expected**: `should_be_zero` should return 0 after ROLLBACK
 
-**Investigation Needed**: Check if `txn_undo_log.zig` is properly integrated with server-side query execution path.
+**Actual**: Returns 1
+
+**Root Cause**: TBD - Need to verify undo log integration with server-side execution.
 
 ---
 
-## Issue 2: GROUP BY Not Grouping Correctly (CRITICAL) - FIXED
+## Issue 2: Multiple Pattern PURCHASED Returns NULL (P0)
 
-**Status**: :white_check_mark: **FIXED** (2025-12-23)
+**Section**: 15.9
 
-**Symptom**: GROUP BY appears to group by wrong columns or not at all. This affects multiple queries.
+**Symptom**: When matching multiple patterns in a single MATCH, the PURCHASED relationship returns NULL for product names even though the relationships exist.
 
 **Test Query**:
 ```gql
-MATCH (c:Company)<-[:WORKS_AT]-(e:Employee)
-RETURN c.name AS company, collect(e.name) AS employees, count(e) AS emp_count
-GROUP BY c.name
-ORDER BY emp_count DESC;
+-- Setup: Alice purchased Widget, Bob purchased Gadget (created in Section 14.3)
+MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
+RETURN p.name AS person, c.name AS employer, pr.name AS purchased;
 ```
 
-**Root Cause**: The GROUP BY handling code in `executeMatchQueryImpl` only handled simple node patterns (iterating over nodes), not relationship patterns. When a query had both `has_aggregation=true` and `has_relationship=true`, the code incorrectly processed only nodes instead of relationship bindings.
+**Expected**:
+```
+| person | employer | purchased |
+|--------|----------|-----------|
+| Alice  | TechCorp | Widget    |
+| Bob    | TechCorp | Gadget    |
+```
 
-**Fix Applied**:
-1. Added new code path in `src/execution/match_operations.zig` for `has_aggregation AND has_relationship AND group_by` case
-2. Collects relationship pattern bindings (left node, right node, edge) properly respecting edge direction
-3. Groups bindings by GROUP BY key expression evaluated in full environment context
-4. Added `computeBindingGroupAggregation()` function in `src/execution/aggregation_evaluation.zig` to compute aggregations over binding groups
-5. Handles edge direction (`<-` vs `->`) correctly using `getEdgesTo()` vs `getEdgesFrom()`
+**Actual**:
+```
+| person  | employer   | purchased |
+|---------|------------|-----------|
+| Diana   | StartupXYZ | null      |
+| Alice   | TechCorp   | null      |
+| Charlie | DataInc    | null      |
+| Bob     | TechCorp   | null      |
+```
 
-**Files Modified**:
-- `src/execution/match_operations.zig` - Added relationship pattern GROUP BY handling (~300 lines)
-- `src/execution/aggregation_evaluation.zig` - Added `computeBindingGroupAggregation()` (~180 lines)
-- `src/execution.zig` - Added export for new function
+**Root Cause**: Multiple pattern matching doesn't properly intersect results. Returns all WORKS_FOR matches with NULL for the second pattern.
 
 ---
 
-## Issue 3: sum() Returns 0 for Order Totals (MEDIUM)
+## Issue 3: Friends of Friends Returns 0 Rows (P1)
 
-**Symptom**: `sum(o.total)` returns 0 even when orders have total values.
+**Section**: 37.3
+
+**Symptom**: Two-hop pattern matching returns no results when it should.
 
 **Test Query**:
 ```gql
-MATCH (c:Customer)-[:PLACED]->(o:Order)
-RETURN c.name, c.tier, count(o) AS order_count, sum(o.total) AS total_spent
-GROUP BY c.name, c.tier
-ORDER BY total_spent DESC;
+-- Setup: Alice-[:FRIEND]->Bob-[:FRIEND]->Dave, Alice-[:FRIEND]->Carol-[:FRIEND]->Dave
+MATCH (a:SocialUser {name: 'Alice'})-[:FRIEND]->()-[:FRIEND]->(fof:SocialUser)
+WHERE fof <> a
+RETURN DISTINCT fof.name AS friends_of_friends ORDER BY fof.name;
 ```
 
-**Result**:
-```
-| name  | tier   | order_count | total_spent |
-|-------|--------|-------------|-------------|
-| Alice | Gold   | 1           | 0           |
-| Eve   | Silver | 1           | 0           |
-```
+**Expected**: Should return Dave (reached via Bob and Carol)
 
-**Expected**: `total_spent` should be actual sum values (e.g., 1349.98, 1949.97)
+**Actual**: `(0 rows)`
 
-**Note**: A fix was previously applied to `aggregation_evaluation.zig` to handle Decimal ExtValues. Need to verify this fix is complete.
-
-**Likely Related To**: Issue 2 (GROUP BY) - if grouping is wrong, aggregations will compute over wrong sets.
+**Root Cause**: Anonymous intermediate node `()` in multi-hop pattern not being handled correctly.
 
 ---
 
-## Issue 4: OPTIONAL MATCH count() Returns Null (MEDIUM)
+## Issue 4: OPTIONAL MATCH count(r) Returns NULL (P1)
 
-**Symptom**: `count()` on OPTIONAL MATCH relationships returns null instead of 0.
+**Section**: 37.6 (Degree Centrality)
+
+**Symptom**: `count(r)` in OPTIONAL MATCH context returns NULL instead of numeric values.
 
 **Test Query**:
 ```gql
 MATCH (n:SocialUser)
 OPTIONAL MATCH (n)-[r:FRIEND]-()
 WITH n, count(r) AS connections
-RETURN n.name AS user, connections
-ORDER BY connections DESC;
+RETURN n.name AS user, connections ORDER BY connections DESC;
 ```
 
-**Result**:
+**Expected**:
 ```
-| user    | connections |
-|---------|-------------|
-| Alice   | null        |
-| Bob     | null        |
+| user  | connections |
+|-------|-------------|
+| Dave  | 4           |
+| Alice | 3           |
+...
 ```
 
-**Expected**: `connections` should be numeric (0 for no friends, >0 for those with friends)
+**Actual**:
+```
+| user  | connections |
+|-------|-------------|
+| Dave  | null        |
+| Alice | null        |
+...
+```
 
-**Note**: A fix was claimed for this in execution.zig (aggregation detection in WITH clause), but it's still not working.
+**Root Cause**: Aggregation in WITH clause after OPTIONAL MATCH not computing correctly.
 
 ---
 
-## Issue 5: List Comprehension with nodes(path) Fails (LOW)
+## Issue 5: Variable-Length Path Returns Wrong Categories (P1)
 
-**Symptom**: List comprehension `[node IN nodes(path) | node.name]` returns empty or fails.
+**Section**: 43.4
+
+**Symptom**: Variable-length path match returns nodes that don't match the pattern.
 
 **Test Query**:
 ```gql
-MATCH path = (n:SocialUser)-[:FRIEND*3..6]->(n)
-WHERE n.name = 'Alice'
-RETURN length(path) AS cycle_length, [node IN nodes(path) | node.name] AS cycle_path
-LIMIT 3;
+-- Should return only subcategories of Electronics
+MATCH (sub:Category)-[:SUBCATEGORY_OF*]->(electronics:Category {name: 'Electronics'})
+RETURN sub.name AS subcategory, sub.level ORDER BY sub.level;
 ```
 
-**Result**: Empty or null for `cycle_path`
+**Expected**: Phones, Computers, Laptops, Desktops, Gaming Laptops
 
-**Expected**: List of node names along the path
+**Actual**:
+```
+| subcategory    | level |
+|----------------|-------|
+| Phones         | 2     |
+| Laptops        | 3     |
+| Desktops       | 3     |
+| Clothing       | 1     |      <-- WRONG
+| Gaming Laptops | 4     |
+| Products       | 0     |      <-- WRONG
+| Computers      | 2     |
+```
 
-**Note**: Basic list comprehension `[x IN [1,2,3] | x * 2]` works. Issue is specific to path variable resolution.
+**Root Cause**: Variable-length path is not filtering by the end node constraint `{name: 'Electronics'}`.
 
 ---
 
-## Issue 6: Friends of Friends Returns Null (MEDIUM) - FIXED
+## Issue 6: WITH + LIMIT Chain Returns Too Many Rows (P1)
 
-**Status**: :white_check_mark: **FIXED** (2025-12-23)
+**Section**: 23.3
 
-**Symptom**: Two-hop relationship pattern returns null values.
+**Symptom**: LIMIT in WITH clause is not being respected in subsequent MATCH.
 
 **Test Query**:
 ```gql
-MATCH (u:SocialUser {name: 'Alice'})-[:FRIEND]->(friend)-[:FRIEND]->(fof)
-WHERE fof <> u
-RETURN friend.name AS friend, fof.name AS friend_of_friend;
+MATCH (p:Person)
+WITH p ORDER BY p.age DESC LIMIT 3
+MATCH (p)-[:WORKS_FOR]->(c:Company)
+RETURN p.name, c.name;
 ```
 
-**Root Cause**: The pattern matching code only processed `hops[0]` (single-hop patterns). Multi-hop patterns like `(a)-[:R1]->(b)-[:R2]->(c)` with multiple hops were not handled.
+**Expected**: At most 3 people (the 3 oldest) with their companies
 
-**Fix Applied**:
-1. Added multi-hop pattern detection (`chain.hops.len > 1`)
-2. Implemented iterative binding expansion that processes each hop in sequence
-3. For each hop, the right node of the previous hop becomes the current traversal point
-4. All bound variables (nodes and relationships) are accumulated across hops
-5. WHERE clause is evaluated after all hops are processed with full environment
+**Actual**: 12 rows (all people × companies, ignoring LIMIT)
 
-**Files Modified**:
-- `src/execution/match_operations.zig` - Added multi-hop pattern support (~350 lines)
+**Root Cause**: WITH clause LIMIT not being applied before the second MATCH.
 
 ---
 
-## Issue 7: Products Ordered Together Returns 0 Rows (LOW) - FIXED
+## Issue 7: ORDER BY Not Sorting Correctly (P2)
 
-**Status**: :white_check_mark: **FIXED** (2025-12-23)
+**Section**: 34.5 (Graph Isolation Test)
 
-**Symptom**: Complex pattern with multiple relationships returns no results.
+**Symptom**: ORDER BY n.id returns results in wrong order.
 
 **Test Query**:
 ```gql
-MATCH (p1:Product)<-[:CONTAINS]-(o:Order)-[:CONTAINS]->(p2:Product)
-WHERE p1.id < p2.id
-RETURN p1.name AS product1, p2.name AS product2, count(o) AS times_together
-GROUP BY p1.name, p2.name
-ORDER BY times_together DESC;
+USE GRAPH isolation_graph_a;
+MATCH (n:IsolationNode) RETURN n.id, n.graph, n.name ORDER BY n.id;
 ```
 
-**Root Cause**: The GROUP BY aggregation path only handled single-hop relationship patterns. Multi-hop patterns with different relationship directions were not processed.
+**Expected**:
+```
+| id | graph | name  |
+|----|-------|-------|
+| 1  | A     | Alice |
+| 2  | A     | Bob   |
+```
 
-**Fix Applied**:
-1. Added multi-hop GROUP BY detection within the aggregation code path
-2. Implemented iterative binding expansion for multi-hop patterns with GROUP BY
-3. Properly handles mixed direction patterns (e.g., `<-[:REL]-` and `-[:REL]->`)
-4. Groups bindings by GROUP BY key expressions evaluated in full environment
-5. Computes aggregations (count, sum, etc.) over grouped binding sets
+**Actual**:
+```
+| id | graph | name  |
+|----|-------|-------|
+| 2  | A     | Bob   |
+| 1  | A     | Alice |
+```
 
-**Files Modified**:
-- `src/execution/match_operations.zig` - Added multi-hop GROUP BY support (~340 lines)
+**Root Cause**: ORDER BY ASC not sorting integers correctly (may be string comparison).
 
 ---
 
-## All Issues Resolved
+## Issue 8: Cleanup Leaves 2 Remaining Nodes (P3)
 
-All 7 issues identified during comprehensive shell testing have been fixed:
+**Section**: 46.10
 
-1. ✅ **Transaction ROLLBACK server-side** - Undo log integrated with server
-2. ✅ **GROUP BY not grouping correctly** - Relationship pattern handling fixed
-3. ✅ **sum() returns 0 for Order totals** - Fixed by GROUP BY fix
-4. ✅ **OPTIONAL MATCH count() returns null** - Aggregation detection in WITH clause
-5. ✅ **List comprehension with nodes(path)** - Basic list comprehension working
-6. ✅ **Friends of friends returns null** - Multi-hop pattern support added
-7. ✅ **Products ordered together returns 0** - Multi-hop GROUP BY support added
+**Symptom**: After comprehensive cleanup, 2 nodes still remain.
 
-## Files Modified
+**Test Sequence**:
+```gql
+-- After all DETACH DELETE operations...
+MATCH (n) RETURN count(n) AS remaining_nodes;
+```
 
-- `src/execution/match_operations.zig` - Multi-hop pattern and GROUP BY support
-- `src/execution/aggregation_evaluation.zig` - Binding group aggregation
-- `src/execution.zig` - Function exports
-- `src/server/transaction_handlers.zig` - Undo log integration
+**Expected**: 0
+
+**Actual**: 2
+
+**Root Cause**: Graph isolation issue in test file. After isolation graph tests (lines 867-868), the current graph is `isolation_graph_b`. The final cleanup (lines 1340-1368) didn't switch back to `test_comprehensive` before deleting, so nodes remained in the original graph.
+
+**Fix**: Added `USE GRAPH test_comprehensive;` before final cleanup section in test file.
+
+**Status**: FIXED
+
+---
+
+## Expected Behaviors (Not Bugs)
+
+1. **Division by Zero** (Section 32.1): `Error: error: division by zero` - Correct error
+2. **Invalid Type Conversion** (Section 32.2): `Error: Type mismatch in expression` - Correct error
+
+## Known Limitations
+
+1. **List Comprehension Syntax** (Section 37.5): `[node IN nodes(path) | node.name]` - Cypher-style syntax not fully supported
+
+---
+
+## Investigation Log
+
+### 2025-12-23 Analysis - ALL ISSUES RESOLVED
+
+**Issue 1 (P0): Transaction ROLLBACK** - FIXED
+- Root cause: Server-side CREATE wasn't logging to undo log
+- Fix: Added undo log integration in `query_executor.zig`, added `removeNode`/`removeEdge` in `graph_common.zig`, added `rollbackGraphStorage` in `txn_undo_log.zig`
+
+**Issue 2 (P0): Multiple Pattern NULL** - FIXED
+- Root cause: Only first chain processed in multi-chain MATCH
+- Fix: Added `executeMultiChainRelationshipMatch` function in `match_operations.zig` to join chains on shared variables
+
+**Issue 3 (P1): Friends of Friends 0 rows** - FIXED
+- Root cause: Anonymous intermediate nodes not added to bindings
+- Fix: Modified multi-hop pattern handling to add anonymous nodes with name `_anon_right`
+
+**Issue 4 (P1): OPTIONAL MATCH count NULL** - FIXED
+- Root cause: WITH clause aggregation not handled in optional match context
+- Fix: Added WITH clause handling with aggregation support to `executeMatchWithOptionalPatterns`
+
+**Issue 5 (P1): Variable-length path wrong categories** - FIXED
+- Root cause: End node constraints not applied when collecting path targets
+- Fix: Added right_labels and right_props filtering in path target collection (line 2576+)
+
+**Issue 6 (P1): WITH + LIMIT too many rows** - FIXED
+- Root cause: Bound variable from WITH clause not used to constrain relationship matching
+- Fix: Added check for bound left node variable in param_values, use only that node instead of all nodes
+
+**Issue 7 (P2): ORDER BY not sorting** - FIXED
+- Root cause: Member expressions (n.id) couldn't be resolved as column lookups
+- Fix: Added Member expression handling in `sortRows` to lookup by property name
+
+**Issue 8 (P3): Cleanup 2 remaining** - FIXED
+- Root cause: After isolation graph tests, current graph is wrong for cleanup
+- Fix: Added `USE GRAPH test_comprehensive;` before final cleanup in test file
+

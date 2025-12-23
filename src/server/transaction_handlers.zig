@@ -4,10 +4,23 @@ const wal_mod = @import("wal");
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-001; FEATURE="TransactionUndoLog"; ASPECT=ServerIntegration; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
 const graph_store = @import("../graph_store.zig");
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-016; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+const graph_storage_mgr = @import("graph_storage_manager.zig");
+const graph_exec = @import("graph/exec.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-009; FEATURE="ServerRefactoring"; ASPECT=TRANSACTION_HANDLERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - Transaction Message Handlers Module (Fifth Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
+
+/// Get graph storage for the current session, falling back to default if no graph selected
+fn getSessionGraphStorage(allocator: std.mem.Allocator, state: *ServerState) *graph_exec.GraphStorage {
+    // Try to get graph by session's current_graph name
+    if (graph_storage_mgr.getGraphStorageByName(state.current_graph)) |storage| {
+        return storage;
+    }
+    // Fall back to default graph
+    return graph_storage_mgr.getOrCreateGraphStorage(allocator);
+}
 
 /// Get or create MVCC manager (helper function)
 fn getOrCreateMVCCManager(allocator: std.mem.Allocator) *@import("txn/mvcc.zig").MVCCManager {
@@ -166,11 +179,10 @@ pub fn handleRollback(allocator: std.mem.Allocator, state: *ServerState) !?[]con
 
         // CANARY: REQ=REQ-TXN-UNDO-SERVER-004; FEATURE="TransactionUndoLog"; ASPECT=RollbackTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
         // Rollback using the undo log - undoes all changes in reverse order
-        const store = graph_store.getGlobalStore(allocator);
+        // Use session graph storage for server-side rollback
+        const session_storage = getSessionGraphStorage(allocator, state);
         const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-        undo_log.rollback(store) catch |err| {
-            std.log.err("Failed to rollback transaction: {any}", .{err});
-        };
+        undo_log.rollbackGraphStorage(session_storage);
 
         state.txn_manager.rollback(&tx2);
         state.active_txn = null;

@@ -80,6 +80,58 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
                         val1 = .{ .Null = {} };
                         val2 = .{ .Null = {} };
                     }
+                } else if (key.expr == .Member) {
+                    // CANARY: REQ=REQ-GQL-ORDERBY-MEMBER-001; FEATURE="OrderByMemberExpr"; ASPECT=PropertyAccess; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // Member expression like n.id - look up by property name or qualified name
+                    const member = key.expr.Member;
+                    const prop_name = member.field;
+
+                    // Try to find the column by property name or qualified name (e.g., "id" or "n.id")
+                    var col_idx_opt: ?usize = null;
+
+                    // First try: exact property name (e.g., "id")
+                    for (result.columns, 0..) |result_col, idx| {
+                        if (std.mem.eql(u8, result_col, prop_name)) {
+                            col_idx_opt = idx;
+                            break;
+                        }
+                    }
+
+                    // Second try: qualified name (e.g., "n.id") if target is an identifier
+                    if (col_idx_opt == null and member.target.* == .Ident) {
+                        const target_name = member.target.Ident.orig;
+                        for (result.columns, 0..) |result_col, idx| {
+                            // Check if column matches "target.property" pattern
+                            if (result_col.len == target_name.len + 1 + prop_name.len) {
+                                if (std.mem.startsWith(u8, result_col, target_name) and
+                                    result_col[target_name.len] == '.' and
+                                    std.mem.endsWith(u8, result_col, prop_name))
+                                {
+                                    col_idx_opt = idx;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (col_idx_opt) |col_idx| {
+                        val1 = result.rows[i][col_idx];
+                        val2 = result.rows[i + 1][col_idx];
+                    } else {
+                        // Column not found - try expression evaluation as fallback
+                        const env1 = Env{
+                            .names = result.columns,
+                            .values = result.rows[i],
+                            .allocator = allocator,
+                        };
+                        const env2 = Env{
+                            .names = result.columns,
+                            .values = result.rows[i + 1],
+                            .allocator = allocator,
+                        };
+                        val1 = eval.evalExpr(allocator, key.expr, env1) catch .{ .Null = {} };
+                        val2 = eval.evalExpr(allocator, key.expr, env2) catch .{ .Null = {} };
+                    }
                 } else {
                     // Complex expression - need to evaluate it for each row
                     // Create environment from row values

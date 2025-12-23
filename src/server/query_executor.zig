@@ -11,6 +11,8 @@ const server_state = @import("server_state.zig");
 const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const union_advanced = geode.union_advanced;
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-010; FEATURE="TransactionUndoLog"; ASPECT=QueryExecutorImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+const txn_undo_log = @import("../txn_undo_log.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=QUERY_EXECUTOR; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.3 - Query Executor Module (Incremental Extraction - Eighth Increment)
@@ -1055,6 +1057,10 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     // Get graph storage for current session
     const graph = getSessionGraphStorage(allocator, state);
 
+    // CANARY: REQ=REQ-TXN-UNDO-SERVER-011; FEATURE="TransactionUndoLog"; ASPECT=CreateUndoLog; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // Get undo log for transaction rollback support
+    const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+
     // Start transaction if not already in one
     var started_auto = false;
     if (state.active_txn == null) {
@@ -1062,6 +1068,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
         state.active_txn = t;
         state.session_snapshot_ts = state.global_commit_ts;
         started_auto = true;
+        // Start undo log for auto transactions too
+        undo_log.begin();
     }
 
     // Process the pattern to create nodes and relationships
@@ -1079,6 +1087,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 const node_id = getNextNodeId(graph);
                 try graph.addNode(allocator, node_id, head_node.labels);
                 try created_nodes.append(allocator, node_id);
+                // Log node creation for rollback support
+                undo_log.logCreateNode(node_id) catch {};
 
                 // Set properties if any
                 if (head_node.props) |props| {
@@ -1095,6 +1105,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 const left_node_id = getNextNodeId(graph);
                 try graph.addNode(allocator, left_node_id, hop.left.labels);
                 try created_nodes.append(allocator, left_node_id);
+                // Log left node creation for rollback support
+                undo_log.logCreateNode(left_node_id) catch {};
 
                 // Set properties if any
                 if (hop.left.props) |props| {
@@ -1108,6 +1120,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 const right_node_id = getNextNodeId(graph);
                 try graph.addNode(allocator, right_node_id, hop.right.labels);
                 try created_nodes.append(allocator, right_node_id);
+                // Log right node creation for rollback support
+                undo_log.logCreateNode(right_node_id) catch {};
 
                 // Set properties if any
                 if (hop.right.props) |props| {
@@ -1124,6 +1138,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                     const edge_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
                     const edge_id = try graph.addEdge(allocator, source, target, edge_type);
                     try created_edges.append(allocator, edge_id);
+                    // Log edge creation for rollback support
+                    undo_log.logCreateEdge(edge_id) catch {};
 
                     // Set edge properties if any
                     if (hop.rel.props) |props| {
@@ -1143,6 +1159,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
             state.txn_manager.commit(txc) catch {};
             state.global_commit_ts += 1;
             state.active_txn = null;
+            // Clear undo log on successful auto-commit
+            undo_log.commit();
         }
     }
 

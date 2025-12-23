@@ -750,6 +750,338 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     };
 }
 
+// CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-001; FEATURE="MultiChainRelationshipMatch"; ASPECT=Execution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// Handle multiple chains with relationships that share variables
+// e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
+// This function joins chains on shared variables
+fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, current_graph: ?[]const u8) !ExecutionResult {
+    const store = graph_store.getGlobalStore(allocator);
+    const filter_graph = current_graph orelse "default";
+
+    // MatchBinding type for tracking variable->node mappings (named differently to avoid shadowing)
+    const MatchBinding = struct {
+        vars: std.StringHashMap(*graph_store.Node),
+        alloc: std.mem.Allocator,
+
+        fn init(alloc: std.mem.Allocator) @This() {
+            return .{
+                .vars = std.StringHashMap(*graph_store.Node).init(alloc),
+                .alloc = alloc,
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.vars.deinit();
+        }
+
+        fn clone(self: *const @This()) !@This() {
+            var new_binding = @This().init(self.alloc);
+            var iter = self.vars.iterator();
+            while (iter.next()) |entry| {
+                try new_binding.vars.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+            return new_binding;
+        }
+    };
+
+    // Start with first chain and build bindings
+    var bindings = std.ArrayList(MatchBinding).initCapacity(allocator, 0) catch unreachable;
+    defer {
+        for (bindings.items) |*b| b.deinit();
+        bindings.deinit(allocator);
+    }
+
+    // Process first chain
+    if (q.match.chains.len == 0) {
+        return ExecutionResult{
+            .columns = &.{},
+            .rows = &.{},
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
+    }
+
+    const first_chain = q.match.chains[0];
+    if (first_chain.hops.len > 0) {
+        // First chain has relationships
+        const hop = first_chain.hops[0];
+        const left_labels = hop.left.labels;
+        const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+        const right_labels = hop.right.labels;
+
+        // Find all matching relationships
+        var node_iter = store.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const left_node = entry.value_ptr;
+            if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+
+            // Check left labels
+            if (!matchesLabels(left_node, left_labels)) continue;
+
+            // Get outgoing edges
+            const edges = store.getEdgesFrom(left_node.id);
+            for (edges) |edge| {
+                // Check relationship type
+                if (rel_type) |rt| {
+                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+                }
+
+                // Get target node
+                if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                    if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                    if (!matchesLabels(right_node, right_labels)) continue;
+
+                    // Create binding with left and right nodes
+                    var binding = MatchBinding.init(allocator);
+                    if (hop.left.name) |v| try binding.vars.put(v, left_node);
+                    if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                    try bindings.append(allocator, binding);
+                }
+            }
+        }
+    } else if (first_chain.head) |node_pattern| {
+        // First chain is just a node pattern
+        var node_iter = store.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const node = entry.value_ptr;
+            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+            if (!matchesLabels(node, node_pattern.labels)) continue;
+
+            var binding = MatchBinding.init(allocator);
+            if (node_pattern.name) |v| try binding.vars.put(v, node);
+            try bindings.append(allocator, binding);
+        }
+    }
+
+    // Process subsequent chains - join on shared variables
+    for (q.match.chains[1..]) |chain| {
+        if (chain.hops.len == 0) continue;
+
+        const hop = chain.hops[0];
+        const left_var = hop.left.name;
+        const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+        const right_labels = hop.right.labels;
+        const right_var = hop.right.name;
+
+        // For each existing binding, try to extend with this chain
+        var new_bindings = std.ArrayList(MatchBinding).initCapacity(allocator, 0) catch unreachable;
+
+        for (bindings.items) |*existing| {
+            // Get the node bound to left_var (if it exists in this binding)
+            const left_node = if (left_var) |lv| existing.vars.get(lv) else null;
+
+            if (left_node) |ln| {
+                // Find edges from this node matching the relationship type
+                const edges = store.getEdgesFrom(ln.id);
+                for (edges) |edge| {
+                    if (rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge.label, rt)) continue;
+                    }
+
+                    if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                        if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!matchesLabels(right_node, right_labels)) continue;
+
+                        // Clone existing binding and add new variable
+                        var new_binding = try existing.clone();
+                        if (right_var) |rv| try new_binding.vars.put(rv, right_node);
+                        try new_bindings.append(allocator, new_binding);
+                    }
+                }
+            }
+        }
+
+        // Replace old bindings with expanded ones
+        for (bindings.items) |*b| b.deinit();
+        bindings.clearRetainingCapacity();
+        for (new_bindings.items) |b| try bindings.append(allocator, b);
+        new_bindings.deinit(allocator);
+    }
+
+    // Generate columns from RETURN clause
+    const items = q.ret.items;
+    const columns = try generateUniqueColumnNames(allocator, items);
+
+    // Evaluate RETURN expressions for each binding
+    var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+
+    for (bindings.items) |*binding| {
+        // Build environment from binding
+        var env_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        defer env_names.deinit(allocator);
+        var env_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
+        defer env_values.deinit(allocator);
+
+        var var_iter = binding.vars.iterator();
+        while (var_iter.next()) |entry| {
+            try env_names.append(allocator, entry.key_ptr.*);
+            try env_values.append(allocator, Value{ .Node = entry.value_ptr.* });
+        }
+
+        const env = Env{
+            .names = env_names.items,
+            .values = env_values.items,
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+        };
+
+        // Evaluate WHERE clause
+        if (q.where_clause) |where_expr| {
+            const where_result = eval.evalExpr(allocator, where_expr, env) catch continue;
+            const passes = switch (where_result) {
+                .Bool => |b| b,
+                else => false,
+            };
+            if (!passes) continue;
+        }
+
+        // Evaluate RETURN items
+        var row = try allocator.alloc(Value, items.len);
+        for (items, 0..) |item, i| {
+            row[i] = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+        }
+        try rows.append(allocator, row);
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = try rows.toOwnedSlice(allocator),
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+// Helper function to check if a node matches required labels
+fn matchesLabels(node: *graph_store.Node, required_labels: []const []const u8) bool {
+    for (required_labels) |required| {
+        var found = false;
+        for (node.labels) |label| {
+            if (std.mem.eql(u8, required, label)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+// Helper to get expression name for WITH clause
+fn getWithExpressionName(allocator: std.mem.Allocator, expr: ast.Expr) []const u8 {
+    return switch (expr) {
+        .Ident => |ident| ident.orig,
+        .PropertyAccess => |prop| blk: {
+            const combined = std.fmt.allocPrint(allocator, "{s}.{s}", .{ prop.object, prop.property }) catch "prop";
+            break :blk combined;
+        },
+        .Call => |call| switch (call.callee.*) {
+            .Ident => |ident| ident.orig,
+            else => "expr",
+        },
+        else => "expr",
+    };
+}
+
+// CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-WITH-002; FEATURE="OptionalMatchWithAggregation"; ASPECT=AggregationComputation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// Compute aggregation for a group of rows
+fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []Value, columns: []const []const u8, param_names: []const []const u8, param_values: []const Value) !Value {
+    if (expr != .Call) return Value{ .Null = {} };
+
+    const call = expr.Call;
+    if (call.callee.* != .Ident) return Value{ .Null = {} };
+
+    const func_name = call.callee.Ident.orig;
+    const arg_ptr: ?*ast.Expr = if (call.args.len > 0) call.args[0] else null;
+
+    // Handle count(*)
+    if (std.ascii.eqlIgnoreCase(func_name, "count")) {
+        if (arg_ptr == null or (arg_ptr.?.* == .Ident and std.mem.eql(u8, arg_ptr.?.Ident.orig, "*"))) {
+            return Value{ .Int = @intCast(group_rows.len) };
+        }
+        // count(expr) - count non-null values
+        var count: i64 = 0;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (val != .Null) count += 1;
+        }
+        return Value{ .Int = count };
+    }
+
+    // Handle sum(expr)
+    if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
+        if (arg_ptr == null) return Value{ .Null = {} };
+        var sum: i64 = 0;
+        var has_value = false;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (val == .Int) {
+                sum += val.Int;
+                has_value = true;
+            }
+        }
+        return if (has_value) Value{ .Int = sum } else Value{ .Null = {} };
+    }
+
+    // Handle min(expr)
+    if (std.ascii.eqlIgnoreCase(func_name, "min")) {
+        if (arg_ptr == null) return Value{ .Null = {} };
+        var min: ?i64 = null;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (val == .Int) {
+                if (min == null or val.Int < min.?) {
+                    min = val.Int;
+                }
+            }
+        }
+        return if (min) |m| Value{ .Int = m } else Value{ .Null = {} };
+    }
+
+    // Handle max(expr)
+    if (std.ascii.eqlIgnoreCase(func_name, "max")) {
+        if (arg_ptr == null) return Value{ .Null = {} };
+        var max: ?i64 = null;
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (val == .Int) {
+                if (max == null or val.Int > max.?) {
+                    max = val.Int;
+                }
+            }
+        }
+        return if (max) |m| Value{ .Int = m } else Value{ .Null = {} };
+    }
+
+    return Value{ .Null = {} };
+}
+
 // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-004; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoinImpl; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
 // CANARY: REQ=REQ-MULTI-GRAPH-009; FEATURE="MultiGraphIsolation"; ASPECT=OptionalMatchFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH + OPTIONAL MATCH patterns as left outer join with graph isolation
@@ -931,23 +1263,142 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         columns[i] = try allocator.dupe(u8, v);
     }
 
-    const result = ExecutionResult{
+    var intermediate_result = ExecutionResult{
         .columns = columns,
         .rows = try rows.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
 
-    // Evaluate RETURN expressions using matched variables as environment
-    const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
-    var return_rows = try allocator.alloc([]Value, result.rows.len);
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-WITH-001; FEATURE="OptionalMatchWithAggregation"; ASPECT=WithClauseHandling; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // Process WITH clause if present (needed for aggregations like count(r))
+    if (q.with_clause) |with_clause| {
+        var with_columns = try allocator.alloc([]const u8, with_clause.items.len);
+        for (with_clause.items, 0..) |item, i| {
+            with_columns[i] = try allocator.dupe(u8, item.alias orelse getWithExpressionName(allocator, item.expr));
+        }
 
-    for (result.rows, 0..) |result_row, row_idx| {
+        // Check for aggregation in WITH clause
+        var has_aggregation = false;
+        for (with_clause.items) |item| {
+            if (isAggregationExpr(item.expr)) {
+                has_aggregation = true;
+                break;
+            }
+        }
+
+        var with_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+
+        if (has_aggregation) {
+            // Group by non-aggregation expressions
+            // For OPTIONAL MATCH with count, we typically need to group by the base node
+            var groups = std.StringHashMap(std.ArrayList([]Value)).init(allocator);
+            defer {
+                var iter = groups.iterator();
+                while (iter.next()) |entry| {
+                    entry.value_ptr.deinit(allocator);
+                }
+                groups.deinit();
+            }
+
+            for (intermediate_result.rows) |input_row| {
+                // Build group key from non-aggregation WITH items
+                var key_parts = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+                defer key_parts.deinit(allocator);
+                const writer = key_parts.writer(allocator);
+
+                const env = Env{
+                    .allocator = allocator,
+                    .names = intermediate_result.columns,
+                    .values = input_row,
+                    .param_names = param_names,
+                    .param_values = param_values,
+                };
+
+                for (with_clause.items) |item| {
+                    if (!isAggregationExpr(item.expr)) {
+                        const val = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+                        writer.print("{any}|", .{val}) catch {};
+                    }
+                }
+
+                const key = try key_parts.toOwnedSlice(allocator);
+                defer allocator.free(key);
+
+                const gop = try groups.getOrPut(key);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                }
+                try gop.value_ptr.append(allocator, input_row);
+            }
+
+            // Compute aggregations for each group
+            var group_iter = groups.iterator();
+            while (group_iter.next()) |entry| {
+                const group_rows = entry.value_ptr.items;
+                if (group_rows.len == 0) continue;
+
+                var with_row = try allocator.alloc(Value, with_clause.items.len);
+
+                // Use first row as representative for non-aggregation expressions
+                const base_env = Env{
+                    .allocator = allocator,
+                    .names = intermediate_result.columns,
+                    .values = group_rows[0],
+                    .param_names = param_names,
+                    .param_values = param_values,
+                };
+
+                for (with_clause.items, 0..) |item, i| {
+                    if (isAggregationExpr(item.expr)) {
+                        with_row[i] = try computeAggregationForGroup(allocator, item.expr, group_rows, intermediate_result.columns, param_names, param_values);
+                    } else {
+                        with_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                    }
+                }
+
+                try with_rows.append(allocator, with_row);
+            }
+        } else {
+            // No aggregation - transform each row individually
+            for (intermediate_result.rows) |input_row| {
+                var with_row = try allocator.alloc(Value, with_clause.items.len);
+                const env = Env{
+                    .allocator = allocator,
+                    .names = intermediate_result.columns,
+                    .values = input_row,
+                    .param_names = param_names,
+                    .param_values = param_values,
+                };
+
+                for (with_clause.items, 0..) |item, i| {
+                    with_row[i] = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+                }
+
+                try with_rows.append(allocator, with_row);
+            }
+        }
+
+        // Clean up old intermediate result
+        for (intermediate_result.columns) |col| allocator.free(col);
+        allocator.free(intermediate_result.columns);
+        for (intermediate_result.rows) |row| allocator.free(row);
+        allocator.free(intermediate_result.rows);
+
+        intermediate_result.columns = with_columns;
+        intermediate_result.rows = try with_rows.toOwnedSlice(allocator);
+    }
+
+    // Evaluate RETURN expressions using matched/WITH variables as environment
+    const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
+    var return_rows = try allocator.alloc([]Value, intermediate_result.rows.len);
+
+    for (intermediate_result.rows, 0..) |result_row, row_idx| {
         var return_row = try allocator.alloc(Value, q.ret.items.len);
 
-        // Create environment from matched variables
+        // Create environment from matched/WITH variables
         const env = Env{
             .allocator = allocator,
-            .names = result.columns,
+            .names = intermediate_result.columns,
             .values = result_row,
             .param_names = param_names,
             .param_values = param_values,
@@ -961,19 +1412,19 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     }
 
     // Clean up intermediate result
-    for (result.columns) |col| {
+    for (intermediate_result.columns) |col| {
         allocator.free(col);
     }
-    allocator.free(result.columns);
-    for (result.rows) |row| {
+    allocator.free(intermediate_result.columns);
+    for (intermediate_result.rows) |row| {
         allocator.free(row);
     }
-    allocator.free(result.rows);
+    allocator.free(intermediate_result.rows);
 
     return ExecutionResult{
         .columns = return_columns,
         .rows = return_rows,
-        .flags = result.flags,
+        .flags = intermediate_result.flags,
     };
 }
 
@@ -1129,6 +1580,23 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     if (all_simple_nodes and q.match.chains.len > 1) {
         // Handle multiple independent node patterns
         return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+    }
+
+    // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // Handle multiple chains with relationships that share variables
+    // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
+    if (q.match.chains.len > 1 and !all_simple_nodes) {
+        var has_any_optional = false;
+        for (q.match.chains) |chain| {
+            if (chain.is_optional) {
+                has_any_optional = true;
+                break;
+            }
+        }
+        if (!has_any_optional) {
+            // Multiple required chains with relationships - use join logic
+            return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
+        }
     }
 
     // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoin; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
@@ -2105,11 +2573,64 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Collect all target nodes from paths (deduplicated by node ID)
+                    // CANARY: REQ=REQ-GQL-VARLEN-ENDNODE-001; FEATURE="VariableLengthPathEndNodeFilter"; ASPECT=AggregationFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
                     for (paths.items) |path| {
                         if (path.nodes.items.len < 2) continue;
 
                         const target_node_id = path.nodes.items[path.nodes.items.len - 1];
                         const target_node_ptr = store.nodes.getPtr(target_node_id) orelse continue;
+
+                        // Filter by right node labels (e.g., :Category in MATCH (a)-[*]->(b:Category {name: 'X'}))
+                        if (right_labels.len > 0) {
+                            var has_all_right_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (target_node_ptr.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_right_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_right_labels) continue;
+                        }
+
+                        // Filter by right node properties (e.g., {name: 'Electronics'})
+                        if (right_props) |props| {
+                            var passes_right_props = true;
+                            for (props) |prop| {
+                                if (target_node_ptr.properties.get(prop.key)) |node_prop_val| {
+                                    // Convert PropertyValue to Value for comparison
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => Value{ .Null = {} },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    };
+                                    // Evaluate the expected property value
+                                    const empty_env = eval.Env{
+                                        .names = &.{},
+                                        .values = &.{},
+                                        .allocator = allocator,
+                                    };
+                                    const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        passes_right_props = false;
+                                        break;
+                                    }
+                                } else {
+                                    passes_right_props = false;
+                                    break;
+                                }
+                            }
+                            if (!passes_right_props) continue;
+                        }
 
                         // Check if already in matched_nodes (deduplicate)
                         var already_added = false;
@@ -2591,10 +3112,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 if (!passes_props) continue;
                             }
 
-                            // Count new variables needed
-                            var new_var_count: usize = 0;
+                            // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-001; FEATURE="MultiHopAnonymousNodes"; ASPECT=BindingCreation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                            // Count new variables needed - ALWAYS add right node (even anonymous)
+                            // This is needed so subsequent hops can traverse from anonymous intermediate nodes
+                            var new_var_count: usize = 1; // Always include right node
                             if (hop.rel.name != null) new_var_count += 1;
-                            if (hop.right.name != null) new_var_count += 1;
 
                             // Create new binding with existing vars + relationship + right node
                             var new_env_names = try allocator.alloc([]const u8, binding.env_names.len + new_var_count);
@@ -2614,10 +3136,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 new_env_values[new_idx] = if (edge_ptr) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
                                 new_idx += 1;
                             }
-                            if (hop.right.name) |right_name| {
-                                new_env_names[new_idx] = right_name;
-                                new_env_values[new_idx] = Value{ .Node = right_node_ptr };
-                            }
+                            // Always add right node with its name or "_anon_right" for anonymous nodes
+                            new_env_names[new_idx] = hop.right.name orelse "_anon_right";
+                            new_env_values[new_idx] = Value{ .Node = right_node_ptr };
 
                             try next_bindings.append(allocator, MultiHopBinding{
                                 .env_names = new_env_names,
@@ -2833,9 +3354,40 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
             // Single-hop relationship patterns (existing code continues below)
             // Handle relationship patterns
-            var left_iter = store.nodes.iterator();
-            while (left_iter.next()) |left_entry| {
-                const left_node = left_entry.value_ptr;
+
+            // CANARY: REQ=REQ-GQL-CHAIN-LEFTNODE-001; FEATURE="QueryChainLeftNodeBinding"; ASPECT=BoundVariableConstraint; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+            // Check if left node variable is already bound from a previous query in the chain
+            // This is critical for WITH + LIMIT chains like: WITH p LIMIT 3 MATCH (p)-[:R]->(c)
+            var bound_left_node: ?*graph_store.Node = null;
+            if (left_node_var) |lnv| {
+                for (param_names, param_values) |pname, pval| {
+                    if (std.mem.eql(u8, pname, lnv)) {
+                        // Found a bound value for the left node variable
+                        if (pval == .Node) {
+                            // Cast away const - the node is in the store and we just need to read it
+                            bound_left_node = @constCast(pval.Node);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // If left node is bound, only process that single node; otherwise iterate all nodes
+            var left_nodes_to_process = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+            defer left_nodes_to_process.deinit(allocator);
+
+            if (bound_left_node) |bln| {
+                // Use only the bound node
+                try left_nodes_to_process.append(allocator, bln);
+            } else {
+                // Iterate over all matching nodes
+                var left_iter = store.nodes.iterator();
+                while (left_iter.next()) |left_entry| {
+                    try left_nodes_to_process.append(allocator, left_entry.value_ptr);
+                }
+            }
+
+            for (left_nodes_to_process.items) |left_node| {
 
                 // CANARY: REQ=REQ-MULTI-GRAPH-022; FEATURE="MultiGraphIsolation"; ASPECT=RelPatternFilter; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
