@@ -205,6 +205,7 @@ pub const UndoLog = struct {
     }
 
     pub fn begin(self: *UndoLog) void {
+        std.debug.print("[UNDO] begin() called, setting active=true\n", .{});
         self.clear();
         self.active = true;
     }
@@ -216,12 +217,17 @@ pub const UndoLog = struct {
 
     /// Log creation of a node (undo = delete it)
     pub fn logCreateNode(self: *UndoLog, node_id: u64, graph_name: ?[]const u8) !void {
-        if (!self.active) return;
+        std.debug.print("[UNDO] logCreateNode called: active={}, node_id={d}, graph_name='{s}'\n", .{ self.active, node_id, graph_name orelse "NULL" });
+        if (!self.active) {
+            std.debug.print("[UNDO] logCreateNode: NOT ACTIVE, skipping\n", .{});
+            return;
+        }
         const gname = graph_name orelse "default";
         try self.entries.append(self.allocator, .{ .CreateNode = .{
             .node_id = node_id,
             .graph_name = try self.allocator.dupe(u8, gname),
         } });
+        std.debug.print("[UNDO] logCreateNode: added entry, now have {d} entries\n", .{self.entries.items.len});
     }
 
     /// Log creation of an edge (undo = delete it)
@@ -348,16 +354,22 @@ pub const UndoLog = struct {
 
     /// Rollback all changes by replaying undo entries in reverse order
     pub fn rollback(self: *UndoLog, store: *graph_store.GraphStore) !void {
-        if (!self.active) return;
+        std.debug.print("[UNDO] rollback called: active={}, entries={d}\n", .{ self.active, self.entries.items.len });
+        if (!self.active) {
+            std.debug.print("[UNDO] rollback: NOT ACTIVE, returning early\n", .{});
+            return;
+        }
 
         // Process entries in reverse order
         var i: usize = self.entries.items.len;
         while (i > 0) {
             i -= 1;
             const entry = self.entries.items[i];
+            std.debug.print("[UNDO] rollback: processing entry {d}\n", .{self.entries.items.len - i});
             try self.undoEntry(store, entry);
         }
 
+        std.debug.print("[UNDO] rollback: completed, clearing log\n", .{});
         self.clear();
         self.active = false;
     }
@@ -367,7 +379,11 @@ pub const UndoLog = struct {
     /// The storage parameter is kept for API compatibility but each entry looks up its own graph
     pub fn rollbackGraphStorage(self: *UndoLog, storage: *graph_common.GraphStorage) void {
         _ = storage; // Kept for API compatibility, but we look up per-entry graph
-        if (!self.active) return;
+        std.debug.print("[UNDO] rollbackGraphStorage called: active={}, entries={d}\n", .{ self.active, self.entries.items.len });
+        if (!self.active) {
+            std.debug.print("[UNDO] rollbackGraphStorage: NOT ACTIVE, returning early\n", .{});
+            return;
+        }
 
         // Process entries in reverse order
         var i: usize = self.entries.items.len;
@@ -382,19 +398,21 @@ pub const UndoLog = struct {
     }
 
     fn undoEntryGraphStorage(self: *UndoLog, entry: UndoEntry) void {
-        _ = self;
         switch (entry) {
             .CreateNode => |e| {
-                // Look up the correct graph storage by name
-                if (graph_storage_mgr.getGraphStorageByName(e.graph_name)) |target_storage| {
-                    target_storage.removeNode(e.node_id);
-                }
+                std.debug.print("[UNDO] undoEntryGraphStorage CreateNode: node_id={d}, graph_name='{s}'\n", .{ e.node_id, e.graph_name });
+                // CANARY: REQ=REQ-TXN-UNDO-020; FEATURE="TransactionUndoLog"; ASPECT=RollbackUseGraphStore; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                // Use GraphStore (the actual data store used by crud_operations) for rollback
+                const store = graph_store.getGlobalStore(self.allocator);
+                std.debug.print("[UNDO] Calling deleteNodeNoSave({d})\n", .{e.node_id});
+                store.deleteNodeNoSave(e.node_id);
             },
             .CreateEdge => |e| {
-                // Look up the correct graph storage by name
-                if (graph_storage_mgr.getGraphStorageByName(e.graph_name)) |target_storage| {
-                    target_storage.removeEdge(e.edge_id);
-                }
+                std.debug.print("[UNDO] undoEntryGraphStorage CreateEdge: edge_id={d}, graph_name='{s}'\n", .{ e.edge_id, e.graph_name });
+                // Use GraphStore for rollback
+                const store = graph_store.getGlobalStore(self.allocator);
+                std.debug.print("[UNDO] Calling deleteEdgeNoSave({d})\n", .{e.edge_id});
+                store.deleteEdgeNoSave(e.edge_id);
             },
             // Other entry types are not commonly used in server mode for now
             // They can be implemented later if needed

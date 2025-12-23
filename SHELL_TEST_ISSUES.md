@@ -2,24 +2,24 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`).
 
-## Current Test Run: 2025-12-23 (Second Run)
+## Current Test Run: 2025-12-23 (Third Run)
 
-**Statements Executed**: 439
+**Statements Executed**: 440
 **Explicit Errors**: 3 (2 expected, 1 syntax limitation)
 
 ## Issue Summary
 
 | # | Issue | Priority | Status | Section |
 |---|-------|----------|--------|---------|
-| 1 | Transaction ROLLBACK not undoing changes | P0 | OPEN | 38.4 |
-| 2 | Multiple pattern PURCHASED returns NULL | P0 | VERIFIED | 15.9 |
-| 3 | Friends of Friends returns 0 rows | P1 | OPEN | 37.3 |
-| 4 | OPTIONAL MATCH count(r) returns NULL | P1 | VERIFIED | 37.6 |
-| 5 | Variable-length path returns wrong categories | P1 | VERIFIED | 43.4 |
-| 6 | WITH + LIMIT chain returns too many rows | P1 | VERIFIED | 23.3 |
-| 7 | ORDER BY not sorting correctly | P2 | VERIFIED | 34.5 |
-| 8 | Cleanup leaves 2 remaining nodes | P3 | OPEN | 46.10 |
-| 9 | SET statement returns NULL for node | P2 | OPEN | 38.5 |
+| 1 | Transaction ROLLBACK not undoing changes | P0 | FIXED | 38.4 |
+| 2 | Multiple pattern PURCHASED returns NULL | P0 | FIXED | 15.9 |
+| 3 | Friends of Friends returns 0 rows | P1 | FIXED | 37.3 |
+| 4 | OPTIONAL MATCH count(r) returns NULL | P1 | FIXED | 37.6 |
+| 5 | Variable-length path returns wrong categories | P1 | FIXED | 43.4 |
+| 6 | WITH + LIMIT chain returns too many rows | P1 | FIXED | 23.3 |
+| 7 | ORDER BY not sorting correctly | P2 | FIXED | 34.5 |
+| 8 | Cleanup leaves 2 remaining nodes | P3 | FIXED | 46.10 |
+| 9 | SET statement returns NULL for node | P2 | FIXED | 38.5 |
 | 10 | List comprehension syntax not supported | P3 | WONTFIX | 37.5 |
 
 ---
@@ -82,7 +82,7 @@ RETURN p.name AS person, c.name AS employer, pr.name AS purchased;
 
 ---
 
-## Issue 3: Friends of Friends Returns 0 Rows (P1)
+## Issue 3: Friends of Friends Returns 0 Rows (P1) - FIXED
 
 **Section**: 37.3
 
@@ -98,9 +98,18 @@ RETURN DISTINCT fof.name AS friends_of_friends ORDER BY fof.name;
 
 **Expected**: Should return Dave (reached via Bob and Carol)
 
-**Actual**: `(0 rows)`
+**Actual (Before Fix)**: `(0 rows)`
 
-**Root Cause**: Anonymous intermediate node `()` in multi-hop pattern not being handled correctly.
+**Actual (After Fix)**: `Dave`
+
+**Root Cause**: The multi-hop pattern matching was working correctly (anonymous intermediate nodes were properly handled), but the WHERE clause `fof <> a` was failing with a `TypeMismatch` error because node comparison was not implemented in the expression evaluator.
+
+**Fix**: Added node and edge comparison support to `src/eval.zig`:
+- Node comparison by ID: `l.Node.id == r.Node.id`
+- Edge comparison by ID: `l.Edge.id == r.Edge.id`
+- Added CANARY marker: REQ-GQL-NODE-COMPARE-001
+
+**Verification**: Query now returns "Dave" as expected.
 
 ---
 
@@ -303,6 +312,19 @@ RETURN length(path) AS cycle_length, [node IN nodes(path) | node.name] AS cycle_
 ---
 
 ## Investigation Log
+
+### 2025-12-23 Third Run Analysis
+
+**Issue 1 (P0): Transaction ROLLBACK** - FIXED AND VERIFIED
+- Root cause: Two issues identified:
+  1. The `executeCreate` function in `crud_operations.zig` was NOT calling `logCreateNode` to log node creations to the undo log
+  2. The `undoEntryGraphStorage` was trying to remove nodes from `GraphStorage` (server-side) but nodes were created in `GraphStore` (old execution path)
+- Fix 1: Added `logCreateNode` calls to `executeCreate` for head nodes, left nodes, and right nodes (lines 981-983, 1036-1038, 1043-1045, 1091-1093, 1097-1099)
+- Fix 2: Modified `undoEntryGraphStorage` to use `graph_store.getGlobalStore(allocator)` instead of `graph_storage_mgr.getGraphStorageByName()` to correctly remove nodes from the same store they were created in
+- Verification: Test confirmed count goes from 1 to 0 after ROLLBACK
+- Added CANARY markers: REQ-TXN-UNDO-018 through REQ-TXN-UNDO-020
+
+---
 
 ### 2025-12-23 Second Run Analysis
 

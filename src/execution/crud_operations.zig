@@ -977,6 +977,11 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
         if (chain.head) |node_pattern| {
             const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
 
+            // CANARY: REQ=REQ-TXN-UNDO-018; FEATURE="TransactionUndoLog"; ASPECT=ExecuteCreateUndoLog; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+            // Log node creation for rollback support
+            const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+            undo_log.logCreateNode(node_id, current_graph) catch {};
+
             // Set properties if present
             if (node_pattern.props) |props| {
                 const env = Env{
@@ -1025,10 +1030,16 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                     left_node_id = existing;
                 } else {
                     left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
+                    // Log left node creation for rollback support
+                    const undo_log_left = txn_undo_log.getGlobalUndoLog(allocator);
+                    undo_log_left.logCreateNode(left_node_id, current_graph) catch {};
                     try created_nodes.put(left_name, left_node_id);
                 }
             } else {
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
+                // Log left node creation for rollback support (unnamed node)
+                const undo_log_left2 = txn_undo_log.getGlobalUndoLog(allocator);
+                undo_log_left2.logCreateNode(left_node_id, current_graph) catch {};
             }
 
             // Set properties on left node if present and not already set
@@ -1071,10 +1082,16 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                     right_node_id = existing;
                 } else {
                     right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
+                    // Log right node creation for rollback support
+                    const undo_log_right = txn_undo_log.getGlobalUndoLog(allocator);
+                    undo_log_right.logCreateNode(right_node_id, current_graph) catch {};
                     try created_nodes.put(right_name, right_node_id);
                 }
             } else {
                 right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
+                // Log right node creation for rollback support (unnamed node)
+                const undo_log_right2 = txn_undo_log.getGlobalUndoLog(allocator);
+                undo_log_right2.logCreateNode(right_node_id, current_graph) catch {};
             }
 
             // Set properties on right node if present and not already set
@@ -1276,10 +1293,16 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     left_node_id = existing;
                 } else {
                     left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
+                    // Log left node creation for rollback support
+                    const undo_log_left = txn_undo_log.getGlobalUndoLog(allocator);
+                    undo_log_left.logCreateNode(left_node_id, current_graph) catch {};
                     try created_nodes.put(left_name, left_node_id);
                 }
             } else {
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
+                // Log left node creation for rollback support (unnamed node)
+                const undo_log_left2 = txn_undo_log.getGlobalUndoLog(allocator);
+                undo_log_left2.logCreateNode(left_node_id, current_graph) catch {};
             }
 
             // Set properties on left node if present and not already set
@@ -1322,10 +1345,16 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     right_node_id = existing;
                 } else {
                     right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
+                    // Log right node creation for rollback support
+                    const undo_log_right = txn_undo_log.getGlobalUndoLog(allocator);
+                    undo_log_right.logCreateNode(right_node_id, current_graph) catch {};
                     try created_nodes.put(right_name, right_node_id);
                 }
             } else {
                 right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
+                // Log right node creation for rollback support (unnamed node)
+                const undo_log_right2 = txn_undo_log.getGlobalUndoLog(allocator);
+                undo_log_right2.logCreateNode(right_node_id, current_graph) catch {};
             }
 
             // Set properties on right node if present and not already set

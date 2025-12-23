@@ -396,6 +396,19 @@ fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalE
                 const eq = l.Bool == r.Bool;
                 return .{ .Bool = if (op == .Eq) eq else !eq };
             }
+            // CANARY: REQ=REQ-GQL-NODE-COMPARE-001; FEATURE="NodeComparison"; ASPECT=EqualityInequality; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+            // Node comparisons: compare by node ID (two nodes are equal if they have the same ID)
+            if (l == .Node and r == .Node) {
+                if (op != .Eq and op != .Ne) return EvalError.TypeMismatch;
+                const eq = l.Node.id == r.Node.id;
+                return .{ .Bool = if (op == .Eq) eq else !eq };
+            }
+            // Edge comparisons: compare by edge ID
+            if (l == .Edge and r == .Edge) {
+                if (op != .Eq and op != .Ne) return EvalError.TypeMismatch;
+                const eq = l.Edge.id == r.Edge.id;
+                return .{ .Bool = if (op == .Eq) eq else !eq };
+            }
             // Comparing NULLs: NULL = NULL true; otherwise NULL compares false
             if (l == .Null or r == .Null) {
                 if (op == .Eq) return .{ .Bool = eqVals(l, r) };
