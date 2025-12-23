@@ -30,7 +30,10 @@ pub fn executeCallSubquery(allocator: std.mem.Allocator, call_subq: ast.CallSubq
             .Procedure => |proc| try executeCallProcedure(allocator, proc, context),
             .Subquery => |subq| try executeCallSubquery(allocator, subq, context),
         },
-        .Create => |c| try execution.executeCreate(allocator, c),
+        .Create => |c| blk: {
+            const create_graph = if (context.session_state) |session| session.graph else null;
+            break :blk try execution.executeCreate(allocator, c, create_graph);
+        },
         else => return error.UnsupportedStatementInCallSubquery,
     };
 

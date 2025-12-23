@@ -341,8 +341,6 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
 }
 
 pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement, context: ExecutionContext) !ExecutionResult {
-    _ = context;
-
     // Evaluate all row expressions with empty environment
     const empty_env = Env{
         .allocator = allocator,
@@ -391,7 +389,9 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                         }
 
                         // Execute the query with VALUES bindings as parameters
-                        const match_result = try executeMatchQueryWithParams(allocator, query, param_names, param_values, query.inline_let_bindings);
+                        // CANARY: REQ=REQ-MULTI-GRAPH-014; FEATURE="MultiGraphIsolation"; ASPECT=ValuesMatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                        const values_graph = if (context.session_state) |session| session.graph else null;
+                        const match_result = try executeMatchQueryWithParams(allocator, query, param_names, param_values, query.inline_let_bindings, values_graph);
 
                         // Collect results from this execution
                         for (match_result.rows) |row| {

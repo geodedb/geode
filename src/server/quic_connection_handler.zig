@@ -322,10 +322,56 @@ pub fn processMessage(
             switch (parse_res) {
                 .Err => |_| return try gpa.dupe(u8, ""),
                 .Ok => |ok| {
+                    std.debug.print("[QUIC-DEBUG] Parsed OK, statements.len={d}\n", .{ok.program.statements.len});
                     if (ok.program.statements.len == 0) {
                         if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| return line else |_| return try gpa.dupe(u8, "");
                     }
-                    const st = ok.program.statements[0];
+                    // CANARY: REQ=REQ-MULTI-GRAPH-025; FEATURE="MultiStatementExecution"; ASPECT=SessionPersistence; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                    // Execute ALL statements in sequence, maintaining session state between them
+                    // Return only the result from the last statement
+                    // First, execute all non-final statements for their side effects (like USE GRAPH)
+                    if (ok.program.statements.len > 1) {
+                        for (ok.program.statements[0 .. ok.program.statements.len - 1]) |earlier_st| {
+                            std.debug.print("[QUIC] Executing earlier statement: {s}\n", .{@tagName(earlier_st)});
+                            // Execute side-effect statements (USE GRAPH, CREATE GRAPH, etc.)
+                            switch (earlier_st) {
+                                .UseGraph => |ug| {
+                                    if (state.current_graph) |old| gpa.free(old);
+                                    if (graph_storage_mgr.graphExists(ug.graph_name)) {
+                                        state.current_graph = gpa.dupe(u8, ug.graph_name) catch null;
+                                        std.debug.print("[QUIC] Set current_graph to: {s}\n", .{ug.graph_name});
+                                    }
+                                },
+                                .CreateGraph => |cg| {
+                                    _ = graph_storage_mgr.createGraphStorage(gpa, cg.name) catch {};
+                                },
+                                .DropGraph => |dg| {
+                                    graph_storage_mgr.dropGraphStorage(gpa, dg.name, dg.if_exists) catch {};
+                                },
+                                .Query => |q| {
+                                    // Execute query for side effects (CREATE/INSERT within query)
+                                    const catalog_stub = execution.initCatalog(gpa, ".") catch continue;
+                                    defer catalog_stub.deinit();
+                                    var session_state = execution.SessionState.init(gpa);
+                                    session_state.graph = state.current_graph;
+                                    defer {
+                                        session_state.graph = null;
+                                        session_state.deinit();
+                                    }
+                                    const context = execution.ExecutionContext{
+                                        .catalog = @constCast(&catalog_stub),
+                                        .user = state.authenticated_user,
+                                        .role = state.authenticated_role,
+                                        .session_state = &session_state,
+                                    };
+                                    _ = execution.executeQueryWithContext(gpa, q, context) catch {};
+                                },
+                                else => {}, // Other statements - ignore for now
+                            }
+                        }
+                    }
+                    // Now execute the final statement and return its result
+                    const st = ok.program.statements[ok.program.statements.len - 1];
                     std.debug.print("[QUIC] Statement type: {s}\n", .{@tagName(st)});
                     switch (st) {
                         .Union => |u_stmt| {
@@ -408,13 +454,25 @@ pub fn processMessage(
                                 // Extract first row of parameters (most queries have single parameter row)
                                 const param_values = if (pr.len > 0) pr[0] else &[_]eval.Value{};
 
-                                // Create execution context with parameters and authentication state
+                                // CANARY: REQ=REQ-MULTI-GRAPH-024; FEATURE="MultiGraphIsolation"; ASPECT=SessionStateContext; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                                // Create SessionState with current graph for multi-graph isolation
+                                var session_state = execution.SessionState.init(gpa);
+                                session_state.graph = state.current_graph;
+                                std.debug.print("[QUIC] Final Query handler: state.current_graph='{s}', session_state.graph='{s}'\n", .{ state.current_graph orelse "NULL", session_state.graph orelse "NULL" });
+                                defer {
+                                    // Don't deinit the graph since it's owned by state, just cleanup the rest
+                                    session_state.graph = null;
+                                    session_state.deinit();
+                                }
+
+                                // Create execution context with parameters, authentication state, and session state
                                 const context = execution.ExecutionContext{
                                     .catalog = @constCast(&catalog_stub),
                                     .query_param_names = pn,
                                     .query_param_values = param_values,
                                     .user = state.authenticated_user,
                                     .role = state.authenticated_role,
+                                    .session_state = &session_state,
                                 };
 
                                 // Execute via new modular execution path

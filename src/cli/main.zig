@@ -400,6 +400,8 @@ const StreamState = struct {
     authenticated_password: ?[]const u8 = null,
     last_result_data: ?[]const u8 = null,
     message_count: usize = 0,
+    // CANARY: REQ=REQ-MULTI-GRAPH-028; FEATURE="MultiGraphIsolation"; ASPECT=StreamStateGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    current_graph: ?[]const u8 = null, // Current graph for multi-graph isolation
 
     fn init(allocator: std.mem.Allocator) !StreamState {
         return StreamState{
@@ -408,6 +410,7 @@ const StreamState = struct {
             .authenticated_password = null,
             .last_result_data = null,
             .message_count = 0,
+            .current_graph = null,
         };
     }
 
@@ -416,6 +419,7 @@ const StreamState = struct {
         if (self.authenticated_username) |username| allocator.free(username);
         if (self.authenticated_password) |password| allocator.free(password);
         if (self.last_result_data) |data| allocator.free(data);
+        if (self.current_graph) |graph| allocator.free(graph);
     }
 
     fn resetLastResult(self: *StreamState, allocator: std.mem.Allocator) void {
@@ -714,6 +718,51 @@ fn processProtocolMessage(
         }
         if (!params_valid) return;
 
+        // CANARY: REQ=REQ-MULTI-GRAPH-029; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphParsing; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+        // Pre-parse query to detect USE GRAPH statements and update session graph context
+        const graph_storage_mgr = geode.graph_storage_manager;
+        if (geode.parse(allocator, query_text, .{})) |parse_res| {
+            defer {
+                var mut_pr = parse_res;
+                mut_pr.deinit();
+            }
+            // Process USE GRAPH and CREATE GRAPH statements before execution
+            for (parse_res.program.statements) |stmt| {
+                switch (stmt) {
+                    .UseGraph => |ug| {
+                        // Check if graph exists
+                        if (graph_storage_mgr.graphExists(ug.graph_name)) {
+                            // Free old graph name if exists
+                            if (state.current_graph) |old| allocator.free(old);
+                            // Store new graph name
+                            state.current_graph = allocator.dupe(u8, ug.graph_name) catch null;
+                            log.debug("USE GRAPH: switched to '{s}'", .{ug.graph_name});
+                        } else {
+                            log.debug("USE GRAPH: graph '{s}' does not exist", .{ug.graph_name});
+                        }
+                    },
+                    .CreateGraph => |cg| {
+                        // Create the graph so it can be used
+                        _ = graph_storage_mgr.createGraphStorage(allocator, cg.name) catch {};
+                        log.debug("CREATE GRAPH: created '{s}'", .{cg.name});
+                    },
+                    .DropGraph => |dg| {
+                        graph_storage_mgr.dropGraphStorage(dg.name) catch {};
+                        // If dropping current graph, reset to null
+                        if (state.current_graph) |curr| {
+                            if (std.mem.eql(u8, curr, dg.name)) {
+                                allocator.free(curr);
+                                state.current_graph = null;
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+        } else |_| {
+            // Parse error - will be handled by runQueryWithAuth
+        }
+
         // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
         // Execute query with authenticated user context (using global geode import)
         const options = geode.test_harness.QueryOptions{
@@ -723,6 +772,7 @@ fn processProtocolMessage(
             .strict_offset_validation = true, // QUIC mode enforces US001 (OFFSET requires ORDER BY)
             .param_names = param_names.items,
             .param_values = param_values.items,
+            .current_graph = state.current_graph, // Pass current graph for multi-graph isolation
         };
 
         var mut_ally = allocator;

@@ -650,16 +650,19 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return executeUnionWithContext(allocator, u, context);
         },
         .Create => |c| {
-            return executeCreate(allocator, c);
+            const create_graph = if (context.session_state) |session| session.graph else null;
+            return executeCreate(allocator, c, create_graph);
         },
         .Insert => |ins| {
-            return executeInsert(allocator, ins);
+            const insert_graph = if (context.session_state) |session| session.graph else null;
+            return executeInsert(allocator, ins, insert_graph);
         },
         .Delete => |d| {
             return executeDelete(allocator, d);
         },
         .Merge => |m| {
-            return executeMerge(allocator, m);
+            const merge_graph = if (context.session_state) |session| session.graph else null;
+            return executeMerge(allocator, m, merge_graph);
         },
         .StartTransaction => |txn| {
             // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=StartTransaction; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
@@ -679,14 +682,15 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 // Execute all statements in the transaction body
                 for (body) |*body_stmt| {
                     // Inline switch to handle different statement types (avoids circular error set inference)
+                    const txn_graph = if (mut_context.session_state) |session| session.graph else null;
                     last_result = (switch (body_stmt.*) {
                         .Query => |q| executeQueryWithContext(allocator, q, mut_context),
                         .Call => |c| switch (c) {
                             .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
                             .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
                         },
-                        .Create => |create_stmt| executeCreate(allocator, create_stmt),
-                        .Merge => |m| executeMerge(allocator, m),
+                        .Create => |create_stmt| executeCreate(allocator, create_stmt, txn_graph),
+                        .Merge => |m| executeMerge(allocator, m, txn_graph),
                         .StartTransaction => return error.NestedTransactionNotAllowed,
                         .Commit => return error.CommitInTransactionBody,
                         .Rollback => return error.RollbackInTransactionBody,

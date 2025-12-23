@@ -24,6 +24,8 @@ pub const QueryOptions = struct {
     strict_offset_validation: bool = false, // If true, reject OFFSET without ORDER BY (US001)
     param_names: []const []const u8 = &.{},
     param_values: []const value_types.Value = &.{},
+    // CANARY: REQ=REQ-MULTI-GRAPH-026; FEATURE="MultiGraphIsolation"; ASPECT=QueryOptionsGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    current_graph: ?[]const u8 = null, // Current graph for multi-graph isolation
 };
 
 // Main query execution function - ONLY parses and calls real Geode execution
@@ -85,7 +87,10 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     const catalog = try execution.ensureCatalogInstance(std.heap.page_allocator);
 
     // Create session state for SESSION SET GRAPH support
+    // CANARY: REQ=REQ-MULTI-GRAPH-027; FEATURE="MultiGraphIsolation"; ASPECT=SessionStateGraphInit; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
     var session_state = execution.SessionState.init(allocator.*);
+    // Copy the graph name so session_state owns its own memory
+    session_state.graph = if (options.current_graph) |cg| allocator.dupe(u8, cg) catch null else null;
     defer session_state.deinit();
 
     // Authenticate user if credentials provided

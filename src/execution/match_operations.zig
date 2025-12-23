@@ -191,9 +191,10 @@ fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=MATCH_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted MATCH operations from execution.zig for better modularity (M1 Phase 6)
 
-pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
+// CANARY: REQ=REQ-MULTI-GRAPH-013; FEATURE="MultiGraphIsolation"; ASPECT=MatchCreate; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, current_graph: ?[]const u8) !ExecutionResult {
     // First execute MATCH to get bindings - use full MATCH path to handle all cases (multi-node, etc)
-    const match_result = try executeMatchQueryWithParams(allocator, q, &.{}, &.{}, q.inline_let_bindings);
+    const match_result = try executeMatchQueryWithParams(allocator, q, &.{}, &.{}, q.inline_let_bindings, current_graph);
     defer {
         // Clean up match_result to prevent memory leak
         for (match_result.columns) |col| {
@@ -242,8 +243,8 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Exec
             }
         }
 
-        // Execute CREATE with these bindings, tracking created entities
-        const result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings);
+        // Execute CREATE with these bindings, tracking created entities (using current graph)
+        const result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, current_graph);
         total_created_count += result.created_count;
 
         // Merge created entities into all_created collections
@@ -306,12 +307,16 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query) !Exec
 }
 
 // Execute MATCH + CALL pattern with node binding
+// CANARY: REQ=REQ-MULTI-GRAPH-010; FEATURE="MultiGraphIsolation"; ASPECT=MatchCallFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
 pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
     // CANARY: REQ=REQ-GQL-MATCH-CALL-BINDING; FEATURE="MatchCallBinding"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-13
     // Fix: Handle multiple comma-separated MATCH patterns and bind all matched nodes
 
     const store = graph_store.getGlobalStore(allocator);
     const call_clause = q.call_clause.?;
+
+    // Get current graph from session context
+    const filter_graph = if (context.session_state) |session| (session.graph orelse "default") else "default";
 
     // Match each chain separately and collect bindings
     var chain_matches = std.ArrayList(std.StringHashMap(u64)).initCapacity(allocator, 0) catch unreachable;
@@ -343,6 +348,9 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
         while (node_iter.next()) |entry| {
             const node_id = entry.key_ptr.*;
             const node = entry.value_ptr.*;
+
+            // Filter by graph - only include nodes from the current graph
+            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
 
             // Check labels
             var matches_labels = true;
@@ -521,21 +529,24 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
     return call_result;
 }
 
-pub fn executeMatchQueryWithParams(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
+// CANARY: REQ=REQ-MULTI-GRAPH-011; FEATURE="MultiGraphIsolation"; ASPECT=MatchQueryWithParams; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+pub fn executeMatchQueryWithParams(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     // Call the main executeMatchQuery implementation with parameters stored in a context
     // For now, we'll add the parameters to the environment when evaluating expressions
-    return executeMatchQueryImpl(allocator, q, param_names, param_values, inline_let_bindings);
+    return executeMatchQueryImpl(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
 }
 
 pub fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
-    return executeMatchQueryImpl(allocator, q, &.{}, &.{}, &.{});
+    return executeMatchQueryImpl(allocator, q, &.{}, &.{}, &.{}, null);
 }
 
 // CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSeparatedMatches"; ASPECT=CartesianProduct; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
-// Handle comma-separated node patterns by creating Cartesian product
-pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
+// CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="MultiGraphIsolation"; ASPECT=MultiNodeMatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+// Handle comma-separated node patterns by creating Cartesian product with graph isolation
+pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     _ = inline_let_bindings;
     const store = graph_store.getGlobalStore(allocator);
+    const filter_graph = current_graph orelse "default";
 
     // Collect matching nodes for each chain
     var chain_matches = try std.ArrayList(std.ArrayList(*graph_store.Node)).initCapacity(allocator, q.match.chains.len);
@@ -557,6 +568,10 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         var node_iter = store.nodes.iterator();
         while (node_iter.next()) |entry| {
             const node = entry.value_ptr;
+
+            // Filter by graph - only include nodes from the current graph
+            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+
             var matches_pattern = true;
 
             // Check labels
@@ -735,11 +750,13 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 }
 
 // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-004; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoinImpl; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
-// Execute MATCH + OPTIONAL MATCH patterns as left outer join
+// CANARY: REQ=REQ-MULTI-GRAPH-009; FEATURE="MultiGraphIsolation"; ASPECT=OptionalMatchFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+// Execute MATCH + OPTIONAL MATCH patterns as left outer join with graph isolation
 // e.g., MATCH (p:Person) OPTIONAL MATCH (p)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name
-fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
+fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     _ = inline_let_bindings;
     const store = graph_store.getGlobalStore(allocator);
+    const filter_graph = current_graph orelse "default";
 
     // Step 1: Execute required chain (first chain) to get base nodes
     const required_chain = q.match.chains[0];
@@ -754,6 +771,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     var node_iter = store.nodes.iterator();
     while (node_iter.next()) |entry| {
         const node = entry.value_ptr;
+
+        // Filter by graph - only include nodes from the current graph
+        if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
 
         // Filter by labels if specified
         if (required_labels.len > 0) {
@@ -956,8 +976,13 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     };
 }
 
-pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding) !ExecutionResult {
+// CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+// Execute MATCH query with graph isolation - only matches nodes in the specified graph
+pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
+    // Graph to filter by - use "default" if no graph specified
+    const filter_graph = current_graph orelse "default";
+    std.debug.print("[MATCH] executeMatchQueryImpl filter_graph='{s}'\n", .{filter_graph});
 
     // CANARY(memory-safety): Debug output to trace execution
 
@@ -1093,7 +1118,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
     if (all_simple_nodes and q.match.chains.len > 1) {
         // Handle multiple independent node patterns
-        return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings);
+        return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     }
 
     // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoin; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
@@ -1117,7 +1142,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
         // Handle MATCH (node) OPTIONAL MATCH (node)-[rel]->(other) pattern
         if (has_required and has_optional and first_required_is_simple) {
-            return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings);
+            return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
         }
     }
 
@@ -1177,6 +1202,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var node_iter = store.nodes.iterator();
             while (node_iter.next()) |entry| {
                 const node = entry.value_ptr;
+
+                // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=NodeFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                // Filter by graph - only include nodes from the current graph
+                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
 
                 // Filter by labels if specified
                 if (match_labels.len > 0) {
@@ -1361,6 +1390,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 while (start_node_iter.next()) |entry| {
                     const start_node = entry.value_ptr;
 
+                    // CANARY: REQ=REQ-MULTI-GRAPH-021; FEATURE="MultiGraphIsolation"; ASPECT=VarLengthPathFilter; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                    // Filter by graph - only include nodes from the current graph
+                    if (!std.mem.eql(u8, start_node.graph_name, filter_graph)) continue;
+
                     // Filter by left node labels
                     if (match_labels.len > 0) {
                         var has_all_labels = true;
@@ -1484,6 +1517,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var node_iter = store.nodes.iterator();
             while (node_iter.next()) |entry| {
                 const node = entry.value_ptr;
+
+                // Filter by graph - only include nodes from the current graph
+                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
 
                 // Filter by labels if specified
                 if (match_labels.len > 0) {
@@ -1704,6 +1740,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var left_iter = store.nodes.iterator();
             while (left_iter.next()) |left_entry| {
                 const left_node = left_entry.value_ptr;
+
+                // CANARY: REQ=REQ-MULTI-GRAPH-022; FEATURE="MultiGraphIsolation"; ASPECT=RelPatternFilter; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                // Filter by graph - only include nodes from the current graph
+                if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
 
                 // Filter left node by labels if specified
                 if (match_labels.len > 0) {
@@ -2231,6 +2271,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var iter = store.nodes.iterator();
             while (iter.next()) |entry| {
                 const node = entry.value_ptr;
+
+                // CANARY: REQ=REQ-MULTI-GRAPH-023; FEATURE="MultiGraphIsolation"; ASPECT=SimpleNodeFilter; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                // Filter by graph - only include nodes from the current graph
+                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
 
                 // Filter by labels if specified
                 if (match_labels.len > 0) {

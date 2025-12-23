@@ -22,8 +22,10 @@ const Env = value_types.Env;
 // CANARY: REQ=REQ-EXEC-REFACTOR-004; FEATURE="ExecutionRefactoring"; ASPECT=CRUD_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted CRUD operations (CREATE/INSERT/MERGE/DELETE) from execution.zig for better modularity (M1 Phase 4)
 
-pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64)) !i64 {
+// CANARY: REQ=REQ-MULTI-GRAPH-016; FEATURE="MultiGraphIsolation"; ASPECT=CreateForBatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), current_graph: ?[]const u8) !i64 {
     const store = graph_store.getGlobalStore(allocator);
+    const target_graph = current_graph orelse "default";
     var created_relationships: i64 = 0;
 
     // Track created nodes by variable name
@@ -55,15 +57,15 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                     // Node already matched from MATCH clause, don't create new
                     break :blk existing_id;
                 } else {
-                    // Variable not bound, create new node
-                    const new_id = try store.createNode(node_pattern.labels);
+                    // Variable not bound, create new node in target graph
+                    const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
                     break :blk new_id;
                 }
             } else blk: {
-                // No variable name, always create new node
-                break :blk try store.createNode(node_pattern.labels);
+                // No variable name, always create new node in target graph
+                break :blk try store.createNodeWithGraph(node_pattern.labels, target_graph);
             };
 
             // Set properties if present
@@ -113,15 +115,15 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                     // This shouldn't happen if the query is well-formed
                     continue;
                 } else {
-                    // Not in batch mode - create new node
-                    const new_id = try store.createNode(hop.left.labels);
+                    // Not in batch mode - create new node in target graph
+                    const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
                     break :blk new_id;
                 }
             } else blk: {
-                // Anonymous node - always create new
-                break :blk try store.createNode(hop.left.labels);
+                // Anonymous node - always create new in target graph
+                break :blk try store.createNodeWithGraph(hop.left.labels, target_graph);
             };
 
             const right_id = if (hop.right.name) |var_name| blk: {
@@ -133,20 +135,20 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                     // This shouldn't happen if the query is well-formed
                     continue;
                 } else {
-                    // Not in batch mode - create new node
-                    const new_id = try store.createNode(hop.right.labels);
+                    // Not in batch mode - create new node in target graph
+                    const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
                     break :blk new_id;
                 }
             } else blk: {
-                // Anonymous node - always create new
-                break :blk try store.createNode(hop.right.labels);
+                // Anonymous node - always create new in target graph
+                break :blk try store.createNodeWithGraph(hop.right.labels, target_graph);
             };
 
-            // Create the relationship
+            // Create the relationship in target graph
             const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
-            const edge_id = try store.createEdge(left_id, right_id, edge_label);
+            const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
             created_relationships += 1;
 
             // Set relationship properties if present
@@ -193,9 +195,11 @@ const CreateBatchResult = struct {
     created_relationships: std.StringHashMap(Value),
 };
 
+// CANARY: REQ=REQ-MULTI-GRAPH-017; FEATURE="MultiGraphIsolation"; ASPECT=CreateForBatchWithTracking; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
 // Enhanced version of executeCreateForBatch that returns created entities for RETURN clause evaluation
-pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64)) !CreateBatchResult {
+pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), current_graph: ?[]const u8) !CreateBatchResult {
     const store = graph_store.getGlobalStore(allocator);
+    const target_graph = current_graph orelse "default";
     var created_relationships_count: i64 = 0;
 
     // Track created nodes by variable name
@@ -222,14 +226,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     // Node already matched from MATCH clause, don't create new
                     break :blk existing_id;
                 } else {
-                    // Variable not bound, create new node
-                    const new_id = try store.createNode(node_pattern.labels);
+                    // Variable not bound, create new node in target graph
+                    const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
                     break :blk new_id;
                 }
             } else blk: {
-                // No variable name, always create new node
-                break :blk try store.createNode(node_pattern.labels);
+                // No variable name, always create new node in target graph
+                break :blk try store.createNodeWithGraph(node_pattern.labels, target_graph);
             };
 
             // Set properties if present
@@ -275,12 +279,12 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                 } else if (matched_bindings.count() > 0) {
                     continue; // Skip if node not found in batch mode
                 } else {
-                    const new_id = try store.createNode(hop.left.labels);
+                    const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
                     break :blk new_id;
                 }
             } else blk: {
-                break :blk try store.createNode(hop.left.labels);
+                break :blk try store.createNodeWithGraph(hop.left.labels, target_graph);
             };
 
             const right_id = if (hop.right.name) |var_name| blk: {
@@ -289,17 +293,17 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                 } else if (matched_bindings.count() > 0) {
                     continue; // Skip if node not found in batch mode
                 } else {
-                    const new_id = try store.createNode(hop.right.labels);
+                    const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
                     break :blk new_id;
                 }
             } else blk: {
-                break :blk try store.createNode(hop.right.labels);
+                break :blk try store.createNodeWithGraph(hop.right.labels, target_graph);
             };
 
-            // Create the relationship
+            // Create the relationship in target graph
             const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
-            const edge_id = try store.createEdge(left_id, right_id, edge_label);
+            const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
             created_relationships_count += 1;
 
             // Set relationship properties if present
@@ -350,6 +354,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     };
 }
 
+// CANARY: REQ=REQ-MULTI-GRAPH-015; FEATURE="MultiGraphIsolation"; ASPECT=CreateQuery; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
 pub fn executeCreateQuery(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -357,8 +362,10 @@ pub fn executeCreateQuery(
     matched_bindings: ?std.StringHashMap(u64),
     param_names: []const []const u8,
     param_values: []const Value,
+    current_graph: ?[]const u8,
 ) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
+    const target_graph = current_graph orelse "default";
 
     // Track created nodes by variable name for WITH/SET/RETURN clauses (store IDs not pointers)
     var created_nodes = std.StringHashMap(u64).init(allocator);
@@ -387,14 +394,14 @@ pub fn executeCreateQuery(
                     // Node already matched from MATCH clause, don't create new
                     break :blk existing_id;
                 } else {
-                    // Variable not bound, create new node
-                    const new_id = try store.createNode(node_pattern.labels);
+                    // Variable not bound, create new node in target graph
+                    const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
                     break :blk new_id;
                 }
             } else blk: {
-                // No variable name, always create new node
-                break :blk try store.createNode(node_pattern.labels);
+                // No variable name, always create new node in target graph
+                break :blk try store.createNodeWithGraph(node_pattern.labels, target_graph);
             };
 
             // Set properties if present
@@ -441,8 +448,8 @@ pub fn executeCreateQuery(
                         break :blk node_id;
                     }
                 }
-                // Variable not bound - create new node
-                const new_id = try store.createNode(hop.left.labels);
+                // Variable not bound - create new node in target graph
+                const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 if (hop.left.name) |var_name| {
                     try created_nodes.put(var_name, new_id);
                 }
@@ -456,8 +463,8 @@ pub fn executeCreateQuery(
                         break :blk node_id;
                     }
                 }
-                // Variable not bound - create new node
-                const new_id = try store.createNode(hop.right.labels);
+                // Variable not bound - create new node in target graph
+                const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 if (hop.right.name) |var_name| {
                     try created_nodes.put(var_name, new_id);
                 }
@@ -532,9 +539,9 @@ pub fn executeCreateQuery(
                 }
             }
 
-            // Create the relationship
+            // Create the relationship in target graph
             const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
-            const edge_id = try store.createEdge(left_id, right_id, rel_type);
+            const edge_id = try store.createEdgeWithGraph(left_id, right_id, rel_type, target_graph);
 
             // Set relationship properties
             if (hop.rel.props) |props| {
@@ -932,8 +939,10 @@ pub fn executeReturnClauseWithNodes(
     };
 }
 
-pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !ExecutionResult {
+// CANARY: REQ=REQ-MULTI-GRAPH-018; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteCreate; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, current_graph: ?[]const u8) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
+    const target_graph = current_graph orelse "default";
 
     // Track created nodes by variable name
     var created_nodes = std.StringHashMap(u64).init(allocator);
@@ -947,7 +956,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
     for (c.pattern.chains) |chain| {
         // Handle single node creation
         if (chain.head) |node_pattern| {
-            const node_id = try store.createNode(node_pattern.labels);
+            const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
 
             // Set properties if present
             if (node_pattern.props) |props| {
@@ -990,17 +999,17 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
 
         // Handle chains with relationships
         for (chain.hops) |hop| {
-            // Create left node if not already created
+            // Create left node if not already created (in target graph)
             var left_node_id: u64 = undefined;
             if (hop.left.name) |left_name| {
                 if (created_nodes.get(left_name)) |existing| {
                     left_node_id = existing;
                 } else {
-                    left_node_id = try store.createNode(hop.left.labels);
+                    left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     try created_nodes.put(left_name, left_node_id);
                 }
             } else {
-                left_node_id = try store.createNode(hop.left.labels);
+                left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
             }
 
             // Set properties on left node if present and not already set
@@ -1036,17 +1045,17 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
                 }
             }
 
-            // Create right node if not already created
+            // Create right node if not already created (in target graph)
             var right_node_id: u64 = undefined;
             if (hop.right.name) |right_name| {
                 if (created_nodes.get(right_name)) |existing| {
                     right_node_id = existing;
                 } else {
-                    right_node_id = try store.createNode(hop.right.labels);
+                    right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     try created_nodes.put(right_name, right_node_id);
                 }
             } else {
-                right_node_id = try store.createNode(hop.right.labels);
+                right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
             }
 
             // Set properties on right node if present and not already set
@@ -1082,12 +1091,12 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
                 }
             }
 
-            // Create edge
+            // Create edge in target graph
             const edge_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
             const edge_id = switch (hop.rel.dir) {
-                .right => try store.createEdge(left_node_id, right_node_id, edge_type),
-                .left => try store.createEdge(right_node_id, left_node_id, edge_type),
-                .undirected => try store.createEdge(left_node_id, right_node_id, edge_type),
+                .right => try store.createEdgeWithGraph(left_node_id, right_node_id, edge_type, target_graph),
+                .left => try store.createEdgeWithGraph(right_node_id, left_node_id, edge_type, target_graph),
+                .undirected => try store.createEdgeWithGraph(left_node_id, right_node_id, edge_type, target_graph),
             };
 
             // Set edge properties if present
@@ -1182,8 +1191,10 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement) !Exec
     };
 }
 
-pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !ExecutionResult {
+// CANARY: REQ=REQ-MULTI-GRAPH-019; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteInsert; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, current_graph: ?[]const u8) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
+    const target_graph = current_graph orelse "default";
 
     // Track created nodes by variable name
     var created_nodes = std.StringHashMap(u64).init(allocator);
@@ -1193,7 +1204,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
     for (ins.pattern.chains) |chain| {
         // Handle single node creation
         if (chain.head) |node_pattern| {
-            const node_id = try store.createNode(node_pattern.labels);
+            const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
 
             // Set properties if present
             if (node_pattern.props) |props| {
@@ -1236,17 +1247,17 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
 
         // Handle chains with relationships
         for (chain.hops) |hop| {
-            // Create left node if not already created
+            // Create left node if not already created (in target graph)
             var left_node_id: u64 = undefined;
             if (hop.left.name) |left_name| {
                 if (created_nodes.get(left_name)) |existing| {
                     left_node_id = existing;
                 } else {
-                    left_node_id = try store.createNode(hop.left.labels);
+                    left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     try created_nodes.put(left_name, left_node_id);
                 }
             } else {
-                left_node_id = try store.createNode(hop.left.labels);
+                left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
             }
 
             // Set properties on left node if present and not already set
@@ -1282,17 +1293,17 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
                 }
             }
 
-            // Create right node if not already created
+            // Create right node if not already created (in target graph)
             var right_node_id: u64 = undefined;
             if (hop.right.name) |right_name| {
                 if (created_nodes.get(right_name)) |existing| {
                     right_node_id = existing;
                 } else {
-                    right_node_id = try store.createNode(hop.right.labels);
+                    right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     try created_nodes.put(right_name, right_node_id);
                 }
             } else {
-                right_node_id = try store.createNode(hop.right.labels);
+                right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
             }
 
             // Set properties on right node if present and not already set
@@ -1328,12 +1339,12 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
                 }
             }
 
-            // Create edge
+            // Create edge in target graph
             const edge_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
             const edge_id = switch (hop.rel.dir) {
-                .right => try store.createEdge(left_node_id, right_node_id, edge_type),
-                .left => try store.createEdge(right_node_id, left_node_id, edge_type),
-                .undirected => try store.createEdge(left_node_id, right_node_id, edge_type),
+                .right => try store.createEdgeWithGraph(left_node_id, right_node_id, edge_type, target_graph),
+                .left => try store.createEdgeWithGraph(right_node_id, left_node_id, edge_type, target_graph),
+                .undirected => try store.createEdgeWithGraph(left_node_id, right_node_id, edge_type, target_graph),
             };
 
             // Set edge properties if present
@@ -1410,19 +1421,24 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement) !Ex
     };
 }
 
-pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !ExecutionResult {
+// CANARY: REQ=REQ-MULTI-GRAPH-020; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteMerge; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
+    const target_graph = current_graph orelse "default";
 
     // MERGE is like a CREATE but checks if the pattern already exists
     // For now, implement simplified version for single nodes
     if (m.pattern.chains.len > 0 and m.pattern.chains[0].head != null) {
         const node_pattern = m.pattern.chains[0].head.?;
 
-        // Look for existing node matching the pattern
+        // Look for existing node matching the pattern (filtered by graph)
         var found_node: ?*graph_store.Node = null;
         var node_iter = store.nodes.iterator();
         while (node_iter.next()) |entry| {
             const node = entry.value_ptr;
+
+            // Filter by graph - only consider nodes from the current graph
+            if (!std.mem.eql(u8, node.graph_name, target_graph)) continue;
 
             // Check if labels match
             var labels_match = true;
@@ -1569,9 +1585,9 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement) !Execut
                 }
             }
         } else {
-            // Node doesn't exist - create it and apply ON CREATE clauses
+            // Node doesn't exist - create it in target graph and apply ON CREATE clauses
             created = true;
-            node_id = try store.createNode(node_pattern.labels);
+            node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
 
             // Set properties from pattern
             if (node_pattern.props) |props| {

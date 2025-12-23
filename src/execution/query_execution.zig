@@ -398,7 +398,10 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         allocator.free(combined.names);
         allocator.free(combined.values);
     };
-    return executeMatchQueryImpl(allocator, q, combined.names, combined.values, &.{});
+    // CANARY: REQ=REQ-MULTI-GRAPH-012; FEATURE="MultiGraphIsolation"; ASPECT=QueryExecution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // Extract current graph from session context for graph-isolated query execution
+    const current_graph = if (context.session_state) |session| session.graph else null;
+    return executeMatchQueryImpl(allocator, q, combined.names, combined.values, &.{}, current_graph);
 }
 
 fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
@@ -446,12 +449,14 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
     // Check if there's BOTH a MATCH and CREATE pattern (MATCH ... CREATE)
     if (q.match.chains.len > 0 and q.create_pattern != null) {
-        return executeMatchCreateQuery(allocator, q);
+        const create_graph = if (context.session_state) |session| session.graph else null;
+        return executeMatchCreateQuery(allocator, q, create_graph);
     }
 
     // Check if there's a CREATE pattern (CREATE ... WITH ... SET ... RETURN)
     if (q.create_pattern) |create_pattern| {
-        return executeCreateQuery(allocator, q, create_pattern, null, param_names.items, param_values.items);
+        const create_graph = if (context.session_state) |session| session.graph else null;
+        return executeCreateQuery(allocator, q, create_pattern, null, param_names.items, param_values.items, create_graph);
     }
 
     // Check if there's a MATCH + CALL pattern
@@ -461,7 +466,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
     // Check if there's a MATCH pattern
     if (q.match.chains.len > 0) {
-        return executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items, q.inline_let_bindings);
+        const match_graph = if (context.session_state) |session| session.graph else null;
+        return executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, match_graph);
     }
 
     // Handle initial CALL subquery (e.g., CALL { MATCH (n) RETURN n } WITH ... RETURN ...)

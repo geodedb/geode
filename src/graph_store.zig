@@ -79,6 +79,9 @@ pub const Node = struct {
     id: u64,
     labels: [][]const u8,
     properties: std.StringHashMap(PropertyValue),
+    // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphTag; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // Graph name this node belongs to - enables per-graph data isolation
+    graph_name: []const u8 = "default",
 };
 
 pub const Edge = struct {
@@ -87,6 +90,9 @@ pub const Edge = struct {
     to_id: u64,
     label: []const u8,
     properties: std.StringHashMap(PropertyValue),
+    // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphTag; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // Graph name this edge belongs to - enables per-graph data isolation
+    graph_name: []const u8 = "default",
 };
 
 pub const PropertyValue = union(enum) {
@@ -133,6 +139,10 @@ pub const GraphStore = struct {
             }
             // Free the labels array itself
             self.allocator.free(entry.value_ptr.labels);
+            // Free the graph_name (always allocated via create functions)
+            if (entry.value_ptr.graph_name.len > 0) {
+                self.allocator.free(entry.value_ptr.graph_name);
+            }
             // Free the properties hashmap
             var prop_iter = entry.value_ptr.properties.iterator();
             while (prop_iter.next()) |prop_entry| {
@@ -153,6 +163,10 @@ pub const GraphStore = struct {
         while (edge_iter.next()) |entry| {
             // Free the label string
             self.allocator.free(entry.value_ptr.label);
+            // Free the graph_name (always allocated via create functions)
+            if (entry.value_ptr.graph_name.len > 0) {
+                self.allocator.free(entry.value_ptr.graph_name);
+            }
             // Free the properties hashmap
             var prop_iter = entry.value_ptr.properties.iterator();
             while (prop_iter.next()) |prop_entry| {
@@ -172,7 +186,10 @@ pub const GraphStore = struct {
         self.next_edge_id = 1;
     }
 
-    pub fn createNode(self: *GraphStore, labels: [][]const u8) !u64 {
+    // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // Create node with optional graph name for per-graph data isolation
+    pub fn createNodeWithGraph(self: *GraphStore, labels: [][]const u8, graph_name: []const u8) !u64 {
+        std.debug.print("[GRAPH_STORE] createNodeWithGraph called with graph_name='{s}'\n", .{graph_name});
         // Generate UUIDv7-style time-based unique ID
         const id = generateTimeBasedId();
 
@@ -181,14 +198,22 @@ pub const GraphStore = struct {
             labels_copy[i] = try self.allocator.dupe(u8, label);
         }
 
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+
         const node = Node{
             .id = id,
             .labels = labels_copy,
             .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .graph_name = graph_name_copy,
         };
 
         try self.nodes.put(id, node);
         return id;
+    }
+
+    // Backward-compatible createNode that uses "default" graph
+    pub fn createNode(self: *GraphStore, labels: [][]const u8) !u64 {
+        return self.createNodeWithGraph(labels, "default");
     }
 
     pub fn setNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
@@ -357,11 +382,14 @@ pub const GraphStore = struct {
         return self.nodes.count();
     }
 
-    pub fn createEdge(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8) !u64 {
+    // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // Create edge with optional graph name for per-graph data isolation
+    pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
         // Generate UUIDv7-style time-based unique ID
         const id = generateTimeBasedId();
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
 
         const edge = Edge{
             .id = id,
@@ -369,6 +397,7 @@ pub const GraphStore = struct {
             .to_id = to_id,
             .label = edge_type_copy,
             .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .graph_name = graph_name_copy,
         };
 
         try self.edges.put(id, edge);
@@ -379,6 +408,11 @@ pub const GraphStore = struct {
         };
 
         return id;
+    }
+
+    // Backward-compatible createEdge that uses "default" graph
+    pub fn createEdge(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8) !u64 {
+        return self.createEdgeWithGraph(from_id, to_id, edge_type, "default");
     }
 
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
