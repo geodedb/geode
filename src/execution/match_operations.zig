@@ -1295,6 +1295,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             defer {
                 var iter = groups.iterator();
                 while (iter.next()) |entry| {
+                    // Free the key (we took ownership when inserting new entries)
+                    allocator.free(entry.key_ptr.*);
                     entry.value_ptr.deinit(allocator);
                 }
                 groups.deinit();
@@ -1322,10 +1324,16 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 }
 
                 const key = try key_parts.toOwnedSlice(allocator);
-                defer allocator.free(key);
+                // Note: Do NOT use defer to free key unconditionally.
+                // When getOrPut creates a new entry, the HashMap takes ownership of the key.
+                // We only free the key if it already exists (duplicate).
 
                 const gop = try groups.getOrPut(key);
-                if (!gop.found_existing) {
+                if (gop.found_existing) {
+                    // Key already exists in map, free this duplicate
+                    allocator.free(key);
+                } else {
+                    // New entry - HashMap takes ownership of the key
                     gop.value_ptr.* = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
                 }
                 try gop.value_ptr.append(allocator, input_row);
