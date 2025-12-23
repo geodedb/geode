@@ -2,7 +2,7 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`).
 
-## Current Test Run: 2025-12-23 (Third Run)
+## Current Test Run: 2025-12-23 (Fourth Run)
 
 **Statements Executed**: 440
 **Explicit Errors**: 3 (2 expected, 1 syntax limitation)
@@ -21,6 +21,8 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 | 8 | Cleanup leaves 2 remaining nodes | P3 | FIXED | 46.10 |
 | 9 | SET statement returns NULL for node | P2 | FIXED | 38.5 |
 | 10 | List comprehension syntax not supported | P3 | WONTFIX | 37.5 |
+| 11 | shortestPath returns 0 hops | P1 | FIXED | 28.1 |
+| 12 | CREATE rel without MATCH creates orphan nodes | P2 | FIXED | 38.1 |
 
 ---
 
@@ -305,6 +307,88 @@ RETURN length(path) AS cycle_length, [node IN nodes(path) | node.name] AS cycle_
 
 ---
 
+## Issue 11: shortestPath Returns 0 Hops (P1)
+
+**Section**: 28.1
+
+**Symptom**: The `length(path)` function returns 0 for a shortestPath result when it should return the number of relationships traversed.
+
+**Test Query**:
+```gql
+MATCH path = shortestPath((a:Person {name: 'Alice'})-[:KNOWS*]->(b:Person {name: 'Diana'}))
+RETURN path, length(path) AS hops;
+```
+
+**Expected**:
+```
+| path  | hops |
+|-------|------|
+| {...} | 2    |
+```
+(Alice → Bob → Diana = 2 hops)
+
+**Actual**:
+```
+| path  | hops |
+|-------|------|
+| {...} | 0    |
+```
+
+**Root Cause**: Two issues in `src/execution/graph_algorithms.zig`:
+1. Start/end node matching only checked labels, not property predicates like `{name: 'Alice'}`. This caused random Person nodes to be selected for start/end.
+2. Edge collection was checking `hop.rel.dir == .undirected` before checking reverse direction, but BFS traverses both directions regardless.
+
+**Fix Applied**:
+1. Added property matching to start and end node identification (lines 279-301, 330-352)
+2. Modified edge collection to always check both directions (lines 460-462, 430-432)
+
+**Status**: FIXED (2025-12-23)
+
+---
+
+## Issue 12: CREATE Relationship Without MATCH Creates Orphan Nodes (P2)
+
+**Section**: 38.1
+
+**Symptom**: Using `CREATE (a)-[:REL]->(b)` with variable names that were defined in earlier separate CREATE statements creates NEW anonymous nodes instead of using the existing nodes.
+
+**Test Sequence**:
+```gql
+CREATE (t1:TransactionTest {id: 1, status: 'created'});
+CREATE (t2:TransactionTest {id: 2, status: 'created'});
+CREATE (t1)-[:LINKED]->(t2);  -- Creates 2 NEW unlabeled nodes!
+```
+
+**Expected Behavior**: Either:
+1. Reuse the variables from previous statements (Cypher behavior), OR
+2. Fail with "undefined variable" error (strict GQL behavior)
+
+**Actual Behavior**: Creates 2 new anonymous nodes without labels, connected by the LINKED relationship. These nodes are not cleaned up by label-specific DETACH DELETE statements.
+
+**Impact**: This is why Issue 8 (cleanup leaves 2 remaining nodes) persists. The test file at section 38.1 creates orphan nodes.
+
+**Workaround**: Use MATCH to find existing nodes before creating relationships:
+```gql
+MATCH (t1:TransactionTest {id: 1}), (t2:TransactionTest {id: 2})
+CREATE (t1)-[:LINKED]->(t2);
+```
+
+**Fix Options**:
+1. **Test file fix**: Update section 38.1 to use MATCH before CREATE relationship
+2. **Cleanup fix**: Add `MATCH (n) WHERE size(labels(n)) = 0 DETACH DELETE n;` to cleanup
+
+**Fix Applied**: Updated test file at `testing/shell/comprehensive_test.gql` section 38.1 to use MATCH before CREATE:
+```gql
+CREATE (t1:TransactionTest {id: 1, status: 'created'});
+CREATE (t2:TransactionTest {id: 2, status: 'created'});
+MATCH (t1:TransactionTest {id: 1}), (t2:TransactionTest {id: 2})
+CREATE (t1)-[:LINKED]->(t2);
+```
+
+**Status**: FIXED (2025-12-23)
+
+---
+
 ## Known Limitations
 
 1. **List Comprehension Syntax** (Section 37.5): `[node IN nodes(path) | node.name]` - Cypher-style syntax not fully supported
@@ -312,6 +396,33 @@ RETURN length(path) AS cycle_length, [node IN nodes(path) | node.name] AS cycle_
 ---
 
 ## Investigation Log
+
+### 2025-12-23 Fourth Run Analysis
+
+**Test Results**:
+- 440 statements executed
+- 2 expected errors (division by zero, invalid type conversion)
+- 1 syntax limitation (list comprehension)
+- 2 remaining nodes after cleanup
+
+**New Issues Found**:
+
+**Issue 11 (P1): shortestPath returns 0 hops**
+- `length(path)` returns 0 instead of 2 for Alice→Bob→Diana path
+- Root cause: TBD - need to investigate path length calculation
+
+**Issue 12 (P2): CREATE relationship creates orphan nodes**
+- Root cause: `CREATE (t1)-[:LINKED]->(t2)` in section 38.1 creates new anonymous nodes
+- These nodes don't have the TransactionTest label, so cleanup doesn't find them
+- This is the actual root cause of the "2 remaining nodes" in Issue 8
+- Fix: Update test file to use MATCH before CREATE for relationship
+
+**Previously Fixed Issues Verified Working**:
+- Issue 1-9: All passing
+- Issue 7: ORDER BY now sorting correctly
+- Issue 8: Partial fix (USE GRAPH added, but orphan node issue remains)
+
+---
 
 ### 2025-12-23 Third Run Analysis
 

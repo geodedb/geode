@@ -276,6 +276,30 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                 }
             }
 
+            // Check properties
+            if (matches and hop.left.props != null) {
+                for (hop.left.props.?) |prop| {
+                    const expected = try eval.evalExpr(allocator, prop.value.*, env);
+                    if (node.properties.get(prop.key)) |node_prop_val| {
+                        const node_val = switch (node_prop_val) {
+                            .String => |s| Value{ .Str = s },
+                            .Int => |i| Value{ .Int = i },
+                            .Bool => |b| Value{ .Bool = b },
+                            .Float => Value{ .Null = {} },
+                            .Null => Value{ .Null = {} },
+                            .ExtValue => |ext| Value{ .ExtValue = ext },
+                        };
+                        if (!valuesEqual(node_val, expected)) {
+                            matches = false;
+                            break;
+                        }
+                    } else {
+                        matches = false;
+                        break;
+                    }
+                }
+            }
+
             if (matches) {
                 start_id = node.id;
                 break;
@@ -300,6 +324,30 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                 if (!has_label) {
                     matches = false;
                     break;
+                }
+            }
+
+            // Check properties
+            if (matches and hop.right.props != null) {
+                for (hop.right.props.?) |prop| {
+                    const expected = try eval.evalExpr(allocator, prop.value.*, env);
+                    if (node.properties.get(prop.key)) |node_prop_val| {
+                        const node_val = switch (node_prop_val) {
+                            .String => |s| Value{ .Str = s },
+                            .Int => |i| Value{ .Int = i },
+                            .Bool => |b| Value{ .Bool = b },
+                            .Float => Value{ .Null = {} },
+                            .Null => Value{ .Null = {} },
+                            .ExtValue => |ext| Value{ .ExtValue = ext },
+                        };
+                        if (!valuesEqual(node_val, expected)) {
+                            matches = false;
+                            break;
+                        }
+                    } else {
+                        matches = false;
+                        break;
+                    }
                 }
             }
 
@@ -413,10 +461,28 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                 current_node = current_node.?.parent;
             }
 
-            // Build path with actual nodes
-            for (node_ids.items) |node_id| {
+            // Build path with actual nodes and edges
+            for (node_ids.items, 0..) |node_id, idx| {
                 if (store.nodes.getPtr(node_id)) |node_ptr| {
                     try path_nodes.append(allocator, node_ptr);
+                }
+
+                // Add edges between consecutive nodes
+                // Always check both directions since BFS can traverse edges either way
+                if (idx > 0) {
+                    const prev_id = node_ids.items[idx - 1];
+                    var edge_iter = store.edges.iterator();
+                    while (edge_iter.next()) |entry| {
+                        const edge_ptr = entry.value_ptr;
+                        const edge = edge_ptr.*;
+                        // Check both directions - BFS may traverse edges in either direction
+                        if ((edge.from_id == prev_id and edge.to_id == node_id) or
+                            (edge.to_id == prev_id and edge.from_id == node_id))
+                        {
+                            try path_edges.append(allocator, edge_ptr);
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -449,14 +515,16 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
             }
 
             // Add edges between consecutive nodes
+            // Always check both directions since BFS can traverse edges either way
             if (idx > 0) {
                 const prev_id = node_ids.items[idx - 1];
                 var edge_iter = store.edges.iterator();
                 while (edge_iter.next()) |entry| {
                     const edge_ptr = entry.value_ptr;
                     const edge = edge_ptr.*;
+                    // Check both directions - BFS may traverse edges in either direction
                     if ((edge.from_id == prev_id and edge.to_id == node_id) or
-                        (hop.rel.dir == .undirected and edge.to_id == prev_id and edge.from_id == node_id))
+                        (edge.to_id == prev_id and edge.from_id == node_id))
                     {
                         try path_edges.append(allocator, edge_ptr);
                         break;

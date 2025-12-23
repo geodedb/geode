@@ -1029,6 +1029,7 @@ RETURN common.name AS common_friend;
 START TRANSACTION;
 CREATE (t1:TransactionTest {id: 1, status: 'created'});
 CREATE (t2:TransactionTest {id: 2, status: 'created'});
+MATCH (t1:TransactionTest {id: 1}), (t2:TransactionTest {id: 2})
 CREATE (t1)-[:LINKED]->(t2);
 MATCH (t:TransactionTest) RETURN count(t) AS created_in_tx;
 COMMIT;
