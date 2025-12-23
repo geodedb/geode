@@ -227,8 +227,10 @@ ORDER BY connections DESC;
 | Reverse path traversal | MEDIUM | :white_check_mark: Fixed | Added direction parameter to path expansion |
 | List comprehension | LOW | :white_check_mark: Fixed | Added parser and evaluator support |
 | OPTIONAL MATCH count | LOW | :white_check_mark: Fixed | Fixed aggregation detection in WITH clause |
+| **GROUP BY with relationships** | **CRITICAL** | :white_check_mark: Fixed | Added relationship pattern handling in GROUP BY |
+| **Relationship direction** | MEDIUM | :white_check_mark: Fixed | Fixed non-aggregation edge direction handling |
 
-**ALL 7 ISSUES RESOLVED** :tada:
+**ALL 9 ISSUES RESOLVED** :tada:
 
 ## Working Features Confirmed
 
@@ -255,7 +257,8 @@ ORDER BY connections DESC;
 - Pagination (LIMIT, SKIP)
 - Basic aggregations (count, min, max, avg)
 - **sum() with Decimal values** (FIXED - now working!)
-- GROUP BY
+- GROUP BY (simple node patterns)
+- **GROUP BY with relationship patterns** (FIXED - collect(), count(), sum() now work correctly!)
 - DISTINCT
 - SET/REMOVE properties and labels
 - MERGE
@@ -270,6 +273,7 @@ ORDER BY connections DESC;
 - Error handling (division by zero returns error, type mismatch returns error)
 - **Transaction ROLLBACK** (FIXED - now properly reverts changes!)
 - **OPTIONAL MATCH with aggregations** (FIXED - count() now works correctly!)
+- **Relationship direction** (FIXED - `<-` incoming edges now work correctly in all query types!)
 
 ## Files Modified
 
@@ -306,3 +310,18 @@ The following files were modified to fix the issues:
 
 ### OPTIONAL MATCH count() Fix
 - `src/execution.zig` - Added aggregation detection in WITH clause without GROUP BY, treats all rows as single group for aggregation
+
+### GROUP BY with Relationship Patterns Fix (NEW - 2025-12-23)
+- `src/execution/match_operations.zig` - Added new code path for `has_aggregation AND has_relationship AND group_by`
+  - Collects relationship pattern bindings (left node, right node, edge) properly
+  - Respects edge direction using `getEdgesTo()` for `<-` and `getEdgesFrom()` for `->`
+  - Groups bindings by GROUP BY key expression evaluated in full environment context
+- `src/execution/aggregation_evaluation.zig` - Added `computeBindingGroupAggregation()` function
+  - Computes aggregations (count, sum, avg, min, max, collect) over binding groups
+  - Evaluates expressions in proper environment context for each binding
+- `src/execution.zig` - Added export for `computeBindingGroupAggregation`
+
+### Relationship Direction Fix for Non-Aggregation Queries (NEW - 2025-12-23)
+- `src/execution/match_operations.zig` - Fixed non-aggregation single-hop edge traversal to respect `rel_direction`
+  - Uses `getEdgesTo()` for incoming edges (`<-`) and `getEdgesFrom()` for outgoing (`->`)
+  - Gets target node ID based on direction: `edge.from_id` for `<-`, `edge.to_id` for `->`

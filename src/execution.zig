@@ -124,6 +124,7 @@ pub const executeProfile = statement_handlers.executeProfile;
 // Re-export aggregation and evaluation functions for backward compatibility (M1 Phase 8 extraction)
 pub const getExpressionNameFromAst = aggregation_evaluation.getExpressionNameFromAst;
 pub const evaluateGroupAggregation = aggregation_evaluation.evaluateGroupAggregation;
+pub const computeBindingGroupAggregation = aggregation_evaluation.computeBindingGroupAggregation;
 pub const evaluateNodeExpression = aggregation_evaluation.evaluateNodeExpression;
 pub const evaluateAggregationWithLabels = aggregation_evaluation.evaluateAggregationWithLabels;
 pub const evaluateAggregation = aggregation_evaluation.evaluateAggregation;

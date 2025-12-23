@@ -20,6 +20,7 @@ const isAggregationExpr = execution.isAggregationExpr;
 const sortRows = execution.sortRows;
 const evaluateNodeExpression = execution.evaluateNodeExpression;
 const evaluateGroupAggregation = execution.evaluateGroupAggregation;
+const computeBindingGroupAggregation = execution.computeBindingGroupAggregation;
 const encryptPropertyIfNeeded = execution.encryptPropertyIfNeeded;
 const encryptEdgePropertyIfNeeded = execution.encryptEdgePropertyIfNeeded;
 const executeWithClause = execution.executeWithClause;
@@ -1176,6 +1177,309 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     if (has_aggregation) {
         // Check if we have GROUP BY
         if (q.group_by) |group_by| {
+            // CANARY: REQ=REQ-GQL-GROUPBY-REL-001; FEATURE="GroupByRelationshipPattern"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
+            // GROUP BY with relationship patterns - need to collect bindings first, then group them
+            if (has_relationship) {
+                // Collect all matching relationship bindings and group them
+                const BindingRow = struct {
+                    env_names: [][]const u8,
+                    env_values: []Value,
+                };
+
+                var binding_groups = std.StringHashMap(std.ArrayList(BindingRow)).init(allocator);
+                var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                defer {
+                    var giter = binding_groups.iterator();
+                    while (giter.next()) |entry| {
+                        for (entry.value_ptr.items) |binding| {
+                            allocator.free(binding.env_names);
+                            allocator.free(binding.env_values);
+                        }
+                        entry.value_ptr.deinit(allocator);
+                    }
+                    binding_groups.deinit();
+                    for (group_keys_list.items) |key| {
+                        allocator.free(key);
+                    }
+                    group_keys_list.deinit(allocator);
+                }
+
+                // Iterate over nodes and edges to collect bindings
+                var left_iter = store.nodes.iterator();
+                while (left_iter.next()) |left_entry| {
+                    const left_node = left_entry.value_ptr;
+
+                    // Filter by graph
+                    if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+
+                    // Filter left node by labels if specified
+                    if (match_labels.len > 0) {
+                        var has_all_labels = true;
+                        for (match_labels) |required_label| {
+                            var found = false;
+                            for (left_node.labels) |node_label| {
+                                if (std.mem.eql(u8, required_label, node_label)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                has_all_labels = false;
+                                break;
+                            }
+                        }
+                        if (!has_all_labels) continue;
+                    }
+
+                    // Check left node property constraints
+                    if (match_props) |props| {
+                        var passes_props = true;
+                        for (props) |prop| {
+                            if (left_node.properties.get(prop.key)) |node_prop_val| {
+                                const node_val = switch (node_prop_val) {
+                                    .Null => Value{ .Null = {} },
+                                    .Bool => |b| Value{ .Bool = b },
+                                    .Int => |i| Value{ .Int = i },
+                                    .String => |s| Value{ .Str = s },
+                                    .Float => Value{ .Null = {} },
+                                    .ExtValue => |ext| Value{ .ExtValue = ext },
+                                };
+                                const prop_env = eval.Env{
+                                    .names = param_names,
+                                    .values = param_values,
+                                    .allocator = allocator,
+                                };
+                                const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                                    passes_props = false;
+                                    break;
+                                };
+                                if (!valuesEqual(node_val, prop_val)) {
+                                    passes_props = false;
+                                    break;
+                                }
+                            } else {
+                                passes_props = false;
+                                break;
+                            }
+                        }
+                        if (!passes_props) continue;
+                    }
+
+                    // Get edges based on direction
+                    const edges = if (rel_direction == 'l')
+                        store.getEdgesTo(left_node.id)
+                    else
+                        store.getEdgesFrom(left_node.id);
+
+                    for (edges) |edge| {
+                        // Filter by relationship type
+                        if (rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+
+                        // Get the target node based on direction
+                        const right_node_id = if (rel_direction == 'l') edge.from_id else edge.to_id;
+                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+
+                        // Filter right node by labels
+                        if (right_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (right_node_ptr.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        // Filter right node by properties
+                        if (right_props) |props| {
+                            var passes_props = true;
+                            for (props) |prop| {
+                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => Value{ .Null = {} },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    };
+                                    const prop_env = eval.Env{
+                                        .names = param_names,
+                                        .values = param_values,
+                                        .allocator = allocator,
+                                    };
+                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                                        passes_props = false;
+                                        break;
+                                    };
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        passes_props = false;
+                                        break;
+                                    }
+                                } else {
+                                    passes_props = false;
+                                    break;
+                                }
+                            }
+                            if (!passes_props) continue;
+                        }
+
+                        // Build environment with matched elements
+                        var env_count: usize = 0;
+                        if (left_node_var != null) env_count += 1;
+                        if (right_node_var != null) env_count += 1;
+                        if (rel_var != null) env_count += 1;
+
+                        const env_names = try allocator.alloc([]const u8, env_count);
+                        const env_values = try allocator.alloc(Value, env_count);
+
+                        var env_idx: usize = 0;
+                        if (left_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = left_node };
+                            env_idx += 1;
+                        }
+                        if (right_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
+                            env_idx += 1;
+                        }
+                        if (rel_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            const edge_ptr = store.edges.getPtr(edge.id) orelse {
+                                env_values[env_idx] = Value{ .Null = {} };
+                                env_idx += 1;
+                                continue;
+                            };
+                            env_values[env_idx] = Value{ .Edge = edge_ptr };
+                            env_idx += 1;
+                        }
+
+                        const env = Env{
+                            .names = env_names,
+                            .values = env_values,
+                            .param_names = param_names,
+                            .param_values = param_values,
+                            .allocator = allocator,
+                        };
+
+                        // Evaluate WHERE clause
+                        if (q.where_clause) |where_expr| {
+                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
+                            const passes_where = switch (where_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                .Int => |i| i != 0,
+                                else => false,
+                            };
+                            if (!passes_where) {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                continue;
+                            }
+                        }
+
+                        // Evaluate GROUP BY key(s) and serialize to string
+                        var key_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+                        const key_writer = key_buf.writer(allocator);
+                        for (group_by.keys, 0..) |key_expr, k| {
+                            if (k > 0) key_writer.writeAll("|") catch {};
+                            const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
+                            switch (key_val) {
+                                .Int => |i| key_writer.print("{d}", .{i}) catch {},
+                                .Str => |s| key_writer.writeAll(s) catch {},
+                                .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
+                                .Null => key_writer.writeAll("null") catch {},
+                                .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
+                                .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
+                                else => key_writer.writeAll("?") catch {},
+                            }
+                        }
+                        const group_key = key_buf.toOwnedSlice(allocator) catch "";
+
+                        // Add binding to its group
+                        if (binding_groups.getPtr(group_key)) |group_list| {
+                            group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
+                            allocator.free(group_key);
+                        } else {
+                            var new_list = std.ArrayList(BindingRow).initCapacity(allocator, 4) catch unreachable;
+                            new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
+                            binding_groups.put(group_key, new_list) catch {};
+                            group_keys_list.append(allocator, group_key) catch {};
+                        }
+                    }
+                }
+
+                // Generate rows for each group
+                var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                var group_iter = binding_groups.iterator();
+                while (group_iter.next()) |group_entry| {
+                    const group_bindings = group_entry.value_ptr.items;
+                    if (group_bindings.len == 0) continue;
+
+                    // Apply HAVING clause if present (simplified check)
+                    if (q.having) |_| {
+                        if (group_bindings.len < 2) continue;
+                    }
+
+                    var row = try allocator.alloc(Value, items.len);
+
+                    // Use first binding as base for non-aggregated expressions
+                    const first_binding = group_bindings[0];
+                    const base_env = Env{
+                        .names = first_binding.env_names,
+                        .values = first_binding.env_values,
+                        .param_names = param_names,
+                        .param_values = param_values,
+                        .allocator = allocator,
+                    };
+
+                    for (items, 0..) |item, i| {
+                        if (isAggregationExpr(item.expr)) {
+                            // Compute aggregation over all bindings in this group
+                            row[i] = try computeBindingGroupAggregation(allocator, item.expr, group_bindings);
+                        } else {
+                            // Non-aggregation: evaluate with first binding
+                            row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                        }
+                    }
+
+                    try rows.append(allocator, row);
+                }
+
+                // Apply ORDER BY if present
+                var result = ExecutionResult{
+                    .columns = columns,
+                    .rows = try rows.toOwnedSlice(allocator),
+                    .flags = blk: {
+                        const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                        break :blk list;
+                    },
+                };
+
+                if (q.order_by) |order| {
+                    try sortRows(allocator, &result, order);
+                }
+
+                // Apply DISTINCT if requested
+                if (q.ret.distinct) {
+                    try applyDistinct(allocator, &result);
+                }
+
+                return result;
+            }
+
+            // Simple node pattern GROUP BY (original code path)
             // GROUP BY with aggregations - group rows and compute aggregations per group
             var groups = std.StringHashMap(std.ArrayList(*graph_store.Node)).init(allocator);
             var group_keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
@@ -2013,8 +2317,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 } else {
                     // Standard single-hop edge traversal
-                    // Get edges from this node
-                    const edges = store.getEdgesFrom(left_node.id);
+                    // CANARY: REQ=REQ-GQL-REL-DIRECTION-001; FEATURE="RelationshipDirection"; ASPECT=NonAggregation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // Get edges based on direction - use getEdgesTo for incoming edges (<-), getEdgesFrom for outgoing (->)
+                    const edges = if (rel_direction == 'l')
+                        store.getEdgesTo(left_node.id)
+                    else
+                        store.getEdgesFrom(left_node.id);
                     // Note: edges are allocated by store's allocator, don't free here
 
                     for (edges) |edge| {
@@ -2023,8 +2331,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
 
-                        // Get the target node
-                        const right_node_ptr = store.nodes.getPtr(edge.to_id) orelse continue;
+                        // Get the target node based on direction
+                        const right_node_id = if (rel_direction == 'l') edge.from_id else edge.to_id;
+                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
 
                         // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-18
                         // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[:REL]->(b:Product))

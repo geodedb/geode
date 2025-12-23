@@ -808,3 +808,182 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
 
     return Value{ .Null = {} };
 }
+
+// CANARY: REQ=REQ-GQL-GROUPBY-REL-002; FEATURE="GroupByRelationshipPattern"; ASPECT=BindingAggregation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
+/// Compute aggregation over a group of binding rows (for relationship pattern GROUP BY)
+pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, bindings: anytype) !Value {
+    // bindings should be a slice of BindingRow structs with env_names and env_values
+    switch (expr) {
+        .Call => |call| {
+            if (call.callee.* == .Ident) {
+                const func_name = call.callee.Ident.orig;
+
+                if (std.ascii.eqlIgnoreCase(func_name, "count")) {
+                    // COUNT(*) or COUNT(expr)
+                    if (call.args.len == 1 and call.args[0].* == .Ident and
+                        std.mem.eql(u8, call.args[0].Ident.orig, "*"))
+                    {
+                        // COUNT(*) - count all bindings in group
+                        return Value{ .Int = @intCast(bindings.len) };
+                    }
+                    // For COUNT(expr), count non-null values
+                    if (call.args.len == 1) {
+                        var count: i64 = 0;
+                        for (bindings) |binding| {
+                            const env = Env{
+                                .names = binding.env_names,
+                                .values = binding.env_values,
+                                .allocator = allocator,
+                            };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            if (val != .Null) {
+                                count += 1;
+                            }
+                        }
+                        return Value{ .Int = count };
+                    }
+                    return Value{ .Int = @intCast(bindings.len) };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
+                    // SUM aggregation over bindings
+                    if (call.args.len == 1) {
+                        var sum_int: i64 = 0;
+                        var sum_float: f64 = 0;
+                        var has_float = false;
+                        for (bindings) |binding| {
+                            const env = Env{
+                                .names = binding.env_names,
+                                .values = binding.env_values,
+                                .allocator = allocator,
+                            };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            switch (val) {
+                                .Int => |i| {
+                                    sum_int += i;
+                                    sum_float += @floatFromInt(i);
+                                },
+                                .Decimal => |d| {
+                                    has_float = true;
+                                    const decimal_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+                                    sum_float += decimal_float;
+                                },
+                                .ExtValue => |ext| {
+                                    if (ext == .Decimal) {
+                                        has_float = true;
+                                        const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
+                                        sum_float += decimal_float;
+                                    } else if (ext == .Int) {
+                                        sum_int += ext.Int;
+                                        sum_float += @floatFromInt(ext.Int);
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                        if (has_float) {
+                            return Value{ .Decimal = .{ .coeff = @intFromFloat(sum_float * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } };
+                        }
+                        return Value{ .Int = sum_int };
+                    }
+                    return Value{ .Int = 0 };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
+                    // AVG aggregation over bindings
+                    if (call.args.len == 1) {
+                        var sum: f64 = 0;
+                        var count: f64 = 0;
+                        for (bindings) |binding| {
+                            const env = Env{
+                                .names = binding.env_names,
+                                .values = binding.env_values,
+                                .allocator = allocator,
+                            };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            switch (val) {
+                                .Int => |i| {
+                                    sum += @floatFromInt(i);
+                                    count += 1;
+                                },
+                                .Decimal => |d| {
+                                    const decimal_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+                                    sum += decimal_float;
+                                    count += 1;
+                                },
+                                else => {},
+                            }
+                        }
+                        if (count > 0) {
+                            const avg = sum / count;
+                            return Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1, .orig_scale = 1, .orig_repr = null } };
+                        }
+                        return Value{ .Null = {} };
+                    }
+                    return Value{ .Null = {} };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
+                    // MIN aggregation over bindings
+                    if (call.args.len == 1) {
+                        var min_val: ?i64 = null;
+                        for (bindings) |binding| {
+                            const env = Env{
+                                .names = binding.env_names,
+                                .values = binding.env_values,
+                                .allocator = allocator,
+                            };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            if (val == .Int) {
+                                if (min_val == null or val.Int < min_val.?) {
+                                    min_val = val.Int;
+                                }
+                            }
+                        }
+                        if (min_val) |v| {
+                            return Value{ .Int = v };
+                        }
+                        return Value{ .Null = {} };
+                    }
+                    return Value{ .Null = {} };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
+                    // MAX aggregation over bindings
+                    if (call.args.len == 1) {
+                        var max_val: ?i64 = null;
+                        for (bindings) |binding| {
+                            const env = Env{
+                                .names = binding.env_names,
+                                .values = binding.env_values,
+                                .allocator = allocator,
+                            };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            if (val == .Int) {
+                                if (max_val == null or val.Int > max_val.?) {
+                                    max_val = val.Int;
+                                }
+                            }
+                        }
+                        if (max_val) |v| {
+                            return Value{ .Int = v };
+                        }
+                        return Value{ .Null = {} };
+                    }
+                    return Value{ .Null = {} };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
+                    // COLLECT aggregation - collect values into a list
+                    if (call.args.len == 1) {
+                        var list = std.ArrayList(Value).initCapacity(allocator, bindings.len) catch unreachable;
+                        for (bindings) |binding| {
+                            const env = Env{
+                                .names = binding.env_names,
+                                .values = binding.env_values,
+                                .allocator = allocator,
+                            };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            list.append(allocator, val) catch {};
+                        }
+                        return Value{ .List = list.toOwnedSlice(allocator) catch &.{} };
+                    }
+                    return Value{ .List = &.{} };
+                }
+            }
+        },
+        else => {},
+    }
+
+    return Value{ .Null = {} };
+}
