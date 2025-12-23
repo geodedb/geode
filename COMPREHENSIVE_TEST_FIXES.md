@@ -274,6 +274,8 @@ ORDER BY connections DESC;
 - **Transaction ROLLBACK** (FIXED - now properly reverts changes!)
 - **OPTIONAL MATCH with aggregations** (FIXED - count() now works correctly!)
 - **Relationship direction** (FIXED - `<-` incoming edges now work correctly in all query types!)
+- **Multi-hop relationship patterns** (FIXED - e.g., `(a)-[:R1]->(b)-[:R2]->(c)` now working!)
+- **Multi-hop with GROUP BY** (FIXED - aggregations over multi-hop patterns now work!)
 
 ## Files Modified
 
@@ -325,3 +327,30 @@ The following files were modified to fix the issues:
 - `src/execution/match_operations.zig` - Fixed non-aggregation single-hop edge traversal to respect `rel_direction`
   - Uses `getEdgesTo()` for incoming edges (`<-`) and `getEdgesFrom()` for outgoing (`->`)
   - Gets target node ID based on direction: `edge.from_id` for `<-`, `edge.to_id` for `->`
+
+### Multi-Hop Pattern Support (NEW - 2025-12-23)
+- `src/execution/match_operations.zig` - Added comprehensive multi-hop pattern support (~700 lines total)
+
+  **Non-Aggregation Multi-Hop (Issue 6: Friends of friends)**:
+  - Detects multi-hop patterns when `chain.hops.len > 1`
+  - Implements iterative binding expansion that processes each hop in sequence
+  - For each hop, the right node of the previous hop becomes the current traversal point
+  - Accumulates all bound variables (nodes and relationships) across hops
+  - Properly handles direction for each hop (`<-` vs `->` vs `--`)
+  - Evaluates WHERE clause after all hops with full environment
+  - Supports LIMIT, OFFSET, ORDER BY, and DISTINCT on results
+
+  **GROUP BY with Multi-Hop (Issue 7: Products ordered together)**:
+  - Extends multi-hop support to aggregation queries with GROUP BY
+  - Iteratively expands bindings through each hop of the pattern
+  - Handles mixed direction patterns (e.g., `<-[:REL]-` followed by `-[:REL]->`)
+  - Groups bindings by GROUP BY key expressions evaluated in full environment
+  - Computes aggregations (count, sum, avg, etc.) over grouped binding sets
+  - Proper memory management for binding groups
+
+### Transaction ROLLBACK Server-Side Integration (NEW - 2025-12-23)
+- `src/server/transaction_handlers.zig` - Integrated txn_undo_log with server-side transaction handling
+  - Import `txn_undo_log.zig` and `graph_store.zig` modules
+  - `handleBegin()` - Calls `undo_log.begin()` to start tracking changes
+  - `handleCommit()` - Calls `undo_log.commit()` to clear log and keep changes
+  - `handleRollback()` - Calls `undo_log.rollback(store)` to revert all changes

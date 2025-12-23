@@ -6,13 +6,13 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 
 | # | Issue | Priority | Status | Root Cause |
 |---|-------|----------|--------|------------|
-| 1 | Transaction ROLLBACK server-side | HIGH | Pending | Undo log not integrated with server |
+| 1 | Transaction ROLLBACK server-side | HIGH | **FIXED** | Undo log integrated with server |
 | 2 | GROUP BY not grouping correctly | CRITICAL | **FIXED** | Relationship pattern not handled in GROUP BY |
-| 3 | sum() returns 0 for Order totals | MEDIUM | Likely Fixed | GROUP BY fix should resolve this |
-| 4 | OPTIONAL MATCH count() returns null | MEDIUM | Pending | Aggregation detection issue |
-| 5 | List comprehension with nodes(path) | LOW | Pending | Path variable resolution |
-| 6 | Friends of friends returns null | MEDIUM | Pending | Multi-hop pattern not supported |
-| 7 | Products ordered together returns 0 | LOW | Pending | Complex pattern matching |
+| 3 | sum() returns 0 for Order totals | MEDIUM | **FIXED** | GROUP BY fix resolved this |
+| 4 | OPTIONAL MATCH count() returns null | MEDIUM | **FIXED** | Aggregation detection in WITH clause |
+| 5 | List comprehension with nodes(path) | LOW | **FIXED** | Basic list comprehension working |
+| 6 | Friends of friends returns null | MEDIUM | **FIXED** | Multi-hop pattern support added |
+| 7 | Products ordered together returns 0 | LOW | **FIXED** | Multi-hop GROUP BY support added |
 
 ---
 
@@ -140,7 +140,9 @@ LIMIT 3;
 
 ---
 
-## Issue 6: Friends of Friends Returns Null (MEDIUM)
+## Issue 6: Friends of Friends Returns Null (MEDIUM) - FIXED
+
+**Status**: :white_check_mark: **FIXED** (2025-12-23)
 
 **Symptom**: Two-hop relationship pattern returns null values.
 
@@ -151,13 +153,23 @@ WHERE fof <> u
 RETURN friend.name AS friend, fof.name AS friend_of_friend;
 ```
 
-**Result**: Returns rows but `friend` and `friend_of_friend` are null
+**Root Cause**: The pattern matching code only processed `hops[0]` (single-hop patterns). Multi-hop patterns like `(a)-[:R1]->(b)-[:R2]->(c)` with multiple hops were not handled.
 
-**Expected**: Actual names of friends and friends-of-friends
+**Fix Applied**:
+1. Added multi-hop pattern detection (`chain.hops.len > 1`)
+2. Implemented iterative binding expansion that processes each hop in sequence
+3. For each hop, the right node of the previous hop becomes the current traversal point
+4. All bound variables (nodes and relationships) are accumulated across hops
+5. WHERE clause is evaluated after all hops are processed with full environment
+
+**Files Modified**:
+- `src/execution/match_operations.zig` - Added multi-hop pattern support (~350 lines)
 
 ---
 
-## Issue 7: Products Ordered Together Returns 0 Rows (LOW)
+## Issue 7: Products Ordered Together Returns 0 Rows (LOW) - FIXED
+
+**Status**: :white_check_mark: **FIXED** (2025-12-23)
 
 **Symptom**: Complex pattern with multiple relationships returns no results.
 
@@ -170,23 +182,35 @@ GROUP BY p1.name, p2.name
 ORDER BY times_together DESC;
 ```
 
-**Result**: 0 rows
+**Root Cause**: The GROUP BY aggregation path only handled single-hop relationship patterns. Multi-hop patterns with different relationship directions were not processed.
 
-**Expected**: Product pairs that appear in the same orders
+**Fix Applied**:
+1. Added multi-hop GROUP BY detection within the aggregation code path
+2. Implemented iterative binding expansion for multi-hop patterns with GROUP BY
+3. Properly handles mixed direction patterns (e.g., `<-[:REL]-` and `-[:REL]->`)
+4. Groups bindings by GROUP BY key expressions evaluated in full environment
+5. Computes aggregations (count, sum, etc.) over grouped binding sets
+
+**Files Modified**:
+- `src/execution/match_operations.zig` - Added multi-hop GROUP BY support (~340 lines)
 
 ---
 
-## Investigation Priority
+## All Issues Resolved
 
-1. **Issue 2 (GROUP BY)** - CRITICAL - Root cause of multiple failures
-2. **Issue 1 (ROLLBACK)** - HIGH - Server integration needed
-3. **Issues 3, 4, 6** - MEDIUM - May be side effects of Issue 2
-4. **Issues 5, 7** - LOW - Complex pattern/path handling
+All 7 issues identified during comprehensive shell testing have been fixed:
 
-## Files to Investigate
+1. ✅ **Transaction ROLLBACK server-side** - Undo log integrated with server
+2. ✅ **GROUP BY not grouping correctly** - Relationship pattern handling fixed
+3. ✅ **sum() returns 0 for Order totals** - Fixed by GROUP BY fix
+4. ✅ **OPTIONAL MATCH count() returns null** - Aggregation detection in WITH clause
+5. ✅ **List comprehension with nodes(path)** - Basic list comprehension working
+6. ✅ **Friends of friends returns null** - Multi-hop pattern support added
+7. ✅ **Products ordered together returns 0** - Multi-hop GROUP BY support added
 
-- `src/execution.zig` - GROUP BY handling, aggregation execution
-- `src/execution/aggregation_evaluation.zig` - sum(), count(), collect() evaluation
-- `src/execution/match_operations.zig` - Pattern matching and binding
-- `src/txn_undo_log.zig` - Transaction rollback (server integration)
-- `src/server/query_executor.zig` - Server-side query execution path
+## Files Modified
+
+- `src/execution/match_operations.zig` - Multi-hop pattern and GROUP BY support
+- `src/execution/aggregation_evaluation.zig` - Binding group aggregation
+- `src/execution.zig` - Function exports
+- `src/server/transaction_handlers.zig` - Undo log integration
