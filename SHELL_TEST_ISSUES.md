@@ -23,6 +23,7 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 | 10 | List comprehension syntax not supported | P3 | WONTFIX | 37.5 |
 | 11 | shortestPath returns 0 hops | P1 | FIXED | 28.1 |
 | 12 | CREATE rel without MATCH creates orphan nodes | P2 | FIXED | 38.1 |
+| 13 | K-NN vector query returns wrong order/missing results | P1 | FIXED | 35.6 |
 
 ---
 
@@ -389,6 +390,70 @@ CREATE (t1)-[:LINKED]->(t2);
 
 ---
 
+## Issue 13: K-NN Vector Query Returns Wrong Order/Missing Results (P1)
+
+**Section**: 35.6
+
+**Symptom**: The k-nearest neighbors vector similarity query returns results in wrong order and is missing the closest match.
+
+**Test Query**:
+```gql
+MATCH (d:VectorDocument)
+WITH d, vector_l2(d.embedding, vectorf32('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]')) AS distance
+ORDER BY distance
+LIMIT 2
+RETURN d.title AS nearest_doc, distance;
+```
+
+**Expected** (ordered by distance ASC):
+```
+| nearest_doc            | distance |
+|------------------------|----------|
+| Machine Learning Intro | 0.00     |
+| Deep Learning Guide    | 0.14     |
+```
+
+**Actual**:
+```
+| nearest_doc         | distance |
+|---------------------|----------|
+| Database Systems    | 0.84     |
+| Deep Learning Guide | 0.14     |
+```
+
+**Vector Data** (created in Section 35.4):
+- Machine Learning Intro: `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]` → L2 distance = 0.00 (identical to query)
+- Deep Learning Guide: `[0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85]` → L2 distance ≈ 0.14
+- Database Systems: `[0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]` → L2 distance ≈ 0.84
+
+**Issues**:
+1. Machine Learning Intro (distance = 0.00) is missing from results
+2. Results are in wrong order (0.84 before 0.14 when ordering ASC)
+
+**Root Cause**: The `executeWithClauseWithGroupBy` function in `src/execution.zig` was missing Decimal type comparison in the sorting logic. The function had comparison handlers for Int, Str, and Bool types, but Decimal values (returned by vector_l2 and other functions) fell through to the default case that treated all non-handled types as equal. This caused Decimal distance values to appear in arbitrary order.
+
+**Fix**: Added Decimal comparison logic in `src/execution.zig:2050-2065`:
+```zig
+if (val_a == .Decimal and val_b == .Decimal) {
+    const dec_a = val_a.Decimal;
+    const dec_b = val_b.Decimal;
+    // Normalize to same scale by cross-multiplying
+    var pow_a: i128 = 1;
+    var pow_b: i128 = 1;
+    for (0..dec_b.scale) |_| pow_a *= 10;
+    for (0..dec_a.scale) |_| pow_b *= 10;
+    const norm_a = dec_a.coeff * pow_a;
+    const norm_b = dec_b.coeff * pow_b;
+    if (norm_a < norm_b) break :blk -1;
+    if (norm_a > norm_b) break :blk 1;
+    break :blk 0;
+}
+```
+
+**Status**: FIXED (2025-12-23)
+
+---
+
 ## Known Limitations
 
 1. **List Comprehension Syntax** (Section 37.5): `[node IN nodes(path) | node.name]` - Cypher-style syntax not fully supported
@@ -416,6 +481,27 @@ CREATE (t1)-[:LINKED]->(t2);
 - These nodes don't have the TransactionTest label, so cleanup doesn't find them
 - This is the actual root cause of the "2 remaining nodes" in Issue 8
 - Fix: Update test file to use MATCH before CREATE for relationship
+
+**Issue 13 (P1): K-NN vector query returns wrong order/missing results**
+- Section 35.6 K-nearest neighbors query returns wrong results
+- Query:
+  ```sql
+  MATCH (d:VectorDocument)
+  WITH d, vector_l2(d.embedding, vectorf32('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]')) AS distance
+  ORDER BY distance
+  LIMIT 2
+  RETURN d.title AS nearest_doc, distance;
+  ```
+- Expected (ordered by distance ASC):
+  1. Machine Learning Intro (distance ≈ 0.00 - identical vectors)
+  2. Deep Learning Guide (distance ≈ 0.14)
+- Actual:
+  1. Database Systems (distance = 0.84)
+  2. Deep Learning Guide (distance = 0.14)
+- Issues:
+  - Machine Learning Intro is missing (has identical embedding, distance = 0)
+  - Results are in wrong order (0.84 before 0.14)
+- Root cause: TBD - need to investigate ORDER BY + WITH + LIMIT interaction
 
 **Previously Fixed Issues Verified Working**:
 - Issue 1-9: All passing

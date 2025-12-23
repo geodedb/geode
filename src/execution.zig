@@ -2047,6 +2047,22 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                             if (val_a.Bool == val_b.Bool) break :blk 0;
                             break :blk if (val_a.Bool) 1 else -1;
                         }
+                        if (val_a == .Decimal and val_b == .Decimal) {
+                            // Compare decimals by normalizing to same scale
+                            const dec_a = val_a.Decimal;
+                            const dec_b = val_b.Decimal;
+                            // To compare a/10^sa vs b/10^sb, normalize by cross-multiplying
+                            // a * 10^sb vs b * 10^sa
+                            var pow_a: i128 = 1;
+                            var pow_b: i128 = 1;
+                            for (0..dec_b.scale) |_| pow_a *= 10;
+                            for (0..dec_a.scale) |_| pow_b *= 10;
+                            const norm_a = dec_a.coeff * pow_a;
+                            const norm_b = dec_b.coeff * pow_b;
+                            if (norm_a < norm_b) break :blk -1;
+                            if (norm_a > norm_b) break :blk 1;
+                            break :blk 0;
+                        }
                         // For other types, treat as equal
                         break :blk 0;
                     };
