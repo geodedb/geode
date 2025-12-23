@@ -81,6 +81,7 @@ pub const ExtValue = union(enum) {
     Temperature: heap.Temperature,
     Pressure: heap.Pressure,
     VectorF32: heap.VectorF32,
+    VectorI32: heap.VectorI32,
     Date: @import("types/datetime.zig").Date,
     Time: @import("types/datetime.zig").Time,
     TimestampTZ: @import("types/datetime.zig").TimestampTZ,
@@ -106,6 +107,7 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("pressure", &constructPressure);
     try registry.put("vector", &constructVector);
     try registry.put("vectorf32", &constructVectorF32);
+    try registry.put("vectori32", &constructVectorI32);
     try registry.put("decimal", &constructDecimal);
     try registry.put("jsonb", &constructJsonb);
 
@@ -769,6 +771,57 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     const result = eval_funcs.VectorF32(allocator, text) catch return error.InvalidFormat;
 
     return .{ .VectorF32 = result.VectorF32 };
+}
+
+// CANARY: REQ=REQ-VECTOR-I32-002; FEATURE="VectorI32"; ASPECT=ConstructorFunction; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-23
+fn constructVectorI32(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 1) return error.InvalidArgs;
+
+    // Handle array literal: VectorI32([1, 2, 3])
+    if (args[0] == .List) {
+        const list = args[0].List;
+        var data = try allocator.alloc(i32, list.len);
+
+        for (list, 0..) |item, i| {
+            data[i] = switch (item) {
+                .Int => |iv| @intCast(iv),
+                else => return error.TypeMismatch,
+            };
+        }
+
+        return .{ .VectorI32 = .{ .dim = @intCast(list.len), .data = data } };
+    }
+
+    // Handle string: VectorI32('[1, 2, 3]')
+    if (args[0] != .Str) return error.TypeMismatch;
+
+    const text = args[0].Str;
+
+    // Parse vector string format: "[1, 2, 3]" or "1,2,3"
+    var cleaned_str = text;
+
+    // Remove brackets if present
+    if (std.mem.startsWith(u8, cleaned_str, "[") and std.mem.endsWith(u8, cleaned_str, "]")) {
+        cleaned_str = cleaned_str[1 .. cleaned_str.len - 1];
+    }
+
+    // Split by comma and parse each element
+    var parts = std.mem.splitSequence(u8, cleaned_str, ",");
+    var elements = std.ArrayListUnmanaged(i32){};
+    defer elements.deinit(allocator);
+
+    while (parts.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " \t\n\r");
+        if (trimmed.len == 0) continue;
+        const value = std.fmt.parseInt(i32, trimmed, 10) catch return error.InvalidFormat;
+        try elements.append(allocator, value);
+    }
+
+    if (elements.items.len == 0) return error.InvalidFormat;
+    if (elements.items.len > 65535) return error.InvalidFormat;
+
+    const data = try allocator.dupe(i32, elements.items);
+    return .{ .VectorI32 = .{ .dim = @intCast(data.len), .data = data } };
 }
 
 fn constructJsonb(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {

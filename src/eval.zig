@@ -3079,6 +3079,7 @@ fn getExtTypeName(ext: @import("eval_extended.zig").ExtValue) []const u8 {
         .Time => "TIME",
         .TimestampTZ => "DATETIME",
         .VectorF32 => "VECTOR",
+        .VectorI32 => "VECTOR_I32",
         .IpAddr => "INET",
         .Subnet => "CIDR",
         .Mac => "MAC",

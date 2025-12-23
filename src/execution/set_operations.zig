@@ -9,6 +9,7 @@ const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const valuesEqual = execution.valuesEqual;
 const executeQueryNoLimit = execution.executeQueryNoLimit;
+const executeQueryNoLimitWithContext = execution.executeQueryNoLimitWithContext;
 const executeQueryWithBindings = execution.executeQueryWithBindings;
 const sortRows = execution.sortRows;
 
@@ -206,9 +207,11 @@ pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet) 
 }
 
 /// Execute UNION query with context
+// CANARY: REQ=REQ-MULTI-GRAPH-UNION-002; FEATURE="MultiGraphIsolation"; ASPECT=UnionExecution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// Fixed: UNION queries now properly propagate graph context to sub-queries
 pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQuery, context: ExecutionContext) !ExecutionResult {
-    // Execute first query (but don't apply its limit/offset yet)
-    var result = try executeQueryNoLimit(allocator, union_query.first);
+    // Execute first query with context (for graph isolation)
+    var result = try executeQueryNoLimitWithContext(allocator, union_query.first, context);
     errdefer result.deinit(allocator);
 
     // Extract variable bindings from first query (if any) to pass to subsequent UNION parts
@@ -227,7 +230,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 var part_result = if (shared_bindings) |bindings|
                     try executeQueryWithBindings(allocator, part.query, bindings)
                 else
-                    try executeQueryNoLimit(allocator, part.query);
+                    try executeQueryNoLimitWithContext(allocator, part.query, context);
                 defer part_result.deinit(allocator);
 
                 // Validate column count match
@@ -261,7 +264,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 var part_result = if (shared_bindings) |bindings|
                     try executeQueryWithBindings(allocator, part.query, bindings)
                 else
-                    try executeQueryNoLimit(allocator, part.query);
+                    try executeQueryNoLimitWithContext(allocator, part.query, context);
                 defer part_result.deinit(allocator);
 
                 // Validate column count match
@@ -330,7 +333,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
             var part_result = if (shared_bindings) |bindings|
                 try executeQueryWithBindings(allocator, part.query, bindings)
             else
-                try executeQueryNoLimit(allocator, part.query);
+                try executeQueryNoLimitWithContext(allocator, part.query, context);
             defer part_result.deinit(allocator);
 
             // Validate column count match
@@ -415,7 +418,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
             var part_result = if (shared_bindings) |bindings|
                 try executeQueryWithBindings(allocator, part.query, bindings)
             else
-                try executeQueryNoLimit(allocator, part.query);
+                try executeQueryNoLimitWithContext(allocator, part.query, context);
             defer part_result.deinit(allocator);
 
             // Validate column count match

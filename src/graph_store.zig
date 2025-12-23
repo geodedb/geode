@@ -621,6 +621,7 @@ pub const GraphStore = struct {
                             .Time => 18,
                             .TimestampTZ => 19,
                             .List => 20,
+                            .VectorI32 => 21,
                         };
                         _ = try file.write(&[1]u8{sub_type});
 
@@ -704,6 +705,18 @@ pub const GraphStore = struct {
                                     var f_buf: [4]u8 = undefined;
                                     std.mem.writeInt(u32, &f_buf, @bitCast(f), .little);
                                     _ = try file.write(&f_buf);
+                                }
+                            },
+                            .VectorI32 => |vec| {
+                                // Write dimension (u16)
+                                var dim_buf: [2]u8 = undefined;
+                                std.mem.writeInt(u16, &dim_buf, vec.dim, .little);
+                                _ = try file.write(&dim_buf);
+                                // Write each i32 value
+                                for (vec.data) |i| {
+                                    var i_buf: [4]u8 = undefined;
+                                    std.mem.writeInt(i32, &i_buf, i, .little);
+                                    _ = try file.write(&i_buf);
                                 }
                             },
                             else => {

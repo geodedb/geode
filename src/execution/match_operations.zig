@@ -999,9 +999,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     var right_props: ?[]ast.Property = null; // Properties required on right/target node
 
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PatternExtraction; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
+    // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-002; FEATURE="VariableLengthPaths"; ASPECT=DirectionExtraction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
     // Variable-length path pattern support
     var var_len_min: ?u32 = null;
     var var_len_max: ?u32 = null;
+    var rel_direction: u8 = 'r'; // 'r' for right (forward), 'l' for left (reverse), 'u' for undirected
     var chain_path_var: ?[]const u8 = null;
 
     // Get the first chain from the pattern
@@ -1026,6 +1028,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Check for variable-length path pattern
             var_len_min = hop.rel.min_len;
             var_len_max = hop.rel.max_len;
+
+            // Extract relationship direction for variable-length path traversal
+            rel_direction = switch (hop.rel.dir) {
+                .right => 'r',
+                .left => 'l',
+                .undirected => 'u',
+            };
 
             // Get right node info
             right_node_var = hop.right.name;
@@ -1447,7 +1456,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Expand variable-length paths from this starting node
-                    var paths = try expandVariableLengthPaths(allocator, store, start_node.id, min_len, max_len, rel_type);
+                    var paths = try expandVariableLengthPaths(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction);
                     defer {
                         for (paths.items) |*path| {
                             path.deinit(allocator);
@@ -1808,7 +1817,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     const min_len = var_len_min orelse 0;
                     const max_len = var_len_max;
 
-                    var paths = try expandVariableLengthPaths(allocator, store, left_node.id, min_len, max_len, rel_type);
+                    var paths = try expandVariableLengthPaths(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction);
                     defer {
                         for (paths.items) |*path| {
                             path.deinit(allocator);

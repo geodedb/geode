@@ -1326,8 +1326,10 @@ pub const VariableLengthPath = struct {
 };
 
 // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=BFSExpansion; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
+// CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
 // Expands variable-length paths using BFS
 // Returns all paths from start_node that match the length constraints and relationship type filter
+// rel_direction: 'r' for right (forward), 'l' for left (reverse), 'u' for undirected (both)
 pub fn expandVariableLengthPaths(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
@@ -1335,6 +1337,7 @@ pub fn expandVariableLengthPaths(
     min_len: u32,
     max_len: ?u32,
     rel_type: ?[]const u8,
+    rel_direction: u8,
 ) !std.ArrayList(VariableLengthPath) {
     var result_paths = std.ArrayList(VariableLengthPath).initCapacity(allocator, 0) catch unreachable;
 
@@ -1401,11 +1404,16 @@ pub fn expandVariableLengthPaths(
         }
         try visited_states.put(state_key, depth);
 
-        // Get all edges from this node
-        const edges = store.getEdgesFrom(last_node_id);
+        // Get edges based on direction
+        // For forward traversal (right): get edges FROM this node (outgoing)
+        // For reverse traversal (left): get edges TO this node (incoming)
+        // For undirected: get both
+        const outgoing_edges = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(last_node_id) else &[_]graph_store.Edge{};
+        const incoming_edges = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(last_node_id) else &[_]graph_store.Edge{};
         var expanded = false;
 
-        for (edges) |edge| {
+        // Process outgoing edges (forward direction)
+        for (outgoing_edges) |edge| {
             // Filter by relationship type if specified
             if (rel_type) |rt| {
                 if (!std.mem.eql(u8, edge.label, rt)) continue;
@@ -1425,6 +1433,52 @@ pub fn expandVariableLengthPaths(
             var new_path = try current_path.clone(allocator);
             try new_path.edges.append(allocator, edge.id);
             try new_path.nodes.append(allocator, edge.to_id);
+
+            const new_depth = depth + 1;
+
+            // Check if this path meets the minimum length requirement
+            const meets_min = new_depth >= min_len;
+            const reached_max = max_len != null and new_depth >= max_len.?;
+
+            // Add to results if it meets minimum length
+            if (meets_min) {
+                const result_path = try new_path.clone(allocator);
+                try result_paths.append(allocator, result_path);
+            }
+
+            // Continue expanding if we haven't reached max length
+            if (!reached_max) {
+                try queue.append(allocator, .{ .path = new_path, .depth = new_depth });
+            } else {
+                new_path.deinit(allocator);
+            }
+            expanded = true;
+        }
+
+        // Process incoming edges (reverse direction)
+        for (incoming_edges) |edge| {
+            // Filter by relationship type if specified
+            if (rel_type) |rt| {
+                if (!std.mem.eql(u8, edge.label, rt)) continue;
+            }
+
+            // For reverse traversal, next node is edge.from_id (source of the edge)
+            const next_node_id = edge.from_id;
+
+            // Check for cycles: don't revisit nodes already in path
+            var is_cycle = false;
+            for (current_path.nodes.items) |visited_node| {
+                if (visited_node == next_node_id) {
+                    is_cycle = true;
+                    break;
+                }
+            }
+            if (is_cycle) continue;
+
+            // Expand path with this edge
+            var new_path = try current_path.clone(allocator);
+            try new_path.edges.append(allocator, edge.id);
+            try new_path.nodes.append(allocator, next_node_id);
 
             const new_depth = depth + 1;
 
@@ -2029,6 +2083,14 @@ pub fn executeQueryNoLimit(allocator: std.mem.Allocator, q: ast.Query) !Executio
     // This is used for UNION parts where we need to execute the full query to populate bindings
     // M2: Use default context with global catalog for legacy code path
     const context = try getDefaultContext(allocator);
+    return executeQueryWithContext(allocator, q, context);
+}
+
+// CANARY: REQ=REQ-MULTI-GRAPH-UNION-001; FEATURE="MultiGraphIsolation"; ASPECT=UnionQueryContext; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// Execute query without limit but with context (for UNION parts that need graph isolation)
+pub fn executeQueryNoLimitWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+    // Execute full query with context (including session state with current graph)
+    // This is used for UNION parts where we need graph isolation
     return executeQueryWithContext(allocator, q, context);
 }
 

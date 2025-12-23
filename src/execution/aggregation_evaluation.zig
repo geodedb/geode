@@ -109,6 +109,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation over group
+                    // CANARY: REQ=REQ-AGGREGATION-SUM-001; FEATURE="SumAggregation"; ASPECT=DecimalSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -129,6 +130,17 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     } else if (val == .Float) {
                                         has_float = true;
                                         sum_float += val.Float;
+                                    } else if (val == .ExtValue) {
+                                        // Handle ExtValue which may contain Decimal values
+                                        const ext = val.ExtValue;
+                                        if (ext == .Decimal) {
+                                            has_float = true;
+                                            const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
+                                            sum_float += decimal_float;
+                                        } else if (ext == .Int) {
+                                            sum_int += ext.Int;
+                                            sum_float += @floatFromInt(ext.Int);
+                                        }
                                     }
                                 }
                             }
@@ -578,6 +590,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation
+                    // CANARY: REQ=REQ-AGGREGATION-SUM-002; FEATURE="SumAggregation"; ASPECT=DecimalSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -600,6 +613,17 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                     } else if (val == .Float) {
                                         has_float = true;
                                         sum_float += val.Float;
+                                    } else if (val == .ExtValue) {
+                                        // Handle ExtValue which may contain Decimal values
+                                        const ext = val.ExtValue;
+                                        if (ext == .Decimal) {
+                                            has_float = true;
+                                            const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
+                                            sum_float += decimal_float;
+                                        } else if (ext == .Int) {
+                                            sum_int += ext.Int;
+                                            sum_float += @floatFromInt(ext.Int);
+                                        }
                                     }
                                 }
                             }
@@ -613,6 +637,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
                     // AVG aggregation
+                    // CANARY: REQ=REQ-AGGREGATION-AVG-001; FEATURE="AvgAggregation"; ASPECT=DecimalSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -631,6 +656,20 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                     if (val == .Int) {
                                         sum += @floatFromInt(val.Int);
                                         count += 1;
+                                    } else if (val == .Float) {
+                                        sum += val.Float;
+                                        count += 1;
+                                    } else if (val == .ExtValue) {
+                                        // Handle ExtValue which may contain Decimal values
+                                        const ext = val.ExtValue;
+                                        if (ext == .Decimal) {
+                                            const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
+                                            sum += decimal_float;
+                                            count += 1;
+                                        } else if (ext == .Int) {
+                                            sum += @floatFromInt(ext.Int);
+                                            count += 1;
+                                        }
                                     }
                                 }
                             }

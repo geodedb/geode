@@ -27,6 +27,7 @@ pub const Value = union(enum) {
     Temperature: Temperature,
     Pressure: Pressure,
     VectorF32: VectorF32,
+    VectorI32: VectorI32,
 
     // Additional data types (tags >= 0x20)
     SmallInt: i16,
@@ -150,6 +151,12 @@ pub const PressureUnit = enum(u8) {
 pub const VectorF32 = struct {
     dim: u16,
     data: []const f32,
+};
+
+// CANARY: REQ=REQ-VECTOR-I32-001; FEATURE="VectorI32"; ASPECT=IntegerVectorType; STATUS=IMPL; OWNER=storage; UPDATED=2025-12-23
+pub const VectorI32 = struct {
+    dim: u16,
+    data: []const i32,
 };
 
 pub fn encodeValue(allocator: std.mem.Allocator, v: Value) ![]u8 {
@@ -282,6 +289,17 @@ pub fn encodeValue(allocator: std.mem.Allocator, v: Value) ![]u8 {
                 var ftmp: [4]u8 = undefined;
                 std.mem.writeInt(u32, &ftmp, @bitCast(f), .little);
                 try buf.appendSlice(&ftmp);
+            }
+        },
+        .VectorI32 => |vec| {
+            try buf.append(0x12); // TAG_VecI32
+            var tmp: [2]u8 = undefined;
+            std.mem.writeInt(u16, &tmp, vec.dim, .little);
+            try buf.appendSlice(&tmp);
+            for (vec.data) |i| {
+                var itmp: [4]u8 = undefined;
+                std.mem.writeInt(i32, &itmp, i, .little);
+                try buf.appendSlice(&itmp);
             }
         },
         // Additional data types (tags >= 0x20)
@@ -633,6 +651,18 @@ pub fn decodeValue(allocator: std.mem.Allocator, bytes: []const u8) !Value {
                 data[i] = @bitCast(bits);
             }
             return .{ .VectorF32 = .{ .dim = dim, .data = data } };
+        },
+        0x12 => { // TAG_VecI32
+            if (bytes.len < 1 + 2) return error.Underflow;
+            const dim = std.mem.readInt(u16, bytes[1..3][0..2], .little);
+            const data_size = @as(usize, dim) * 4;
+            if (bytes.len < 3 + data_size) return error.Underflow;
+            var data = try allocator.alloc(i32, dim);
+            var i: usize = 0;
+            while (i < dim) : (i += 1) {
+                data[i] = std.mem.readInt(i32, bytes[3 + i * 4 .. 3 + i * 4 + 4][0..4], .little);
+            }
+            return .{ .VectorI32 = .{ .dim = dim, .data = data } };
         },
         // Additional data types (tags >= 0x20)
         0x20 => { // SmallInt

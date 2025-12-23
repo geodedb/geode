@@ -828,10 +828,578 @@ DROP GRAPH IF EXISTS test_secondary;
 SHOW GRAPHS;
 
 -- ============================================================================
+-- SECTION 34: MULTI-GRAPH ISOLATION TESTS
+-- ============================================================================
+-- Extended multi-graph testing for data isolation verification
+
+-- 34.1 Create Isolation Test Graphs
+CREATE GRAPH IF NOT EXISTS isolation_graph_a;
+CREATE GRAPH IF NOT EXISTS isolation_graph_b;
+
+-- 34.2 Populate Graph A
+USE GRAPH isolation_graph_a;
+CREATE (a:IsolationNode {id: 1, graph: 'A', name: 'Alice'});
+CREATE (b:IsolationNode {id: 2, graph: 'A', name: 'Bob'});
+CREATE (a)-[:KNOWS_IN_A {since: 2020}]->(b);
+
+-- 34.3 Populate Graph B with Different Data
+USE GRAPH isolation_graph_b;
+CREATE (x:IsolationNode {id: 100, graph: 'B', name: 'Xavier'});
+CREATE (y:IsolationNode {id: 101, graph: 'B', name: 'Yolanda'});
+CREATE (z:IsolationNode {id: 102, graph: 'B', name: 'Zach'});
+CREATE (x)-[:KNOWS_IN_B]->(y)-[:KNOWS_IN_B]->(z);
+
+-- 34.4 Verify Graph B Only Has Graph B Data
+MATCH (n:IsolationNode) RETURN n.id, n.graph, n.name ORDER BY n.id;
+MATCH (n:IsolationNode) RETURN count(n) AS graph_b_count;
+
+-- 34.5 Switch Back to Graph A and Verify Isolation
+USE GRAPH isolation_graph_a;
+MATCH (n:IsolationNode) RETURN n.id, n.graph, n.name ORDER BY n.id;
+MATCH (n:IsolationNode) RETURN count(n) AS graph_a_count;
+
+-- 34.6 Test Cross-Graph Queries Dont Mix
+MATCH (n:IsolationNode) WHERE n.graph = 'B' RETURN count(n) AS should_be_zero;
+
+-- 34.7 Graph Isolation Cleanup
+USE GRAPH isolation_graph_a;
+MATCH (n) DETACH DELETE n;
+USE GRAPH isolation_graph_b;
+MATCH (n) DETACH DELETE n;
+DROP GRAPH IF EXISTS isolation_graph_a;
+DROP GRAPH IF EXISTS isolation_graph_b;
+
+-- ============================================================================
+-- SECTION 35: EXTENDED VECTOR OPERATIONS
+-- ============================================================================
+
+-- 35.1 Vector Type Variants
+RETURN vectorf32('[1.0, 2.0, 3.0, 4.0, 5.0]') AS vec_f32;
+RETURN vectori32('[1, 2, 3, 4, 5]') AS vec_i32;
+
+-- 35.2 High-Dimensional Vectors
+RETURN vectorf32('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6]') AS vec_16d;
+
+-- 35.3 Distance Metrics
+RETURN vector_l2(vectorf32('[1.0, 0.0, 0.0]'), vectorf32('[0.0, 1.0, 0.0]')) AS l2_dist_3d;
+RETURN vector_cosine(vectorf32('[1.0, 1.0, 0.0]'), vectorf32('[1.0, 0.0, 1.0]')) AS cosine_sim_3d;
+RETURN vector_dot(vectorf32('[1.0, 2.0, 3.0, 4.0]'), vectorf32('[4.0, 3.0, 2.0, 1.0]')) AS dot_product_4d;
+
+-- 35.4 Vector Storage in Nodes
+CREATE (d1:VectorDocument {
+    title: 'Machine Learning Intro',
+    embedding: vectorf32('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]'),
+    category: 'AI'
+});
+CREATE (d2:VectorDocument {
+    title: 'Deep Learning Guide',
+    embedding: vectorf32('[0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85]'),
+    category: 'AI'
+});
+CREATE (d3:VectorDocument {
+    title: 'Database Systems',
+    embedding: vectorf32('[0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]'),
+    category: 'DB'
+});
+
+-- 35.5 Vector Similarity Search
+MATCH (d:VectorDocument)
+WHERE vector_cosine(d.embedding, vectorf32('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]')) > 0.9
+RETURN d.title AS similar_doc;
+
+-- 35.6 Vector K-Nearest Neighbors Pattern
+MATCH (d:VectorDocument)
+WITH d, vector_l2(d.embedding, vectorf32('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]')) AS distance
+ORDER BY distance
+LIMIT 2
+RETURN d.title AS nearest_doc, distance;
+
+-- ============================================================================
+-- SECTION 36: RECURSIVE AND HIERARCHICAL PATTERNS
+-- ============================================================================
+
+-- 36.1 Create Family Tree Hierarchy
+CREATE (ggp:FamilyMember {id: 1, name: 'Great-Grandparent', generation: 1, birth_year: 1920});
+CREATE (gp1:FamilyMember {id: 2, name: 'Grandparent-1', generation: 2, birth_year: 1945});
+CREATE (gp2:FamilyMember {id: 3, name: 'Grandparent-2', generation: 2, birth_year: 1948});
+CREATE (p1:FamilyMember {id: 4, name: 'Parent-1', generation: 3, birth_year: 1970});
+CREATE (p2:FamilyMember {id: 5, name: 'Parent-2', generation: 3, birth_year: 1972});
+CREATE (p3:FamilyMember {id: 6, name: 'Parent-3', generation: 3, birth_year: 1975});
+CREATE (c1:FamilyMember {id: 7, name: 'Child-1', generation: 4, birth_year: 1995});
+CREATE (c2:FamilyMember {id: 8, name: 'Child-2', generation: 4, birth_year: 1998});
+CREATE (c3:FamilyMember {id: 9, name: 'Child-3', generation: 4, birth_year: 2000});
+CREATE (gc1:FamilyMember {id: 10, name: 'Grandchild-1', generation: 5, birth_year: 2020});
+
+-- 36.2 Create Family Relationships
+MATCH (ggp:FamilyMember {id: 1}), (gp1:FamilyMember {id: 2}), (gp2:FamilyMember {id: 3})
+CREATE (ggp)-[:PARENT_OF]->(gp1), (ggp)-[:PARENT_OF]->(gp2);
+
+MATCH (gp1:FamilyMember {id: 2}), (p1:FamilyMember {id: 4}), (p2:FamilyMember {id: 5})
+CREATE (gp1)-[:PARENT_OF]->(p1), (gp1)-[:PARENT_OF]->(p2);
+
+MATCH (gp2:FamilyMember {id: 3}), (p3:FamilyMember {id: 6})
+CREATE (gp2)-[:PARENT_OF]->(p3);
+
+MATCH (p1:FamilyMember {id: 4}), (c1:FamilyMember {id: 7}), (c2:FamilyMember {id: 8})
+CREATE (p1)-[:PARENT_OF]->(c1), (p1)-[:PARENT_OF]->(c2);
+
+MATCH (p2:FamilyMember {id: 5}), (c3:FamilyMember {id: 9})
+CREATE (p2)-[:PARENT_OF]->(c3);
+
+MATCH (c1:FamilyMember {id: 7}), (gc1:FamilyMember {id: 10})
+CREATE (c1)-[:PARENT_OF]->(gc1);
+
+-- 36.3 Variable-Length Ancestor Query
+MATCH (ancestor:FamilyMember {name: 'Great-Grandparent'})-[:PARENT_OF*]->(descendant:FamilyMember)
+RETURN count(DISTINCT descendant) AS total_descendants;
+
+-- 36.4 Specific Depth Traversal
+MATCH (ancestor:FamilyMember {name: 'Great-Grandparent'})-[:PARENT_OF*2]->(grandchild:FamilyMember)
+RETURN grandchild.name AS two_generations_down ORDER BY grandchild.name;
+
+-- 36.5 Path with Range
+MATCH path = (start:FamilyMember {name: 'Great-Grandparent'})-[:PARENT_OF*2..4]->(end:FamilyMember)
+RETURN end.name AS reachable, length(path) AS hops ORDER BY hops, reachable;
+
+-- 36.6 Reverse Ancestry Query
+MATCH (child:FamilyMember {name: 'Grandchild-1'})<-[:PARENT_OF*]-(ancestor:FamilyMember)
+RETURN ancestor.name AS ancestor_name, ancestor.generation ORDER BY ancestor.generation;
+
+-- ============================================================================
+-- SECTION 37: COMPLEX PATTERN MATCHING
+-- ============================================================================
+
+-- 37.1 Create Social Network for Pattern Tests
+CREATE (u1:SocialUser {name: 'Alice', age: 28, city: 'NYC'});
+CREATE (u2:SocialUser {name: 'Bob', age: 32, city: 'LA'});
+CREATE (u3:SocialUser {name: 'Carol', age: 25, city: 'NYC'});
+CREATE (u4:SocialUser {name: 'Dave', age: 35, city: 'Chicago'});
+CREATE (u5:SocialUser {name: 'Eve', age: 29, city: 'LA'});
+CREATE (u6:SocialUser {name: 'Frank', age: 31, city: 'NYC'});
+
+MATCH (u1:SocialUser {name: 'Alice'}), (u2:SocialUser {name: 'Bob'}),
+      (u3:SocialUser {name: 'Carol'}), (u4:SocialUser {name: 'Dave'}),
+      (u5:SocialUser {name: 'Eve'}), (u6:SocialUser {name: 'Frank'})
+CREATE (u1)-[:FRIEND {since: 2019}]->(u2),
+       (u1)-[:FRIEND {since: 2020}]->(u3),
+       (u2)-[:FRIEND {since: 2018}]->(u4),
+       (u3)-[:FRIEND {since: 2021}]->(u4),
+       (u4)-[:FRIEND {since: 2020}]->(u5),
+       (u5)-[:FRIEND {since: 2019}]->(u6),
+       (u6)-[:FRIEND {since: 2022}]->(u1);
+
+-- 37.2 Undirected Relationship Match
+MATCH (a:SocialUser)-[:FRIEND]-(b:SocialUser)
+WHERE a.name = 'Alice'
+RETURN DISTINCT b.name AS friends_of_alice ORDER BY b.name;
+
+-- 37.3 Friends of Friends
+MATCH (a:SocialUser {name: 'Alice'})-[:FRIEND]->()-[:FRIEND]->(fof:SocialUser)
+WHERE fof <> a
+RETURN DISTINCT fof.name AS friends_of_friends ORDER BY fof.name;
+
+-- 37.4 Triangle Detection (Mutual Friends)
+MATCH (a:SocialUser)-[:FRIEND]->(b:SocialUser)-[:FRIEND]->(c:SocialUser)-[:FRIEND]->(a)
+WHERE id(a) < id(b) AND id(b) < id(c)
+RETURN a.name AS user_a, b.name AS user_b, c.name AS user_c;
+
+-- 37.5 Cycle Detection
+MATCH path = (n:SocialUser)-[:FRIEND*3..6]->(n)
+WHERE n.name = 'Alice'
+RETURN length(path) AS cycle_length, [node IN nodes(path) | node.name] AS cycle_path LIMIT 3;
+
+-- 37.6 Degree Centrality (Connection Count)
+MATCH (n:SocialUser)
+OPTIONAL MATCH (n)-[r:FRIEND]-()
+WITH n, count(r) AS connections
+RETURN n.name AS user, connections ORDER BY connections DESC;
+
+-- 37.7 Common Neighbors
+MATCH (a:SocialUser {name: 'Alice'})-[:FRIEND]-(common)-[:FRIEND]-(b:SocialUser {name: 'Dave'})
+RETURN common.name AS common_friend;
+
+-- ============================================================================
+-- SECTION 38: ADVANCED TRANSACTION WORKFLOWS
+-- ============================================================================
+
+-- 38.1 Transaction with Multiple Creates
+START TRANSACTION;
+CREATE (t1:TransactionTest {id: 1, status: 'created'});
+CREATE (t2:TransactionTest {id: 2, status: 'created'});
+CREATE (t1)-[:LINKED]->(t2);
+MATCH (t:TransactionTest) RETURN count(t) AS created_in_tx;
+COMMIT;
+
+-- 38.2 Verify Transaction Committed
+MATCH (t:TransactionTest) RETURN t.id, t.status ORDER BY t.id;
+
+-- 38.3 Transaction Rollback Test
+START TRANSACTION;
+CREATE (t:TransactionRollback {id: 999, status: 'will_rollback'});
+MATCH (t:TransactionRollback) RETURN count(t) AS count_before_rollback;
+ROLLBACK;
+
+-- 38.4 Verify Rollback
+MATCH (t:TransactionRollback {id: 999}) RETURN count(t) AS should_be_zero;
+
+-- 38.5 Transaction with Updates
+START TRANSACTION;
+MATCH (t:TransactionTest {id: 1}) SET t.status = 'updated', t.updated_at = timestamp();
+MATCH (t:TransactionTest {id: 2}) SET t.status = 'updated', t.updated_at = timestamp();
+COMMIT;
+
+-- 38.6 Verify Updates
+MATCH (t:TransactionTest) RETURN t.id, t.status ORDER BY t.id;
+
+-- ============================================================================
+-- SECTION 39: NETWORK AND SPECIALIZED TYPES
+-- ============================================================================
+
+-- 39.1 IPv4 Addresses
+RETURN '192.168.1.1' AS ipv4_address;
+RETURN '10.0.0.0' AS private_network;
+RETURN '255.255.255.0' AS subnet_mask;
+
+-- 39.2 IPv6 Addresses
+RETURN '::1' AS ipv6_loopback;
+RETURN '2001:0db8:85a3:0000:0000:8a2e:0370:7334' AS ipv6_full;
+RETURN 'fe80::1' AS ipv6_link_local;
+
+-- 39.3 Network Nodes with IPs
+CREATE (s1:Server {name: 'web-server-1', ip: '192.168.1.100', port: 80, status: 'active'});
+CREATE (s2:Server {name: 'db-server-1', ip: '192.168.1.50', port: 5432, status: 'active'});
+CREATE (s3:Server {name: 'cache-server-1', ip: '192.168.1.75', port: 6379, status: 'active'});
+
+-- 39.4 Network Topology
+MATCH (web:Server {name: 'web-server-1'}), (db:Server {name: 'db-server-1'}), (cache:Server {name: 'cache-server-1'})
+CREATE (web)-[:CONNECTS_TO {protocol: 'TCP', latency_ms: 2}]->(db),
+       (web)-[:CONNECTS_TO {protocol: 'TCP', latency_ms: 1}]->(cache);
+
+-- 39.5 Query Network Topology
+MATCH (s1:Server)-[c:CONNECTS_TO]->(s2:Server)
+RETURN s1.name AS source, s2.name AS target, c.protocol, c.latency_ms ORDER BY c.latency_ms;
+
+-- 39.6 MAC Address Storage
+RETURN '00:1a:2b:3c:4d:5e' AS mac_address;
+CREATE (nic:NetworkInterface {name: 'eth0', mac: '00:1a:2b:3c:4d:5e', speed_mbps: 1000});
+
+-- 39.7 CIDR Notation
+RETURN '192.168.0.0/24' AS network_cidr;
+RETURN '10.0.0.0/8' AS class_a_private;
+
+-- ============================================================================
+-- SECTION 40: UNION AND SET OPERATIONS ADVANCED
+-- ============================================================================
+
+-- 40.1 UNION with Different Sources
+MATCH (u:SocialUser) WHERE u.city = 'NYC' RETURN u.name AS person, 'NYC' AS location
+UNION
+MATCH (u:SocialUser) WHERE u.city = 'LA' RETURN u.name AS person, 'LA' AS location;
+
+-- 40.2 UNION ALL (Keep Duplicates)
+MATCH (u:SocialUser) WHERE u.age > 30 RETURN u.name AS mature_user
+UNION ALL
+MATCH (u:SocialUser) WHERE u.city = 'NYC' RETURN u.name AS mature_user;
+
+-- 40.3 Complex UNION with Aggregation
+MATCH (f:FamilyMember) WHERE f.generation <= 2 RETURN f.name AS elder, f.birth_year AS year
+UNION
+MATCH (f:FamilyMember) WHERE f.generation >= 4 RETURN f.name AS elder, f.birth_year AS year;
+
+-- ============================================================================
+-- SECTION 41: COMPLEX FILTERING AND PREDICATES
+-- ============================================================================
+
+-- 41.1 Range Queries
+MATCH (u:SocialUser) WHERE u.age >= 25 AND u.age <= 30 RETURN u.name, u.age ORDER BY u.age;
+
+-- 41.2 OR Conditions
+MATCH (u:SocialUser) WHERE u.city = 'NYC' OR u.city = 'LA' RETURN u.name, u.city ORDER BY u.city, u.name;
+
+-- 41.3 NOT Conditions
+MATCH (u:SocialUser) WHERE NOT u.city = 'NYC' RETURN u.name, u.city ORDER BY u.name;
+
+-- 41.4 IN List Predicate
+MATCH (u:SocialUser) WHERE u.city IN ['NYC', 'Chicago'] RETURN u.name, u.city ORDER BY u.name;
+
+-- 41.5 String Predicates
+MATCH (u:SocialUser) WHERE u.name STARTS WITH 'A' RETURN u.name;
+MATCH (u:SocialUser) WHERE u.name ENDS WITH 'e' RETURN u.name;
+MATCH (u:SocialUser) WHERE u.name CONTAINS 'ar' RETURN u.name;
+
+-- 41.6 Complex Combined Predicates
+MATCH (u:SocialUser)
+WHERE (u.age > 28 AND u.city = 'NYC') OR (u.age < 30 AND u.city = 'LA')
+RETURN u.name, u.age, u.city ORDER BY u.name;
+
+-- ============================================================================
+-- SECTION 42: LOCATION/GEOGRAPHY HIERARCHY
+-- ============================================================================
+
+-- 42.1 Create Geographic Hierarchy
+CREATE (world:Location {name: 'World', type: 'Planet', population: 8000000000});
+CREATE (na:Location {name: 'North America', type: 'Continent', population: 579000000});
+CREATE (usa:Location {name: 'USA', type: 'Country', population: 331000000});
+CREATE (ca:Location {name: 'California', type: 'State', population: 39500000});
+CREATE (la:Location {name: 'Los Angeles', type: 'City', population: 3900000});
+CREATE (sf:Location {name: 'San Francisco', type: 'City', population: 880000});
+CREATE (tx:Location {name: 'Texas', type: 'State', population: 29100000});
+CREATE (houston:Location {name: 'Houston', type: 'City', population: 2300000});
+
+-- 42.2 Create Location Hierarchy Relationships
+MATCH (na:Location {name: 'North America'}), (world:Location {name: 'World'})
+CREATE (na)-[:LOCATED_IN]->(world);
+
+MATCH (usa:Location {name: 'USA'}), (na:Location {name: 'North America'})
+CREATE (usa)-[:LOCATED_IN]->(na);
+
+MATCH (ca:Location {name: 'California'}), (usa:Location {name: 'USA'})
+CREATE (ca)-[:LOCATED_IN]->(usa);
+
+MATCH (tx:Location {name: 'Texas'}), (usa:Location {name: 'USA'})
+CREATE (tx)-[:LOCATED_IN]->(usa);
+
+MATCH (la:Location {name: 'Los Angeles'}), (ca:Location {name: 'California'})
+CREATE (la)-[:LOCATED_IN]->(ca);
+
+MATCH (sf:Location {name: 'San Francisco'}), (ca:Location {name: 'California'})
+CREATE (sf)-[:LOCATED_IN]->(ca);
+
+MATCH (houston:Location {name: 'Houston'}), (tx:Location {name: 'Texas'})
+CREATE (houston)-[:LOCATED_IN]->(tx);
+
+-- 42.3 Query Location Hierarchy
+MATCH (city:Location {type: 'City'})-[:LOCATED_IN*]->(country:Location {type: 'Country'})
+RETURN city.name AS city, country.name AS country ORDER BY city.name;
+
+-- 42.4 Population Aggregation by Type
+MATCH (l:Location)
+RETURN l.type AS location_type, count(l) AS count
+GROUP BY l.type
+ORDER BY count DESC;
+
+-- 42.5 States with Total City Population
+MATCH (city:Location {type: 'City'})-[:LOCATED_IN]->(state:Location {type: 'State'})
+RETURN state.name AS state, sum(city.population) AS total_city_pop
+GROUP BY state.name
+ORDER BY total_city_pop DESC;
+
+-- ============================================================================
+-- SECTION 43: PRODUCT CATALOG HIERARCHY
+-- ============================================================================
+
+-- 43.1 Create Category Tree
+CREATE (root:Category {id: 1, name: 'Products', level: 0});
+CREATE (electronics:Category {id: 2, name: 'Electronics', level: 1});
+CREATE (clothing:Category {id: 3, name: 'Clothing', level: 1});
+CREATE (computers:Category {id: 4, name: 'Computers', level: 2});
+CREATE (phones:Category {id: 5, name: 'Phones', level: 2});
+CREATE (laptops:Category {id: 6, name: 'Laptops', level: 3});
+CREATE (desktops:Category {id: 7, name: 'Desktops', level: 3});
+CREATE (gaming:Category {id: 8, name: 'Gaming Laptops', level: 4});
+
+-- 43.2 Create Category Relationships
+MATCH (electronics:Category {name: 'Electronics'}), (root:Category {name: 'Products'})
+CREATE (electronics)-[:SUBCATEGORY_OF]->(root);
+
+MATCH (clothing:Category {name: 'Clothing'}), (root:Category {name: 'Products'})
+CREATE (clothing)-[:SUBCATEGORY_OF]->(root);
+
+MATCH (computers:Category {name: 'Computers'}), (electronics:Category {name: 'Electronics'})
+CREATE (computers)-[:SUBCATEGORY_OF]->(electronics);
+
+MATCH (phones:Category {name: 'Phones'}), (electronics:Category {name: 'Electronics'})
+CREATE (phones)-[:SUBCATEGORY_OF]->(electronics);
+
+MATCH (laptops:Category {name: 'Laptops'}), (computers:Category {name: 'Computers'})
+CREATE (laptops)-[:SUBCATEGORY_OF]->(computers);
+
+MATCH (desktops:Category {name: 'Desktops'}), (computers:Category {name: 'Computers'})
+CREATE (desktops)-[:SUBCATEGORY_OF]->(computers);
+
+MATCH (gaming:Category {name: 'Gaming Laptops'}), (laptops:Category {name: 'Laptops'})
+CREATE (gaming)-[:SUBCATEGORY_OF]->(laptops);
+
+-- 43.3 Query Category Depth
+MATCH path = (leaf:Category)-[:SUBCATEGORY_OF*]->(root:Category {name: 'Products'})
+RETURN leaf.name AS category, length(path) AS depth ORDER BY depth DESC, category;
+
+-- 43.4 All Subcategories of Electronics
+MATCH (sub:Category)-[:SUBCATEGORY_OF*]->(electronics:Category {name: 'Electronics'})
+RETURN sub.name AS subcategory, sub.level ORDER BY sub.level;
+
+-- ============================================================================
+-- SECTION 44: E-COMMERCE STRESS TEST
+-- ============================================================================
+
+-- 44.1 Create Customers
+CREATE (c1:Customer {id: 1, name: 'Alice', email: 'alice@example.com', tier: 'Gold', credit_limit: 10000});
+CREATE (c2:Customer {id: 2, name: 'Bob', email: 'bob@example.com', tier: 'Silver', credit_limit: 5000});
+CREATE (c3:Customer {id: 3, name: 'Charlie', email: 'charlie@example.com', tier: 'Gold', credit_limit: 8000});
+CREATE (c4:Customer {id: 4, name: 'Diana', email: 'diana@example.com', tier: 'Bronze', credit_limit: 2000});
+CREATE (c5:Customer {id: 5, name: 'Eve', email: 'eve@example.com', tier: 'Silver', credit_limit: 6000});
+
+-- 44.2 Create Products
+CREATE (p1:ProductItem {id: 1, name: 'Laptop Pro', price: 1299.99, stock: 50, rating: 4.5});
+CREATE (p2:ProductItem {id: 2, name: 'Wireless Mouse', price: 49.99, stock: 200, rating: 4.2});
+CREATE (p3:ProductItem {id: 3, name: 'Standing Desk', price: 499.99, stock: 30, rating: 4.7});
+CREATE (p4:ProductItem {id: 4, name: 'Ergonomic Chair', price: 349.99, stock: 75, rating: 4.3});
+CREATE (p5:ProductItem {id: 5, name: '4K Monitor', price: 599.99, stock: 40, rating: 4.6});
+
+-- 44.3 Create Orders
+CREATE (o1:Order {id: 1, total: 1349.98, status: 'Completed', date: '2024-01-15'});
+CREATE (o2:Order {id: 2, total: 599.99, status: 'Completed', date: '2024-01-20'});
+CREATE (o3:Order {id: 3, total: 849.98, status: 'Pending', date: '2024-02-01'});
+CREATE (o4:Order {id: 4, total: 49.99, status: 'Shipped', date: '2024-02-10'});
+CREATE (o5:Order {id: 5, total: 1949.97, status: 'Completed', date: '2024-02-15'});
+
+-- 44.4 Create Order Relationships
+MATCH (c1:Customer {id: 1}), (o1:Order {id: 1})
+CREATE (c1)-[:PLACED]->(o1);
+
+MATCH (c2:Customer {id: 2}), (o2:Order {id: 2})
+CREATE (c2)-[:PLACED]->(o2);
+
+MATCH (c1:Customer {id: 1}), (o3:Order {id: 3})
+CREATE (c1)-[:PLACED]->(o3);
+
+MATCH (c3:Customer {id: 3}), (o4:Order {id: 4})
+CREATE (c3)-[:PLACED]->(o4);
+
+MATCH (c5:Customer {id: 5}), (o5:Order {id: 5})
+CREATE (c5)-[:PLACED]->(o5);
+
+-- 44.5 Create Order Items
+MATCH (o1:Order {id: 1}), (p1:ProductItem {id: 1}), (p2:ProductItem {id: 2})
+CREATE (o1)-[:CONTAINS {quantity: 1}]->(p1), (o1)-[:CONTAINS {quantity: 1}]->(p2);
+
+MATCH (o2:Order {id: 2}), (p5:ProductItem {id: 5})
+CREATE (o2)-[:CONTAINS {quantity: 1}]->(p5);
+
+MATCH (o3:Order {id: 3}), (p3:ProductItem {id: 3}), (p4:ProductItem {id: 4})
+CREATE (o3)-[:CONTAINS {quantity: 1}]->(p3), (o3)-[:CONTAINS {quantity: 1}]->(p4);
+
+-- 44.6 Complex E-Commerce Queries
+-- High-value customers with their orders
+MATCH (c:Customer)-[:PLACED]->(o:Order)
+WHERE c.credit_limit > 5000
+RETURN c.name AS customer, c.tier, o.total AS order_total ORDER BY o.total DESC;
+
+-- Products frequently ordered together
+MATCH (p1:ProductItem)<-[:CONTAINS]-(o:Order)-[:CONTAINS]->(p2:ProductItem)
+WHERE id(p1) < id(p2)
+RETURN p1.name AS product1, p2.name AS product2, count(o) AS ordered_together
+GROUP BY p1.name, p2.name
+ORDER BY ordered_together DESC;
+
+-- Customer purchase summary
+MATCH (c:Customer)-[:PLACED]->(o:Order)
+RETURN c.name, c.tier, count(o) AS order_count, sum(o.total) AS total_spent
+GROUP BY c.name, c.tier
+ORDER BY total_spent DESC;
+
+-- ============================================================================
+-- SECTION 45: PERFORMANCE STRESS TESTS
+-- ============================================================================
+
+-- 45.1 Bulk Node Creation
+CREATE (b1:BulkNode {id: 1, batch: 'stress', value: 'test_1'}),
+       (b2:BulkNode {id: 2, batch: 'stress', value: 'test_2'}),
+       (b3:BulkNode {id: 3, batch: 'stress', value: 'test_3'}),
+       (b4:BulkNode {id: 4, batch: 'stress', value: 'test_4'}),
+       (b5:BulkNode {id: 5, batch: 'stress', value: 'test_5'}),
+       (b6:BulkNode {id: 6, batch: 'stress', value: 'test_6'}),
+       (b7:BulkNode {id: 7, batch: 'stress', value: 'test_7'}),
+       (b8:BulkNode {id: 8, batch: 'stress', value: 'test_8'}),
+       (b9:BulkNode {id: 9, batch: 'stress', value: 'test_9'}),
+       (b10:BulkNode {id: 10, batch: 'stress', value: 'test_10'});
+
+-- 45.2 Bulk Relationship Creation
+MATCH (a:BulkNode), (b:BulkNode) WHERE a.id < b.id AND a.id <= 5
+CREATE (a)-[:BULK_LINK {weight: a.id + b.id}]->(b);
+
+-- 45.3 Complex Multi-Hop Query
+MATCH (start:BulkNode {id: 1})-[:BULK_LINK*1..3]->(end:BulkNode)
+RETURN DISTINCT end.id AS reachable_node ORDER BY reachable_node;
+
+-- 45.4 Aggregation Stress Test
+MATCH (b:BulkNode)
+RETURN count(b) AS total_nodes, min(b.id) AS min_id, max(b.id) AS max_id, avg(b.id) AS avg_id;
+
+-- 45.5 Large Path Query
+MATCH path = (a:BulkNode)-[:BULK_LINK*]->(b:BulkNode)
+WHERE length(path) >= 2
+RETURN a.id AS start, b.id AS end, length(path) AS hops
+ORDER BY hops DESC LIMIT 10;
+
+-- ============================================================================
+-- SECTION 46: FINAL COMPREHENSIVE CLEANUP
+-- ============================================================================
+
+-- 46.1 Delete All Vector Documents
+MATCH (d:VectorDocument) DETACH DELETE d;
+
+-- 46.2 Delete Family Tree
+MATCH (f:FamilyMember) DETACH DELETE f;
+
+-- 46.3 Delete Social Network
+MATCH (u:SocialUser) DETACH DELETE u;
+
+-- 46.4 Delete Transaction Test Data
+MATCH (t:TransactionTest) DETACH DELETE t;
+MATCH (t:TransactionRollback) DETACH DELETE t;
+
+-- 46.5 Delete Network Infrastructure
+MATCH (s:Server) DETACH DELETE s;
+MATCH (n:NetworkInterface) DETACH DELETE n;
+
+-- 46.6 Delete Location Hierarchy
+MATCH (l:Location) DETACH DELETE l;
+
+-- 46.7 Delete Category Tree
+MATCH (c:Category) DETACH DELETE c;
+
+-- 46.8 Delete E-Commerce Data
+MATCH (c:Customer) DETACH DELETE c;
+MATCH (p:ProductItem) DETACH DELETE p;
+MATCH (o:Order) DETACH DELETE o;
+
+-- 46.9 Delete Bulk Nodes
+MATCH (b:BulkNode) DETACH DELETE b;
+
+-- 46.10 Final Node Count Verification
+MATCH (n) RETURN count(n) AS remaining_nodes;
+
+-- 46.11 Drop All Test Graphs
+DROP GRAPH IF EXISTS test_comprehensive;
+DROP GRAPH IF EXISTS test_secondary;
+
+-- 46.12 Final Graphs List
+SHOW GRAPHS;
+
+-- ============================================================================
 -- END OF COMPREHENSIVE TEST FILE
 -- ============================================================================
--- Total Sections: 33
+-- Total Sections: 46
 -- Coverage: Expressions, Functions, Graph Management, Pattern Matching,
 --           Data Modification, Aggregation, Subqueries, Indexes, Constraints,
---           Transactions, Error Handling, Vectors, Paths, and more.
+--           Transactions, Error Handling, Vectors, Paths, Multi-Graph Isolation,
+--           Recursive Patterns, Network Types, Set Operations, Complex Filtering,
+--           Geographic/Location Hierarchies, Product Catalogs, E-Commerce Workflows,
+--           and Performance Stress Tests.
+--
+-- New sections added (34-46):
+--   - Multi-Graph Isolation Tests
+--   - Extended Vector Operations
+--   - Recursive and Hierarchical Patterns
+--   - Complex Pattern Matching
+--   - Advanced Transaction Workflows
+--   - Network and Specialized Types
+--   - Union and Set Operations Advanced
+--   - Complex Filtering and Predicates
+--   - Location/Geography Hierarchy
+--   - Product Catalog Hierarchy
+--   - E-Commerce Stress Test
+--   - Performance Stress Tests
+--   - Final Comprehensive Cleanup
 -- ============================================================================
