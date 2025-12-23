@@ -2857,46 +2857,53 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
                 allocator.free(result.rows);
 
-                // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
-                // Now evaluate RETURN expressions using WITH result as environment (with disambiguation for duplicates)
-                const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
+                // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
+                // If there's no RETURN clause (query chaining case like MATCH...WITH...MATCH),
+                // return WITH result directly to preserve bindings for the next query in the chain
+                if (q.ret.items.len == 0) {
+                    result = with_result;
+                } else {
+                    // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
+                    // Now evaluate RETURN expressions using WITH result as environment (with disambiguation for duplicates)
+                    const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
 
-                // Evaluate RETURN items using WITH result as environment
-                var return_rows = try allocator.alloc([]Value, with_result.rows.len);
-                for (with_result.rows, 0..) |with_row, row_idx| {
-                    var return_row = try allocator.alloc(Value, q.ret.items.len);
+                    // Evaluate RETURN items using WITH result as environment
+                    var return_rows = try allocator.alloc([]Value, with_result.rows.len);
+                    for (with_result.rows, 0..) |with_row, row_idx| {
+                        var return_row = try allocator.alloc(Value, q.ret.items.len);
 
-                    // Create environment from WITH result columns and this row's values
-                    const env = Env{
-                        .names = with_result.columns,
-                        .values = with_row,
-                        .param_names = param_names,
-                        .param_values = param_values,
-                        .allocator = allocator,
-                    };
+                        // Create environment from WITH result columns and this row's values
+                        const env = Env{
+                            .names = with_result.columns,
+                            .values = with_row,
+                            .param_names = param_names,
+                            .param_values = param_values,
+                            .allocator = allocator,
+                        };
 
-                    for (q.ret.items, 0..) |item, i| {
-                        return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                        for (q.ret.items, 0..) |item, i| {
+                            return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                        }
+
+                        return_rows[row_idx] = return_row;
                     }
 
-                    return_rows[row_idx] = return_row;
-                }
+                    // Clean up WITH result
+                    for (with_result.columns) |col| {
+                        allocator.free(col);
+                    }
+                    allocator.free(with_result.columns);
+                    for (with_result.rows) |r| {
+                        allocator.free(r);
+                    }
+                    allocator.free(with_result.rows);
 
-                // Clean up WITH result
-                for (with_result.columns) |col| {
-                    allocator.free(col);
+                    result = ExecutionResult{
+                        .columns = return_columns,
+                        .rows = return_rows,
+                        .flags = with_result.flags,
+                    };
                 }
-                allocator.free(with_result.columns);
-                for (with_result.rows) |r| {
-                    allocator.free(r);
-                }
-                allocator.free(with_result.rows);
-
-                result = ExecutionResult{
-                    .columns = return_columns,
-                    .rows = return_rows,
-                    .flags = with_result.flags,
-                };
             }
 
             // Apply DISTINCT deduplication if requested
@@ -3247,39 +3254,47 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
                         allocator.free(intermediate_result.rows);
 
-                        // Evaluate RETURN expressions using WITH result
-                        const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
-                        var return_rows = try allocator.alloc([]Value, with_result.rows.len);
-                        for (with_result.rows, 0..) |with_row, row_idx| {
-                            var return_row = try allocator.alloc(Value, q.ret.items.len);
-                            const return_env = Env{
-                                .names = with_result.columns,
-                                .values = with_row,
-                                .param_names = param_names,
-                                .param_values = param_values,
-                                .allocator = allocator,
-                            };
-                            for (q.ret.items, 0..) |item, i| {
-                                return_row[i] = eval.evalExpr(allocator, item.expr, return_env) catch Value{ .Null = {} };
+                        // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
+                        // If there's no RETURN clause (query chaining case like MATCH...WITH...MATCH),
+                        // return WITH result directly to preserve bindings for the next query in the chain
+                        var result: ExecutionResult = undefined;
+                        if (q.ret.items.len == 0) {
+                            result = with_result;
+                        } else {
+                            // Evaluate RETURN expressions using WITH result
+                            const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
+                            var return_rows = try allocator.alloc([]Value, with_result.rows.len);
+                            for (with_result.rows, 0..) |with_row, row_idx| {
+                                var return_row = try allocator.alloc(Value, q.ret.items.len);
+                                const return_env = Env{
+                                    .names = with_result.columns,
+                                    .values = with_row,
+                                    .param_names = param_names,
+                                    .param_values = param_values,
+                                    .allocator = allocator,
+                                };
+                                for (q.ret.items, 0..) |item, i| {
+                                    return_row[i] = eval.evalExpr(allocator, item.expr, return_env) catch Value{ .Null = {} };
+                                }
+                                return_rows[row_idx] = return_row;
                             }
-                            return_rows[row_idx] = return_row;
-                        }
 
-                        // Clean up WITH result
-                        for (with_result.columns) |col| {
-                            allocator.free(col);
-                        }
-                        allocator.free(with_result.columns);
-                        for (with_result.rows) |r| {
-                            allocator.free(r);
-                        }
-                        allocator.free(with_result.rows);
+                            // Clean up WITH result
+                            for (with_result.columns) |col| {
+                                allocator.free(col);
+                            }
+                            allocator.free(with_result.columns);
+                            for (with_result.rows) |r| {
+                                allocator.free(r);
+                            }
+                            allocator.free(with_result.rows);
 
-                        var result = ExecutionResult{
-                            .columns = return_columns,
-                            .rows = return_rows,
-                            .flags = with_result.flags,
-                        };
+                            result = ExecutionResult{
+                                .columns = return_columns,
+                                .rows = return_rows,
+                                .flags = with_result.flags,
+                            };
+                        }
 
                         // Apply ORDER BY if present
                         if (q.order_by) |order| {
@@ -4316,46 +4331,53 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
             allocator.free(result.rows);
 
-            // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
-            // Now evaluate RETURN expressions using WITH result as environment (with disambiguation for duplicates)
-            const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
+            // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
+            // If there's no RETURN clause (query chaining case like MATCH...WITH...MATCH),
+            // return WITH result directly to preserve bindings for the next query in the chain
+            if (q.ret.items.len == 0) {
+                result = with_result;
+            } else {
+                // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
+                // Now evaluate RETURN expressions using WITH result as environment (with disambiguation for duplicates)
+                const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
 
-            // Evaluate RETURN items using WITH result as environment
-            var return_rows = try allocator.alloc([]Value, with_result.rows.len);
-            for (with_result.rows, 0..) |with_row, row_idx| {
-                var return_row = try allocator.alloc(Value, q.ret.items.len);
+                // Evaluate RETURN items using WITH result as environment
+                var return_rows = try allocator.alloc([]Value, with_result.rows.len);
+                for (with_result.rows, 0..) |with_row, row_idx| {
+                    var return_row = try allocator.alloc(Value, q.ret.items.len);
 
-                // Create environment from WITH result columns and this row's values
-                const env = Env{
-                    .allocator = allocator,
-                    .names = with_result.columns,
-                    .values = with_row,
-                    .param_names = param_names,
-                    .param_values = param_values,
-                };
+                    // Create environment from WITH result columns and this row's values
+                    const env = Env{
+                        .allocator = allocator,
+                        .names = with_result.columns,
+                        .values = with_row,
+                        .param_names = param_names,
+                        .param_values = param_values,
+                    };
 
-                for (q.ret.items, 0..) |item, i| {
-                    return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    for (q.ret.items, 0..) |item, i| {
+                        return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    }
+
+                    return_rows[row_idx] = return_row;
                 }
 
-                return_rows[row_idx] = return_row;
-            }
+                // Clean up WITH result
+                for (with_result.columns) |col| {
+                    allocator.free(col);
+                }
+                allocator.free(with_result.columns);
+                for (with_result.rows) |row| {
+                    allocator.free(row);
+                }
+                allocator.free(with_result.rows);
 
-            // Clean up WITH result
-            for (with_result.columns) |col| {
-                allocator.free(col);
+                result = ExecutionResult{
+                    .columns = return_columns,
+                    .rows = return_rows,
+                    .flags = with_result.flags,
+                };
             }
-            allocator.free(with_result.columns);
-            for (with_result.rows) |row| {
-                allocator.free(row);
-            }
-            allocator.free(with_result.rows);
-
-            result = ExecutionResult{
-                .columns = return_columns,
-                .rows = return_rows,
-                .flags = with_result.flags,
-            };
         }
 
         // Apply DISTINCT deduplication if requested

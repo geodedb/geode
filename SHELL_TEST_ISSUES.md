@@ -2,13 +2,20 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`).
 
-## Current Test Run: 2025-12-23 (Eighth Run)
+## Current Test Run: 2025-12-23 (Ninth Run)
 
 **Statements Executed**: 441
 **Explicit Errors**: 3 (2 expected, 1 syntax limitation)
-**Status**: ✅ ALL CRITICAL ISSUES RESOLVED
+**Status**: ✅ ALL ISSUES FIXED
 
-**Previous Finding (FIXED)**: Variable-length path patterns (`*`) were ignoring direction constraints. Fixed in parser.zig by updating the direction from the trailing connector (`->`, `<-`, or `-`) after parsing the relationship pattern.
+### Recent Fixes
+- **Issue 6 (WITH + LIMIT chain)**: FIXED - Query chaining now preserves all WITH bindings
+- **Issue 14 (Variable-length path direction)**: FIXED - Parser now uses trailing connector direction
+- **Issue 1 (Transaction ROLLBACK)**: Verified working - `should_be_zero = 0`
+- **Issue 2 (Multiple pattern PURCHASED)**: Verified working - returns Widget/Gadget
+- **Issue 3 (Friends of Friends)**: Verified working - returns Dave
+- **Issue 11 (shortestPath hops)**: Verified working - shows `hops = 2`
+- **Issue 8 (Cleanup)**: Verified working - `remaining_nodes = 0`
 
 ## Issue Summary
 
@@ -19,7 +26,7 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 | 3 | Friends of Friends returns 0 rows | P1 | FIXED | 37.3 |
 | 4 | OPTIONAL MATCH count(r) returns NULL | P1 | FIXED | 37.6 |
 | 5 | Variable-length path returns wrong categories | P1 | FIXED | 43.4 |
-| 6 | WITH + LIMIT chain returns too many rows | P1 | FIXED | 23.3 |
+| 6 | WITH + LIMIT chain returns wrong rows | P2 | FIXED | 23.3 |
 | 7 | ORDER BY not sorting correctly | P2 | FIXED | 34.5 |
 | 8 | Cleanup leaves 2 remaining nodes | P3 | FIXED | 46.10 |
 | 9 | SET statement returns NULL for node | P2 | FIXED | 38.5 |
@@ -187,11 +194,11 @@ RETURN sub.name AS subcategory, sub.level ORDER BY sub.level;
 
 ---
 
-## Issue 6: WITH + LIMIT Chain Returns Too Many Rows (P1)
+## Issue 6: WITH + LIMIT Chain Returns Wrong Rows (P2) - FIXED
 
 **Section**: 23.3
 
-**Symptom**: LIMIT in WITH clause is not being respected in subsequent MATCH.
+**Symptom**: LIMIT in WITH clause was being respected, but only the first row from WITH results was being passed to the next MATCH query in the chain.
 
 **Test Query**:
 ```gql
@@ -201,11 +208,42 @@ MATCH (p)-[:WORKS_FOR]->(c:Company)
 RETURN p.name, c.name;
 ```
 
-**Expected**: At most 3 people (the 3 oldest) with their companies
+**Expected**: 2 rows (Charlie/DataInc, Alice/TechCorp) - the 2 oldest people who have companies
 
-**Actual**: 12 rows (all people × companies, ignoring LIMIT)
+**Actual (Before Fix)**: 1 row (Charlie/DataInc only)
 
-**Root Cause**: WITH clause LIMIT not being applied before the second MATCH.
+**Root Cause**: In `src/execution/match_operations.zig`, when a query had a WITH clause but no RETURN clause (query chaining case like `MATCH...WITH...MATCH`), the code was:
+1. Executing `executeWithClauseWithGroupBy` correctly → returns 3 rows
+2. Then attempting to evaluate RETURN expressions with `q.ret.items` (which was empty since there's no RETURN clause)
+3. This created `return_rows` with 3 entries, but each row was empty (0 columns)
+4. The WITH result columns and rows were then freed
+5. When `executeQueryChain` iterated over the result, the empty columns meant no bindings were passed to the next query
+
+**Fix** (in `src/execution/match_operations.zig`):
+Added check for `q.ret.items.len == 0` before processing RETURN expressions. When there's no RETURN clause, the code now returns `with_result` directly to preserve bindings for the next query in the chain.
+
+```zig
+// CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
+// If there's no RETURN clause (query chaining case like MATCH...WITH...MATCH),
+// return WITH result directly to preserve bindings for the next query in the chain
+if (q.ret.items.len == 0) {
+    result = with_result;
+} else {
+    // ... existing RETURN expression evaluation ...
+}
+```
+
+**Affected Locations**: Fix applied in 3 places in match_operations.zig:
+- Line ~2863 (multi-chain aggregation path)
+- Line ~3261 (variable-length path with bound variables)
+- Line ~4322 (main single-chain execution path)
+
+**Status**: FIXED (2025-12-23)
+
+**Verification**: Query now returns all matching rows from the chain:
+- Charlie → DataInc
+- Alice → TechCorp
+(Bob has no WORKS_FOR relationship, so correctly excluded)
 
 ---
 
