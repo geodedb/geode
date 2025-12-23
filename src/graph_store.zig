@@ -1122,6 +1122,220 @@ pub const GraphStore = struct {
             try self.edges.put(edge_id, edge);
         }
     }
+
+    // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // NoSave versions of mutation methods for transaction undo/redo operations
+    // These methods modify the store without triggering auto-save to disk
+
+    /// Delete a node without saving (used during rollback)
+    pub fn deleteNodeNoSave(self: *GraphStore, node_id: u64) void {
+        if (self.nodes.getPtr(node_id)) |node| {
+            // Free labels
+            for (node.labels) |label| {
+                self.allocator.free(label);
+            }
+            self.allocator.free(node.labels);
+            // Free graph_name
+            if (node.graph_name.len > 0) {
+                self.allocator.free(node.graph_name);
+            }
+            // Free properties
+            var prop_iter = node.properties.iterator();
+            while (prop_iter.next()) |prop_entry| {
+                self.allocator.free(prop_entry.key_ptr.*);
+                switch (prop_entry.value_ptr.*) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+            node.properties.deinit();
+        }
+        _ = self.nodes.remove(node_id);
+    }
+
+    /// Delete an edge without saving (used during rollback)
+    pub fn deleteEdgeNoSave(self: *GraphStore, edge_id: u64) void {
+        if (self.edges.getPtr(edge_id)) |edge| {
+            // Free label
+            self.allocator.free(edge.label);
+            // Free graph_name
+            if (edge.graph_name.len > 0) {
+                self.allocator.free(edge.graph_name);
+            }
+            // Free properties
+            var prop_iter = edge.properties.iterator();
+            while (prop_iter.next()) |prop_entry| {
+                self.allocator.free(prop_entry.key_ptr.*);
+                switch (prop_entry.value_ptr.*) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+            edge.properties.deinit();
+        }
+        _ = self.edges.remove(edge_id);
+    }
+
+    /// Set a node property without saving (used during rollback)
+    pub fn setNodePropertyNoSave(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
+        if (self.nodes.getPtr(node_id)) |node| {
+            const value_copy = switch (value) {
+                .String => |s| PropertyValue{ .String = try self.allocator.dupe(u8, s) },
+                else => value,
+            };
+
+            const result = try node.properties.getOrPut(key);
+            if (!result.found_existing) {
+                result.key_ptr.* = try self.allocator.dupe(u8, key);
+            } else {
+                switch (result.value_ptr.*) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+            result.value_ptr.* = value_copy;
+        }
+    }
+
+    /// Remove a node property without saving (used during rollback)
+    pub fn removeNodePropertyNoSave(self: *GraphStore, node_id: u64, key: []const u8) void {
+        if (self.nodes.getPtr(node_id)) |node| {
+            if (node.properties.fetchRemove(key)) |kv| {
+                self.allocator.free(kv.key);
+                switch (kv.value) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+        }
+    }
+
+    /// Set an edge property without saving (used during rollback)
+    pub fn setEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        if (self.edges.getPtr(edge_id)) |edge| {
+            const value_copy = switch (value) {
+                .String => |s| PropertyValue{ .String = try self.allocator.dupe(u8, s) },
+                else => value,
+            };
+
+            const result = try edge.properties.getOrPut(key);
+            if (!result.found_existing) {
+                result.key_ptr.* = try self.allocator.dupe(u8, key);
+            } else {
+                switch (result.value_ptr.*) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+            result.value_ptr.* = value_copy;
+        }
+    }
+
+    /// Remove an edge property without saving (used during rollback)
+    pub fn removeEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8) void {
+        if (self.edges.getPtr(edge_id)) |edge| {
+            if (edge.properties.fetchRemove(key)) |kv| {
+                self.allocator.free(kv.key);
+                switch (kv.value) {
+                    .String => |s| self.allocator.free(s),
+                    else => {},
+                }
+            }
+        }
+    }
+
+    /// Restore a deleted node without saving (used during rollback)
+    pub fn restoreNodeNoSave(self: *GraphStore, node_id: u64, labels: []const []const u8, graph_name: []const u8) !void {
+        // Copy labels
+        const labels_copy = try self.allocator.alloc([]const u8, labels.len);
+        for (labels, 0..) |label, i| {
+            labels_copy[i] = try self.allocator.dupe(u8, label);
+        }
+
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+
+        const node = Node{
+            .id = node_id,
+            .labels = labels_copy,
+            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .graph_name = graph_name_copy,
+        };
+
+        try self.nodes.put(node_id, node);
+    }
+
+    /// Restore a deleted edge without saving (used during rollback)
+    pub fn restoreEdgeNoSave(self: *GraphStore, edge_id: u64, from_id: u64, to_id: u64, label: []const u8, graph_name: []const u8) !void {
+        const label_copy = try self.allocator.dupe(u8, label);
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+
+        const edge = Edge{
+            .id = edge_id,
+            .from_id = from_id,
+            .to_id = to_id,
+            .label = label_copy,
+            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .graph_name = graph_name_copy,
+        };
+
+        try self.edges.put(edge_id, edge);
+    }
+
+    /// Add a label to a node without saving (used during rollback)
+    pub fn addNodeLabelNoSave(self: *GraphStore, node_id: u64, label: []const u8) !void {
+        if (self.nodes.getPtr(node_id)) |node| {
+            // Check if label already exists
+            for (node.labels) |existing_label| {
+                if (std.mem.eql(u8, existing_label, label)) {
+                    return;
+                }
+            }
+
+            const label_copy = try self.allocator.dupe(u8, label);
+            const new_labels = try self.allocator.alloc([]const u8, node.labels.len + 1);
+            @memcpy(new_labels[0..node.labels.len], node.labels);
+            new_labels[node.labels.len] = label_copy;
+
+            if (node.labels.len > 0) {
+                self.allocator.free(node.labels);
+            }
+
+            node.labels = new_labels;
+        }
+    }
+
+    /// Remove a label from a node without saving (used during rollback)
+    pub fn removeNodeLabelNoSave(self: *GraphStore, node_id: u64, label: []const u8) !void {
+        if (self.nodes.getPtr(node_id)) |node| {
+            var found_index: ?usize = null;
+            for (node.labels, 0..) |existing_label, i| {
+                if (std.mem.eql(u8, existing_label, label)) {
+                    found_index = i;
+                    break;
+                }
+            }
+
+            if (found_index) |index| {
+                // Free the label being removed
+                self.allocator.free(node.labels[index]);
+
+                const new_labels = try self.allocator.alloc([]const u8, node.labels.len - 1);
+                var new_index: usize = 0;
+                for (node.labels, 0..) |existing_label, i| {
+                    if (i != index) {
+                        new_labels[new_index] = existing_label;
+                        new_index += 1;
+                    }
+                }
+
+                if (node.labels.len > 0) {
+                    self.allocator.free(node.labels);
+                }
+
+                node.labels = new_labels;
+            }
+        }
+    }
 };
 
 // Global instance that persists across queries

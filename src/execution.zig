@@ -41,6 +41,8 @@ const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 const graph_storage_manager = @import("server/graph_storage_manager.zig");
+// CANARY: REQ=REQ-TXN-UNDO-004; FEATURE="TransactionUndoLog"; ASPECT=ExecutionImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+const txn_undo_log = @import("txn_undo_log.zig");
 
 // Re-export catalog functionality for backward compatibility
 // Using direct aliases instead of usingnamespace for Zig 0.15.1 compatibility
@@ -675,6 +677,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             var mut_context = context;
             mut_context.transaction_state = .Active;
 
+            // CANARY: REQ=REQ-TXN-UNDO-005; FEATURE="TransactionUndoLog"; ASPECT=BeginTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+            // Begin undo log for tracking changes during this transaction
+            const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+            undo_log.begin();
+
             // If transaction has a body, execute statements and auto-commit
             if (txn.body) |body| {
                 var last_result: ?ExecutionResult = null;
@@ -733,11 +740,14 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 // Mark transaction as committed
                 var mut_context = context;
                 mut_context.transaction_state = .Committed;
+
+                // CANARY: REQ=REQ-TXN-UNDO-006; FEATURE="TransactionUndoLog"; ASPECT=CommitTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                // Commit the undo log - clears the log and keeps changes
+                const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+                undo_log.commit();
+
                 break :blk "transaction committed";
             } else "no transaction active";
-
-            // In a full implementation, this would persist changes to disk
-            // For now, changes are immediately visible (auto-commit mode)
 
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
@@ -760,11 +770,17 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 // Mark transaction as rolled back
                 var mut_context = context;
                 mut_context.transaction_state = .RolledBack;
+
+                // CANARY: REQ=REQ-TXN-UNDO-007; FEATURE="TransactionUndoLog"; ASPECT=RollbackTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                // Rollback using the undo log - undoes all changes in reverse order
+                const store = graph_store.getGlobalStore(allocator);
+                const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+                undo_log.rollback(store) catch |err| {
+                    std.log.err("Failed to rollback transaction: {any}", .{err});
+                };
+
                 break :blk "transaction rolled back";
             } else "no transaction active";
-
-            // In a full implementation, this would revert uncommitted changes
-            // For now, changes are immediately visible (auto-commit mode)
 
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
@@ -1898,23 +1914,65 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
             try new_rows.append(allocator, new_row);
         }
     } else {
-        // No GROUP BY - transform each row individually
-        for (input_result.rows) |input_row| {
+        // CANARY: REQ=REQ-OPTIONAL-MATCH-COUNT-001; FEATURE="OptionalMatchCount"; ASPECT=WithAggregation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+        // No GROUP BY - check if there are aggregation expressions that need special handling
+        // If any WITH item contains an aggregation (count, sum, avg, min, max),
+        // we need to treat all rows as a single group instead of processing individually
+        var has_aggregation = false;
+        for (with_items) |item| {
+            if (return_and_sorting.isAggregationExpr(item.expr)) {
+                has_aggregation = true;
+                break;
+            }
+        }
+
+        if (has_aggregation) {
+            // Treat all input rows as a single group for aggregation
+            // This handles cases like: OPTIONAL MATCH (n)-[r]->() WITH count(r) AS cnt
+            // where r may be null from the optional match
             var new_row = try allocator.alloc(Value, with_items.len);
 
-            // Create environment from input row for expression evaluation
-            const env = Env{
+            // Use first row as base for non-aggregated expressions (if any rows exist)
+            const base_env = if (input_result.rows.len > 0) Env{
                 .names = input_result.columns,
-                .values = input_row,
+                .values = input_result.rows[0],
+                .allocator = allocator,
+            } else Env{
+                .names = input_result.columns,
+                .values = &.{},
                 .allocator = allocator,
             };
 
             for (with_items, 0..) |item, i| {
-                // Evaluate the WITH expression in the context of the current row
-                new_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                if (return_and_sorting.isAggregationExpr(item.expr)) {
+                    // Compute aggregation over all input rows
+                    new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns);
+                } else {
+                    // Non-aggregation expression: evaluate with first row
+                    new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                }
             }
 
             try new_rows.append(allocator, new_row);
+        } else {
+            // No aggregations - transform each row individually
+            for (input_result.rows) |input_row| {
+                var new_row = try allocator.alloc(Value, with_items.len);
+
+                // Create environment from input row for expression evaluation
+                const env = Env{
+                    .names = input_result.columns,
+                    .values = input_row,
+                    .allocator = allocator,
+                };
+
+                for (with_items, 0..) |item, i| {
+                    // Evaluate the WITH expression in the context of the current row
+                    new_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                }
+
+                try new_rows.append(allocator, new_row);
+            }
         }
     }
 

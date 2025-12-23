@@ -3194,6 +3194,48 @@ pub const Parser = struct {
                     starts_pattern = true;
                 }
                 if (!starts_pattern) {
+                    // Check for list comprehension: [x IN list WHERE cond | expr]
+                    // Detected by: identifier IN ...
+                    if (self.cur.kind == .identifier and self.peekKind() == .IN) {
+                        // Parse list comprehension
+                        const var_name = self.cur.lexeme;
+                        self.advance(); // consume identifier
+                        self.advance(); // consume IN
+
+                        // Parse source expression
+                        const source_expr = try self.parseOrExpr();
+                        const source_ptr = try self.arena.allocator().create(ast.Expr);
+                        source_ptr.* = source_expr;
+
+                        // Optional WHERE filter
+                        var filter_ptr: ?*ast.Expr = null;
+                        if (self.cur.kind == .WHERE) {
+                            self.advance();
+                            const filter_expr = try self.parseOrExpr();
+                            const fp = try self.arena.allocator().create(ast.Expr);
+                            fp.* = filter_expr;
+                            filter_ptr = fp;
+                        }
+
+                        // Optional | map expression
+                        var map_ptr: ?*ast.Expr = null;
+                        if (self.cur.kind == .bar) {
+                            self.advance();
+                            const map_expr = try self.parseOrExpr();
+                            const mp = try self.arena.allocator().create(ast.Expr);
+                            mp.* = map_expr;
+                            map_ptr = mp;
+                        }
+
+                        _ = try self.expect(.r_bracket);
+                        break :blk_pc .{ .ListComprehension = .{
+                            .variable = var_name,
+                            .source = source_ptr,
+                            .filter = filter_ptr,
+                            .map = map_ptr,
+                        } };
+                    }
+
                     // Try to parse as array literal: [expr, expr, ...]
                     var elements = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
 

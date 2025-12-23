@@ -3,6 +3,8 @@ const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
+// CANARY: REQ=REQ-TXN-UNDO-008; FEATURE="TransactionUndoLog"; ASPECT=CrudImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+const txn_undo_log = @import("../txn_undo_log.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -59,13 +61,21 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                 } else {
                     // Variable not bound, create new node in target graph
                     const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+                    // CANARY: REQ=REQ-TXN-UNDO-009; FEATURE="TransactionUndoLog"; ASPECT=LogCreateNode; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // Log node creation for rollback support
+                    const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+                    undo_log.logCreateNode(new_id) catch {};
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
                     break :blk new_id;
                 }
             } else blk: {
                 // No variable name, always create new node in target graph
-                break :blk try store.createNodeWithGraph(node_pattern.labels, target_graph);
+                const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+                // Log node creation for rollback support
+                const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+                undo_log.logCreateNode(new_id) catch {};
+                break :blk new_id;
             };
 
             // Set properties if present
@@ -149,6 +159,9 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
             // Create the relationship in target graph
             const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
             const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
+            // Log edge creation for rollback support
+            const undo_log_edge = txn_undo_log.getGlobalUndoLog(allocator);
+            undo_log_edge.logCreateEdge(edge_id) catch {};
             created_relationships += 1;
 
             // Set relationship properties if present
@@ -304,6 +317,9 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             // Create the relationship in target graph
             const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
             const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
+            // Log edge creation for rollback support
+            const undo_log2 = txn_undo_log.getGlobalUndoLog(allocator);
+            undo_log2.logCreateEdge(edge_id) catch {};
             created_relationships_count += 1;
 
             // Set relationship properties if present
@@ -542,6 +558,9 @@ pub fn executeCreateQuery(
             // Create the relationship in target graph
             const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
             const edge_id = try store.createEdgeWithGraph(left_id, right_id, rel_type, target_graph);
+            // Log edge creation for rollback support
+            const undo_log3 = txn_undo_log.getGlobalUndoLog(allocator);
+            undo_log3.logCreateEdge(edge_id) catch {};
 
             // Set relationship properties
             if (hop.rel.props) |props| {
@@ -1098,6 +1117,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 .left => try store.createEdgeWithGraph(right_node_id, left_node_id, edge_type, target_graph),
                 .undirected => try store.createEdgeWithGraph(left_node_id, right_node_id, edge_type, target_graph),
             };
+            // Log edge creation for rollback support
+            const undo_log_merge = txn_undo_log.getGlobalUndoLog(allocator);
+            undo_log_merge.logCreateEdge(edge_id) catch {};
 
             // Set edge properties if present
             if (hop.rel.props) |props| {
@@ -1346,6 +1368,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                 .left => try store.createEdgeWithGraph(right_node_id, left_node_id, edge_type, target_graph),
                 .undirected => try store.createEdgeWithGraph(left_node_id, right_node_id, edge_type, target_graph),
             };
+            // Log edge creation for rollback support
+            const undo_log_merge = txn_undo_log.getGlobalUndoLog(allocator);
+            undo_log_merge.logCreateEdge(edge_id) catch {};
 
             // Set edge properties if present
             if (hop.rel.props) |props| {

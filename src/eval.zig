@@ -1750,6 +1750,46 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
             break :blk_arr Value{ .List = list };
         },
+        // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-12-23
+        // Handle bare list comprehension: [x IN list WHERE condition | x.property]
+        .ListComprehension => |comp| blk_lc: {
+            const source_val = try evalExpr(allocator, comp.source.*, env);
+
+            const source_list = switch (source_val) {
+                .List => |l| l,
+                else => break :blk_lc Value{ .List = &[_]Value{} },
+            };
+
+            // Build result list
+            var result_list = std.ArrayListUnmanaged(Value){};
+
+            for (source_list) |item| {
+                // Create new environment with variable binding
+                const new_env = try env.withBinding(allocator, comp.variable, item);
+
+                // Check filter condition if present
+                if (comp.filter) |filter| {
+                    const filter_result = try evalExpr(allocator, filter.*, new_env);
+                    const matches = switch (filter_result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        else => false,
+                    };
+
+                    if (!matches) continue;
+                }
+
+                // Evaluate map expression if present, otherwise use the item itself
+                const result_val = if (comp.map) |map_expr|
+                    try evalExpr(allocator, map_expr.*, new_env)
+                else
+                    item;
+
+                try result_list.append(allocator, result_val);
+            }
+
+            break :blk_lc Value{ .List = try result_list.toOwnedSlice(allocator) };
+        },
         .BitLit => |b| Value{ .Str = b },
         .VarBitLit => |vb| Value{ .Str = vb },
         .Member => |member| blk_member: {

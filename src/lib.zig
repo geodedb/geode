@@ -115,6 +115,10 @@ pub const materialized_views = @import("query/materialized_views.zig");
 // Re-export test harness for CLI integration
 pub const test_harness = @import("test_harness.zig");
 
+// CANARY: REQ=REQ-TXN-UNDO-003; FEATURE="TransactionUndoLog"; ASPECT=LibExport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// Re-export transaction undo log for CLI rollback support
+pub const txn_undo_log = @import("txn_undo_log.zig");
+
 // CANARY: REQ=REQ-MULTI-GRAPH-030; FEATURE="MultiGraphIsolation"; ASPECT=GraphStorageManagerExport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
 // Re-export graph storage manager for multi-graph isolation support
 pub const graph_storage_manager = @import("server/graph_storage_manager.zig");

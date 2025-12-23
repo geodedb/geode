@@ -242,9 +242,17 @@ pub const Expr = union(enum) {
     PatternCount: *GraphPattern,
     // Map projection: n {.name, .age} - projects specified properties from an object
     MapProjection: struct { source: *Expr, fields: [][]const u8 },
-    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=AST; STATUS=IMPLEMENTED; OWNER=parser; UPDATED=2025-10-14
-    // List comprehension with optional filter: all(x IN list WHERE condition)
-    ListComprehension: struct { variable: []const u8, source: *Expr, filter: ?*Expr },
+    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=AST; STATUS=IMPLEMENTED; OWNER=parser; UPDATED=2025-12-23
+    // List comprehension with optional filter and map: [x IN list WHERE cond | x.name]
+    // or all(x IN list WHERE condition)
+    ListComprehension: struct {
+        variable: []const u8,
+        source: *Expr,
+        filter: ?*Expr,
+        // CANARY: REQ=REQ-LIST-COMP-MAP-001; FEATURE="ListComprehension"; ASPECT=MapExpression; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-23
+        // Map expression after |, e.g., [x IN list | x.name] - if null, returns the variable itself
+        map: ?*Expr = null,
+    },
 };
 
 pub const BinOp = enum { And, Or, Xor, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat, RegexMatch, RegexNotMatch };
