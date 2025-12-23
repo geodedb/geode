@@ -1839,10 +1839,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     if (!has_all_labels) continue;
                                 }
 
-                                // Count new variables
-                                var new_var_count: usize = 0;
+                                // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-002; FEATURE="MultiHopAnonymous"; ASPECT=GroupByPatterns; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                                // Count new variables - ALWAYS include right node even if anonymous
+                                var new_var_count: usize = 1; // Always include right node
                                 if (hop.rel.name != null) new_var_count += 1;
-                                if (hop.right.name != null) new_var_count += 1;
 
                                 var new_env_names_mh = try allocator.alloc([]const u8, binding.env_names.len + new_var_count);
                                 var new_env_values_mh = try allocator.alloc(Value, binding.env_values.len + new_var_count);
@@ -1859,10 +1859,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     new_env_values_mh[new_idx] = if (edge_ptr) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
                                     new_idx += 1;
                                 }
-                                if (hop.right.name) |right_name| {
-                                    new_env_names_mh[new_idx] = right_name;
-                                    new_env_values_mh[new_idx] = Value{ .Node = right_node_ptr };
-                                }
+                                // Always add right node (even anonymous) with synthetic name "_anon_right" for traversal
+                                new_env_names_mh[new_idx] = hop.right.name orelse "_anon_right";
+                                new_env_values_mh[new_idx] = Value{ .Node = right_node_ptr };
 
                                 try next_bindings_mh.append(allocator, MultiHopBinding{
                                     .env_names = new_env_names_mh,
@@ -4208,8 +4207,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     for (extended_env.values, 0..) |val, i| {
                         row[i] = val;
                     }
+                } else if (items.len == 0) {
+                    // CANARY: REQ=REQ-SET-RETURN-FIX-001; FEATURE="SetReturnFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // No RETURN clause - build row from matched variables for MATCH...SET queries
+                    row = try allocator.alloc(Value, extended_env.values.len);
+                    for (extended_env.values, 0..) |val, i| {
+                        row[i] = val;
+                    }
                 } else {
-                    // No WITH clause - evaluate RETURN expressions directly
+                    // Explicit RETURN clause - evaluate RETURN expressions directly
                     row = try allocator.alloc(Value, items.len);
                     for (items, 0..) |item, i| {
                         // Evaluate expression with node and inline LET bindings in environment

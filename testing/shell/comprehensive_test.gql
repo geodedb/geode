@@ -869,6 +869,9 @@ MATCH (n) DETACH DELETE n;
 DROP GRAPH IF EXISTS isolation_graph_a;
 DROP GRAPH IF EXISTS isolation_graph_b;
 
+-- Switch back to main test graph after isolation tests (fixes Issue 8 - cleanup leaving nodes)
+USE GRAPH test_comprehensive;
+
 -- ============================================================================
 -- SECTION 35: EXTENDED VECTOR OPERATIONS
 -- ============================================================================

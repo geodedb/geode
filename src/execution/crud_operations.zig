@@ -64,7 +64,7 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                     // CANARY: REQ=REQ-TXN-UNDO-009; FEATURE="TransactionUndoLog"; ASPECT=LogCreateNode; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
                     // Log node creation for rollback support
                     const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-                    undo_log.logCreateNode(new_id) catch {};
+                    undo_log.logCreateNode(new_id, current_graph) catch {};
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
                     break :blk new_id;
@@ -74,7 +74,7 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                 const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
                 // Log node creation for rollback support
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-                undo_log.logCreateNode(new_id) catch {};
+                undo_log.logCreateNode(new_id, current_graph) catch {};
                 break :blk new_id;
             };
 
@@ -161,7 +161,7 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
             const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
             // Log edge creation for rollback support
             const undo_log_edge = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log_edge.logCreateEdge(edge_id) catch {};
+            undo_log_edge.logCreateEdge(edge_id, current_graph) catch {};
             created_relationships += 1;
 
             // Set relationship properties if present
@@ -319,7 +319,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
             // Log edge creation for rollback support
             const undo_log2 = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log2.logCreateEdge(edge_id) catch {};
+            undo_log2.logCreateEdge(edge_id, current_graph) catch {};
             created_relationships_count += 1;
 
             // Set relationship properties if present
@@ -560,7 +560,7 @@ pub fn executeCreateQuery(
             const edge_id = try store.createEdgeWithGraph(left_id, right_id, rel_type, target_graph);
             // Log edge creation for rollback support
             const undo_log3 = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log3.logCreateEdge(edge_id) catch {};
+            undo_log3.logCreateEdge(edge_id, current_graph) catch {};
 
             // Set relationship properties
             if (hop.rel.props) |props| {
@@ -1119,7 +1119,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             };
             // Log edge creation for rollback support
             const undo_log_merge = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log_merge.logCreateEdge(edge_id) catch {};
+            undo_log_merge.logCreateEdge(edge_id, current_graph) catch {};
 
             // Set edge properties if present
             if (hop.rel.props) |props| {
@@ -1370,7 +1370,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             };
             // Log edge creation for rollback support
             const undo_log_merge = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log_merge.logCreateEdge(edge_id) catch {};
+            undo_log_merge.logCreateEdge(edge_id, current_graph) catch {};
 
             // Set edge properties if present
             if (hop.rel.props) |props| {

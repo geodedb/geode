@@ -1088,7 +1088,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 try graph.addNode(allocator, node_id, head_node.labels);
                 try created_nodes.append(allocator, node_id);
                 // Log node creation for rollback support
-                undo_log.logCreateNode(node_id) catch {};
+                undo_log.logCreateNode(node_id, state.current_graph) catch {};
 
                 // Set properties if any
                 if (head_node.props) |props| {
@@ -1106,7 +1106,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 try graph.addNode(allocator, left_node_id, hop.left.labels);
                 try created_nodes.append(allocator, left_node_id);
                 // Log left node creation for rollback support
-                undo_log.logCreateNode(left_node_id) catch {};
+                undo_log.logCreateNode(left_node_id, state.current_graph) catch {};
 
                 // Set properties if any
                 if (hop.left.props) |props| {
@@ -1121,7 +1121,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 try graph.addNode(allocator, right_node_id, hop.right.labels);
                 try created_nodes.append(allocator, right_node_id);
                 // Log right node creation for rollback support
-                undo_log.logCreateNode(right_node_id) catch {};
+                undo_log.logCreateNode(right_node_id, state.current_graph) catch {};
 
                 // Set properties if any
                 if (hop.right.props) |props| {
@@ -1139,7 +1139,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                     const edge_id = try graph.addEdge(allocator, source, target, edge_type);
                     try created_edges.append(allocator, edge_id);
                     // Log edge creation for rollback support
-                    undo_log.logCreateEdge(edge_id) catch {};
+                    undo_log.logCreateEdge(edge_id, state.current_graph) catch {};
 
                     // Set edge properties if any
                     if (hop.rel.props) |props| {

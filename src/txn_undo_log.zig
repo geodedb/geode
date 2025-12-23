@@ -2,6 +2,8 @@ const std = @import("std");
 const graph_store = @import("graph_store.zig");
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-014; FEATURE="TransactionUndoLog"; ASPECT=GraphCommonImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
 const graph_common = @import("types/graph_common.zig");
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-017; FEATURE="TransactionUndoLog"; ASPECT=MultiGraphRollback; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+const graph_storage_mgr = @import("server/graph_storage_manager.zig");
 
 // CANARY: REQ=REQ-TXN-UNDO-001; FEATURE="TransactionUndoLog"; ASPECT=UndoLogCore; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
 // Transaction undo log for proper ROLLBACK support in CLI mode
@@ -57,11 +59,13 @@ pub const UndoEntry = union(UndoOpType) {
     // On rollback: delete this node
     CreateNode: struct {
         node_id: u64,
+        graph_name: []const u8, // Graph where node was created
     },
 
     // On rollback: delete this edge
     CreateEdge: struct {
         edge_id: u64,
+        graph_name: []const u8, // Graph where edge was created
     },
 
     // On rollback: restore old value or remove property
@@ -189,7 +193,12 @@ pub const UndoLog = struct {
                 .RemoveNodeLabel => |e| {
                     self.allocator.free(e.label);
                 },
-                .CreateNode, .CreateEdge => {},
+                .CreateNode => |e| {
+                    self.allocator.free(e.graph_name);
+                },
+                .CreateEdge => |e| {
+                    self.allocator.free(e.graph_name);
+                },
             }
         }
         self.entries.clearRetainingCapacity();
@@ -206,15 +215,23 @@ pub const UndoLog = struct {
     }
 
     /// Log creation of a node (undo = delete it)
-    pub fn logCreateNode(self: *UndoLog, node_id: u64) !void {
+    pub fn logCreateNode(self: *UndoLog, node_id: u64, graph_name: ?[]const u8) !void {
         if (!self.active) return;
-        try self.entries.append(self.allocator, .{ .CreateNode = .{ .node_id = node_id } });
+        const gname = graph_name orelse "default";
+        try self.entries.append(self.allocator, .{ .CreateNode = .{
+            .node_id = node_id,
+            .graph_name = try self.allocator.dupe(u8, gname),
+        } });
     }
 
     /// Log creation of an edge (undo = delete it)
-    pub fn logCreateEdge(self: *UndoLog, edge_id: u64) !void {
+    pub fn logCreateEdge(self: *UndoLog, edge_id: u64, graph_name: ?[]const u8) !void {
         if (!self.active) return;
-        try self.entries.append(self.allocator, .{ .CreateEdge = .{ .edge_id = edge_id } });
+        const gname = graph_name orelse "default";
+        try self.entries.append(self.allocator, .{ .CreateEdge = .{
+            .edge_id = edge_id,
+            .graph_name = try self.allocator.dupe(u8, gname),
+        } });
     }
 
     /// Log setting a node property (undo = restore old value or remove)
@@ -347,7 +364,9 @@ pub const UndoLog = struct {
 
     // CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStorage; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
     /// Rollback all changes using GraphStorage (for server-side execution)
+    /// The storage parameter is kept for API compatibility but each entry looks up its own graph
     pub fn rollbackGraphStorage(self: *UndoLog, storage: *graph_common.GraphStorage) void {
+        _ = storage; // Kept for API compatibility, but we look up per-entry graph
         if (!self.active) return;
 
         // Process entries in reverse order
@@ -355,23 +374,27 @@ pub const UndoLog = struct {
         while (i > 0) {
             i -= 1;
             const entry = self.entries.items[i];
-            self.undoEntryGraphStorage(storage, entry);
+            self.undoEntryGraphStorage(entry);
         }
 
         self.clear();
         self.active = false;
     }
 
-    fn undoEntryGraphStorage(self: *UndoLog, storage: *graph_common.GraphStorage, entry: UndoEntry) void {
+    fn undoEntryGraphStorage(self: *UndoLog, entry: UndoEntry) void {
         _ = self;
         switch (entry) {
             .CreateNode => |e| {
-                // Undo: delete the created node
-                storage.removeNode(e.node_id);
+                // Look up the correct graph storage by name
+                if (graph_storage_mgr.getGraphStorageByName(e.graph_name)) |target_storage| {
+                    target_storage.removeNode(e.node_id);
+                }
             },
             .CreateEdge => |e| {
-                // Undo: delete the created edge
-                storage.removeEdge(e.edge_id);
+                // Look up the correct graph storage by name
+                if (graph_storage_mgr.getGraphStorageByName(e.graph_name)) |target_storage| {
+                    target_storage.removeEdge(e.edge_id);
+                }
             },
             // Other entry types are not commonly used in server mode for now
             // They can be implemented later if needed
@@ -502,11 +525,21 @@ fn writeUndoEntry(file: std.fs.File, entry: UndoEntry) !void {
             var buf: [8]u8 = undefined;
             std.mem.writeInt(u64, &buf, e.node_id, .little);
             _ = try file.write(&buf);
+            // Write graph_name length and content
+            var len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &len_buf, @intCast(e.graph_name.len), .little);
+            _ = try file.write(&len_buf);
+            _ = try file.write(e.graph_name);
         },
         .CreateEdge => |e| {
             var buf: [8]u8 = undefined;
             std.mem.writeInt(u64, &buf, e.edge_id, .little);
             _ = try file.write(&buf);
+            // Write graph_name length and content
+            var len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &len_buf, @intCast(e.graph_name.len), .little);
+            _ = try file.write(&len_buf);
+            _ = try file.write(e.graph_name);
         },
         else => {
             // For complex entries, we'll use a simplified approach
@@ -548,7 +581,6 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
 }
 
 fn readUndoEntry(allocator: std.mem.Allocator, file: std.fs.File) !?UndoEntry {
-    _ = allocator;
     var type_buf: [1]u8 = undefined;
     const bytes_read = try file.read(&type_buf);
     if (bytes_read == 0) return null;
@@ -560,13 +592,25 @@ fn readUndoEntry(allocator: std.mem.Allocator, file: std.fs.File) !?UndoEntry {
             var buf: [8]u8 = undefined;
             _ = try file.read(&buf);
             const node_id = std.mem.readInt(u64, &buf, .little);
-            return .{ .CreateNode = .{ .node_id = node_id } };
+            // Read graph_name length and content
+            var len_buf: [4]u8 = undefined;
+            _ = try file.read(&len_buf);
+            const name_len = std.mem.readInt(u32, &len_buf, .little);
+            const graph_name = try allocator.alloc(u8, name_len);
+            _ = try file.read(graph_name);
+            return .{ .CreateNode = .{ .node_id = node_id, .graph_name = graph_name } };
         },
         .CreateEdge => {
             var buf: [8]u8 = undefined;
             _ = try file.read(&buf);
             const edge_id = std.mem.readInt(u64, &buf, .little);
-            return .{ .CreateEdge = .{ .edge_id = edge_id } };
+            // Read graph_name length and content
+            var len_buf: [4]u8 = undefined;
+            _ = try file.read(&len_buf);
+            const name_len = std.mem.readInt(u32, &len_buf, .little);
+            const graph_name = try allocator.alloc(u8, name_len);
+            _ = try file.read(graph_name);
+            return .{ .CreateEdge = .{ .edge_id = edge_id, .graph_name = graph_name } };
         },
         else => {
             // For complex entries, skip for now
@@ -590,7 +634,7 @@ test "basic undo log operations" {
     defer log.deinit();
 
     // Not active, should not log
-    try log.logCreateNode(1);
+    try log.logCreateNode(1, null);
     try std.testing.expectEqual(@as(usize, 0), log.entries.items.len);
 
     // Begin transaction
@@ -598,9 +642,9 @@ test "basic undo log operations" {
     try std.testing.expect(log.active);
 
     // Log operations
-    try log.logCreateNode(1);
-    try log.logCreateNode(2);
-    try log.logCreateEdge(100);
+    try log.logCreateNode(1, null);
+    try log.logCreateNode(2, null);
+    try log.logCreateEdge(100, null);
 
     try std.testing.expectEqual(@as(usize, 3), log.entries.items.len);
 

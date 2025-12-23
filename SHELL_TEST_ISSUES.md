@@ -2,23 +2,25 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`).
 
-## Current Test Run: 2025-12-23
+## Current Test Run: 2025-12-23 (Second Run)
 
-**Statements Executed**: 438
+**Statements Executed**: 439
 **Explicit Errors**: 3 (2 expected, 1 syntax limitation)
 
 ## Issue Summary
 
 | # | Issue | Priority | Status | Section |
 |---|-------|----------|--------|---------|
-| 1 | Transaction ROLLBACK not undoing changes | P0 | FIXED | 38.4 |
-| 2 | Multiple pattern PURCHASED returns NULL | P0 | FIXED | 15.9 |
-| 3 | Friends of Friends returns 0 rows | P1 | FIXED | 37.3 |
-| 4 | OPTIONAL MATCH count(r) returns NULL | P1 | FIXED | 37.6 |
-| 5 | Variable-length path returns wrong categories | P1 | FIXED | 43.4 |
-| 6 | WITH + LIMIT chain returns too many rows | P1 | FIXED | 23.3 |
-| 7 | ORDER BY not sorting correctly | P2 | FIXED | 34.5 |
-| 8 | Cleanup leaves 2 remaining nodes | P3 | FIXED | 46.10 |
+| 1 | Transaction ROLLBACK not undoing changes | P0 | OPEN | 38.4 |
+| 2 | Multiple pattern PURCHASED returns NULL | P0 | VERIFIED | 15.9 |
+| 3 | Friends of Friends returns 0 rows | P1 | OPEN | 37.3 |
+| 4 | OPTIONAL MATCH count(r) returns NULL | P1 | VERIFIED | 37.6 |
+| 5 | Variable-length path returns wrong categories | P1 | VERIFIED | 43.4 |
+| 6 | WITH + LIMIT chain returns too many rows | P1 | VERIFIED | 23.3 |
+| 7 | ORDER BY not sorting correctly | P2 | VERIFIED | 34.5 |
+| 8 | Cleanup leaves 2 remaining nodes | P3 | OPEN | 46.10 |
+| 9 | SET statement returns NULL for node | P2 | OPEN | 38.5 |
+| 10 | List comprehension syntax not supported | P3 | WONTFIX | 37.5 |
 
 ---
 
@@ -253,6 +255,47 @@ MATCH (n) RETURN count(n) AS remaining_nodes;
 1. **Division by Zero** (Section 32.1): `Error: error: division by zero` - Correct error
 2. **Invalid Type Conversion** (Section 32.2): `Error: Type mismatch in expression` - Correct error
 
+## Issue 9: SET Statement Returns NULL for Node (P2)
+
+**Section**: 38.5
+
+**Symptom**: SET statement within transaction returns NULL for the node being updated.
+
+**Test Query**:
+```gql
+START TRANSACTION;
+MATCH (t:TransactionTest {id: 1}) SET t.status = 'updated', t.updated_at = timestamp();
+-- Returns: | t | null |
+COMMIT;
+```
+
+**Expected**: Should return the updated node with new properties
+
+**Actual**: Returns `null` for the node
+
+**Root Cause**: TBD - SET within transaction context not returning updated node.
+
+---
+
+## Issue 10: List Comprehension Syntax Not Supported (P3 - WONTFIX)
+
+**Section**: 37.5
+
+**Symptom**: Cypher-style list comprehension syntax causes syntax error.
+
+**Test Query**:
+```gql
+MATCH path = (n:SocialUser)-[:FRIEND*3..6]->(n)
+WHERE n.name = 'Alice'
+RETURN length(path) AS cycle_length, [node IN nodes(path) | node.name] AS cycle_path LIMIT 3;
+```
+
+**Error**: `Error: Syntax error in query`
+
+**Status**: WONTFIX - This is Cypher-specific syntax. GQL uses different constructs.
+
+---
+
 ## Known Limitations
 
 1. **List Comprehension Syntax** (Section 37.5): `[node IN nodes(path) | node.name]` - Cypher-style syntax not fully supported
@@ -261,9 +304,50 @@ MATCH (n) RETURN count(n) AS remaining_nodes;
 
 ## Investigation Log
 
-### 2025-12-23 Analysis - ALL ISSUES RESOLVED
+### 2025-12-23 Second Run Analysis
 
-**Issue 1 (P0): Transaction ROLLBACK** - FIXED
+**Issue 1 (P0): Transaction ROLLBACK** - FIX APPLIED (needs verification)
+- Previous fix didn't track which graph storage the node was created in
+- New fix: Added `graph_name` field to `CreateNode` and `CreateEdge` undo entries in `txn_undo_log.zig`
+- Modified `logCreateNode` and `logCreateEdge` to accept and store the graph name
+- Modified `rollbackGraphStorage` to look up the correct graph storage by name for each entry
+- Updated all call sites in `query_executor.zig` and `crud_operations.zig` to pass `state.current_graph`
+
+**Issue 2 (P0): Multiple Pattern NULL** - VERIFIED WORKING
+- Query now returns correct results: `Alice | TechCorp | Widget`, `Bob | TechCorp | Gadget`
+
+**Issue 3 (P1): Friends of Friends 0 rows** - FIX APPLIED (needs verification)
+- Root cause: First multi-hop implementation (for GROUP BY patterns) didn't add anonymous right nodes to environment
+- Fix: Modified line 1842+ in `match_operations.zig` to always allocate and store the right node
+- Now uses `new_var_count = 1` (always include right) and stores with `hop.right.name orelse "_anon_right"`
+
+**Issue 4 (P1): OPTIONAL MATCH count NULL** - VERIFIED WORKING
+- Query now returns proper connection counts
+
+**Issue 5 (P1): Variable-length path wrong categories** - VERIFIED WORKING
+- Returns correct subcategories of Electronics
+
+**Issue 6 (P1): WITH + LIMIT too many rows** - VERIFIED WORKING
+- WITH clause LIMIT is now respected
+
+**Issue 7 (P2): ORDER BY not sorting** - VERIFIED WORKING
+- ORDER BY n.id now sorts correctly
+
+**Issue 8 (P3): Cleanup 2 remaining** - FIX APPLIED (needs verification)
+- Root cause: After isolation graph cleanup (line 870), no USE GRAPH before section 35
+- VectorDocument nodes at lines 889-903 were created in wrong graph
+- Fix: Added `USE GRAPH test_comprehensive;` at line 873 after isolation graph DROP
+
+**Issue 9 (P2): SET returns NULL** - FIX APPLIED (needs verification)
+- Root cause: When no RETURN clause, row was allocated with 0 values but columns rebuilt from matched vars
+- Fix: Modified line 4210+ in `match_operations.zig` to build row from `extended_env.values` when `items.len == 0`
+- Added CANARY: REQ-SET-RETURN-FIX-001
+
+---
+
+### 2025-12-23 Analysis - Previous Fixes
+
+**Issue 1 (P0): Transaction ROLLBACK** - FIXED (but needs verification)
 - Root cause: Server-side CREATE wasn't logging to undo log
 - Fix: Added undo log integration in `query_executor.zig`, added `removeNode`/`removeEdge` in `graph_common.zig`, added `rollbackGraphStorage` in `txn_undo_log.zig`
 
@@ -271,7 +355,7 @@ MATCH (n) RETURN count(n) AS remaining_nodes;
 - Root cause: Only first chain processed in multi-chain MATCH
 - Fix: Added `executeMultiChainRelationshipMatch` function in `match_operations.zig` to join chains on shared variables
 
-**Issue 3 (P1): Friends of Friends 0 rows** - FIXED
+**Issue 3 (P1): Friends of Friends 0 rows** - FIXED (but needs verification)
 - Root cause: Anonymous intermediate nodes not added to bindings
 - Fix: Modified multi-hop pattern handling to add anonymous nodes with name `_anon_right`
 
@@ -291,7 +375,7 @@ MATCH (n) RETURN count(n) AS remaining_nodes;
 - Root cause: Member expressions (n.id) couldn't be resolved as column lookups
 - Fix: Added Member expression handling in `sortRows` to lookup by property name
 
-**Issue 8 (P3): Cleanup 2 remaining** - FIXED
+**Issue 8 (P3): Cleanup 2 remaining** - FIXED (but needs verification)
 - Root cause: After isolation graph tests, current graph is wrong for cleanup
 - Fix: Added `USE GRAPH test_comprehensive;` before final cleanup in test file
 
