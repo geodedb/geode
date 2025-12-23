@@ -5,6 +5,9 @@ const geode = @import("geode");
 const Value = geode.value_types.Value;
 // Use std.log for debug logging (respects log level)
 const log = std.log.scoped(.cli);
+
+// C library function for setting environment variables
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 // const auth = @import("../security/auth.zig"); // Not needed for current implementation
 // const hash = @import("../types/hash.zig"); // Not needed for current implementation
 const crypto = std.crypto;
@@ -1514,6 +1517,16 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         error.PathAlreadyExists => {},
         else => return err,
     };
+
+    // CANARY: REQ=REQ-MULTI-GRAPH-030; FEATURE="MultiGraphIsolation"; ASPECT=DataDirEnvVar; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // Set GEODE_DATA_DIR environment variable so catalog and graph storage use the correct directory
+    // This is critical for multi-graph isolation - without it, the catalog loads from /tmp
+    const data_dir_z = try allocator.dupeZ(u8, actual_data_dir);
+    defer allocator.free(data_dir_z);
+    const result = setenv("GEODE_DATA_DIR", data_dir_z.ptr, 1);
+    if (result != 0) {
+        std.debug.print("Warning: Failed to set GEODE_DATA_DIR environment variable\n", .{});
+    }
 
     // Set up certificate paths
     const actual_cert_path = cert_path orelse try std.fmt.allocPrint(allocator, "{s}/server.crt", .{actual_data_dir});

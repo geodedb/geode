@@ -658,6 +658,37 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     // This prevents overlapping with the prompt
     try stdout.writeAll("\r\n");
 
+    // CANARY: REQ=REQ-MULTI-GRAPH-031; FEATURE="MultiGraphIsolation"; ASPECT=DropGraphReset; STATUS=IMPL; OWNER=repl; UPDATED=2025-12-23
+    // Check if this is a DROP GRAPH statement that drops the current graph
+    // If so, reset current_graph to null (default graph) after execution
+    var dropped_current_graph = false;
+    if (state.current_graph) |current| {
+        // Check for DROP GRAPH <current_graph> pattern (case insensitive)
+        const upper_gql = blk: {
+            var upper = state.allocator.alloc(u8, gql.len) catch break :blk null;
+            for (gql, 0..) |c, i| {
+                upper[i] = std.ascii.toUpper(c);
+            }
+            break :blk upper;
+        };
+        defer if (upper_gql) |u| state.allocator.free(u);
+
+        if (upper_gql) |upper| {
+            if (std.mem.indexOf(u8, upper, "DROP GRAPH")) |drop_idx| {
+                // Extract the graph name after "DROP GRAPH "
+                const after_drop = gql[drop_idx + "DROP GRAPH ".len ..];
+                const trimmed = std.mem.trim(u8, after_drop, " \t\n\r;");
+                // Check if the dropped graph name matches current graph
+                if (std.mem.eql(u8, trimmed, current) or
+                    (trimmed.len > current.len and std.mem.startsWith(u8, trimmed, current) and
+                    (trimmed[current.len] == ' ' or trimmed[current.len] == ';')))
+                {
+                    dropped_current_graph = true;
+                }
+            }
+        }
+    }
+
     // Start timing the query execution
     var timer = try std.time.Timer.start();
 
@@ -678,6 +709,14 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
         {
             has_error = true;
         }
+    }
+
+    // If we dropped the current graph and execution succeeded, reset to default
+    if (dropped_current_graph and !has_error) {
+        if (state.current_graph) |old| {
+            state.allocator.free(old);
+        }
+        state.current_graph = null;
     }
 
     // Get response data from QUIC client (only if no error in schema)
