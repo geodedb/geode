@@ -1172,10 +1172,18 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
             const right_labels = hop.right.labels;
 
-            // Find matching edges from base node
-            const edges = store.getEdgesFrom(base_node.id);
+            // CANARY: REQ=REQ-GQL-OPTIONAL-UNDIRECTED-001; FEATURE="UndirectedOptionalMatch"; ASPECT=EdgeDirection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+            // Get edges based on relationship direction pattern:
+            // - .right (->): outgoing edges only
+            // - .left (<-): incoming edges only
+            // - .undirected (-): both outgoing and incoming edges
+            const rel_direction = hop.rel.dir;
+            const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(base_node.id) else &[_]graph_store.Edge{};
+            const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(base_node.id) else &[_]graph_store.Edge{};
 
-            for (edges) |edge| {
+            // Helper function to process edges - inline as a loop to avoid function pointer overhead
+            // Process outgoing edges (base_node -> other)
+            for (outgoing_edges) |edge| {
                 // Filter by relationship type
                 if (rel_type) |rt| {
                     if (!std.mem.eql(u8, edge.label, rt)) continue;
@@ -1216,6 +1224,61 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 // Edge variable (if named)
                 if (hop.rel.name != null) {
                     // Get edge pointer from store
+                    const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                    row[idx] = Value{ .Edge = edge_ptr };
+                    idx += 1;
+                }
+
+                // Right node variable (if named)
+                if (hop.right.name != null) {
+                    row[idx] = Value{ .Node = right_node };
+                    idx += 1;
+                }
+
+                try extended_rows.append(allocator, row);
+            }
+
+            // Process incoming edges (other -> base_node) for undirected/left patterns
+            for (incoming_edges) |edge| {
+                // Filter by relationship type
+                if (rel_type) |rt| {
+                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+                }
+
+                // For incoming edges, the "right" node is the source (from_id)
+                const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
+
+                // Filter by right node labels
+                if (right_labels.len > 0) {
+                    var has_all_labels = true;
+                    for (right_labels) |required_label| {
+                        var found = false;
+                        for (right_node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            has_all_labels = false;
+                            break;
+                        }
+                    }
+                    if (!has_all_labels) continue;
+                }
+
+                // Build row with all bindings: base_node, edge, right_node
+                var row = try allocator.alloc(Value, all_vars.items.len);
+                var idx: usize = 0;
+
+                // Base variable
+                if (required_var != null) {
+                    row[idx] = Value{ .Node = base_node };
+                    idx += 1;
+                }
+
+                // Edge variable (if named)
+                if (hop.rel.name != null) {
                     const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
                     row[idx] = Value{ .Edge = edge_ptr };
                     idx += 1;

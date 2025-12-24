@@ -292,8 +292,17 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     var bound_var_env_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
     defer bound_var_env_values.deinit(allocator);
 
+    // CANARY: REQ=REQ-GQL-CHAIN-FIX-002; FEATURE="BoundVariableShortcutFix"; ASPECT=HopsCheck; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+    // Check if all MATCH variables are bound AND there are no relationships to match.
+    // If there are relationship hops, we must execute the full match, not the shortcut.
     if (q.match.chains.len > 0) {
         for (q.match.chains) |chain| {
+            // First check: if there are any hops (relationships), we cannot use the shortcut
+            // regardless of whether the head node variable is bound.
+            if (chain.hops.len > 0) {
+                all_vars_bound = false;
+                break;
+            }
             if (chain.head) |node_pattern| {
                 if (node_pattern.name) |var_name| {
                     // Check if this variable is in the bindings
@@ -311,10 +320,6 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
                         break;
                     }
                 }
-            } else if (chain.hops.len > 0) {
-                // Has relationships, not a simple bound variable case
-                all_vars_bound = false;
-                break;
             }
         }
     }

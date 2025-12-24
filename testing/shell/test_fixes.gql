@@ -1,0 +1,61 @@
+-- Test fixes for Issue 6 and Issue 15
+-- Run with: ./zig-out/bin/geode shell --insecure, then /source ./testing/shell/test_fixes.gql
+
+-- Setup
+CREATE GRAPH IF NOT EXISTS test_fix;
+USE GRAPH test_fix;
+
+-- Clean any previous data
+MATCH (n) DETACH DELETE n;
+
+-- Create test data for Issue 6: WITH + LIMIT chain
+CREATE (p1:Person {name: 'Charlie', age: 35});
+CREATE (p2:Person {name: 'Eve', age: 32});
+CREATE (p3:Person {name: 'Alice', age: 30});
+CREATE (c1:Company {name: 'DataInc'});
+CREATE (c2:Company {name: 'TechCorp'});
+
+-- Create relationships
+MATCH (p:Person {name: 'Charlie'}), (c:Company {name: 'DataInc'})
+CREATE (p)-[:WORKS_FOR]->(c);
+
+MATCH (p:Person {name: 'Alice'}), (c:Company {name: 'TechCorp'})
+CREATE (p)-[:WORKS_FOR]->(c);
+
+-- TEST ISSUE 6: WITH + LIMIT chain
+-- Expected: 2 rows (Charlie/DataInc, Alice/TechCorp) - the 2 oldest people who have companies
+-- (Eve is 32 but has no company)
+MATCH (p:Person)
+WITH p ORDER BY p.age DESC LIMIT 3
+MATCH (p)-[:WORKS_FOR]->(c:Company)
+RETURN p.name AS person, c.name AS company;
+
+-- Create test data for Issue 15: Undirected OPTIONAL MATCH
+CREATE (u1:SocialUser {name: 'Alice'});
+CREATE (u2:SocialUser {name: 'Bob'});
+CREATE (u3:SocialUser {name: 'Carol'});
+CREATE (u4:SocialUser {name: 'Dave'});
+
+-- Create directed FRIEND relationships
+MATCH (a:SocialUser {name: 'Alice'}), (b:SocialUser {name: 'Bob'})
+CREATE (a)-[:FRIEND]->(b);
+
+MATCH (a:SocialUser {name: 'Alice'}), (c:SocialUser {name: 'Carol'})
+CREATE (a)-[:FRIEND]->(c);
+
+MATCH (b:SocialUser {name: 'Bob'}), (d:SocialUser {name: 'Dave'})
+CREATE (b)-[:FRIEND]->(d);
+
+MATCH (d:SocialUser {name: 'Dave'}), (a:SocialUser {name: 'Alice'})
+CREATE (d)-[:FRIEND]->(a);
+
+-- TEST ISSUE 15: Undirected OPTIONAL MATCH
+-- Expected: Alice=3 (Bob out, Carol out, Dave in), Bob=2 (Alice in, Dave out), Carol=1, Dave=2
+MATCH (n:SocialUser)
+OPTIONAL MATCH (n)-[r:FRIEND]-()
+WITH n, count(r) AS connections
+RETURN n.name AS user, connections ORDER BY connections DESC;
+
+-- Cleanup
+MATCH (n) DETACH DELETE n;
+DROP GRAPH IF EXISTS test_fix;
