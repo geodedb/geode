@@ -1459,6 +1459,17 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         intermediate_result.rows = try with_rows.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-GQL-WITH-CHAIN-004; FEATURE="ChainedWithClauseResult"; ASPECT=ReturnOptimization; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+    // Check if ret.items is the same as with_clause.items (pointer equality - happens with query chaining)
+    // In this case, WITH has already evaluated the expressions, so skip re-evaluation and use intermediate_result directly
+    if (q.with_clause) |with_clause| {
+        if (q.ret.items.ptr == with_clause.items.ptr and q.ret.items.len == with_clause.items.len) {
+            // Query chaining case: ret and with_clause share the same items
+            // intermediate_result already has the correct columns and values from WITH processing
+            return intermediate_result;
+        }
+    }
+
     // Evaluate RETURN expressions using matched/WITH variables as environment
     const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
     var return_rows = try allocator.alloc([]Value, intermediate_result.rows.len);
@@ -2917,10 +2928,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
                 allocator.free(result.rows);
 
-                // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
-                // If there's no RETURN clause (query chaining case like MATCH...WITH...MATCH),
+                // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+                // If there's no RETURN clause, or if ret.items shares pointer with with_clause.items (query chaining),
                 // return WITH result directly to preserve bindings for the next query in the chain
-                if (q.ret.items.len == 0) {
+                const same_items = q.ret.items.ptr == with_clause.items.ptr and q.ret.items.len == with_clause.items.len;
+                if (q.ret.items.len == 0 or same_items) {
                     result = with_result;
                 } else {
                     // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
@@ -3314,11 +3326,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
                         allocator.free(intermediate_result.rows);
 
-                        // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
-                        // If there's no RETURN clause (query chaining case like MATCH...WITH...MATCH),
+                        // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+                        // If there's no RETURN clause, or if ret.items shares pointer with with_clause.items (query chaining),
                         // return WITH result directly to preserve bindings for the next query in the chain
                         var result: ExecutionResult = undefined;
-                        if (q.ret.items.len == 0) {
+                        const same_items_mh = q.ret.items.ptr == with_clause.items.ptr and q.ret.items.len == with_clause.items.len;
+                        if (q.ret.items.len == 0 or same_items_mh) {
                             result = with_result;
                         } else {
                             // Evaluate RETURN expressions using WITH result
@@ -4391,10 +4404,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
             allocator.free(result.rows);
 
-            // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
-            // If there's no RETURN clause (query chaining case like MATCH...WITH...MATCH),
+            // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+            // If there's no RETURN clause, or if ret.items shares pointer with with_clause.items (query chaining),
             // return WITH result directly to preserve bindings for the next query in the chain
-            if (q.ret.items.len == 0) {
+            const same_items_varlen = q.ret.items.ptr == with_clause.items.ptr and q.ret.items.len == with_clause.items.len;
+            if (q.ret.items.len == 0 or same_items_varlen) {
                 result = with_result;
             } else {
                 // CANARY(query-chaining): Evaluate RETURN expressions using WITH result

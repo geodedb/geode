@@ -13,7 +13,7 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 | Issue | Status | Description |
 |-------|--------|-------------|
 | E1 | ✅ FIXED | Graph context switch data loss - fixed delete isolation |
-| E2 | ⚠️ PARTIAL | Multi-step WITH - pure WITH chains work, MATCH chains pending |
+| E2 | ✅ FIXED | Multi-step WITH clause - fixed ret/with_clause pointer equality check |
 | E3 | ✅ FIXED | List slice syntax [start..end] |
 | E4-E7 | ✅ FIXED | last(), power(), log10(), toBoolean() functions |
 | E8-E9 | ✅ FIXED | EXISTS/COUNT subquery parsing and evaluation |
@@ -68,7 +68,7 @@ The `USE GRAPH` implementation may be getting a new/fresh graph storage referenc
 
 ---
 
-### Issue E2: Multi-step WITH Clause Not Supported (P1) ⚠️ PARTIALLY FIXED
+### Issue E2: Multi-step WITH Clause Not Supported (P1) ✅ FIXED
 
 **Section**: 2.2
 
@@ -91,11 +91,11 @@ RETURN dept, emp_count, avg_salary ORDER BY avg_salary DESC;
 3. Parser: Added WHERE clause parsing after initial WITH (lines 1434-1437)
 4. Execution: Added WITH clause binding transformation in executeQueryWithBindingsImpl (lines 340-371)
 5. Execution: Added WHERE clause evaluation for chained queries (lines 380-396)
+6. Execution: **KEY FIX** - Added pointer equality check for `ret.items` and `with_clause.items` in 4 locations in match_operations.zig to skip re-evaluation when query chaining uses the same items for both ret and with_clause
 
-**Current Status**:
-- ✅ Pure WITH chains work: `WITH 'Hello' AS x WITH x AS y RETURN y` → returns "Hello"
-- ⚠️ MATCH + WITH chains still return null: `MATCH (e) WITH e.name AS n WITH n AS n2 RETURN n2` → returns null
-- Investigation ongoing for MATCH->WITH->WITH execution path
+**Status**: ✅ FULLY FIXED
+- Pure WITH chains work: `WITH 'Hello' AS x WITH x AS y RETURN y` → returns "Hello"
+- MATCH + WITH chains work: `MATCH (e) WITH e.name AS n WITH n AS n2 RETURN n2` → returns names correctly
 
 ---
 
