@@ -1,0 +1,520 @@
+-- ============================================================================
+-- GEODE ENTERPRISE GQL TEST FILE
+-- ============================================================================
+-- Comprehensive enterprise-level tests for advanced Geode features.
+-- Run with: ./zig-out/bin/geode shell --insecure
+-- Then: /source ./testing/shell/enterprise_test.gql
+-- ============================================================================
+
+-- ============================================================================
+-- SECTION 1: MULTI-GRAPH MANAGEMENT
+-- ============================================================================
+
+-- 1.1 Create multiple isolated graphs
+CREATE GRAPH IF NOT EXISTS enterprise_hr;
+CREATE GRAPH IF NOT EXISTS enterprise_sales;
+CREATE GRAPH IF NOT EXISTS enterprise_analytics;
+
+-- 1.2 Work with HR graph
+USE GRAPH enterprise_hr;
+MATCH (n) DETACH DELETE n;
+
+CREATE (e1:Employee {id: 'EMP001', name: 'Alice Johnson', department: 'Engineering', salary: 95000, hire_date: '2020-03-15'});
+CREATE (e2:Employee {id: 'EMP002', name: 'Bob Smith', department: 'Engineering', salary: 105000, hire_date: '2019-08-22'});
+CREATE (e3:Employee {id: 'EMP003', name: 'Carol Williams', department: 'Sales', salary: 85000, hire_date: '2021-01-10'});
+CREATE (e4:Employee {id: 'EMP004', name: 'David Brown', department: 'Marketing', salary: 78000, hire_date: '2022-06-01'});
+CREATE (e5:Employee {id: 'EMP005', name: 'Eve Davis', department: 'Engineering', salary: 115000, hire_date: '2018-11-30'});
+
+CREATE (d1:Department {name: 'Engineering', budget: 5000000, head_count: 50});
+CREATE (d2:Department {name: 'Sales', budget: 3000000, head_count: 30});
+CREATE (d3:Department {name: 'Marketing', budget: 2000000, head_count: 20});
+
+-- Create management relationships
+MATCH (e:Employee {name: 'Eve Davis'}), (d:Department {name: 'Engineering'})
+CREATE (e)-[:MANAGES]->(d);
+
+MATCH (e:Employee {name: 'Alice Johnson'}), (m:Employee {name: 'Eve Davis'})
+CREATE (e)-[:REPORTS_TO]->(m);
+
+MATCH (e:Employee {name: 'Bob Smith'}), (m:Employee {name: 'Eve Davis'})
+CREATE (e)-[:REPORTS_TO]->(m);
+
+-- 1.3 Work with Sales graph
+USE GRAPH enterprise_sales;
+MATCH (n) DETACH DELETE n;
+
+CREATE (c1:Customer {id: 'CUST001', name: 'Acme Corp', industry: 'Manufacturing', annual_revenue: 50000000});
+CREATE (c2:Customer {id: 'CUST002', name: 'TechStart Inc', industry: 'Technology', annual_revenue: 10000000});
+CREATE (c3:Customer {id: 'CUST003', name: 'Global Retail', industry: 'Retail', annual_revenue: 200000000});
+
+CREATE (p1:Product {sku: 'PROD001', name: 'Enterprise Suite', price: 50000, category: 'Software'});
+CREATE (p2:Product {sku: 'PROD002', name: 'Analytics Platform', price: 75000, category: 'Software'});
+CREATE (p3:Product {sku: 'PROD003', name: 'Support Package', price: 15000, category: 'Services'});
+
+CREATE (o1:Order {id: 'ORD001', date: '2024-01-15', status: 'completed', total: 125000});
+CREATE (o2:Order {id: 'ORD002', date: '2024-02-20', status: 'pending', total: 50000});
+CREATE (o3:Order {id: 'ORD003', date: '2024-03-10', status: 'completed', total: 90000});
+
+MATCH (c:Customer {name: 'Acme Corp'}), (o:Order {id: 'ORD001'})
+CREATE (c)-[:PLACED]->(o);
+
+MATCH (o:Order {id: 'ORD001'}), (p:Product {sku: 'PROD001'})
+CREATE (o)-[:CONTAINS {quantity: 2}]->(p);
+
+MATCH (o:Order {id: 'ORD001'}), (p:Product {sku: 'PROD003'})
+CREATE (o)-[:CONTAINS {quantity: 1}]->(p);
+
+-- ============================================================================
+-- SECTION 2: ADVANCED QUERY PATTERNS
+-- ============================================================================
+
+-- 2.1 WITH clause chaining
+USE GRAPH enterprise_hr;
+
+-- Find top earners and their management chain
+MATCH (e:Employee)
+WITH e ORDER BY e.salary DESC LIMIT 3
+RETURN e.name AS top_earner, e.salary AS salary, e.department AS dept;
+
+-- 2.2 Multi-step WITH processing
+MATCH (e:Employee)
+WITH e.department AS dept, count(*) AS emp_count, avg(e.salary) AS avg_salary
+WITH dept, emp_count, avg_salary
+WHERE emp_count >= 1
+RETURN dept, emp_count, avg_salary ORDER BY avg_salary DESC;
+
+-- 2.3 OPTIONAL MATCH patterns
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(manager:Employee)
+RETURN e.name AS employee, manager.name AS manager;
+
+-- 2.4 OPTIONAL MATCH with aggregation
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[r:REPORTS_TO]->()
+WITH e, count(r) AS has_manager
+RETURN e.name AS employee,
+       CASE WHEN has_manager > 0 THEN 'Has Manager' ELSE 'Top Level' END AS status;
+
+-- ============================================================================
+-- SECTION 3: AGGREGATION AND GROUPING
+-- ============================================================================
+
+USE GRAPH enterprise_hr;
+
+-- 3.1 Basic aggregations
+MATCH (e:Employee)
+RETURN count(*) AS total_employees,
+       sum(e.salary) AS total_payroll,
+       avg(e.salary) AS avg_salary,
+       min(e.salary) AS min_salary,
+       max(e.salary) AS max_salary;
+
+-- 3.2 GROUP BY with multiple columns
+MATCH (e:Employee)
+RETURN e.department AS dept,
+       count(*) AS headcount,
+       sum(e.salary) AS dept_payroll
+GROUP BY e.department
+ORDER BY dept_payroll DESC;
+
+-- 3.3 HAVING clause filtering
+MATCH (e:Employee)
+RETURN e.department AS dept, avg(e.salary) AS avg_sal
+GROUP BY e.department
+HAVING avg(e.salary) > 85000
+ORDER BY avg_sal DESC;
+
+-- 3.4 COUNT with DISTINCT
+MATCH (e:Employee)
+RETURN count(DISTINCT e.department) AS unique_departments;
+
+-- ============================================================================
+-- SECTION 4: SET OPERATIONS
+-- ============================================================================
+
+USE GRAPH enterprise_hr;
+
+-- 4.1 UNION - combine results
+MATCH (e:Employee) WHERE e.department = 'Engineering'
+RETURN e.name AS person, 'Engineer' AS role
+UNION
+MATCH (e:Employee) WHERE e.salary > 100000
+RETURN e.name AS person, 'High Earner' AS role;
+
+-- 4.2 UNION ALL - preserve duplicates
+MATCH (e:Employee) WHERE e.department = 'Engineering'
+RETURN e.name AS person
+UNION ALL
+MATCH (e:Employee) WHERE e.salary > 90000
+RETURN e.name AS person;
+
+-- 4.3 INTERSECT - common results
+MATCH (e:Employee) WHERE e.department = 'Engineering'
+RETURN e.name AS person
+INTERSECT
+MATCH (e:Employee) WHERE e.salary > 100000
+RETURN e.name AS person;
+
+-- 4.4 EXCEPT - difference
+MATCH (e:Employee) WHERE e.department = 'Engineering'
+RETURN e.name AS person
+EXCEPT
+MATCH (e:Employee) WHERE e.salary > 100000
+RETURN e.name AS person;
+
+-- ============================================================================
+-- SECTION 5: COMPLEX PATTERN MATCHING
+-- ============================================================================
+
+USE GRAPH enterprise_sales;
+
+-- 5.1 Multi-hop patterns
+MATCH (c:Customer)-[:PLACED]->(o:Order)-[:CONTAINS]->(p:Product)
+RETURN c.name AS customer, o.id AS order_id, p.name AS product;
+
+-- 5.2 Pattern with relationship properties
+MATCH (o:Order)-[contains:CONTAINS]->(p:Product)
+RETURN o.id AS order_id, p.name AS product, contains.quantity AS qty;
+
+-- 5.3 Multiple patterns in single MATCH
+MATCH (c:Customer), (p:Product)
+WHERE c.industry = 'Manufacturing' AND p.category = 'Software'
+RETURN c.name AS customer, p.name AS product;
+
+-- ============================================================================
+-- SECTION 6: ORDERING AND PAGINATION
+-- ============================================================================
+
+USE GRAPH enterprise_hr;
+
+-- 6.1 Multi-column ORDER BY
+MATCH (e:Employee)
+RETURN e.name, e.department, e.salary
+ORDER BY e.department ASC, e.salary DESC;
+
+-- 6.2 NULLS handling
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+RETURN e.name AS employee, m.name AS manager
+ORDER BY m.name NULLS LAST;
+
+-- 6.3 SKIP and LIMIT
+MATCH (e:Employee)
+RETURN e.name, e.salary
+ORDER BY e.salary DESC
+SKIP 1 LIMIT 3;
+
+-- 6.4 Pagination pattern
+MATCH (e:Employee)
+RETURN e.name AS name, e.salary AS salary
+ORDER BY e.name
+LIMIT 2;
+
+-- ============================================================================
+-- SECTION 7: CASE EXPRESSIONS
+-- ============================================================================
+
+USE GRAPH enterprise_hr;
+
+-- 7.1 Simple CASE
+MATCH (e:Employee)
+RETURN e.name,
+       CASE e.department
+           WHEN 'Engineering' THEN 'Tech'
+           WHEN 'Sales' THEN 'Revenue'
+           WHEN 'Marketing' THEN 'Growth'
+           ELSE 'Other'
+       END AS team;
+
+-- 7.2 Searched CASE
+MATCH (e:Employee)
+RETURN e.name,
+       e.salary,
+       CASE
+           WHEN e.salary >= 100000 THEN 'Senior'
+           WHEN e.salary >= 80000 THEN 'Mid-Level'
+           ELSE 'Junior'
+       END AS level;
+
+-- ============================================================================
+-- SECTION 8: STRING FUNCTIONS
+-- ============================================================================
+
+-- 8.1 String manipulation
+RETURN upper('hello world') AS upper_case;
+RETURN lower('HELLO WORLD') AS lower_case;
+RETURN trim('  spaces  ') AS trimmed;
+RETURN substring('enterprise', 0, 5) AS substr;
+RETURN replace('hello world', 'world', 'geode') AS replaced;
+
+-- 8.2 String predicates
+RETURN 'enterprise' STARTS WITH 'enter' AS starts_check;
+RETURN 'enterprise' ENDS WITH 'rise' AS ends_check;
+RETURN 'enterprise' CONTAINS 'pris' AS contains_check;
+
+-- 8.3 String functions in queries
+USE GRAPH enterprise_hr;
+MATCH (e:Employee)
+WHERE upper(e.department) = 'ENGINEERING'
+RETURN e.name, e.department;
+
+-- ============================================================================
+-- SECTION 9: LIST OPERATIONS
+-- ============================================================================
+
+-- 9.1 List creation and access
+RETURN [1, 2, 3, 4, 5] AS numbers;
+RETURN [1, 2, 3, 4, 5][0] AS first_element;
+RETURN [1, 2, 3, 4, 5][2..4] AS slice;
+
+-- 9.2 List functions
+RETURN size([1, 2, 3]) AS list_size;
+RETURN head([1, 2, 3]) AS first;
+RETURN tail([1, 2, 3]) AS rest;
+RETURN last([1, 2, 3]) AS final;
+
+-- 9.3 List predicates
+RETURN 3 IN [1, 2, 3, 4, 5] AS is_in_list;
+RETURN 10 IN [1, 2, 3, 4, 5] AS not_in_list;
+
+-- 9.4 List comprehension
+RETURN [x IN [1, 2, 3, 4, 5] WHERE x > 2] AS filtered;
+
+-- ============================================================================
+-- SECTION 10: MATHEMATICAL FUNCTIONS
+-- ============================================================================
+
+-- 10.1 Rounding functions
+RETURN round(3.7) AS rounded;
+RETURN floor(3.7) AS floored;
+RETURN ceil(3.2) AS ceiled;
+
+-- 10.2 Absolute and sign
+RETURN abs(-42) AS absolute;
+RETURN sign(-42) AS negative_sign;
+RETURN sign(42) AS positive_sign;
+
+-- 10.3 Power and roots
+RETURN sqrt(16) AS square_root;
+RETURN power(2, 10) AS power_of_two;
+
+-- 10.4 Logarithms and exponentials
+RETURN log(10) AS natural_log;
+RETURN log10(100) AS log_base_10;
+RETURN exp(1) AS e_value;
+
+-- ============================================================================
+-- SECTION 11: TYPE COERCION AND CHECKING
+-- ============================================================================
+
+-- 11.1 Type conversion
+RETURN toInteger('42') AS string_to_int;
+RETURN toFloat('3.14') AS string_to_float;
+RETURN toString(42) AS int_to_string;
+RETURN toBoolean('true') AS string_to_bool;
+
+-- 11.2 Type checking predicates
+RETURN 42 IS NOT NULL AS not_null_check;
+RETURN null IS NULL AS null_check;
+
+-- ============================================================================
+-- SECTION 12: DATE/TIME OPERATIONS
+-- ============================================================================
+
+-- 12.1 Current date/time
+RETURN date() AS current_date;
+RETURN datetime() AS current_datetime;
+RETURN time() AS current_time;
+
+-- 12.2 Date construction
+RETURN date('2024-01-15') AS specific_date;
+RETURN datetime('2024-01-15T10:30:00') AS specific_datetime;
+
+-- 12.3 Date components
+RETURN date().year AS current_year;
+RETURN date().month AS current_month;
+RETURN date().day AS current_day;
+
+-- ============================================================================
+-- SECTION 13: GRAPH ALGORITHMS (Conceptual Tests)
+-- ============================================================================
+
+USE GRAPH enterprise_hr;
+
+-- 13.1 Path finding setup
+CREATE (loc1:Location {name: 'HQ', city: 'New York'});
+CREATE (loc2:Location {name: 'Branch1', city: 'Boston'});
+CREATE (loc3:Location {name: 'Branch2', city: 'Chicago'});
+CREATE (loc4:Location {name: 'Remote', city: 'Denver'});
+
+MATCH (l1:Location {name: 'HQ'}), (l2:Location {name: 'Branch1'})
+CREATE (l1)-[:CONNECTED_TO {distance: 200}]->(l2);
+
+MATCH (l1:Location {name: 'HQ'}), (l2:Location {name: 'Branch2'})
+CREATE (l1)-[:CONNECTED_TO {distance: 800}]->(l2);
+
+MATCH (l1:Location {name: 'Branch1'}), (l2:Location {name: 'Branch2'})
+CREATE (l1)-[:CONNECTED_TO {distance: 1000}]->(l2);
+
+MATCH (l1:Location {name: 'Branch2'}), (l2:Location {name: 'Remote'})
+CREATE (l1)-[:CONNECTED_TO {distance: 600}]->(l2);
+
+-- 13.2 Variable-length path
+MATCH (start:Location {name: 'HQ'})-[:CONNECTED_TO*1..3]->(end:Location)
+RETURN start.name AS origin, end.name AS destination;
+
+-- 13.3 Shortest path query
+MATCH path = shortestPath((start:Location {name: 'HQ'})-[:CONNECTED_TO*]->(end:Location {name: 'Remote'}))
+RETURN path;
+
+-- ============================================================================
+-- SECTION 14: SUBQUERIES
+-- ============================================================================
+
+USE GRAPH enterprise_hr;
+
+-- 14.1 EXISTS subquery
+MATCH (e:Employee)
+WHERE EXISTS {
+    MATCH (e)-[:REPORTS_TO]->(:Employee)
+}
+RETURN e.name AS has_manager;
+
+-- 14.2 NOT EXISTS subquery
+MATCH (e:Employee)
+WHERE NOT EXISTS {
+    MATCH (e)-[:REPORTS_TO]->(:Employee)
+}
+RETURN e.name AS top_level_employee;
+
+-- 14.3 COUNT subquery
+MATCH (d:Department)
+RETURN d.name AS department,
+       COUNT { MATCH (:Employee {department: d.name}) } AS employee_count;
+
+-- ============================================================================
+-- SECTION 15: CROSS-GRAPH VERIFICATION
+-- ============================================================================
+
+-- 15.1 Verify HR graph isolation
+USE GRAPH enterprise_hr;
+MATCH (e:Employee) RETURN count(*) AS hr_employees;
+
+-- 15.2 Verify Sales graph isolation
+USE GRAPH enterprise_sales;
+MATCH (c:Customer) RETURN count(*) AS sales_customers;
+MATCH (p:Product) RETURN count(*) AS sales_products;
+
+-- 15.3 Verify graphs don't leak data
+USE GRAPH enterprise_hr;
+MATCH (c:Customer) RETURN count(*) AS customers_in_hr;
+
+USE GRAPH enterprise_sales;
+MATCH (e:Employee) RETURN count(*) AS employees_in_sales;
+
+-- ============================================================================
+-- SECTION 16: TRANSACTION PATTERNS
+-- ============================================================================
+
+USE GRAPH enterprise_hr;
+
+-- 16.1 Read-only transaction simulation
+MATCH (e:Employee)
+RETURN e.name, e.salary
+ORDER BY e.salary DESC
+LIMIT 5;
+
+-- 16.2 Write with verification pattern
+CREATE (temp:TempNode {value: 'test'});
+MATCH (t:TempNode) RETURN count(*) AS temp_count;
+MATCH (t:TempNode) DELETE t;
+MATCH (t:TempNode) RETURN count(*) AS temp_after_delete;
+
+-- ============================================================================
+-- SECTION 17: ERROR HANDLING PATTERNS
+-- ============================================================================
+
+-- 17.1 COALESCE for null handling
+USE GRAPH enterprise_hr;
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+RETURN e.name AS employee, coalesce(m.name, 'No Manager') AS manager;
+
+-- 17.2 CASE for conditional defaults
+MATCH (e:Employee)
+RETURN e.name,
+       CASE WHEN e.salary IS NULL THEN 0 ELSE e.salary END AS safe_salary;
+
+-- ============================================================================
+-- SECTION 18: PERFORMANCE PATTERNS
+-- ============================================================================
+
+USE GRAPH enterprise_hr;
+
+-- 18.1 Projection early (reduce data early in pipeline)
+MATCH (e:Employee)
+WITH e.name AS name, e.salary AS salary
+WHERE salary > 80000
+RETURN name, salary
+ORDER BY salary DESC;
+
+-- 18.2 Filter before join
+MATCH (e:Employee)
+WHERE e.department = 'Engineering'
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+RETURN e.name, m.name AS manager;
+
+-- ============================================================================
+-- SECTION 19: COMPLEX BUSINESS QUERIES
+-- ============================================================================
+
+USE GRAPH enterprise_sales;
+
+-- 19.1 Order summary with totals
+MATCH (c:Customer)-[:PLACED]->(o:Order)
+RETURN c.name AS customer,
+       count(o) AS order_count,
+       sum(o.total) AS total_spent
+ORDER BY total_spent DESC;
+
+-- 19.2 Product popularity
+MATCH (o:Order)-[contains:CONTAINS]->(p:Product)
+RETURN p.name AS product,
+       count(o) AS times_ordered,
+       sum(contains.quantity) AS total_quantity
+ORDER BY times_ordered DESC;
+
+USE GRAPH enterprise_hr;
+
+-- 19.3 Department budget efficiency
+MATCH (d:Department)
+MATCH (e:Employee)
+WHERE e.department = d.name
+RETURN d.name AS department,
+       d.budget AS budget,
+       sum(e.salary) AS actual_payroll,
+       d.budget - sum(e.salary) AS remaining_budget
+GROUP BY d.name, d.budget
+ORDER BY remaining_budget DESC;
+
+-- ============================================================================
+-- SECTION 20: CLEANUP
+-- ============================================================================
+
+-- Clean up test data
+USE GRAPH enterprise_hr;
+MATCH (n) DETACH DELETE n;
+DROP GRAPH IF EXISTS enterprise_hr;
+
+USE GRAPH enterprise_sales;
+MATCH (n) DETACH DELETE n;
+DROP GRAPH IF EXISTS enterprise_sales;
+
+DROP GRAPH IF EXISTS enterprise_analytics;
+
+-- ============================================================================
+-- END OF ENTERPRISE TEST FILE
+-- ============================================================================
+-- Summary: 20 sections covering multi-graph, aggregations, set operations,
+-- patterns, algorithms, subqueries, transactions, and business queries.
+-- ============================================================================

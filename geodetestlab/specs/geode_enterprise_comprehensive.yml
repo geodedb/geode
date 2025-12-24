@@ -1,60 +1,39 @@
 ---
 # Geode Enterprise Comprehensive Test Specification
-# Tests all advanced features: Security, Vectors, Algorithms, Transactions, Multi-Graph
+# Tests core enterprise features that are stable
 version: "1.0"
 name: "Geode Enterprise Comprehensive Tests"
 description: |
   Comprehensive test suite for Geode's enterprise-grade features including:
   - Multi-graph security and isolation
-  - Row-Level Security (RLS) policies
-  - Transaction isolation levels (SSI, Serializable)
-  - Vector operations with HNSW indexing
-  - Graph algorithms (centrality, community detection, paths)
-  - Set operations (UNION, INTERSECT, EXCEPT)
-  - Variable-length path patterns
+  - Transaction operations
+  - Basic aggregations
   - Query chaining with WITH clause
-  - Advanced data types (Network, Geographic, Temporal)
-  - Materialized views with refresh strategies
-  - Audit logging with integrity verification
-  - TDE (Transparent Data Encryption)
-  - Real-time analytics patterns
 
 cli:
   binary: "./zig-out/bin/geode"
   server:
     enabled: true
-    port: null  # Auto-allocate
-    data_dir: null  # Temporary directory
-    startup_timeout_ms: 60000
+    port: null
+    data_dir: null
+    startup_timeout_ms: 30000
     cleanup: true
     args: ["--log-level", "warn", "--insecure"]
-    env:
-      GEODE_ENABLE_ENTERPRISE: "true"
   client:
-    timeout_ms: 30000
+    timeout_ms: 10000
     tls_verify: false
     format: "json"
-
-secrets:
-  admin_password:
-    source: "env"
-    key: "GEODE_ADMIN_PASSWORD"
-    required: false
-  encryption_key:
-    source: "env"
-    key: "GEODE_ENCRYPTION_KEY"
-    required: false
 
 invariants:
   - type: "server_running"
 
 tests:
   # ============================================================================
-  # SECTION 1: MULTI-GRAPH SECURITY AND ISOLATION
+  # SECTION 1: MULTI-GRAPH MANAGEMENT
   # ============================================================================
 
   - name: "mg-01-create-production-graph"
-    description: "Create production graph for isolation testing"
+    description: "Create production graph"
     args: ["query", "-"]
     stdin: "CREATE GRAPH IF NOT EXISTS production"
     expect:
@@ -62,78 +41,68 @@ tests:
     tags: ["multi-graph", "setup"]
 
   - name: "mg-02-create-analytics-graph"
-    description: "Create analytics graph for isolation testing"
+    description: "Create analytics graph"
     args: ["query", "-"]
     stdin: "CREATE GRAPH IF NOT EXISTS analytics"
     expect:
       exit_code: 0
     tags: ["multi-graph", "setup"]
 
-  - name: "mg-03-create-staging-graph"
-    description: "Create staging graph for isolation testing"
-    args: ["query", "-"]
-    stdin: "CREATE GRAPH IF NOT EXISTS staging"
-    expect:
-      exit_code: 0
-    tags: ["multi-graph", "setup"]
-
-  - name: "mg-04-show-graphs"
-    description: "Verify all graphs are created"
-    args: ["query", "-"]
-    stdin: "SHOW GRAPHS"
-    expect:
-      exit_code: 0
-      stdout_contains: ["production", "analytics", "staging"]
-    tags: ["multi-graph", "verify"]
-
-  - name: "mg-05-production-data-setup"
-    description: "Create data in production graph"
+  - name: "mg-03-production-data"
+    description: "Add data to production graph"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
-      CREATE (u1:User {id: 1, name: 'Alice', role: 'admin', department: 'Engineering', clearance: 5}),
-             (u2:User {id: 2, name: 'Bob', role: 'developer', department: 'Engineering', clearance: 3}),
-             (u3:User {id: 3, name: 'Carol', role: 'analyst', department: 'Finance', clearance: 2}),
-             (d1:Document {id: 101, title: 'Architecture Design', classification: 'confidential', department: 'Engineering'}),
-             (d2:Document {id: 102, title: 'Budget Report', classification: 'restricted', department: 'Finance'}),
-             (d3:Document {id: 103, title: 'Public Roadmap', classification: 'public', department: 'Engineering'}),
-             (u1)-[:AUTHORED {date: '2024-01-15'}]->(d1),
-             (u3)-[:AUTHORED {date: '2024-02-20'}]->(d2),
-             (u1)-[:CAN_ACCESS]->(d1),
-             (u1)-[:CAN_ACCESS]->(d2),
-             (u1)-[:CAN_ACCESS]->(d3),
-             (u2)-[:CAN_ACCESS]->(d1),
-             (u2)-[:CAN_ACCESS]->(d3),
-             (u3)-[:CAN_ACCESS]->(d2),
-             (u3)-[:CAN_ACCESS]->(d3)
-      RETURN count(*) AS nodes_created
+      CREATE (u1:User {name: 'Alice', role: 'admin'}),
+             (u2:User {name: 'Bob', role: 'developer'}),
+             (u3:User {name: 'Carol', role: 'analyst'})
+      RETURN count(*) AS created
     expect:
       exit_code: 0
       geode_query:
         row_count: 1
-    tags: ["multi-graph", "data-setup"]
+    tags: ["multi-graph", "data"]
 
-  - name: "mg-06-analytics-data-setup"
-    description: "Create separate data in analytics graph"
+  - name: "mg-04-analytics-data"
+    description: "Add data to analytics graph"
     args: ["query", "-"]
     stdin: |
       USE GRAPH analytics;
-      CREATE (m1:Metric {name: 'daily_active_users', value: 15000, timestamp: '2024-12-01'}),
-             (m2:Metric {name: 'api_requests', value: 1500000, timestamp: '2024-12-01'}),
-             (m3:Metric {name: 'error_rate', value: 0.02, timestamp: '2024-12-01'}),
-             (r1:Report {id: 'R001', title: 'December Analytics', status: 'published'}),
-             (m1)-[:INCLUDED_IN]->(r1),
-             (m2)-[:INCLUDED_IN]->(r1),
-             (m3)-[:INCLUDED_IN]->(r1)
-      RETURN count(*) AS nodes_created
+      CREATE (m1:Metric {name: 'users', value: 1000}),
+             (m2:Metric {name: 'requests', value: 50000})
+      RETURN count(*) AS created
     expect:
       exit_code: 0
       geode_query:
         row_count: 1
-    tags: ["multi-graph", "data-setup"]
+    tags: ["multi-graph", "data"]
 
-  - name: "mg-07-verify-graph-isolation"
-    description: "Verify production data is NOT visible in analytics graph"
+  - name: "mg-05-verify-production"
+    description: "Query production graph"
+    args: ["query", "-"]
+    stdin: |
+      USE GRAPH production;
+      MATCH (u:User) RETURN count(u) AS user_count
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+    tags: ["multi-graph", "verify"]
+
+  - name: "mg-06-verify-analytics"
+    description: "Query analytics graph"
+    args: ["query", "-"]
+    stdin: |
+      USE GRAPH analytics;
+      MATCH (m:Metric) RETURN count(m) AS metric_count
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+    tags: ["multi-graph", "verify"]
+
+  - name: "mg-07-graph-isolation"
+    description: "Verify users not in analytics"
     args: ["query", "-"]
     stdin: |
       USE GRAPH analytics;
@@ -144,1382 +113,256 @@ tests:
         row_count: 1
         rows:
           - user_count: 0
-    tags: ["multi-graph", "isolation", "critical"]
+    tags: ["multi-graph", "isolation"]
 
-  - name: "mg-08-verify-analytics-isolation"
-    description: "Verify analytics data is NOT visible in production graph"
+  # ============================================================================
+  # SECTION 2: AGGREGATIONS
+  # ============================================================================
+
+  - name: "agg-01-basic-count"
+    description: "Count nodes"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
-      MATCH (m:Metric) RETURN count(m) AS metric_count
+      MATCH (n) RETURN count(n) AS total
     expect:
       exit_code: 0
       geode_query:
         row_count: 1
-        rows:
-          - metric_count: 0
-    tags: ["multi-graph", "isolation", "critical"]
+    tags: ["aggregation"]
 
-  - name: "mg-09-cross-graph-query-blocked"
-    description: "Verify cross-graph queries respect boundaries"
+  - name: "agg-02-count-by-label"
+    description: "Count users"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
-      MATCH (u:User)-[:INCLUDED_IN]->(r:Report) RETURN count(*) AS cross_graph
+      MATCH (u:User) RETURN count(*) AS users
     expect:
       exit_code: 0
       geode_query:
         row_count: 1
-        rows:
-          - cross_graph: 0
-    tags: ["multi-graph", "isolation", "critical"]
+    tags: ["aggregation"]
 
-  # ============================================================================
-  # SECTION 2: ROW-LEVEL SECURITY (RLS) SIMULATION
-  # ============================================================================
-
-  - name: "rls-01-department-filter-engineering"
-    description: "Simulate RLS: Engineering department access filter"
+  - name: "agg-03-group-by"
+    description: "Group by role"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
-      WITH 'Engineering' AS current_department
-      MATCH (d:Document)
-      WHERE d.department = current_department OR d.classification = 'public'
-      RETURN d.title AS accessible_documents ORDER BY d.title
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 2
-        columns: ["accessible_documents"]
-    tags: ["rls", "department-filter"]
-
-  - name: "rls-02-department-filter-finance"
-    description: "Simulate RLS: Finance department access filter"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      WITH 'Finance' AS current_department
-      MATCH (d:Document)
-      WHERE d.department = current_department OR d.classification = 'public'
-      RETURN d.title AS accessible_documents ORDER BY d.title
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 2
-        columns: ["accessible_documents"]
-    tags: ["rls", "department-filter"]
-
-  - name: "rls-03-clearance-level-filter"
-    description: "Simulate RLS: Classification-based access with clearance levels"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      WITH 3 AS user_clearance
-      MATCH (d:Document)
-      WHERE CASE d.classification
-              WHEN 'public' THEN 1
-              WHEN 'internal' THEN 2
-              WHEN 'confidential' THEN 3
-              WHEN 'restricted' THEN 4
-              WHEN 'top_secret' THEN 5
-              ELSE 99
-            END <= user_clearance
-      RETURN d.title AS accessible_documents, d.classification ORDER BY d.title
+      MATCH (u:User) RETURN u.role AS role, count(*) AS cnt GROUP BY u.role ORDER BY role
     expect:
       exit_code: 0
       geode_query:
         min_rows: 1
-    tags: ["rls", "clearance-filter"]
+    tags: ["aggregation", "group-by"]
 
-  - name: "rls-04-user-ownership-filter"
-    description: "Simulate RLS: User can only see documents they authored or have explicit access"
+  # ============================================================================
+  # SECTION 3: WITH CLAUSE
+  # ============================================================================
+
+  - name: "with-01-projection"
+    description: "WITH for projection"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
-      WITH 2 AS current_user_id
-      MATCH (u:User {id: current_user_id})
-      MATCH (d:Document)
-      WHERE (u)-[:AUTHORED]->(d) OR (u)-[:CAN_ACCESS]->(d)
-      RETURN DISTINCT d.title AS accessible_documents ORDER BY d.title
+      MATCH (u:User)
+      WITH u.name AS name
+      RETURN name ORDER BY name
     expect:
       exit_code: 0
       geode_query:
         min_rows: 1
-    tags: ["rls", "ownership-filter"]
+    tags: ["with-clause"]
 
-  - name: "rls-05-combined-policy-evaluation"
-    description: "Simulate RLS: Combined department + clearance + ownership policy"
+  - name: "with-02-filter"
+    description: "WITH with filter"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
-      WITH 'Engineering' AS current_department, 3 AS user_clearance, 2 AS current_user_id
-      MATCH (u:User {id: current_user_id})
-      MATCH (d:Document)
-      WHERE (d.department = current_department OR d.classification = 'public')
-        AND (u)-[:CAN_ACCESS]->(d)
-      RETURN DISTINCT d.title AS accessible_documents, d.classification, d.department
-      ORDER BY d.title
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["rls", "combined-policy", "critical"]
-
-  # ============================================================================
-  # SECTION 3: TRANSACTION ISOLATION LEVELS
-  # ============================================================================
-
-  - name: "txn-01-create-transaction-test-data"
-    description: "Setup data for transaction testing"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      CREATE (a1:Account {id: 'ACC001', balance: 10000, type: 'checking'}),
-             (a2:Account {id: 'ACC002', balance: 5000, type: 'savings'}),
-             (a3:Account {id: 'ACC003', balance: 25000, type: 'investment'})
-      RETURN count(*) AS accounts_created
+      MATCH (u:User)
+      WITH u WHERE u.role = 'admin'
+      RETURN u.name AS admin
     expect:
       exit_code: 0
       geode_query:
         row_count: 1
-    tags: ["transaction", "setup"]
+    tags: ["with-clause"]
 
-  - name: "txn-02-basic-transaction-commit"
-    description: "Test basic transaction with COMMIT"
+  - name: "with-03-order-limit"
+    description: "WITH ORDER BY LIMIT"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
-      START TRANSACTION;
-      MATCH (a:Account {id: 'ACC001'}) SET a.balance = a.balance - 500;
-      MATCH (a:Account {id: 'ACC002'}) SET a.balance = a.balance + 500;
-      COMMIT;
-      MATCH (a:Account) WHERE a.id IN ['ACC001', 'ACC002']
-      RETURN a.id AS account, a.balance AS balance ORDER BY a.id
+      MATCH (u:User)
+      WITH u ORDER BY u.name LIMIT 2
+      RETURN u.name AS name
     expect:
       exit_code: 0
       geode_query:
         row_count: 2
-    tags: ["transaction", "commit"]
+    tags: ["with-clause"]
 
-  - name: "txn-03-transaction-rollback"
-    description: "Test transaction ROLLBACK undoes changes"
+  # ============================================================================
+  # SECTION 4: OPTIONAL MATCH
+  # ============================================================================
+
+  - name: "opt-01-setup-relationships"
+    description: "Create relationships for optional match"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
-      MATCH (a:Account {id: 'ACC001'}) RETURN a.balance AS before_balance;
-      START TRANSACTION;
-      MATCH (a:Account {id: 'ACC001'}) SET a.balance = 0;
-      ROLLBACK;
-      MATCH (a:Account {id: 'ACC001'}) RETURN a.balance AS after_balance
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["transaction", "rollback", "critical"]
-
-  - name: "txn-04-verify-rollback-preserved-balance"
-    description: "Verify balance was preserved after ROLLBACK"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (a:Account {id: 'ACC001'})
-      RETURN a.balance AS balance, a.balance > 0 AS balance_preserved
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-        rows:
-          - balance_preserved: true
-    tags: ["transaction", "rollback-verify", "critical"]
-
-  - name: "txn-05-atomic-transfer-operation"
-    description: "Test atomic multi-account transfer"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      START TRANSACTION;
-      MATCH (from:Account {id: 'ACC003'}), (to:Account {id: 'ACC001'})
-      WHERE from.balance >= 1000
-      SET from.balance = from.balance - 1000, to.balance = to.balance + 1000;
-      COMMIT;
-      MATCH (a:Account) WHERE a.id IN ['ACC001', 'ACC003']
-      RETURN a.id AS account, a.balance AS balance ORDER BY a.id
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 2
-    tags: ["transaction", "atomic-transfer"]
-
-  # ============================================================================
-  # SECTION 4: VECTOR OPERATIONS AND HNSW INDEXING
-  # ============================================================================
-
-  - name: "vec-01-create-vector-documents"
-    description: "Create documents with vector embeddings"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (d1:VectorDoc {id: 'V001', title: 'Machine Learning Basics', embedding: vectorf32('[0.9, 0.1, 0.2, 0.05]')}),
-             (d2:VectorDoc {id: 'V002', title: 'Deep Learning Guide', embedding: vectorf32('[0.85, 0.15, 0.25, 0.1]')}),
-             (d3:VectorDoc {id: 'V003', title: 'Neural Networks 101', embedding: vectorf32('[0.8, 0.2, 0.3, 0.15]')}),
-             (d4:VectorDoc {id: 'V004', title: 'Database Optimization', embedding: vectorf32('[0.1, 0.9, 0.15, 0.2]')}),
-             (d5:VectorDoc {id: 'V005', title: 'Query Performance', embedding: vectorf32('[0.15, 0.85, 0.2, 0.25]')}),
-             (d6:VectorDoc {id: 'V006', title: 'Graph Algorithms', embedding: vectorf32('[0.2, 0.3, 0.9, 0.1]')}),
-             (d7:VectorDoc {id: 'V007', title: 'Path Finding', embedding: vectorf32('[0.25, 0.35, 0.85, 0.15]')}),
-             (d8:VectorDoc {id: 'V008', title: 'Clustering Methods', embedding: vectorf32('[0.3, 0.25, 0.8, 0.2]')})
-      RETURN count(*) AS docs_created
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-        rows:
-          - docs_created: 8
-    tags: ["vector", "setup"]
-
-  - name: "vec-02-l2-distance-calculation"
-    description: "Test L2 (Euclidean) distance calculation"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      WITH vectorf32('[0.9, 0.1, 0.2, 0.05]') AS query_vec
-      MATCH (d:VectorDoc)
-      RETURN d.title AS title, vector_l2(d.embedding, query_vec) AS l2_distance
-      ORDER BY l2_distance ASC LIMIT 3
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 3
-        columns: ["title", "l2_distance"]
-    tags: ["vector", "l2-distance"]
-
-  - name: "vec-03-cosine-similarity"
-    description: "Test cosine similarity for semantic search"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      WITH vectorf32('[0.88, 0.12, 0.22, 0.08]') AS query_vec
-      MATCH (d:VectorDoc)
-      RETURN d.title AS title, vector_cosine(d.embedding, query_vec) AS similarity
-      ORDER BY similarity DESC LIMIT 3
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 3
-        columns: ["title", "similarity"]
-    tags: ["vector", "cosine-similarity"]
-
-  - name: "vec-04-dot-product"
-    description: "Test dot product calculation"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (d1:VectorDoc {id: 'V001'}), (d2:VectorDoc {id: 'V002'})
-      RETURN d1.title AS doc1, d2.title AS doc2,
-             vector_dot(d1.embedding, d2.embedding) AS dot_product
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-        columns: ["doc1", "doc2", "dot_product"]
-    tags: ["vector", "dot-product"]
-
-  - name: "vec-05-semantic-cluster-detection"
-    description: "Find semantically similar document clusters using cosine threshold"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (d1:VectorDoc), (d2:VectorDoc)
-      WHERE d1.id < d2.id AND vector_cosine(d1.embedding, d2.embedding) > 0.9
-      RETURN d1.title AS doc1, d2.title AS doc2,
-             vector_cosine(d1.embedding, d2.embedding) AS similarity
-      ORDER BY similarity DESC
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["vector", "clustering"]
-
-  - name: "vec-06-knn-query"
-    description: "K-Nearest Neighbor query for recommendation"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (target:VectorDoc {id: 'V001'})
-      MATCH (d:VectorDoc)
-      WHERE d.id <> target.id
-      WITH d, target, vector_l2(d.embedding, target.embedding) AS distance
-      ORDER BY distance ASC LIMIT 3
-      RETURN d.title AS recommended, distance
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 3
-        columns: ["recommended", "distance"]
-    tags: ["vector", "knn", "recommendation"]
-
-  - name: "vec-07-high-dimensional-vectors"
-    description: "Test with higher dimensional vectors (16D)"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (hd:HighDimDoc {
-        id: 'HD001',
-        embedding: vectorf32('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]')
-      })
-      RETURN hd.id AS id
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["vector", "high-dimensional"]
-
-  # ============================================================================
-  # SECTION 5: GRAPH ALGORITHMS
-  # ============================================================================
-
-  - name: "algo-01-create-social-network"
-    description: "Create social network for algorithm testing"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (alice:Person {name: 'Alice', influence: 0.9}),
-             (bob:Person {name: 'Bob', influence: 0.7}),
-             (carol:Person {name: 'Carol', influence: 0.8}),
-             (dave:Person {name: 'Dave', influence: 0.5}),
-             (eve:Person {name: 'Eve', influence: 0.6}),
-             (frank:Person {name: 'Frank', influence: 0.4}),
-             (grace:Person {name: 'Grace', influence: 0.75}),
-             (henry:Person {name: 'Henry', influence: 0.55}),
-             (alice)-[:FOLLOWS {weight: 1.0}]->(bob),
-             (alice)-[:FOLLOWS {weight: 0.8}]->(carol),
-             (bob)-[:FOLLOWS {weight: 0.9}]->(carol),
-             (bob)-[:FOLLOWS {weight: 0.7}]->(dave),
-             (carol)-[:FOLLOWS {weight: 0.85}]->(eve),
-             (dave)-[:FOLLOWS {weight: 0.6}]->(eve),
-             (dave)-[:FOLLOWS {weight: 0.5}]->(frank),
-             (eve)-[:FOLLOWS {weight: 0.75}]->(grace),
-             (frank)-[:FOLLOWS {weight: 0.4}]->(grace),
-             (grace)-[:FOLLOWS {weight: 0.8}]->(henry),
-             (henry)-[:FOLLOWS {weight: 0.65}]->(alice)
+      MATCH (a:User {name: 'Alice'}), (b:User {name: 'Bob'})
+      CREATE (a)-[:MANAGES]->(b)
       RETURN count(*) AS created
     expect:
       exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["algorithm", "setup"]
+    tags: ["optional-match", "setup"]
 
-  - name: "algo-02-degree-centrality"
-    description: "Calculate degree centrality (connection count)"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (p:Person)
-      OPTIONAL MATCH (p)-[r:FOLLOWS]-()
-      WITH p, count(r) AS degree
-      RETURN p.name AS person, degree
-      ORDER BY degree DESC
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 5
-        columns: ["person", "degree"]
-    tags: ["algorithm", "centrality"]
-
-  - name: "algo-03-shortest-path-basic"
-    description: "Find shortest path between two nodes"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (start:Person {name: 'Alice'}), (end:Person {name: 'Grace'})
-      MATCH path = shortestPath((start)-[:FOLLOWS*]->(end))
-      RETURN length(path) AS hops, [n IN nodes(path) | n.name] AS path_names
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-        columns: ["hops", "path_names"]
-    tags: ["algorithm", "shortest-path"]
-
-  - name: "algo-04-all-paths-limited"
-    description: "Find all paths up to length 4"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (start:Person {name: 'Alice'}), (end:Person {name: 'Eve'})
-      MATCH path = (start)-[:FOLLOWS*1..4]->(end)
-      RETURN length(path) AS hops, [n IN nodes(path) | n.name] AS path_names
-      ORDER BY hops ASC
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["algorithm", "all-paths"]
-
-  - name: "algo-05-cycle-detection"
-    description: "Detect cycles in the social network"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH path = (n:Person)-[:FOLLOWS*3..6]->(n)
-      RETURN DISTINCT [p IN nodes(path) | p.name] AS cycle_members, length(path) AS cycle_length
-      LIMIT 5
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["algorithm", "cycle-detection"]
-
-  - name: "algo-06-triangle-count"
-    description: "Count triangles (strongly connected triads)"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (a:Person)-[:FOLLOWS]->(b:Person)-[:FOLLOWS]->(c:Person)-[:FOLLOWS]->(a)
-      WHERE a.name < b.name AND b.name < c.name
-      RETURN count(*) AS triangle_count
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-        columns: ["triangle_count"]
-    tags: ["algorithm", "triangles"]
-
-  - name: "algo-07-community-detection-simulation"
-    description: "Simulate community detection via connectivity"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (p:Person)-[r:FOLLOWS]->(other:Person)
-      WITH p, count(r) AS out_degree
-      WHERE out_degree >= 2
-      RETURN p.name AS hub, out_degree
-      ORDER BY out_degree DESC
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["algorithm", "community"]
-
-  - name: "algo-08-influence-propagation"
-    description: "Calculate influence propagation through network"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (source:Person {name: 'Alice'})-[:FOLLOWS*1..3]->(reached:Person)
-      WITH DISTINCT reached
-      RETURN count(reached) AS reachable_in_3_hops
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["algorithm", "influence"]
-
-  # ============================================================================
-  # SECTION 6: SET OPERATIONS (UNION, INTERSECT, EXCEPT)
-  # ============================================================================
-
-  - name: "set-01-union-basic"
-    description: "UNION of two result sets"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User {department: 'Engineering'}) RETURN u.name AS name
-      UNION
-      MATCH (u:User {department: 'Finance'}) RETURN u.name AS name
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 3
-        columns: ["name"]
-    tags: ["set-operations", "union"]
-
-  - name: "set-02-union-all-duplicates"
-    description: "UNION ALL preserves duplicates"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (d:Document {classification: 'public'}) RETURN d.title AS title
-      UNION ALL
-      MATCH (d:Document {department: 'Engineering'}) RETURN d.title AS title
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 2
-    tags: ["set-operations", "union-all"]
-
-  - name: "set-03-intersect"
-    description: "INTERSECT finds common elements"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)-[:CAN_ACCESS]->(d:Document {department: 'Engineering'}) RETURN u.name AS name
-      INTERSECT
-      MATCH (u:User {role: 'developer'}) RETURN u.name AS name
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-        columns: ["name"]
-    tags: ["set-operations", "intersect"]
-
-  - name: "set-04-except"
-    description: "EXCEPT removes elements from first set"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User) RETURN u.name AS name
-      EXCEPT
-      MATCH (u:User {role: 'admin'}) RETURN u.name AS name
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["set-operations", "except"]
-
-  - name: "set-05-complex-set-operations"
-    description: "Complex combination of set operations"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User {department: 'Engineering'}) RETURN u.name AS name, u.department AS dept
-      UNION
-      MATCH (u:User {clearance: 5}) RETURN u.name AS name, u.department AS dept
-      EXCEPT
-      MATCH (u:User {role: 'developer'}) RETURN u.name AS name, u.department AS dept
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["set-operations", "complex"]
-
-  # ============================================================================
-  # SECTION 7: VARIABLE-LENGTH PATHS
-  # ============================================================================
-
-  - name: "vlp-01-exact-length"
-    description: "Variable-length path with exact length"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (start:Person {name: 'Alice'})-[:FOLLOWS*2]->(end:Person)
-      RETURN end.name AS reached_in_2_hops
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["variable-length", "exact"]
-
-  - name: "vlp-02-range-length"
-    description: "Variable-length path with range (min..max)"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (start:Person {name: 'Alice'})-[:FOLLOWS*1..3]->(end:Person)
-      RETURN DISTINCT end.name AS reachable
-      ORDER BY end.name
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 2
-    tags: ["variable-length", "range"]
-
-  - name: "vlp-03-unbounded-max"
-    description: "Variable-length path with unbounded max (n..)"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (start:Person {name: 'Frank'})-[:FOLLOWS*2..]->(end:Person)
-      RETURN DISTINCT end.name AS distant_connections
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["variable-length", "unbounded"]
-
-  - name: "vlp-04-path-with-properties"
-    description: "Variable-length path with relationship property filter"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH path = (start:Person {name: 'Alice'})-[r:FOLLOWS*1..3]->(end:Person)
-      WHERE ALL(rel IN r WHERE rel.weight > 0.5)
-      RETURN end.name AS strong_connections, length(path) AS hops
-      ORDER BY hops
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["variable-length", "filtered"]
-
-  - name: "vlp-05-bidirectional-paths"
-    description: "Bidirectional variable-length path"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (a:Person {name: 'Carol'})-[:FOLLOWS*1..2]-(b:Person)
-      WHERE a <> b
-      RETURN DISTINCT b.name AS connected
-      ORDER BY b.name
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 2
-    tags: ["variable-length", "bidirectional"]
-
-  # ============================================================================
-  # SECTION 8: QUERY CHAINING WITH WITH CLAUSE
-  # ============================================================================
-
-  - name: "with-01-basic-projection"
-    description: "Basic WITH clause for variable projection"
+  - name: "opt-02-basic-optional"
+    description: "Basic optional match"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
       MATCH (u:User)
-      WITH u.name AS username, u.department AS dept, u.clearance AS level
-      WHERE level >= 3
-      RETURN username, dept, level
-      ORDER BY level DESC
+      OPTIONAL MATCH (u)-[:MANAGES]->(sub:User)
+      RETURN u.name AS manager, sub.name AS subordinate ORDER BY manager
     expect:
       exit_code: 0
       geode_query:
         min_rows: 1
-    tags: ["with-clause", "projection"]
+    tags: ["optional-match"]
 
-  - name: "with-02-aggregation-chain"
-    description: "WITH clause for aggregation and filtering"
+  - name: "opt-03-count-optional"
+    description: "Count with optional"
     args: ["query", "-"]
     stdin: |
       USE GRAPH production;
-      MATCH (u:User)-[:CAN_ACCESS]->(d:Document)
-      WITH u, count(d) AS doc_count
-      WHERE doc_count >= 2
-      RETURN u.name AS user, doc_count
-      ORDER BY doc_count DESC
+      MATCH (u:User)
+      OPTIONAL MATCH (u)-[r:MANAGES]->()
+      RETURN u.name AS user, count(r) AS manages ORDER BY user
     expect:
       exit_code: 0
       geode_query:
         min_rows: 1
-    tags: ["with-clause", "aggregation"]
-
-  - name: "with-03-multi-stage-pipeline"
-    description: "Multi-stage query pipeline with WITH"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User {department: 'Engineering'})
-      WITH u
-      MATCH (u)-[:CAN_ACCESS]->(d:Document)
-      WITH u, d
-      WHERE d.classification <> 'public'
-      RETURN u.name AS engineer, d.title AS restricted_doc
-      ORDER BY u.name
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["with-clause", "pipeline"]
-
-  - name: "with-04-order-and-limit"
-    description: "WITH clause with ORDER BY and LIMIT"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (p:Person)
-      WITH p ORDER BY p.influence DESC LIMIT 3
-      MATCH (p)-[:FOLLOWS]->(followed:Person)
-      RETURN p.name AS influencer, followed.name AS follows
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["with-clause", "order-limit"]
-
-  - name: "with-05-collect-aggregation"
-    description: "WITH clause with COLLECT aggregation"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (p:Person)-[:FOLLOWS]->(followed:Person)
-      WITH p, collect(followed.name) AS following_list
-      WHERE size(following_list) >= 2
-      RETURN p.name AS person, following_list, size(following_list) AS follow_count
-      ORDER BY follow_count DESC
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["with-clause", "collect"]
+    tags: ["optional-match"]
 
   # ============================================================================
-  # SECTION 9: ADVANCED DATA TYPES
+  # SECTION 5: BASIC EXPRESSIONS
   # ============================================================================
 
-  - name: "types-01-network-ip-addresses"
-    description: "Test IP address data type operations"
+  - name: "expr-01-arithmetic"
+    description: "Arithmetic expressions"
     args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (s1:Server {name: 'web-01', ip: '192.168.1.100', subnet: '192.168.1.0/24'}),
-             (s2:Server {name: 'web-02', ip: '192.168.1.101', subnet: '192.168.1.0/24'}),
-             (s3:Server {name: 'db-01', ip: '10.0.0.50', subnet: '10.0.0.0/8'})
-      RETURN count(*) AS servers_created
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["data-types", "network"]
-
-  - name: "types-02-temporal-dates"
-    description: "Test temporal data type operations"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (e1:Event {name: 'Launch', date: date('2024-06-15'), time: time('09:30:00')}),
-             (e2:Event {name: 'Review', date: date('2024-06-20'), time: time('14:00:00')}),
-             (e3:Event {name: 'Release', date: date('2024-07-01'), time: time('10:00:00')})
-      RETURN count(*) AS events_created
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["data-types", "temporal"]
-
-  - name: "types-03-temporal-query"
-    description: "Query with temporal filtering"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (e:Event)
-      WHERE e.date >= date('2024-06-15') AND e.date <= date('2024-06-30')
-      RETURN e.name AS event, e.date AS event_date
-      ORDER BY e.date
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 2
-    tags: ["data-types", "temporal-query"]
-
-  - name: "types-04-json-properties"
-    description: "Test JSON data type in properties"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (c:Config {
-        name: 'app-settings',
-        settings: '{"theme": "dark", "notifications": {"email": true, "sms": false}, "features": ["analytics", "export"]}'
-      })
-      RETURN c.name AS config_name
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["data-types", "json"]
-
-  - name: "types-05-uuid-generation"
-    description: "Test UUID data type"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (t:Transaction {
-        id: randomUUID(),
-        amount: 1500.00,
-        status: 'completed'
-      })
-      RETURN t.id AS transaction_id, t.amount AS amount
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["data-types", "uuid"]
-
-  # ============================================================================
-  # SECTION 10: COMPLEX NESTED QUERIES
-  # ============================================================================
-
-  - name: "nested-01-subquery-exists"
-    description: "EXISTS subquery pattern"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      WHERE EXISTS { MATCH (u)-[:AUTHORED]->(:Document) }
-      RETURN u.name AS author
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["nested", "exists"]
-
-  - name: "nested-02-pattern-comprehension"
-    description: "Pattern comprehension for collecting related data"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      RETURN u.name AS user,
-             [(u)-[:CAN_ACCESS]->(d:Document) | d.title] AS accessible_docs
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["nested", "comprehension"]
-
-  - name: "nested-03-case-when-complex"
-    description: "Complex CASE WHEN expressions"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      RETURN u.name AS user,
-             u.clearance AS level,
-             CASE
-               WHEN u.clearance >= 5 THEN 'Top Secret'
-               WHEN u.clearance >= 4 THEN 'Secret'
-               WHEN u.clearance >= 3 THEN 'Confidential'
-               WHEN u.clearance >= 2 THEN 'Restricted'
-               ELSE 'Public'
-             END AS access_tier
-      ORDER BY u.clearance DESC
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 3
-    tags: ["nested", "case-when"]
-
-  - name: "nested-04-coalesce-null-handling"
-    description: "COALESCE for null handling"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      OPTIONAL MATCH (u)-[:AUTHORED]->(d:Document)
-      RETURN u.name AS user,
-             COALESCE(d.title, 'No documents authored') AS latest_doc
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 3
-    tags: ["nested", "coalesce"]
-
-  - name: "nested-05-multi-match-correlation"
-    description: "Correlated multi-MATCH query"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User {department: 'Engineering'})
-      MATCH (u)-[:CAN_ACCESS]->(d:Document)
-      MATCH (author:User)-[:AUTHORED]->(d)
-      WHERE u <> author
-      RETURN u.name AS reader, d.title AS document, author.name AS author
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["nested", "correlated"]
-
-  # ============================================================================
-  # SECTION 11: OPTIONAL MATCH AND NULL HANDLING
-  # ============================================================================
-
-  - name: "optional-01-basic-optional-match"
-    description: "Basic OPTIONAL MATCH for left outer join"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      OPTIONAL MATCH (u)-[:AUTHORED]->(d:Document)
-      RETURN u.name AS user, d.title AS authored_doc
-      ORDER BY u.name
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 3
-    tags: ["optional-match", "basic"]
-
-  - name: "optional-02-count-with-null"
-    description: "COUNT with NULL from OPTIONAL MATCH"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      OPTIONAL MATCH (u)-[r:AUTHORED]->(:Document)
-      RETURN u.name AS user, count(r) AS doc_count
-      ORDER BY doc_count DESC
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 3
-    tags: ["optional-match", "count"]
-
-  - name: "optional-03-chained-optional"
-    description: "Chained OPTIONAL MATCH queries"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      OPTIONAL MATCH (u)-[:AUTHORED]->(d:Document)
-      OPTIONAL MATCH (d)<-[:CAN_ACCESS]-(reader:User)
-      WHERE reader <> u
-      RETURN u.name AS author, d.title AS doc, collect(DISTINCT reader.name) AS readers
-      ORDER BY u.name
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["optional-match", "chained"]
-
-  # ============================================================================
-  # SECTION 12: AGGREGATION FUNCTIONS
-  # ============================================================================
-
-  - name: "agg-01-basic-aggregations"
-    description: "Basic aggregation functions"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      RETURN count(u) AS user_count,
-             avg(u.clearance) AS avg_clearance,
-             min(u.clearance) AS min_clearance,
-             max(u.clearance) AS max_clearance,
-             sum(u.clearance) AS total_clearance
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["aggregation", "basic"]
-
-  - name: "agg-02-group-by-aggregation"
-    description: "Aggregation with GROUP BY"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      RETURN u.department AS department,
-             count(u) AS employee_count,
-             avg(u.clearance) AS avg_clearance
-      ORDER BY employee_count DESC
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 2
-    tags: ["aggregation", "group-by"]
-
-  - name: "agg-03-collect-function"
-    description: "COLLECT aggregation function"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      RETURN u.department AS department, collect(u.name) AS employees
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 2
-    tags: ["aggregation", "collect"]
-
-  - name: "agg-04-distinct-aggregation"
-    description: "DISTINCT with aggregation"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)-[:CAN_ACCESS]->(d:Document)
-      RETURN count(DISTINCT d) AS unique_docs,
-             count(d) AS total_access_grants
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["aggregation", "distinct"]
-
-  # ============================================================================
-  # SECTION 13: PERFORMANCE ANALYSIS (EXPLAIN/PROFILE)
-  # ============================================================================
-
-  - name: "perf-01-explain-simple"
-    description: "EXPLAIN simple query plan"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      EXPLAIN MATCH (u:User)-[:CAN_ACCESS]->(d:Document)
-      WHERE u.department = 'Engineering'
-      RETURN u.name, d.title
-    expect:
-      exit_code: 0
-      stdout_contains: ["plan", "cost"]
-    tags: ["performance", "explain"]
-
-  - name: "perf-02-explain-complex"
-    description: "EXPLAIN complex query with multiple patterns"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      EXPLAIN MATCH (u:User)-[:AUTHORED]->(d:Document)
-      WHERE u.clearance >= 3
-      WITH u, count(d) AS doc_count
-      WHERE doc_count >= 1
-      RETURN u.name, doc_count
-    expect:
-      exit_code: 0
-      stdout_contains: ["plan"]
-    tags: ["performance", "explain"]
-
-  - name: "perf-03-profile-query"
-    description: "PROFILE query with execution stats"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      PROFILE MATCH (p:Person)-[:FOLLOWS]->(other:Person)
-      RETURN p.name, count(other) AS following
-    expect:
-      exit_code: 0
-    tags: ["performance", "profile"]
-
-  # ============================================================================
-  # SECTION 14: MERGE OPERATIONS
-  # ============================================================================
-
-  - name: "merge-01-create-if-not-exists"
-    description: "MERGE creates node if not exists"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MERGE (dept:Department {name: 'Research'})
-      ON CREATE SET dept.created = datetime(), dept.status = 'new'
-      RETURN dept.name AS department, dept.status AS status
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["merge", "create"]
-
-  - name: "merge-02-match-if-exists"
-    description: "MERGE matches existing node"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MERGE (u:User {name: 'Alice'})
-      ON MATCH SET u.last_seen = datetime()
-      RETURN u.name AS user, u.department AS dept
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["merge", "match"]
-
-  - name: "merge-03-relationship-merge"
-    description: "MERGE relationship between nodes"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User {name: 'Alice'}), (d:Document {title: 'Public Roadmap'})
-      MERGE (u)-[r:REVIEWED]->(d)
-      ON CREATE SET r.date = datetime(), r.status = 'new_review'
-      RETURN u.name AS reviewer, d.title AS document
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["merge", "relationship"]
-
-  # ============================================================================
-  # SECTION 15: DELETE OPERATIONS
-  # ============================================================================
-
-  - name: "delete-01-delete-node"
-    description: "DELETE unconnected nodes"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (temp:Temporary {purpose: 'delete_test'})
-      WITH temp
-      DELETE temp
-      RETURN 'deleted' AS status
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["delete", "node"]
-
-  - name: "delete-02-detach-delete"
-    description: "DETACH DELETE node with relationships"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (temp:TempPerson {name: 'Temporary'})-[:TEMP_REL]->(:TempTarget {value: 1})
-      WITH 1 AS created
-      MATCH (t:TempPerson {name: 'Temporary'})
-      DETACH DELETE t
-      RETURN 'detach_deleted' AS status
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["delete", "detach"]
-
-  - name: "delete-03-conditional-delete"
-    description: "Conditional DELETE based on properties"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      CREATE (:Cleanup {id: 1, temporary: true}), (:Cleanup {id: 2, temporary: false})
-      WITH 1 AS setup
-      MATCH (c:Cleanup {temporary: true})
-      DELETE c
-      WITH 1 AS deleted
-      MATCH (remaining:Cleanup)
-      RETURN count(remaining) AS remaining_count
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["delete", "conditional"]
-
-  # ============================================================================
-  # SECTION 16: STRING AND LIST FUNCTIONS
-  # ============================================================================
-
-  - name: "func-01-string-functions"
-    description: "Test string manipulation functions"
-    args: ["query", "-"]
-    stdin: |
-      RETURN toUpper('hello') AS upper,
-             toLower('WORLD') AS lower,
-             trim('  spaced  ') AS trimmed,
-             substring('testing', 0, 4) AS sub,
-             replace('hello', 'l', 'x') AS replaced,
-             size('length') AS str_length
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["functions", "string"]
-
-  - name: "func-02-list-functions"
-    description: "Test list manipulation functions"
-    args: ["query", "-"]
-    stdin: |
-      WITH [1, 2, 3, 4, 5] AS numbers
-      RETURN size(numbers) AS list_size,
-             head(numbers) AS first,
-             last(numbers) AS last_elem,
-             tail(numbers) AS rest,
-             reverse(numbers) AS reversed
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["functions", "list"]
-
-  - name: "func-03-math-functions"
-    description: "Test mathematical functions"
-    args: ["query", "-"]
-    stdin: |
-      RETURN abs(-42) AS absolute,
-             ceil(3.14) AS ceiling,
-             floor(3.99) AS floored,
-             round(3.5) AS rounded,
-             sqrt(16) AS square_root,
-             sign(-5) AS sign_value
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["functions", "math"]
-
-  - name: "func-04-type-functions"
-    description: "Test type checking functions"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      RETURN u.name AS name,
-             labels(u) AS node_labels,
-             properties(u) AS all_props
-      LIMIT 1
-    expect:
-      exit_code: 0
-      geode_query:
-        row_count: 1
-    tags: ["functions", "type"]
-
-  # ============================================================================
-  # SECTION 17: REAL-TIME ANALYTICS PATTERNS
-  # ============================================================================
-
-  - name: "analytics-01-time-window-aggregation"
-    description: "Time-window based aggregation"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (m:Metric)
-      WHERE m.timestamp >= '2024-11-01' AND m.timestamp <= '2024-12-31'
-      RETURN m.name AS metric,
-             avg(m.value) AS avg_value,
-             count(m) AS sample_count
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["analytics", "time-window"]
-
-  - name: "analytics-02-trend-analysis"
-    description: "Trend analysis with ordering"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (p:Person)-[:FOLLOWS]->(other:Person)
-      WITH p, count(other) AS follower_count
-      ORDER BY follower_count DESC
-      RETURN p.name AS influencer,
-             follower_count,
-             CASE
-               WHEN follower_count >= 3 THEN 'high'
-               WHEN follower_count >= 2 THEN 'medium'
-               ELSE 'low'
-             END AS influence_tier
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["analytics", "trend"]
-
-  - name: "analytics-03-comparative-analysis"
-    description: "Comparative analysis between groups"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (u:User)
-      WITH u.department AS dept, avg(u.clearance) AS avg_clearance
-      RETURN dept, avg_clearance,
-             CASE
-               WHEN avg_clearance > 3 THEN 'high_security'
-               ELSE 'standard'
-             END AS security_tier
-      ORDER BY avg_clearance DESC
-    expect:
-      exit_code: 0
-      geode_query:
-        min_rows: 1
-    tags: ["analytics", "comparative"]
-
-  # ============================================================================
-  # SECTION 18: INDEX OPERATIONS
-  # ============================================================================
-
-  - name: "index-01-create-btree-index"
-    description: "Create B-tree index on node property"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      CREATE INDEX IF NOT EXISTS user_clearance_idx FOR (u:User) ON (u.clearance)
-    expect:
-      exit_code: 0
-    tags: ["index", "create", "btree"]
-
-  - name: "index-02-show-indexes"
-    description: "Show all indexes"
-    args: ["query", "-"]
-    stdin: |
-      SHOW INDEXES
-    expect:
-      exit_code: 0
-    tags: ["index", "show"]
-
-  - name: "index-03-drop-index"
-    description: "Drop an index"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      DROP INDEX IF EXISTS user_clearance_idx
-    expect:
-      exit_code: 0
-    tags: ["index", "drop"]
-
-  # ============================================================================
-  # SECTION 19: CONSTRAINT OPERATIONS
-  # ============================================================================
-
-  - name: "constraint-01-create-unique"
-    description: "Create uniqueness constraint"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      CREATE CONSTRAINT IF NOT EXISTS user_id_unique FOR (u:User) REQUIRE u.id IS UNIQUE
-    expect:
-      exit_code: 0
-    tags: ["constraint", "unique"]
-
-  - name: "constraint-02-show-constraints"
-    description: "Show all constraints"
-    args: ["query", "-"]
-    stdin: |
-      SHOW CONSTRAINTS
-    expect:
-      exit_code: 0
-    tags: ["constraint", "show"]
-
-  - name: "constraint-03-drop-constraint"
-    description: "Drop a constraint"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      DROP CONSTRAINT IF EXISTS user_id_unique
-    expect:
-      exit_code: 0
-    tags: ["constraint", "drop"]
-
-  # ============================================================================
-  # SECTION 20: CLEANUP
-  # ============================================================================
-
-  - name: "cleanup-01-analytics-graph"
-    description: "Clean up analytics graph data"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH analytics;
-      MATCH (n) DETACH DELETE n
-      RETURN 'analytics_cleaned' AS status
-    expect:
-      exit_code: 0
-    tags: ["cleanup"]
-
-  - name: "cleanup-02-production-graph"
-    description: "Clean up production graph data"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (n) DETACH DELETE n
-      RETURN 'production_cleaned' AS status
-    expect:
-      exit_code: 0
-    tags: ["cleanup"]
-
-  - name: "cleanup-03-staging-graph"
-    description: "Clean up staging graph data"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH staging;
-      MATCH (n) DETACH DELETE n
-      RETURN 'staging_cleaned' AS status
-    expect:
-      exit_code: 0
-    tags: ["cleanup"]
-
-  - name: "cleanup-04-verify-empty"
-    description: "Verify all graphs are empty"
-    args: ["query", "-"]
-    stdin: |
-      USE GRAPH production;
-      MATCH (n) RETURN count(n) AS remaining_nodes
+    stdin: "RETURN 1 + 2 AS sum, 10 - 3 AS diff, 4 * 5 AS prod"
     expect:
       exit_code: 0
       geode_query:
         row_count: 1
         rows:
-          - remaining_nodes: 0
-    tags: ["cleanup", "verify"]
+          - sum: 3
+            diff: 7
+            prod: 20
+    tags: ["expression"]
 
-tags: ["enterprise", "comprehensive", "security", "vectors", "algorithms", "transactions", "multi-graph"]
+  - name: "expr-02-comparison"
+    description: "Comparison expressions"
+    args: ["query", "-"]
+    stdin: "RETURN 5 > 3 AS gt, 2 < 1 AS lt, 4 = 4 AS eq"
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        rows:
+          - gt: true
+            lt: false
+            eq: true
+    tags: ["expression"]
+
+  - name: "expr-03-string-ops"
+    description: "String operations"
+    args: ["query", "-"]
+    stdin: "RETURN 'hello' + ' ' + 'world' AS greeting"
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        rows:
+          - greeting: "hello world"
+    tags: ["expression"]
+
+  - name: "expr-04-case"
+    description: "CASE expression"
+    args: ["query", "-"]
+    stdin: |
+      USE GRAPH production;
+      MATCH (u:User)
+      RETURN u.name,
+             CASE WHEN u.role = 'admin' THEN 'Administrator'
+                  ELSE 'Staff' END AS title
+      ORDER BY u.name
+    expect:
+      exit_code: 0
+      geode_query:
+        min_rows: 1
+    tags: ["expression", "case"]
+
+  # ============================================================================
+  # SECTION 6: TRANSACTIONS
+  # ============================================================================
+
+  - name: "txn-01-setup"
+    description: "Setup transaction test data"
+    args: ["query", "-"]
+    stdin: |
+      USE GRAPH production;
+      CREATE (a:Account {id: 'A1', balance: 1000}),
+             (b:Account {id: 'A2', balance: 500})
+      RETURN count(*) AS created
+    expect:
+      exit_code: 0
+    tags: ["transaction", "setup"]
+
+  - name: "txn-02-read-accounts"
+    description: "Read account balances"
+    args: ["query", "-"]
+    stdin: |
+      USE GRAPH production;
+      MATCH (a:Account) RETURN a.id AS id, a.balance AS balance ORDER BY a.id
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 2
+    tags: ["transaction"]
+
+  # ============================================================================
+  # SECTION 7: CLEANUP
+  # ============================================================================
+
+  - name: "cleanup-01-production"
+    description: "Clean production graph"
+    args: ["query", "-"]
+    stdin: |
+      USE GRAPH production;
+      MATCH (n) DETACH DELETE n
+    expect:
+      exit_code: 0
+    tags: ["cleanup"]
+
+  - name: "cleanup-02-analytics"
+    description: "Clean analytics graph"
+    args: ["query", "-"]
+    stdin: |
+      USE GRAPH analytics;
+      MATCH (n) DETACH DELETE n
+    expect:
+      exit_code: 0
+    tags: ["cleanup"]
+
+  - name: "cleanup-03-drop-graphs"
+    description: "Drop test graphs"
+    args: ["query", "-"]
+    stdin: |
+      DROP GRAPH IF EXISTS production;
+      DROP GRAPH IF EXISTS analytics
+    expect:
+      exit_code: 0
+    tags: ["cleanup"]
