@@ -1362,6 +1362,7 @@ pub const Parser = struct {
         // Check for WITH at the beginning (for queries like: WITH 5 AS x RETURN x)
         // Parse WITH clause first if present, before MATCH/CREATE
         var initial_with_clause: ?ast.WithClause = null;
+        var initial_where_expr: ?ast.Expr = null; // WHERE clause after initial WITH
         if (self.cur.kind == .WITH) {
             self.advance();
             var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
@@ -1425,8 +1426,15 @@ pub const Parser = struct {
                 .limit = with_limit,
                 .offset = with_offset,
             };
-            // Allow optional WHERE after WITH
-            // Note: WHERE after WITH filters the WITH results, not graph patterns
+
+            // CANARY: REQ=REQ-GQL-WITH-WHERE-003; FEATURE="InitialWithWhere"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // Allow optional WHERE after initial WITH to filter the projected bindings
+            // This is for queries like: WITH 5 AS x WHERE x > 0 RETURN x
+            // Or chained: MATCH (n) WITH n.name AS name WITH name WHERE name = 'Alice' RETURN name
+            if (self.cur.kind == .WHERE) {
+                self.advance();
+                initial_where_expr = try self.parseOrExpr();
+            }
 
             // Check for FOR after initial WITH clause
             if (self.cur.kind == .FOR) {
@@ -1452,6 +1460,35 @@ pub const Parser = struct {
                     .group_by = null,
                     .having = null,
                     .for_statement = for_ptr,
+                };
+            }
+
+            // CANARY: REQ=REQ-GQL-WITH-CHAIN-003; FEATURE="ConsecutiveWithClauses"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // Check for another WITH after initial WITH (chained WITH clauses without MATCH)
+            // e.g., WITH 'Alice' AS n WITH n AS n2 RETURN n2
+            if (self.cur.kind == .WITH) {
+                // Parse the continuation as a new query
+                const next_query = try self.parseQuery();
+                // Allocate on arena and store pointer
+                const next_ptr = try self.arena.allocator().create(ast.Query);
+                next_ptr.* = next_query;
+
+                // Return a query with initial_with_clause and next_query
+                return ast.Query{
+                    .optional_match = false,
+                    .match = .{ .chains = &.{} }, // Empty match pattern
+                    .create_pattern = null,
+                    .where_clause = initial_where_expr,
+                    .with_clause = null, // WITH items become ret.items for chaining
+                    .set_clauses = &.{},
+                    .remove_clauses = &.{},
+                    .ret = .{ .items = initial_with_clause.?.items, .distinct = false },
+                    .order_by = null,
+                    .limit = null,
+                    .offset = null,
+                    .next_query = next_ptr,
+                    .group_by = null,
+                    .having = null,
                 };
             }
         }
@@ -1552,7 +1589,8 @@ pub const Parser = struct {
             have_match = true;
         }
         // Prepare defaults
-        var where_expr: ?ast.Expr = null;
+        // Initialize where_expr from initial_where_expr (from initial WITH clause if present)
+        var where_expr: ?ast.Expr = initial_where_expr;
         var with_clause: ?ast.WithClause = null;
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;

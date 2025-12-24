@@ -6,8 +6,20 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 
 **Test File**: `./testing/shell/enterprise_test.gql`
 **Statements Executed**: 150
-**Explicit Errors**: 6 → 0 (after fixes)
-**Status**: ✅ FIXED (2025-12-24)
+**Explicit Errors**: 6 → 0 (parsing fixed)
+**Status**: ⚠️ MOSTLY FIXED (2025-12-24)
+
+### Fix Summary (2025-12-24)
+| Issue | Status | Description |
+|-------|--------|-------------|
+| E1 | ✅ FIXED | Graph context switch data loss - fixed delete isolation |
+| E2 | ⚠️ PARTIAL | Multi-step WITH - pure WITH chains work, MATCH chains pending |
+| E3 | ✅ FIXED | List slice syntax [start..end] |
+| E4-E7 | ✅ FIXED | last(), power(), log10(), toBoolean() functions |
+| E8-E9 | ✅ FIXED | EXISTS/COUNT subquery parsing and evaluation |
+| E10 | ✅ FIXED | OPTIONAL MATCH after WHERE clause |
+| E11 | ⚠️ PENDING | Aggregation after relationships - needs verification |
+| E12 | ✅ EXPECTED | Variable-length path duplicates - correct behavior |
 
 ---
 
@@ -56,7 +68,7 @@ The `USE GRAPH` implementation may be getting a new/fresh graph storage referenc
 
 ---
 
-### Issue E2: Multi-step WITH Clause Not Supported (P1) ✅ FIXED
+### Issue E2: Multi-step WITH Clause Not Supported (P1) ⚠️ PARTIALLY FIXED
 
 **Section**: 2.2
 
@@ -73,7 +85,17 @@ RETURN dept, emp_count, avg_salary ORDER BY avg_salary DESC;
 
 **Expected**: Parser should support chained `WITH...WITH...RETURN` clauses
 
-**Fix Applied**: Modified `src/gql/parser.zig` line 1831 to include `WITH` token in the query chaining condition, allowing `WITH...WITH...RETURN` patterns.
+**Fixes Applied** (2025-12-24):
+1. Parser: Added `WITH` token in query chaining condition (line 1858)
+2. Parser: Added consecutive WITH clause support in initial_with_clause path (lines 1469-1492)
+3. Parser: Added WHERE clause parsing after initial WITH (lines 1434-1437)
+4. Execution: Added WITH clause binding transformation in executeQueryWithBindingsImpl (lines 340-371)
+5. Execution: Added WHERE clause evaluation for chained queries (lines 380-396)
+
+**Current Status**:
+- ✅ Pure WITH chains work: `WITH 'Hello' AS x WITH x AS y RETURN y` → returns "Hello"
+- ⚠️ MATCH + WITH chains still return null: `MATCH (e) WITH e.name AS n WITH n AS n2 RETURN n2` → returns null
+- Investigation ongoing for MATCH->WITH->WITH execution path
 
 ---
 
@@ -158,7 +180,9 @@ RETURN e.name AS has_manager;
 
 **Output**: `Error: Syntax error in query`
 
-**Fix Applied**: Updated `parseUnaryExpr` in `src/gql/parser.zig` to support `EXISTS { MATCH pattern }` syntax by optionally consuming the MATCH keyword inside the braces.
+**Fixes Applied** (2025-12-24):
+1. Parser: Updated `parseUnaryExpr` in `src/gql/parser.zig` to support `EXISTS { MATCH pattern }` syntax
+2. Evaluation: Added `.Exists` case to `evalExpr` in `src/eval.zig` (lines 2058-2066) that uses `countPatternMatches` callback and returns true if count > 0
 
 ---
 
@@ -175,7 +199,9 @@ RETURN d.name AS department,
 
 **Output**: `Error: Syntax error in query`
 
-**Fix Applied**: Added `COUNT { MATCH pattern }` support in `parsePostfixExpr` in `src/gql/parser.zig`, parsing the subquery pattern to a `PatternCount` AST node.
+**Fixes Applied** (2025-12-24):
+1. Parser: Added `COUNT { MATCH pattern }` support in `parsePostfixExpr` (lines 2864-2879)
+2. COUNT subqueries create `PatternCount` AST nodes, which are evaluated using the existing `countPatternMatches` callback
 
 ---
 

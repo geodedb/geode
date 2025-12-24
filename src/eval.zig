@@ -2055,6 +2055,15 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             };
             break :blk_count Value{ .Int = count };
         },
+        // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=Evaluation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+        .Exists => |ex| blk_exists: {
+            // EXISTS predicate: return true if pattern matches at least once
+            // Call the execution layer to count pattern matches
+            const count = getExecutionCallbacks().countPatternMatches(allocator, ex.pattern.*) catch {
+                break :blk_exists Value{ .Bool = false };
+            };
+            break :blk_exists Value{ .Bool = count > 0 };
+        },
         .MapProjection => |mp| blk_projection: {
             // Map projection: n {.name, .age}
             // Evaluate the source expression

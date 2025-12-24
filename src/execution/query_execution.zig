@@ -325,26 +325,81 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     }
 
     // If there's no MATCH clause, just evaluate RETURN with bindings
+    // CANARY: REQ=REQ-GQL-WITH-WHERE-001; FEATURE="ChainedWITHWithWHERE"; ASPECT=WhereEvaluation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
     if (q.match.chains.len == 0 and binding_names.len > 0) {
-        const items = q.ret.items;
-        const columns = try generateUniqueColumnNames(allocator, items);
-
-        // Create a single row by evaluating RETURN expressions with bindings
-        var row = try allocator.alloc(Value, items.len);
-
         const combined = try combineBindingParams(allocator, context, binding_names, binding_values);
         defer if (combined.owns) {
             allocator.free(combined.names);
             allocator.free(combined.values);
         };
 
+        // Start with input bindings
+        var current_names: []const []const u8 = binding_names;
+        var current_values: []const Value = binding_values;
+
+        // CANARY: REQ=REQ-GQL-WITH-CHAIN-002; FEATURE="ChainedWithClauseExecution"; ASPECT=BindingTransform; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+        // If there's a WITH clause, first transform bindings by evaluating WITH items
+        if (q.with_clause) |with_clause| {
+            const env_for_with = Env{
+                .allocator = allocator,
+                .names = binding_names,
+                .values = binding_values,
+                .param_names = combined.names,
+                .param_values = combined.values,
+            };
+
+            // Evaluate WITH items to create new bindings
+            var new_names = try std.ArrayList([]const u8).initCapacity(allocator, with_clause.items.len);
+            var new_values = try std.ArrayList(Value).initCapacity(allocator, with_clause.items.len);
+
+            for (with_clause.items) |item| {
+                const val = try eval.evalExpr(allocator, item.expr, env_for_with);
+                // Use alias if present, otherwise try to get identifier name from expression
+                const name = if (item.alias) |alias|
+                    alias
+                else if (item.expr == .Ident)
+                    item.expr.Ident.orig
+                else
+                    "?column?";
+                try new_names.append(allocator, name);
+                try new_values.append(allocator, val);
+            }
+
+            // Convert to owned slices to persist beyond this block
+            current_names = try new_names.toOwnedSlice(allocator);
+            current_values = try new_values.toOwnedSlice(allocator);
+        }
+
         const env = Env{
             .allocator = allocator,
-            .names = binding_names,
-            .values = binding_values,
+            .names = current_names,
+            .values = current_values,
             .param_names = combined.names,
             .param_values = combined.values,
         };
+
+        // Check WHERE clause - if it evaluates to false, return empty result
+        if (q.where_clause) |where_expr| {
+            const where_result = try eval.evalExpr(allocator, where_expr, env);
+            const passes_filter = switch (where_result) {
+                .Bool => |b| b,
+                else => false,
+            };
+            if (!passes_filter) {
+                const items = q.ret.items;
+                const columns = try generateUniqueColumnNames(allocator, items);
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = try allocator.alloc([]Value, 0),
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
+            }
+        }
+
+        // Create a single row by evaluating RETURN expressions with (transformed) bindings
+        const items = q.ret.items;
+        const columns = try generateUniqueColumnNames(allocator, items);
+        var row = try allocator.alloc(Value, items.len);
 
         for (items, 0..) |item, i| {
             row[i] = try eval.evalExpr(allocator, item.expr, env);
@@ -361,12 +416,10 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     }
 
     // If all MATCH variables are bound, we can skip matching and just evaluate RETURN
+    // CANARY: REQ=REQ-GQL-WITH-WHERE-002; FEATURE="BoundVarsWithWHERE"; ASPECT=WhereEvaluation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
     if (all_vars_bound and bound_var_env_names.items.len > 0) {
         const items = q.ret.items;
         const columns = try generateUniqueColumnNames(allocator, items);
-
-        // Create a single row by evaluating RETURN expressions with bound variables
-        var row = try allocator.alloc(Value, items.len);
 
         const combined = try combineBindingParams(allocator, context, binding_names, binding_values);
         defer if (combined.owns) {
@@ -381,6 +434,26 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
             .param_names = combined.names,
             .param_values = combined.values,
         };
+
+        // Check WHERE clause first - if it evaluates to false, return empty result
+        if (q.where_clause) |where_expr| {
+            const where_result = try eval.evalExpr(allocator, where_expr, env);
+            const passes_filter = switch (where_result) {
+                .Bool => |b| b,
+                else => false,
+            };
+            if (!passes_filter) {
+                // WHERE clause failed, return empty result
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = try allocator.alloc([]Value, 0),
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
+            }
+        }
+
+        // Create a single row by evaluating RETURN expressions with bound variables
+        var row = try allocator.alloc(Value, items.len);
 
         for (items, 0..) |item, i| {
             row[i] = try eval.evalExpr(allocator, item.expr, env);
