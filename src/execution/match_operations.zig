@@ -1505,9 +1505,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const store = graph_store.getGlobalStore(allocator);
     // Graph to filter by - use "default" if no graph specified
     const filter_graph = current_graph orelse "default";
-    std.debug.print("[MATCH] executeMatchQueryImpl filter_graph='{s}'\n", .{filter_graph});
-
-    // CANARY(memory-safety): Debug output to trace execution
 
     // Extract pattern information from MATCH
     var match_variable: ?[]const u8 = null;

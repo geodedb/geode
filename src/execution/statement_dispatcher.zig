@@ -261,11 +261,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                             try createTestGraphG1(allocator);
                         } else if (std.mem.eql(u8, graph_name, "G2")) {
                             try createTestGraphG2(allocator);
-                        } else {
-                            // For any other graph (including "NewG"), clear the store to create empty graph
-                            const store = graph_store.getGlobalStore(allocator);
-                            store.clearNodes();
                         }
+                        // For other graphs (including "NewG"), just set the session graph
+                        // MATCH will filter by graph_name, so an empty graph returns 0 results naturally
                     },
                     .TimeZone => |tz| {
                         // Set timezone in session state

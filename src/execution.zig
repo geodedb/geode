@@ -816,11 +816,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                             try createTestGraphG1(allocator);
                         } else if (std.mem.eql(u8, graph_name, "G2")) {
                             try createTestGraphG2(allocator);
-                        } else {
-                            // For any other graph (including "NewG"), clear the store to create empty graph
-                            const store = graph_store.getGlobalStore(allocator);
-                            store.clearNodes();
                         }
+                        // For other graphs (including "NewG"), just set the session graph
+                        // MATCH will filter by graph_name, so an empty graph returns 0 results naturally
                     },
                     .TimeZone => |tz| {
                         // Set timezone in session state
@@ -1539,29 +1537,29 @@ pub fn expandVariableLengthPaths(
 pub fn createTestGraphG1(allocator: std.mem.Allocator) !void {
     const store = graph_store.getGlobalStore(allocator);
 
-    // Clear existing nodes first
-    store.clearNodes();
+    // Clear only G1 nodes before recreating test data
+    store.clearNodesForGraph("G1");
 
     // Create test nodes for G1
     // Based on test T15, we have nodes with labels "A", "A", and "B"
     // Node 1: label="A", v=1
     const node1_labels = try allocator.alloc([]const u8, 0);
     defer allocator.free(node1_labels);
-    const node1_id = try store.createNode(node1_labels);
+    const node1_id = try store.createNodeWithGraph(node1_labels, "G1");
     try store.setNodeProperty(node1_id, "label", .{ .String = "A" });
     try store.setNodeProperty(node1_id, "v", .{ .Int = 1 });
 
     // Node 2: label="A", v=2  (another A node for count(*) = 2 in T15)
     const node2_labels = try allocator.alloc([]const u8, 0);
     defer allocator.free(node2_labels);
-    const node2_id = try store.createNode(node2_labels);
+    const node2_id = try store.createNodeWithGraph(node2_labels, "G1");
     try store.setNodeProperty(node2_id, "label", .{ .String = "A" });
     try store.setNodeProperty(node2_id, "v", .{ .Int = 2 });
 
     // Node 3: label="B", v=null (no v property, for testing AVG/SUM null handling)
     const node3_labels = try allocator.alloc([]const u8, 0);
     defer allocator.free(node3_labels);
-    const node3_id = try store.createNode(node3_labels);
+    const node3_id = try store.createNodeWithGraph(node3_labels, "G1");
     try store.setNodeProperty(node3_id, "label", .{ .String = "B" });
     // No v property for this node (null)
 }
@@ -1569,8 +1567,8 @@ pub fn createTestGraphG1(allocator: std.mem.Allocator) !void {
 pub fn createTestGraphG2(allocator: std.mem.Allocator) !void {
     const store = graph_store.getGlobalStore(allocator);
 
-    // Clear existing nodes first
-    store.clearNodes();
+    // Clear only G2 nodes before recreating test data
+    store.clearNodesForGraph("G2");
 
     // Create test nodes for G2 - only 2 nodes for T12 test
     var i: u8 = 0;
@@ -1579,7 +1577,7 @@ pub fn createTestGraphG2(allocator: std.mem.Allocator) !void {
         defer allocator.free(labels);
         labels[0] = try allocator.dupe(u8, "Node");
         defer allocator.free(labels[0]);
-        const node_id = try store.createNode(labels);
+        const node_id = try store.createNodeWithGraph(labels, "G2");
         // All nodes have v=1 for testing COUNT DISTINCT
         try store.setNodeProperty(node_id, "v", .{ .Int = 1 });
     }

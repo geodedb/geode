@@ -186,10 +186,82 @@ pub const GraphStore = struct {
         self.next_edge_id = 1;
     }
 
+    // Clear only nodes and edges for a specific graph
+    // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=ClearGraphNodes; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    pub fn clearNodesForGraph(self: *GraphStore, graph_name: []const u8) void {
+        // Collect node IDs to remove (can't modify while iterating)
+        var nodes_to_remove = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return;
+        defer nodes_to_remove.deinit(self.allocator);
+
+        var node_iter = self.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.graph_name, graph_name)) {
+                nodes_to_remove.append(self.allocator, entry.key_ptr.*) catch continue;
+            }
+        }
+
+        // Remove and free the nodes
+        for (nodes_to_remove.items) |node_id| {
+            if (self.nodes.fetchRemove(node_id)) |kv| {
+                var node = kv.value;
+                // Free each label string
+                for (node.labels) |label| {
+                    self.allocator.free(label);
+                }
+                // Free the labels array itself
+                self.allocator.free(node.labels);
+                // Free the graph_name
+                if (node.graph_name.len > 0) {
+                    self.allocator.free(node.graph_name);
+                }
+                // Free the properties hashmap
+                var prop_iter = node.properties.iterator();
+                while (prop_iter.next()) |prop_entry| {
+                    self.allocator.free(prop_entry.key_ptr.*);
+                    switch (prop_entry.value_ptr.*) {
+                        .String => |s| self.allocator.free(s),
+                        else => {},
+                    }
+                }
+                node.properties.deinit();
+            }
+        }
+
+        // Collect edge IDs to remove
+        var edges_to_remove = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return;
+        defer edges_to_remove.deinit(self.allocator);
+
+        var edge_iter = self.edges.iterator();
+        while (edge_iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.graph_name, graph_name)) {
+                edges_to_remove.append(self.allocator, entry.key_ptr.*) catch continue;
+            }
+        }
+
+        // Remove and free the edges
+        for (edges_to_remove.items) |edge_id| {
+            if (self.edges.fetchRemove(edge_id)) |kv| {
+                var edge = kv.value;
+                self.allocator.free(edge.label);
+                if (edge.graph_name.len > 0) {
+                    self.allocator.free(edge.graph_name);
+                }
+                var prop_iter = edge.properties.iterator();
+                while (prop_iter.next()) |prop_entry| {
+                    self.allocator.free(prop_entry.key_ptr.*);
+                    switch (prop_entry.value_ptr.*) {
+                        .String => |s| self.allocator.free(s),
+                        else => {},
+                    }
+                }
+                edge.properties.deinit();
+            }
+        }
+    }
+
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
     // Create node with optional graph name for per-graph data isolation
     pub fn createNodeWithGraph(self: *GraphStore, labels: [][]const u8, graph_name: []const u8) !u64 {
-        std.debug.print("[GRAPH_STORE] createNodeWithGraph called with graph_name='{s}'\n", .{graph_name});
         // Generate UUIDv7-style time-based unique ID
         const id = generateTimeBasedId();
 
