@@ -1970,6 +1970,50 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Otherwise return null
             break :blk_index Value{ .Null = {} };
         },
+        .Slice => |slice| blk_slice: {
+            // CANARY: REQ=REQ-GQL-SLICE-003; FEATURE="ListSlicing"; ASPECT=Evaluation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+            // Handle list slicing like list[2..4]
+            const target = try evalExpr(allocator, slice.target.*, env);
+
+            // Target must be a list
+            if (target != .List) break :blk_slice Value{ .Null = {} };
+            const list = target.List;
+
+            // Evaluate start index (default 0)
+            var start_idx: usize = 0;
+            if (slice.start) |start_expr| {
+                const start_val = try evalExpr(allocator, start_expr.*, env);
+                if (start_val != .Int) return EvalError.TypeMismatch;
+                if (start_val.Int < 0) {
+                    break :blk_slice Value{ .List = &[_]Value{} };
+                }
+                start_idx = @intCast(start_val.Int);
+            }
+
+            // Evaluate end index (default list.len)
+            var end_idx: usize = list.len;
+            if (slice.end) |end_expr| {
+                const end_val = try evalExpr(allocator, end_expr.*, env);
+                if (end_val != .Int) return EvalError.TypeMismatch;
+                if (end_val.Int < 0) {
+                    break :blk_slice Value{ .List = &[_]Value{} };
+                }
+                end_idx = @intCast(end_val.Int);
+            }
+
+            // Clamp indices to valid range
+            if (start_idx > list.len) start_idx = list.len;
+            if (end_idx > list.len) end_idx = list.len;
+            if (start_idx >= end_idx) {
+                break :blk_slice Value{ .List = &[_]Value{} };
+            }
+
+            // Create the sliced list
+            const slice_len = end_idx - start_idx;
+            const result_slice = try allocator.alloc(Value, slice_len);
+            @memcpy(result_slice, list[start_idx..end_idx]);
+            break :blk_slice Value{ .List = result_slice };
+        },
         .Map => |props| blk_map: {
             // Create a map from properties
             var map = std.StringHashMap(Value).init(allocator);
@@ -2754,7 +2798,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     } else if (std.mem.eql(u8, function_name, "floor")) {
         const result = evaluator_functions.floor_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "pow")) {
+    } else if (std.mem.eql(u8, function_name, "pow") or std.mem.eql(u8, function_name, "power")) {
+        // CANARY: REQ=REQ-GQL-POWER-001; FEATURE="MathFunctions"; ASPECT=PowerAlias; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
         if (args.len != 2) return null;
         const heap_second_arg = evalValueToHeapValue(try evalExpr(allocator, args[1].*, env));
         const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch return null;
@@ -2795,6 +2840,24 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
         };
         return heapValueToEvalValue(result);
+    } else if (std.mem.eql(u8, function_name, "log10")) {
+        // CANARY: REQ=REQ-GQL-LOG10-001; FEATURE="MathFunctions"; ASPECT=Log10; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+        // log10(x) = log(x) / log(10)
+        switch (first_arg) {
+            .Int => |i| {
+                if (i <= 0) return Value{ .Null = {} };
+                const f: f64 = @floatFromInt(i);
+                const log10_result = @log10(f);
+                return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * 1000000), .scale = 6 } };
+            },
+            .Decimal => |d| {
+                const f: f64 = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
+                if (f <= 0) return Value{ .Null = {} };
+                const log10_result = @log10(f);
+                return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * 1000000), .scale = 6 } };
+            },
+            else => return Value{ .Null = {} },
+        }
     } else if (std.mem.eql(u8, function_name, "exp")) {
         const result = evaluator_functions.exp_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
@@ -2855,6 +2918,16 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .List = &[_]Value{} },
         }
+    } else if (std.mem.eql(u8, function_name, "last")) {
+        // CANARY: REQ=REQ-GQL-LAST-001; FEATURE="ListFunctions"; ASPECT=LastElement; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+        // Return the last element of a list
+        switch (first_arg) {
+            .List => |l| {
+                if (l.len == 0) return Value{ .Null = {} };
+                return l[l.len - 1];
+            },
+            else => return Value{ .Null = {} },
+        }
     } else if (std.mem.eql(u8, function_name, "toString")) {
         // Convert to string
         switch (first_arg) {
@@ -2888,6 +2961,23 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
                 return Value{ .Int = i };
             },
+            else => return Value{ .Null = {} },
+        }
+    } else if (std.mem.eql(u8, function_name, "toboolean") or std.mem.eql(u8, function_name, "toBoolean") or std.mem.eql(u8, function_name, "tobool")) {
+        // CANARY: REQ=REQ-GQL-TOBOOLEAN-001; FEATURE="TypeConversionFunctions"; ASPECT=ToBooleanConversion; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+        // Convert to boolean
+        switch (first_arg) {
+            .Bool => |b| return Value{ .Bool = b },
+            .Int => |i| return Value{ .Bool = i != 0 },
+            .Str => |s| {
+                if (std.mem.eql(u8, s, "true") or std.mem.eql(u8, s, "TRUE") or std.mem.eql(u8, s, "1")) {
+                    return Value{ .Bool = true };
+                } else if (std.mem.eql(u8, s, "false") or std.mem.eql(u8, s, "FALSE") or std.mem.eql(u8, s, "0")) {
+                    return Value{ .Bool = false };
+                }
+                return Value{ .Null = {} };
+            },
+            .Null => return Value{ .Null = {} },
             else => return Value{ .Null = {} },
         }
     }

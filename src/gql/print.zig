@@ -244,6 +244,11 @@ fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.Ar
                     try walkExpr(ally_inner, dst, idx.target.*);
                     try walkExpr(ally_inner, dst, idx.index.*);
                 },
+                .Slice => |slice| {
+                    try walkExpr(ally_inner, dst, slice.target.*);
+                    if (slice.start) |start| try walkExpr(ally_inner, dst, start.*);
+                    if (slice.end) |end| try walkExpr(ally_inner, dst, end.*);
+                },
                 .Call => |c| {
                     try walkExpr(ally_inner, dst, c.callee.*);
                     for (c.args) |a| try walkExpr(ally_inner, dst, a.*);
@@ -550,6 +555,18 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try printExprWith(w, idx.target.*, 0, opts);
             try w.print("[", .{});
             try printExprWith(w, idx.index.*, 0, opts);
+            try w.print("]", .{});
+        },
+        .Slice => |slice| {
+            try printExprWith(w, slice.target.*, 0, opts);
+            try w.print("[", .{});
+            if (slice.start) |start| {
+                try printExprWith(w, start.*, 0, opts);
+            }
+            try w.print("..", .{});
+            if (slice.end) |end| {
+                try printExprWith(w, end.*, 0, opts);
+            }
             try w.print("]", .{});
         },
         .Unary => |u| {

@@ -1813,8 +1813,11 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     };
 }
 
-pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !ExecutionResult {
+// CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
+    // Filter by graph - use "default" if no graph specified
+    const filter_graph = current_graph orelse "default";
 
     // Track deleted node count
     var deleted_count: usize = 0;
@@ -1837,6 +1840,9 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement) !Exec
         var iter = store.nodes.iterator();
         while (iter.next()) |entry| {
             const node = entry.value_ptr;
+
+            // CRITICAL FIX: Filter by graph_name to ensure graph isolation
+            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
 
             // Check WHERE clause if present
             var should_delete = true;

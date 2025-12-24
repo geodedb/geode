@@ -661,7 +661,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return executeInsert(allocator, ins, insert_graph);
         },
         .Delete => |d| {
-            return executeDelete(allocator, d);
+            const delete_graph = if (context.session_state) |session| session.graph else null;
+            return executeDelete(allocator, d, delete_graph);
         },
         .Merge => |m| {
             const merge_graph = if (context.session_state) |session| session.graph else null;

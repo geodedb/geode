@@ -1672,7 +1672,7 @@ pub const Parser = struct {
                 }
             }
 
-            const combined_gp = ast.GraphPattern{ .chains = try all_chains.toOwnedSlice(self.arena.allocator()) };
+            var combined_gp = ast.GraphPattern{ .chains = try all_chains.toOwnedSlice(self.arena.allocator()) };
 
             // Keep aliases for ORDER BY checks that follow.
             self.collect_chain_aliases = false;
@@ -1680,6 +1680,33 @@ pub const Parser = struct {
             if (self.cur.kind == .WHERE) {
                 self.advance();
                 where_expr = try self.parseOrExpr();
+            }
+
+            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // Check for OPTIONAL MATCH after WHERE clause
+            // e.g., MATCH (e) WHERE e.x = 1 OPTIONAL MATCH (e)-[:R]->(m) RETURN ...
+            if (self.cur.kind == .OPTIONAL) {
+                var post_where_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                // First add the existing chains
+                for (combined_gp.chains) |chain| {
+                    try post_where_chains.append(self.arena.allocator(), chain);
+                }
+                // Parse OPTIONAL MATCH clauses
+                while (self.cur.kind == .OPTIONAL) {
+                    self.advance(); // consume OPTIONAL
+                    if (self.cur.kind == .MATCH) {
+                        self.advance(); // consume MATCH
+                        const opt_gp = try self.parseGraphPattern();
+                        for (opt_gp.chains) |chain| {
+                            var optional_chain = chain;
+                            optional_chain.is_optional = true;
+                            try post_where_chains.append(self.arena.allocator(), optional_chain);
+                        }
+                    } else {
+                        return error.UnexpectedToken;
+                    }
+                }
+                combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
             }
 
             // After MATCH ... WHERE, check for CREATE - support multiple CREATE clauses
@@ -1825,9 +1852,10 @@ pub const Parser = struct {
                 }
             }
 
-            // Check for query chaining: WITH ... MATCH/CREATE/FOR ...
-            // If we see MATCH, CREATE, or FOR after WITH, parse it as a chained query or statement
-            if (self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR) {
+            // CANARY: REQ=REQ-GQL-WITH-CHAIN-001; FEATURE="ChainedWithClauses"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // Check for query chaining: WITH ... WITH/MATCH/CREATE/FOR ...
+            // If we see WITH, MATCH, CREATE, or FOR after WITH, parse it as a chained query or statement
+            if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR) {
                 if (self.cur.kind == .FOR) {
                     // FOR needs special handling as it's a statement, not a query
                     // Parse the FOR statement and store it in the query
@@ -2780,9 +2808,17 @@ pub const Parser = struct {
     fn parseUnaryExpr(self: *Parser) ParserError!ast.Expr {
         // NOT is now handled in parseNotExpr at correct precedence level
         if (self.cur.kind == .EXISTS and self.peekToken() == .l_brace) {
-            // This is EXISTS { pattern } - EXISTS predicate
+            // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // This is EXISTS { ... } - EXISTS predicate
+            // Supports both EXISTS { pattern } and EXISTS { MATCH pattern }
             self.advance(); // consume EXISTS
             _ = try self.expect(.l_brace);
+
+            // Check if this is EXISTS { MATCH pattern } or EXISTS { pattern }
+            if (self.cur.kind == .MATCH) {
+                self.advance(); // consume MATCH
+            }
+
             const pattern = try self.parseGraphPattern();
             _ = try self.expect(.r_brace);
             const a = self.arena.allocator();
@@ -2823,6 +2859,22 @@ pub const Parser = struct {
                 const bp = try a.create(ast.Expr);
                 bp.* = base;
                 base = .{ .Member = .{ .target = bp, .field = field.lexeme } };
+                continue;
+            }
+            // CANARY: REQ=REQ-GQL-COUNT-001; FEATURE="CountSubquery"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // Check for COUNT { MATCH pattern } subquery syntax
+            if (self.cur.kind == .l_brace and base == .Ident and std.ascii.eqlIgnoreCase(base.Ident.orig, "count")) {
+                self.advance(); // consume '{'
+                // Check if this is COUNT { MATCH pattern } or COUNT { pattern }
+                if (self.cur.kind == .MATCH) {
+                    self.advance(); // consume MATCH
+                }
+                const pattern = try self.parseGraphPattern();
+                _ = try self.expect(.r_brace);
+                const a = self.arena.allocator();
+                const pat_ptr = try a.create(ast.GraphPattern);
+                pat_ptr.* = pattern;
+                base = .{ .PatternCount = pat_ptr };
                 continue;
             }
             if (self.cur.kind == .l_paren) {
@@ -3001,15 +3053,52 @@ pub const Parser = struct {
                 continue;
             }
             if (self.cur.kind == .l_bracket) {
-                // array index: base[index]
+                // CANARY: REQ=REQ-GQL-SLICE-002; FEATURE="ListSlicing"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+                // array index: base[index] or slice: base[start..end]
                 self.advance();
-                const index_expr = try self.parseOrExpr();
-                _ = try self.expect(.r_bracket);
                 const a = self.arena.allocator();
                 const bp = try a.create(ast.Expr);
                 bp.* = base;
+
+                // Check for slice syntax: [..end], [start..], [start..end]
+                if (self.cur.kind == .dotdot) {
+                    // [..end] - slice from beginning
+                    self.advance();
+                    const end_expr = try self.parseOrExpr();
+                    _ = try self.expect(.r_bracket);
+                    const ep = try a.create(ast.Expr);
+                    ep.* = end_expr;
+                    base = .{ .Slice = .{ .target = bp, .start = null, .end = ep } };
+                    continue;
+                }
+
+                const first_expr = try self.parseOrExpr();
+
+                if (self.cur.kind == .dotdot) {
+                    // [start..] or [start..end] - slice with start
+                    self.advance();
+                    const sp = try a.create(ast.Expr);
+                    sp.* = first_expr;
+
+                    if (self.cur.kind == .r_bracket) {
+                        // [start..] - slice to end
+                        self.advance();
+                        base = .{ .Slice = .{ .target = bp, .start = sp, .end = null } };
+                    } else {
+                        // [start..end] - full slice
+                        const end_expr = try self.parseOrExpr();
+                        _ = try self.expect(.r_bracket);
+                        const ep = try a.create(ast.Expr);
+                        ep.* = end_expr;
+                        base = .{ .Slice = .{ .target = bp, .start = sp, .end = ep } };
+                    }
+                    continue;
+                }
+
+                // Regular index: base[index]
+                _ = try self.expect(.r_bracket);
                 const ip = try a.create(ast.Expr);
-                ip.* = index_expr;
+                ip.* = first_expr;
                 base = .{ .Index = .{ .target = bp, .index = ip } };
                 continue;
             }

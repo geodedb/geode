@@ -214,6 +214,8 @@ pub const Expr = union(enum) {
     Member: struct { target: *Expr, field: []const u8 },
     PropertyAccess: struct { object: []const u8, property: []const u8 }, // n.name syntax
     Index: struct { target: *Expr, index: *Expr },
+    // CANARY: REQ=REQ-GQL-SLICE-001; FEATURE="ListSlicing"; ASPECT=ASTNode; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+    Slice: struct { target: *Expr, start: ?*Expr, end: ?*Expr },
     Call: struct { callee: *Expr, args: []*Expr },
     Unary: struct { op: UnaryOp, expr: *Expr },
     Binary: struct { op: BinOp, left: *Expr, right: *Expr },
