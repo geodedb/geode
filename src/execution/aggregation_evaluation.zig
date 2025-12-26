@@ -71,10 +71,13 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     }
                     return Value{ .Int = @intCast(nodes.len) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
+                    // CANARY: REQ=REQ-COUNT-DISTINCT-FIX-001; FEATURE="CountDistinctStrings"; ASPECT=StringSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
                     // COUNT(DISTINCT expr) - count distinct non-null values
                     if (call.args.len == 1) {
-                        var unique_values = std.AutoHashMap(i64, void).init(allocator);
-                        defer unique_values.deinit();
+                        var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
+                        defer unique_int_values.deinit();
+                        var unique_str_values = std.StringHashMap(void).init(allocator);
+                        defer unique_str_values.deinit();
 
                         // Handle property access for COUNT(DISTINCT n.prop)
                         if (call.args[0].* == .PropertyAccess) {
@@ -82,9 +85,10 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             for (nodes) |node| {
                                 if (node.properties.get(prop_access.property)) |prop_val| {
                                     if (prop_val == .Int) {
-                                        try unique_values.put(prop_val.Int, {});
+                                        try unique_int_values.put(prop_val.Int, {});
+                                    } else if (prop_val == .String) {
+                                        try unique_str_values.put(prop_val.String, {});
                                     }
-                                    // Note: only counting integer values for uniqueness
                                 }
                             }
                         } else if (call.args[0].* == .Member) {
@@ -92,19 +96,20 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             for (nodes) |node| {
                                 if (node.properties.get(member.field)) |prop_val| {
                                     if (prop_val == .Int) {
-                                        try unique_values.put(prop_val.Int, {});
+                                        try unique_int_values.put(prop_val.Int, {});
+                                    } else if (prop_val == .String) {
+                                        try unique_str_values.put(prop_val.String, {});
                                     }
-                                    // Note: only counting integer values for uniqueness
                                 }
                             }
                         } else if (call.args[0].* == .Ident) {
                             // COUNT(DISTINCT n) - count distinct nodes by their ID
                             for (nodes) |node| {
-                                try unique_values.put(@intCast(node.id), {});
+                                try unique_int_values.put(@intCast(node.id), {});
                             }
                         }
 
-                        return Value{ .Int = @intCast(unique_values.count()) };
+                        return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count()) };
                     }
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
@@ -520,9 +525,12 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                         const is_distinct = std.mem.eql(u8, func_name, "countDistinct");
 
                         if (is_distinct) {
+                            // CANARY: REQ=REQ-COUNT-DISTINCT-FIX-002; FEATURE="CountDistinctStrings"; ASPECT=StringSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
                             // COUNT(DISTINCT expr) - count unique non-null values
-                            var unique_values = std.AutoHashMap(i64, void).init(allocator);
-                            defer unique_values.deinit();
+                            var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
+                            defer unique_int_values.deinit();
+                            var unique_str_values = std.StringHashMap(void).init(allocator);
+                            defer unique_str_values.deinit();
 
                             // Handle property access for COUNT(DISTINCT n.prop)
                             if (call.args[0].* == .PropertyAccess) {
@@ -532,7 +540,9 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                     const node = entry.value_ptr;
                                     if (node.properties.get(prop_access.property)) |prop_val| {
                                         if (prop_val == .Int) {
-                                            try unique_values.put(prop_val.Int, {});
+                                            try unique_int_values.put(prop_val.Int, {});
+                                        } else if (prop_val == .Str) {
+                                            try unique_str_values.put(prop_val.Str, {});
                                         }
                                     }
                                 }
@@ -543,13 +553,15 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                     const node = entry.value_ptr;
                                     if (node.properties.get(member.field)) |prop_val| {
                                         if (prop_val == .Int) {
-                                            try unique_values.put(prop_val.Int, {});
+                                            try unique_int_values.put(prop_val.Int, {});
+                                        } else if (prop_val == .Str) {
+                                            try unique_str_values.put(prop_val.Str, {});
                                         }
                                     }
                                 }
                             }
 
-                            return Value{ .Int = @intCast(unique_values.count()) };
+                            return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count()) };
                         }
 
                         // COUNT(n.v) - count nodes with non-null v property

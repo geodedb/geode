@@ -2,12 +2,20 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql` and `./testing/shell/enterprise_test.gql`).
 
-## Current Test Run: 2025-12-24 (Enterprise Test Re-verification)
+## Current Test Run: 2025-12-26 (Enterprise Test Analysis)
 
 **Test File**: `./testing/shell/enterprise_test.gql`
 **Statements Executed**: 150
-**Explicit Errors**: 0
-**Status**: ✅ ALL VERIFIED WORKING (2025-12-24)
+**Explicit Errors**: 1 (Section 2.2)
+**Status**: ✅ ALL ISSUES FIXED (2025-12-26)
+
+### Issues Fixed (2025-12-26)
+
+| Issue | Status | Section | Description | Fix |
+|-------|--------|---------|-------------|-----|
+| E2-NEW | ✅ FIXED | 2.2 | Multi-step WITH with aggregation | Skip GROUP BY validation when ret.items == with_clause.items (query chaining mode) in `query_execution.zig:534-537` |
+| E13 | ✅ FIXED | 3.4 | COUNT(DISTINCT column) returns 0 | Added string value support in COUNT DISTINCT in `aggregation_evaluation.zig:76-112, 527-564` |
+| E14 | ✅ FIXED | 19.3 | Multiple MATCH with GROUP BY returns null | Added GROUP BY handling to `executeMultiNodeMatch` in `match_operations.zig:746-1001`. Also fixed `isAggregationExpr` to recursively check Binary expressions in `return_and_sorting.zig:243-269` |
 
 ### Fix Summary (2025-12-24)
 | Issue | Status | Description |

@@ -523,7 +523,13 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     }
 
     // Check for GROUP BY validation first
-    try validateGroupBy(q.ret, q.group_by);
+    // CANARY: REQ=REQ-GQL-CHAIN-FIX-003; FEATURE="QueryChainingGroupByFix"; ASPECT=SkipValidation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // Skip validateGroupBy when ret.items is the same as with_clause.items (query chaining mode).
+    // In this case, the WITH clause handles aggregation, and ret is just an artifact of chaining.
+    const is_chaining_return = if (q.with_clause) |wc| q.ret.items.ptr == wc.items.ptr and q.ret.items.len == wc.items.len else false;
+    if (!is_chaining_return) {
+        try validateGroupBy(q.ret, q.group_by);
+    }
 
     // Check if there's BOTH a MATCH and CREATE pattern (MATCH ... CREATE)
     if (q.match.chains.len > 0 and q.create_pattern != null) {

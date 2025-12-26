@@ -743,11 +743,260 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
     try context.generateCombinations(&current_combo, 0);
 
+    // CANARY: REQ=REQ-GQL-MULTINODE-GROUPBY-001; FEATURE="MultiNodeGroupBy"; ASPECT=Execution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+    // Handle GROUP BY with aggregation for multiple node patterns
+    if (q.group_by) |group_by| {
+        // Check if RETURN contains aggregation
+        var has_aggregation = false;
+        for (items) |item| {
+            if (isAggregationExpr(item.expr)) {
+                has_aggregation = true;
+                break;
+            }
+        }
+
+        if (has_aggregation) {
+            // We have GROUP BY with aggregation - need to re-process rows
+            // First, we need the raw bindings, not the evaluated RETURN expressions
+            // Re-collect bindings by iterating through matches again
+            var binding_groups = std.StringHashMap(std.ArrayList(Env)).init(allocator);
+            var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+            defer {
+                var giter = binding_groups.iterator();
+                while (giter.next()) |entry| {
+                    for (entry.value_ptr.items) |*env| {
+                        allocator.free(env.names);
+                        allocator.free(env.values);
+                    }
+                    entry.value_ptr.deinit(allocator);
+                }
+                binding_groups.deinit();
+                for (group_keys_list.items) |key| {
+                    allocator.free(key);
+                }
+                group_keys_list.deinit(allocator);
+            }
+
+            // Re-iterate through combinations to collect bindings for grouping
+            const BindingContext = struct {
+                allocator: std.mem.Allocator,
+                chain_matches: *std.ArrayList(std.ArrayList(*graph_store.Node)),
+                chain_vars: *std.ArrayList(?[]const u8),
+                q: ast.Query,
+                param_names: []const []const u8,
+                param_values: []const Value,
+                binding_groups: *std.StringHashMap(std.ArrayList(Env)),
+                group_keys_list: *std.ArrayList([]const u8),
+                group_by: ast.GroupBy,
+
+                fn collectBindings(self: @This(), combo_list: *std.ArrayList(*graph_store.Node), chain_idx: usize) !void {
+                    if (chain_idx >= self.chain_matches.items.len) {
+                        // Create environment from current combo
+                        var env_names = try self.allocator.alloc([]const u8, combo_list.items.len);
+                        var env_values = try self.allocator.alloc(Value, combo_list.items.len);
+
+                        for (self.chain_vars.items, combo_list.items, 0..) |var_name, node, i| {
+                            env_names[i] = var_name orelse "";
+                            env_values[i] = Value{ .Node = node };
+                        }
+
+                        const env = Env{
+                            .names = env_names,
+                            .values = env_values,
+                            .param_names = self.param_names,
+                            .param_values = self.param_values,
+                            .allocator = self.allocator,
+                        };
+
+                        // Evaluate WHERE clause
+                        if (self.q.where_clause) |where_expr| {
+                            const where_result = try eval.evalExpr(self.allocator, where_expr, env);
+                            const passes = switch (where_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                .Int => |i| i != 0,
+                                else => false,
+                            };
+                            if (!passes) {
+                                self.allocator.free(env_names);
+                                self.allocator.free(env_values);
+                                return;
+                            }
+                        }
+
+                        // Compute group key
+                        var key_buf = std.ArrayList(u8).initCapacity(self.allocator, 128) catch unreachable;
+                        const key_writer = key_buf.writer(self.allocator);
+                        for (self.group_by.keys, 0..) |key_expr, k| {
+                            if (k > 0) key_writer.writeAll("|") catch {};
+                            const key_val = eval.evalExpr(self.allocator, key_expr, env) catch Value{ .Null = {} };
+                            switch (key_val) {
+                                .Int => |i| key_writer.print("{d}", .{i}) catch {},
+                                .Str => |s| key_writer.writeAll(s) catch {},
+                                .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
+                                .Null => key_writer.writeAll("null") catch {},
+                                .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
+                                else => key_writer.writeAll("?") catch {},
+                            }
+                        }
+                        const group_key = key_buf.toOwnedSlice(self.allocator) catch "";
+
+                        // Add to group
+                        if (self.binding_groups.getPtr(group_key)) |group_list| {
+                            group_list.append(self.allocator, env) catch {};
+                            self.allocator.free(group_key);
+                        } else {
+                            var new_list = std.ArrayList(Env).initCapacity(self.allocator, 4) catch unreachable;
+                            new_list.append(self.allocator, env) catch {};
+                            self.binding_groups.put(group_key, new_list) catch {};
+                            self.group_keys_list.append(self.allocator, group_key) catch {};
+                        }
+                        return;
+                    }
+
+                    for (self.chain_matches.items[chain_idx].items) |node| {
+                        try combo_list.append(self.allocator, node);
+                        try self.collectBindings(combo_list, chain_idx + 1);
+                        _ = combo_list.pop();
+                    }
+                }
+            };
+
+            var binding_context = BindingContext{
+                .allocator = allocator,
+                .chain_matches = &chain_matches,
+                .chain_vars = &chain_vars,
+                .q = q,
+                .param_names = param_names,
+                .param_values = param_values,
+                .binding_groups = &binding_groups,
+                .group_keys_list = &group_keys_list,
+                .group_by = group_by,
+            };
+
+            var combo = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+            defer combo.deinit(allocator);
+            try binding_context.collectBindings(&combo, 0);
+
+            // Clear existing rows (they have incorrectly evaluated aggregations)
+            for (rows.items) |row| {
+                allocator.free(row);
+            }
+            rows.clearRetainingCapacity();
+
+            // Process each group and compute aggregations
+            var giter = binding_groups.iterator();
+            while (giter.next()) |entry| {
+                const group_envs = entry.value_ptr.items;
+                if (group_envs.len == 0) continue;
+
+                var row = try allocator.alloc(Value, items.len);
+
+                for (items, 0..) |item, i| {
+                    if (isAggregationExpr(item.expr)) {
+                        // Compute aggregation over all rows in group
+                        row[i] = try computeMultiNodeAggregation(allocator, item.expr, group_envs);
+                    } else {
+                        // Use first row's value for non-aggregated expressions
+                        row[i] = eval.evalExpr(allocator, item.expr, group_envs[0]) catch Value{ .Null = {} };
+                    }
+                }
+
+                try rows.append(allocator, row);
+            }
+        }
+    }
+
     return ExecutionResult{
         .columns = columns,
         .rows = try rows.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
+}
+
+// CANARY: REQ=REQ-GQL-MULTINODE-AGG-001; FEATURE="MultiNodeAggregation"; ASPECT=Computation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_envs: []const Env) !Value {
+    switch (expr) {
+        .Call => |call| {
+            if (call.callee.* == .Ident) {
+                const func_name = call.callee.Ident.orig;
+
+                if (std.ascii.eqlIgnoreCase(func_name, "count")) {
+                    if (call.args.len == 1 and call.args[0].* == .Ident and std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
+                        return Value{ .Int = @intCast(group_envs.len) };
+                    }
+                    // COUNT(expr) - count non-null values
+                    var count: i64 = 0;
+                    for (group_envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val != .Null) count += 1;
+                    }
+                    return Value{ .Int = count };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
+                    var sum: i64 = 0;
+                    for (group_envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val == .Int) sum += val.Int;
+                    }
+                    return Value{ .Int = sum };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
+                    var sum: i64 = 0;
+                    var count: i64 = 0;
+                    for (group_envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val == .Int) {
+                            sum += val.Int;
+                            count += 1;
+                        }
+                    }
+                    if (count == 0) return Value{ .Null = {} };
+                    return Value{ .Int = @divTrunc(sum, count) };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
+                    var min: ?i64 = null;
+                    for (group_envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val == .Int) {
+                            if (min == null or val.Int < min.?) min = val.Int;
+                        }
+                    }
+                    if (min) |m| return Value{ .Int = m };
+                    return Value{ .Null = {} };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
+                    var max: ?i64 = null;
+                    for (group_envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val == .Int) {
+                            if (max == null or val.Int > max.?) max = val.Int;
+                        }
+                    }
+                    if (max) |m| return Value{ .Int = m };
+                    return Value{ .Null = {} };
+                }
+            }
+        },
+        .Binary => |bin| {
+            // Handle expressions like d.budget - sum(e.salary)
+            const left = try computeMultiNodeAggregation(allocator, bin.left.*, group_envs);
+            const right = try computeMultiNodeAggregation(allocator, bin.right.*, group_envs);
+            if (left == .Int and right == .Int) {
+                return switch (bin.op) {
+                    .Sub => Value{ .Int = left.Int - right.Int },
+                    .Add => Value{ .Int = left.Int + right.Int },
+                    .Mul => Value{ .Int = left.Int * right.Int },
+                    .Div => if (right.Int != 0) Value{ .Int = @divTrunc(left.Int, right.Int) } else Value{ .Null = {} },
+                    else => Value{ .Null = {} },
+                };
+            }
+            return Value{ .Null = {} };
+        },
+        else => {
+            // For non-aggregation expressions, use first row
+            if (group_envs.len > 0) {
+                return eval.evalExpr(allocator, expr, group_envs[0]) catch Value{ .Null = {} };
+            }
+        },
+    }
+    return Value{ .Null = {} };
 }
 
 // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-001; FEATURE="MultiChainRelationshipMatch"; ASPECT=Execution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23

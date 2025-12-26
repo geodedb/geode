@@ -240,6 +240,7 @@ fn getTypeOrder(v: Value) u8 {
     };
 }
 
+// CANARY: REQ=REQ-GQL-AGG-DETECT-001; FEATURE="AggregationDetection"; ASPECT=RecursiveCheck; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
 pub fn isAggregationExpr(expr: ast.Expr) bool {
     switch (expr) {
         .Call => |call| {
@@ -255,6 +256,14 @@ pub fn isAggregationExpr(expr: ast.Expr) bool {
                     std.ascii.eqlIgnoreCase(func_name, "collect");
             }
             return false;
+        },
+        .Binary => |bin| {
+            // Recursively check for aggregations in binary expressions (e.g., d.budget - sum(e.salary))
+            return isAggregationExpr(bin.left.*) or isAggregationExpr(bin.right.*);
+        },
+        .Unary => |un| {
+            // Recursively check for aggregations in unary expressions
+            return isAggregationExpr(un.expr.*);
         },
         else => return false,
     }
