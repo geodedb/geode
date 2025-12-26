@@ -146,11 +146,24 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
     allocator.free(current_result.rows);
     // current_result.flags owned by result, no need to deinit
 
-    return ExecutionResult{
+    var result = ExecutionResult{
         .columns = final_columns,
         .rows = try final_rows.toOwnedSlice(allocator),
         .flags = final_flags,
     };
+
+    // CANARY: REQ=REQ-GQL-CHAIN-ORDERBY-001; FEATURE="ChainOrderBy"; ASPECT=FinalSorting; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // Apply ORDER BY from the final query in the chain to the combined result
+    // Walk to the end of the chain to get the final query's ORDER BY
+    var final_query = next_query_ptr.*;
+    while (final_query.next_query) |next| {
+        final_query = next.*;
+    }
+    if (final_query.order_by) |order| {
+        try sortRows(allocator, &result, order);
+    }
+
+    return result;
 }
 
 // Helper function to execute a query with pre-existing bindings from a previous query
@@ -161,7 +174,14 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         var current_query_standalone = q;
         current_query_standalone.next_query = null;
 
+        std.debug.print("[CHAIN] Executing current query (standalone)...\n", .{});
         const current_result = try executeQueryWithBindingsImpl(allocator, current_query_standalone, context, binding_names, binding_values);
+        std.debug.print("[CHAIN] Current result: cols={d}, rows={d}\n", .{ current_result.columns.len, current_result.rows.len });
+        for (current_result.columns, 0..) |col, i| {
+            if (current_result.rows.len > 0) {
+                std.debug.print("[CHAIN]   col[{d}] {s} = {any}\n", .{ i, col, current_result.rows[0][i] });
+            }
+        }
 
         // CANARY(memory-safety): Validate current_result structure before accessing
         // Prevent corrupted column length from causing OutOfMemory errors

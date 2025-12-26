@@ -1927,33 +1927,123 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
         }
 
         if (has_aggregation) {
-            // Treat all input rows as a single group for aggregation
-            // This handles cases like: OPTIONAL MATCH (n)-[r]->() WITH count(r) AS cnt
-            // where r may be null from the optional match
-            var new_row = try allocator.alloc(Value, with_items.len);
-
-            // Use first row as base for non-aggregated expressions (if any rows exist)
-            const base_env = if (input_result.rows.len > 0) Env{
-                .names = input_result.columns,
-                .values = input_result.rows[0],
-                .allocator = allocator,
-            } else Env{
-                .names = input_result.columns,
-                .values = &.{},
-                .allocator = allocator,
-            };
-
-            for (with_items, 0..) |item, i| {
-                if (return_and_sorting.isAggregationExpr(item.expr)) {
-                    // Compute aggregation over all input rows
-                    new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns);
-                } else {
-                    // Non-aggregation expression: evaluate with first row
-                    new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+            // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-001; FEATURE="ImplicitGroupBy"; ASPECT=WithAggregation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+            // Check if there are non-aggregated expressions that should be used for implicit grouping
+            // e.g., WITH e.department AS dept, count(*) AS cnt should group by e.department
+            var has_non_aggregation = false;
+            for (with_items) |item| {
+                if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
+                    has_non_aggregation = true;
+                    break;
                 }
             }
 
-            try new_rows.append(allocator, new_row);
+            if (has_non_aggregation and input_result.rows.len > 0) {
+                // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-002; FEATURE="ImplicitGroupBy"; ASPECT=GroupingLogic; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // Implicit GROUP BY: group rows by non-aggregated expressions
+                var groups = std.StringHashMap(std.ArrayList([]const Value)).init(allocator);
+                var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                defer {
+                    var iter = groups.iterator();
+                    while (iter.next()) |entry| {
+                        entry.value_ptr.deinit(allocator);
+                    }
+                    groups.deinit();
+                    for (group_keys_list.items) |key| {
+                        allocator.free(key);
+                    }
+                    group_keys_list.deinit(allocator);
+                }
+
+                // Group rows by non-aggregated expression values
+                for (input_result.rows) |input_row| {
+                    const env = Env{
+                        .names = input_result.columns,
+                        .values = input_row,
+                        .allocator = allocator,
+                    };
+
+                    // Build group key from non-aggregated expressions
+                    var key_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+                    const key_writer = key_buf.writer(allocator);
+                    var first_key = true;
+                    for (with_items) |item| {
+                        if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
+                            if (!first_key) key_writer.writeAll("|") catch {};
+                            first_key = false;
+                            const key_val = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+                            switch (key_val) {
+                                .Int => |iv| key_writer.print("{d}", .{iv}) catch {},
+                                .Str => |s| key_writer.writeAll(s) catch {},
+                                .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
+                                .Null => key_writer.writeAll("null") catch {},
+                                .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
+                                .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
+                                else => key_writer.writeAll("?") catch {},
+                            }
+                        }
+                    }
+                    const group_key = key_buf.toOwnedSlice(allocator) catch "";
+
+                    if (groups.getPtr(group_key)) |group_list| {
+                        group_list.append(allocator, input_row) catch {};
+                        allocator.free(group_key);
+                    } else {
+                        var new_list = std.ArrayList([]const Value).initCapacity(allocator, 4) catch unreachable;
+                        new_list.append(allocator, input_row) catch {};
+                        groups.put(group_key, new_list) catch {};
+                        group_keys_list.append(allocator, group_key) catch {};
+                    }
+                }
+
+                // For each group, compute aggregations and produce one output row
+                var group_iter = groups.iterator();
+                while (group_iter.next()) |group_entry| {
+                    const group_rows = group_entry.value_ptr.items;
+                    if (group_rows.len == 0) continue;
+
+                    const first_row = group_rows[0];
+                    const base_env = Env{
+                        .names = input_result.columns,
+                        .values = first_row,
+                        .allocator = allocator,
+                    };
+
+                    var new_row = try allocator.alloc(Value, with_items.len);
+                    for (with_items, 0..) |item, i| {
+                        if (return_and_sorting.isAggregationExpr(item.expr)) {
+                            new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns);
+                        } else {
+                            new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                        }
+                    }
+                    try new_rows.append(allocator, new_row);
+                }
+            } else {
+                // No non-aggregated expressions or no input rows - treat all as single group
+                // This handles cases like: OPTIONAL MATCH (n)-[r]->() WITH count(r) AS cnt
+                var new_row = try allocator.alloc(Value, with_items.len);
+
+                const base_env = if (input_result.rows.len > 0) Env{
+                    .names = input_result.columns,
+                    .values = input_result.rows[0],
+                    .allocator = allocator,
+                } else Env{
+                    .names = input_result.columns,
+                    .values = &.{},
+                    .allocator = allocator,
+                };
+
+                for (with_items, 0..) |item, i| {
+                    if (return_and_sorting.isAggregationExpr(item.expr)) {
+                        new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns);
+                    } else {
+                        new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                    }
+                }
+
+                try new_rows.append(allocator, new_row);
+            }
         } else {
             // No aggregations - transform each row individually
             for (input_result.rows) |input_row| {

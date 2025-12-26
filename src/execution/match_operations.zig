@@ -17,6 +17,7 @@ const executeCallStatement = execution.executeCallStatement;
 const valuesEqual = execution.valuesEqual;
 const findShortestPath = execution.findShortestPath;
 const isAggregationExpr = execution.isAggregationExpr;
+const isNonConstantExpr = execution.isNonConstantExpr;
 const sortRows = execution.sortRows;
 const evaluateNodeExpression = execution.evaluateNodeExpression;
 const evaluateGroupAggregation = execution.evaluateGroupAggregation;
@@ -1376,6 +1377,33 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             if (!has_all_labels) continue;
         }
 
+        // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-001; FEATURE="OptionalMatchWhereFilter"; ASPECT=RequiredNodeFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // Apply WHERE clause to filter base nodes before optional matching
+        if (q.where_clause) |where_expr| {
+            // Create environment with the required variable bound to the current node
+            const env = if (required_var) |var_name| Env{
+                .names = &[_][]const u8{var_name},
+                .values = &[_]Value{Value{ .Node = node }},
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            } else Env{
+                .names = &.{},
+                .values = &.{},
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            const where_result = try eval.evalExpr(allocator, where_expr, env);
+            const passes_where = switch (where_result) {
+                .Bool => |b| b,
+                .Null => false,
+                .Int => |i| i != 0,
+                else => false,
+            };
+            if (!passes_where) continue;
+        }
+
         try base_nodes.append(allocator, node);
     }
 
@@ -2690,13 +2718,17 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 // Evaluate WHERE clause if present
+                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-002; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // When there's a WITH clause, skip pre-MATCH WHERE and defer to post-WITH filtering
                 if (q.where_clause) |where_expr| {
-                    const where_result = try eval.evalExpr(allocator, where_expr, env);
-                    const passes_where = switch (where_result) {
-                        .Bool => |b| b,
-                        .Null => false,
-                        .Int => |i| i != 0,
-                        else => false,
+                    const passes_where = if (has_with) true else blk: {
+                        const where_result = try eval.evalExpr(allocator, where_expr, env);
+                        break :blk switch (where_result) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            .Int => |i| i != 0,
+                            else => false,
+                        };
                     };
 
                     if (!passes_where) {
@@ -3057,13 +3089,19 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 // Evaluate WHERE clause if present
+                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-001; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // When there's a WITH clause, skip pre-MATCH WHERE and defer to post-WITH filtering
+                // This handles cases like "WITH e.salary AS salary WHERE salary > 80000" where
+                // "salary" isn't defined until after WITH transformation
                 if (q.where_clause) |where_expr| {
-                    const where_result = try eval.evalExpr(allocator, where_expr, env);
-                    const passes_where = switch (where_result) {
-                        .Bool => |b| b,
-                        .Null => false,
-                        .Int => |i| i != 0,
-                        else => false,
+                    const passes_where = if (has_with) true else blk: {
+                        const where_result = try eval.evalExpr(allocator, where_expr, env);
+                        break :blk switch (where_result) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            .Int => |i| i != 0,
+                            else => false,
+                        };
                     };
 
                     if (!passes_where) {
@@ -3128,21 +3166,56 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 try matched_nodes.append(allocator, node);
             }
 
-            // Now compute aggregations over the matched nodes
-            var row = try allocator.alloc(Value, items.len);
-
-            for (items, 0..) |item, i| {
-                row[i] = try evaluateGroupAggregation(allocator, item.expr, matched_nodes.items);
+            // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-FIX-001; FEATURE="ImplicitGroupByInMatchAgg"; ASPECT=NonAggExprCheck; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+            // Check if there are non-aggregated expressions that need grouping
+            // If so, we should NOT pre-aggregate - let executeWithClauseWithGroupBy handle it
+            var has_non_agg_expr = false;
+            for (items) |item| {
+                if (!isAggregationExpr(item.expr) and isNonConstantExpr(item.expr)) {
+                    has_non_agg_expr = true;
+                    break;
+                }
             }
 
-            var rows_slice = try allocator.alloc([]Value, 1);
-            rows_slice[0] = row;
+            var rows_slice: [][]Value = undefined;
+            var result_columns: [][]const u8 = undefined;
+
+            if (has_non_agg_expr and has_with) {
+                // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-FIX-002; FEATURE="ImplicitGroupByInMatchAgg"; ASPECT=PerNodeRows; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // Create a row for each matched node with the node binding
+                // The WITH clause will handle grouping and aggregation
+                rows_slice = try allocator.alloc([]Value, matched_nodes.items.len);
+                for (matched_nodes.items, 0..) |node, idx| {
+                    const row_data = try allocator.alloc(Value, 1);
+                    row_data[0] = Value{ .Node = node };
+                    rows_slice[idx] = row_data;
+                }
+                // Column is the match variable name
+                result_columns = try allocator.alloc([]const u8, 1);
+                result_columns[0] = try allocator.dupe(u8, match_variable orelse "n");
+                // Free the previously allocated columns since we're using different ones
+                for (columns) |col| {
+                    allocator.free(col);
+                }
+                allocator.free(columns);
+            } else {
+                // Original path: pre-aggregate all matched nodes into a single row
+                var row = try allocator.alloc(Value, items.len);
+
+                for (items, 0..) |item, i| {
+                    row[i] = try evaluateGroupAggregation(allocator, item.expr, matched_nodes.items);
+                }
+
+                rows_slice = try allocator.alloc([]Value, 1);
+                rows_slice[0] = row;
+                result_columns = columns;
+            }
 
             // CANARY(memory-safety): Don't return early if there's a WITH clause
             // We need to process the WITH clause before returning
             if (!has_with) {
                 return ExecutionResult{
-                    .columns = columns,
+                    .columns = result_columns,
                     .rows = rows_slice,
                     .flags = blk: {
                         const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
@@ -3153,7 +3226,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
             // Convert to result that can be processed by WITH clause
             var result = ExecutionResult{
-                .columns = columns,
+                .columns = result_columns,
                 .rows = rows_slice,
                 .flags = blk: {
                     const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
@@ -3165,7 +3238,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             if (q.with_clause) |with_clause| {
                 // Apply WITH clause to transform matched variables
                 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
-                const with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, q.having);
+                var with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, q.having);
 
                 // Clean up original result since it's been transformed by WITH
                 for (result.columns) |col| {
@@ -3176,6 +3249,38 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     allocator.free(r);
                 }
                 allocator.free(result.rows);
+
+                // CANARY: REQ=REQ-GQL-WITH-WHERE-POST-001; FEATURE="WithWherePostFilter"; ASPECT=AliasFiltering; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // Apply WHERE clause filtering AFTER WITH transformation
+                // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
+                if (q.where_clause) |where_expr| {
+                    var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                    for (with_result.rows) |row| {
+                        const where_env = Env{
+                            .names = with_result.columns,
+                            .values = row,
+                            .param_names = param_names,
+                            .param_values = param_values,
+                            .allocator = allocator,
+                        };
+                        const where_val = try eval.evalExpr(allocator, where_expr, where_env);
+                        const passes = switch (where_val) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            .Int => |i| i != 0,
+                            else => false,
+                        };
+                        if (passes) {
+                            try filtered_rows.append(allocator, row);
+                        } else {
+                            // Free row that doesn't pass filter
+                            allocator.free(row);
+                        }
+                    }
+                    // Replace rows with filtered rows
+                    allocator.free(with_result.rows);
+                    with_result.rows = try filtered_rows.toOwnedSlice(allocator);
+                }
 
                 // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
                 // If there's no RETURN clause, or if ret.items shares pointer with with_clause.items (query chaining),
@@ -4352,14 +4457,20 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 // Evaluate WHERE clause if present
+                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-003; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // When there's a WITH clause, skip pre-MATCH WHERE entirely and defer to post-WITH filtering
+                // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
+                // where "salary" only exists after WITH transformation
                 if (q.where_clause) |where_expr| {
-                    const where_result = try eval.evalExpr(allocator, where_expr, env);
-                    // Check if WHERE clause evaluates to true
-                    const passes_where = switch (where_result) {
-                        .Bool => |b| b,
-                        .Null => false, // NULL is treated as false in WHERE
-                        .Int => |i| i != 0, // Non-zero integers are true
-                        else => false, // Other types are false
+                    // Skip WHERE at MATCH level when WITH clause exists - post-WITH WHERE will handle it
+                    const passes_where = if (has_with) true else blk: {
+                        const where_result = try eval.evalExpr(allocator, where_expr, env);
+                        break :blk switch (where_result) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            .Int => |i| i != 0,
+                            else => false,
+                        };
                     };
 
                     if (!passes_where) {
@@ -4641,7 +4752,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         if (q.with_clause) |with_clause| {
             // Apply WITH clause to transform matched variables
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
-            const with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, q.having);
+            var with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, q.having);
 
             // Clean up original result since it's been transformed by WITH
             for (result.columns) |col| {
@@ -4652,6 +4763,36 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 allocator.free(row);
             }
             allocator.free(result.rows);
+
+            // CANARY: REQ=REQ-GQL-WITH-WHERE-POST-002; FEATURE="WithWherePostFilter"; ASPECT=NonAggPath; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+            // Apply WHERE clause filtering AFTER WITH transformation (non-aggregation path)
+            // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
+            if (q.where_clause) |where_expr| {
+                var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                for (with_result.rows) |row| {
+                    const where_env = Env{
+                        .names = with_result.columns,
+                        .values = row,
+                        .param_names = param_names,
+                        .param_values = param_values,
+                        .allocator = allocator,
+                    };
+                    const where_val = try eval.evalExpr(allocator, where_expr, where_env);
+                    const passes = switch (where_val) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+                    if (passes) {
+                        try filtered_rows.append(allocator, row);
+                    } else {
+                        allocator.free(row);
+                    }
+                }
+                allocator.free(with_result.rows);
+                with_result.rows = try filtered_rows.toOwnedSlice(allocator);
+            }
 
             // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
             // If there's no RETURN clause, or if ret.items shares pointer with with_clause.items (query chaining),

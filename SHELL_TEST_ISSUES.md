@@ -2,20 +2,157 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql` and `./testing/shell/enterprise_test.gql`).
 
-## Current Test Run: 2025-12-26 (Enterprise Test Analysis)
+## Current Test Run: 2025-12-26 (Enterprise Test Analysis - Run 2)
 
 **Test File**: `./testing/shell/enterprise_test.gql`
 **Statements Executed**: 150
-**Explicit Errors**: 1 (Section 2.2)
-**Status**: ✅ ALL ISSUES FIXED (2025-12-26)
+**Explicit Errors**: 0 (no 42000 errors)
+**Status**: ✅ ALL ISSUES FIXED
 
-### Issues Fixed (2025-12-26)
+### Confirmed Fixed (2025-12-26)
 
-| Issue | Status | Section | Description | Fix |
-|-------|--------|---------|-------------|-----|
-| E2-NEW | ✅ FIXED | 2.2 | Multi-step WITH with aggregation | Skip GROUP BY validation when ret.items == with_clause.items (query chaining mode) in `query_execution.zig:534-537` |
-| E13 | ✅ FIXED | 3.4 | COUNT(DISTINCT column) returns 0 | Added string value support in COUNT DISTINCT in `aggregation_evaluation.zig:76-112, 527-564` |
-| E14 | ✅ FIXED | 19.3 | Multiple MATCH with GROUP BY returns null | Added GROUP BY handling to `executeMultiNodeMatch` in `match_operations.zig:746-1001`. Also fixed `isAggregationExpr` to recursively check Binary expressions in `return_and_sorting.zig:243-269` |
+| Issue | Status | Section | Description |
+|-------|--------|---------|-------------|
+| E13 | ✅ FIXED | 3.4 | COUNT(DISTINCT column) now returns 3 correctly |
+| E14 | ✅ FIXED | 19.3 | Multiple MATCH with GROUP BY returns correct payroll values |
+| E2-REGRESSION | ✅ FIXED | 2.2 | Multi-step WITH aggregation now returns correct department rows |
+| E15-NEW | ✅ FIXED | 18.1 | WITH projection + WHERE now correctly filters post-transformation |
+| E16-NEW | ✅ FIXED | 18.2 | WHERE before OPTIONAL MATCH now filters base nodes |
+| E17-NEW | ✅ FIXED | 19.3 | ORDER BY DESC on computed expressions now sorts correctly |
+
+---
+
+## Issue E2-REGRESSION: Multi-step WITH Aggregation Returns Wrong Result (P1) ✅ FIXED
+
+**Section**: 2.2
+
+**Query**:
+```gql
+MATCH (e:Employee)
+WITH e.department AS dept, count(*) AS emp_count, avg(e.salary) AS avg_salary
+WITH dept, emp_count, avg_salary
+WHERE emp_count >= 1
+RETURN dept, emp_count, avg_salary ORDER BY avg_salary DESC;
+```
+
+**Expected**:
+```
+| dept        | emp_count | avg_salary |
+|-------------|-----------|------------|
+| Engineering | 3         | 105000     |
+| Sales       | 1         | 85000      |
+| Marketing   | 1         | 78000      |
+```
+
+**Root Cause**: The second WITH clause in a chain wasn't properly receiving bindings from the first WITH clause. The query chain execution was not correctly passing aggregated values through subsequent WITH clauses.
+
+**Fix Applied** (2025-12-26):
+1. Modified `executeQueryChainWithBindings` in `match_operations.zig` to properly pass bindings from previous query results
+2. Enhanced `executeQueryWithBindingsImpl` to correctly process chained WITH clauses with existing bindings
+3. Added CANARY marker: REQ-GQL-WITH-CHAIN-001
+
+**Verification**: Query now returns 3 department rows with correct aggregated values.
+
+---
+
+## Issue E15-NEW: WITH Projection + WHERE Returns 0 Rows (P1) ✅ FIXED
+
+**Section**: 18.1
+
+**Query**:
+```gql
+MATCH (e:Employee)
+WITH e.name AS name, e.salary AS salary
+WHERE salary > 80000
+RETURN name, salary ORDER BY salary DESC;
+```
+
+**Expected**: 4 rows (Eve/115000, Bob/105000, Alice/95000, Carol/85000)
+
+**Root Cause**: The WHERE clause was being evaluated at the MATCH level where only `e` (the node) was in scope. The alias `salary` didn't exist at MATCH time, so evaluating `salary` returned `Null`, and `Null > 80000` evaluated to `Bool = false`, filtering out all rows.
+
+**Fix Applied** (2025-12-26):
+1. When a WITH clause is present, skip pre-MATCH WHERE evaluation (defer to post-WITH)
+2. Added post-WITH WHERE filtering that evaluates against the transformed column names
+3. Changes in `match_operations.zig`:
+   - Lines ~2694-2710: Added `has_with` check to defer WHERE evaluation
+   - Lines ~3064-3083: Same for aggregation path
+   - Lines ~4428-4454: Same for non-aggregation path
+   - Lines ~4740-4768: Added post-WITH WHERE filtering for non-aggregation
+   - Lines ~3219+: Added post-WITH WHERE filtering for aggregation path
+4. Added CANARY markers: REQ-GQL-WITH-WHERE-PRE-003, REQ-GQL-WITH-WHERE-POST-002
+
+**Verification**: Query now returns 4 rows: Eve/115000, Bob/105000, Alice/95000, Carol/85000.
+
+---
+
+## Issue E16-NEW: WHERE Before OPTIONAL MATCH Not Filtering (P1) ✅ FIXED
+
+**Section**: 18.2
+
+**Query**:
+```gql
+MATCH (e:Employee)
+WHERE e.salary > 100000
+OPTIONAL MATCH (m:Manager)-[:MANAGES]->(e)
+RETURN e.name, m.name AS manager;
+```
+
+**Expected**: 2 rows (only employees with salary > 100000: Bob, Eve)
+
+**Root Cause**: The `executeMatchWithOptionalPatterns` function was iterating over all base nodes without applying the WHERE clause filter. The WHERE clause was parsed but not evaluated before processing the optional patterns.
+
+**Fix Applied** (2025-12-26):
+1. Added WHERE clause evaluation in `executeMatchWithOptionalPatterns` around line ~1380
+2. For each base node, evaluate the WHERE expression against the node's environment
+3. Skip base nodes that don't pass the WHERE filter
+4. Added CANARY marker: REQ-GQL-OPTIONAL-WHERE-001
+
+**Verification**: Query now returns only Bob and Eve (employees with salary > 100000).
+
+---
+
+## Issue E17-NEW: ORDER BY DESC on Computed Expression Not Sorting (P2) ✅ FIXED
+
+**Section**: 19.3
+
+**Query**:
+```gql
+MATCH (d:Department) MATCH (e:Employee) WHERE e.department = d.name
+RETURN d.name AS department, d.budget AS budget,
+       sum(e.salary) AS actual_payroll,
+       d.budget - sum(e.salary) AS remaining_budget
+GROUP BY d.name, d.budget
+ORDER BY remaining_budget DESC;
+```
+
+**Expected Order** (DESC = highest first):
+```
+| department  | remaining_budget |
+|-------------|------------------|
+| Engineering | 4685000          |
+| Sales       | 2915000          |
+| Marketing   | 1922000          |
+```
+
+**Root Cause**: The ORDER BY sorting logic in `return_and_sorting.zig` was not correctly handling the DESC direction for all value types, particularly for computed expressions that may be integers.
+
+**Fix Applied** (2025-12-26):
+1. Enhanced `sortRows` in `return_and_sorting.zig` to properly apply direction reversal for all comparable types
+2. Added sorting support for both ASC and DESC with Integer, Decimal, and String types
+3. Added CANARY marker: REQ-GQL-ORDER-DESC-001
+
+**Verification**: Query now returns departments in correct descending order by remaining_budget.
+
+---
+
+### Previous Fix Summary (2025-12-26 Run 1)
+
+| Issue | Status | Description | Fix |
+|-------|--------|-------------|-----|
+| E2-NEW (partial) | ⚠️ PARTIAL | Skip GROUP BY validation for query chaining | `query_execution.zig:534-537` |
+| E13 | ✅ FIXED | COUNT DISTINCT string support | `aggregation_evaluation.zig:76-112, 527-564` |
+| E14 | ✅ FIXED | Multi-node GROUP BY handling | `match_operations.zig:746-1001` + `return_and_sorting.zig:243-269` |
 
 ### Fix Summary (2025-12-24)
 | Issue | Status | Description |
