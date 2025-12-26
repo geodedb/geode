@@ -55,6 +55,7 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    iproute2 \
     && rm -rf /var/lib/apt/lists/* && \
     useradd -m -u 1000 geode && \
     mkdir -p /data /certs /var/log/geode && \

@@ -68,6 +68,277 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         }
     }
 
+    // CANARY: REQ=REQ-GQL-CHAIN-WITH-AGG-001; FEATURE="ChainedWithAggregation"; ASPECT=IntermediateWithAgg; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // E25 Fix: Also check if any intermediate WITH clause contains aggregation
+    // If so, we need to handle aggregation at that level (grouping by non-aggregated columns)
+    var has_intermediate_with_agg = false;
+    var intermediate_with_agg_query: ?*ast.Query = null;
+    var query_check: ?*ast.Query = next_query_ptr;
+    while (query_check) |q| {
+        if (q.with_clause) |with_clause| {
+            for (with_clause.items) |item| {
+                if (return_and_sorting.isAggregationExpr(item.expr)) {
+                    has_intermediate_with_agg = true;
+                    intermediate_with_agg_query = q;
+                    break;
+                }
+            }
+            if (has_intermediate_with_agg) break;
+        }
+        query_check = q.next_query;
+    }
+
+    // E25 Fix: Handle intermediate WITH clause with aggregation (grouping)
+    if (has_intermediate_with_agg and intermediate_with_agg_query != null) {
+        const agg_query = intermediate_with_agg_query.?;
+        const with_clause = agg_query.with_clause.?;
+
+        // Collect all input rows
+        var input_envs = std.ArrayList(Env).initCapacity(allocator, current_result.rows.len) catch unreachable;
+        defer {
+            for (input_envs.items) |env| {
+                allocator.free(env.names);
+                allocator.free(env.values);
+            }
+            input_envs.deinit(allocator);
+        }
+
+        for (current_result.rows) |current_row| {
+            var env_names = try allocator.alloc([]const u8, current_result.columns.len);
+            var env_values = try allocator.alloc(Value, current_result.columns.len);
+            for (current_result.columns, current_row, 0..) |col, val, i| {
+                env_names[i] = col;
+                env_values[i] = val;
+            }
+            try input_envs.append(allocator, Env{
+                .allocator = allocator,
+                .names = env_names,
+                .values = env_values,
+                .param_names = &.{},
+                .param_values = &.{},
+            });
+        }
+
+        // Find non-aggregated columns (group by columns) and aggregated columns
+        var group_by_indices = try std.ArrayList(usize).initCapacity(allocator, with_clause.items.len);
+        defer group_by_indices.deinit(allocator);
+        var agg_indices = try std.ArrayList(usize).initCapacity(allocator, with_clause.items.len);
+        defer agg_indices.deinit(allocator);
+
+        for (with_clause.items, 0..) |item, i| {
+            if (return_and_sorting.isAggregationExpr(item.expr)) {
+                try agg_indices.append(allocator, i);
+            } else {
+                try group_by_indices.append(allocator, i);
+            }
+        }
+
+        // Group rows by the non-aggregated column values
+        // Use a string key approach for simplicity
+        var groups = std.StringHashMap(std.ArrayList(Env)).init(allocator);
+        defer {
+            var iter = groups.iterator();
+            while (iter.next()) |entry| {
+                entry.value_ptr.deinit(allocator);
+                allocator.free(entry.key_ptr.*);
+            }
+            groups.deinit();
+        }
+
+        for (input_envs.items) |env| {
+            // Compute group key from non-aggregated expressions
+            var key_parts = try std.ArrayList(u8).initCapacity(allocator, 256);
+            defer key_parts.deinit(allocator);
+
+            for (group_by_indices.items) |idx| {
+                const item = with_clause.items[idx];
+                const val = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+                var buf: [256]u8 = undefined;
+                const val_str = formatValue(val, &buf);
+                try key_parts.appendSlice(allocator, val_str);
+                try key_parts.append(allocator, '|');
+            }
+
+            const key = try allocator.dupe(u8, key_parts.items);
+
+            if (groups.get(key)) |_| {
+                // Key already exists, add to existing list
+                const existing_list = groups.getPtr(key).?;
+                try existing_list.append(allocator, env);
+                allocator.free(key); // Free duplicate key
+            } else {
+                var new_list = try std.ArrayList(Env).initCapacity(allocator, 16);
+                try new_list.append(allocator, env);
+                try groups.put(key, new_list);
+            }
+        }
+
+        // Build result rows from groups
+        var grouped_rows = try std.ArrayList([]Value).initCapacity(allocator, groups.count());
+        defer grouped_rows.deinit(allocator);
+
+        var group_iter = groups.iterator();
+        while (group_iter.next()) |entry| {
+            const group_envs = entry.value_ptr.items;
+            var row = try allocator.alloc(Value, with_clause.items.len);
+
+            for (with_clause.items, 0..) |item, i| {
+                if (return_and_sorting.isAggregationExpr(item.expr)) {
+                    // Compute aggregation over all envs in this group
+                    row[i] = try computeChainAggregation(allocator, item.expr, group_envs);
+                } else {
+                    // Use value from first row in group
+                    row[i] = eval.evalExpr(allocator, item.expr, group_envs[0]) catch Value{ .Null = {} };
+                }
+            }
+            try grouped_rows.append(allocator, row);
+        }
+
+        // Build column names
+        var grouped_columns = try allocator.alloc([]const u8, with_clause.items.len);
+        for (with_clause.items, 0..) |item, i| {
+            grouped_columns[i] = if (item.alias) |alias|
+                try allocator.dupe(u8, alias)
+            else if (item.expr == .Ident)
+                try allocator.dupe(u8, item.expr.Ident.orig)
+            else
+                try allocator.dupe(u8, "?column?");
+        }
+
+        // Now continue with remaining chain if any
+        if (agg_query.next_query) |remaining_query| {
+            // Execute remaining chain with grouped results
+            const grouped_result = ExecutionResult{
+                .columns = grouped_columns,
+                .rows = try grouped_rows.toOwnedSlice(allocator),
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            };
+
+            // Clean up current_result
+            for (current_result.columns) |col| {
+                allocator.free(col);
+            }
+            allocator.free(current_result.columns);
+            for (current_result.rows) |r| {
+                allocator.free(r);
+            }
+            allocator.free(current_result.rows);
+
+            // Process remaining query using the grouped result rows as input
+            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, grouped_result.rows.len);
+            defer final_rows.deinit(allocator);
+            var final_columns: [][]const u8 = &.{};
+
+            for (grouped_result.rows) |grouped_row| {
+                // Execute remaining query with grouped row as bindings
+                const next_result = try executeQueryChainWithBindings(allocator, remaining_query.*, context, grouped_result.columns, grouped_row);
+
+                if (final_columns.len == 0) {
+                    final_columns = try allocator.alloc([]const u8, next_result.columns.len);
+                    for (next_result.columns, 0..) |col, i| {
+                        final_columns[i] = try allocator.dupe(u8, col);
+                    }
+                }
+
+                for (next_result.rows) |row| {
+                    const row_copy = try allocator.alloc(Value, row.len);
+                    for (row, 0..) |val, i| {
+                        row_copy[i] = val;
+                    }
+                    try final_rows.append(allocator, row_copy);
+                }
+
+                // Clean up next_result
+                for (next_result.columns) |col| {
+                    allocator.free(col);
+                }
+                allocator.free(next_result.columns);
+                for (next_result.rows) |row| {
+                    allocator.free(row);
+                }
+                allocator.free(next_result.rows);
+            }
+
+            // Clean up grouped result
+            for (grouped_result.columns) |col| {
+                allocator.free(col);
+            }
+            allocator.free(grouped_result.columns);
+            for (grouped_result.rows) |row| {
+                allocator.free(row);
+            }
+            allocator.free(grouped_result.rows);
+
+            return ExecutionResult{
+                .columns = final_columns,
+                .rows = try final_rows.toOwnedSlice(allocator),
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            };
+        } else {
+            // This is the final query, apply ORDER BY if present
+            var result = ExecutionResult{
+                .columns = grouped_columns,
+                .rows = try grouped_rows.toOwnedSlice(allocator),
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            };
+
+            if (agg_query.ret.items.len > 0) {
+                // Apply RETURN clause transformation
+                var final_columns = try allocator.alloc([]const u8, agg_query.ret.items.len);
+                for (agg_query.ret.items, 0..) |item, i| {
+                    final_columns[i] = if (item.alias) |alias|
+                        try allocator.dupe(u8, alias)
+                    else if (item.expr == .Ident)
+                        try allocator.dupe(u8, item.expr.Ident.orig)
+                    else
+                        try allocator.dupe(u8, "?column?");
+                }
+
+                var final_rows = try allocator.alloc([]Value, result.rows.len);
+                for (result.rows, 0..) |row, ri| {
+                    var new_row = try allocator.alloc(Value, agg_query.ret.items.len);
+                    const row_env = Env{
+                        .allocator = allocator,
+                        .names = result.columns,
+                        .values = row,
+                        .param_names = &.{},
+                        .param_values = &.{},
+                    };
+                    for (agg_query.ret.items, 0..) |item, i| {
+                        new_row[i] = eval.evalExpr(allocator, item.expr, row_env) catch Value{ .Null = {} };
+                    }
+                    final_rows[ri] = new_row;
+                    allocator.free(row);
+                }
+
+                for (result.columns) |col| {
+                    allocator.free(col);
+                }
+                allocator.free(result.columns);
+                allocator.free(result.rows);
+
+                result.columns = final_columns;
+                result.rows = final_rows;
+            }
+
+            if (agg_query.order_by) |order_by| {
+                try return_and_sorting.sortRows(allocator, &result, order_by);
+            }
+
+            // Clean up current_result
+            for (current_result.columns) |col| {
+                allocator.free(col);
+            }
+            allocator.free(current_result.columns);
+            for (current_result.rows) |r| {
+                allocator.free(r);
+            }
+            allocator.free(current_result.rows);
+
+            return result;
+        }
+    }
+
     if (final_has_aggregation) {
         // Process all rows together through the chain, then aggregate at the end
         // First transform all current_result rows through intermediate WITH clauses
@@ -576,6 +847,29 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
 
     // No further chaining, just execute with bindings
     return executeQueryWithBindingsImpl(allocator, q, context, binding_names, binding_values);
+}
+
+// E25 Fix: Format a Value to string for group key building
+// CANARY: REQ=REQ-GQL-WITH-GROUP-KEY-001; FEATURE="WithGroupKey"; ASPECT=FormatValue; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+fn formatValue(val: Value, buf: []u8) []const u8 {
+    switch (val) {
+        .Int => |i| {
+            const result = std.fmt.bufPrint(buf, "{d}", .{i}) catch return "<int>";
+            return result;
+        },
+        .Str => |s| return s,
+        .Bool => |b| return if (b) "true" else "false",
+        .Null => return "<null>",
+        .Node => |n| {
+            const result = std.fmt.bufPrint(buf, "{d}", .{n.id}) catch return "<node>";
+            return result;
+        },
+        .Decimal => |d| {
+            const result = std.fmt.bufPrint(buf, "{d}", .{d.coeff}) catch return "<decimal>";
+            return result;
+        },
+        else => return "<complex>",
+    }
 }
 
 // E24/E35 Fix: Compute aggregation over chained WITH clause environments

@@ -350,8 +350,9 @@ LIMIT 10;
 -- SECTION 7: DEEP RELATIONSHIP TRAVERSAL
 -- ============================================================================
 
--- 7.1 Variable-length path 1..4 hops
-MATCH (e:Employee {name: 'Alice Chen'})-[:REPORTS_TO*1..4]->(subordinate:Employee)
+-- 7.1 Variable-length path 1..4 hops (find people who report to Alice within 4 hops)
+-- Note: Use reverse arrow because REPORTS_TO edges point FROM subordinate TO manager
+MATCH (e:Employee {name: 'Alice Chen'})<-[:REPORTS_TO*1..4]-(subordinate:Employee)
 RETURN e.name AS manager, subordinate.name AS subordinate;
 
 -- 7.2 Reverse traversal (who reports up to top)
@@ -721,6 +722,8 @@ RETURN u1.name AS user1, u2.name AS user2, u1.city AS city;
 -- ============================================================================
 -- SECTION 18: DATE EDGE CASES
 -- ============================================================================
+
+USE GRAPH extended_corp;
 
 -- 18.1 Date comparison
 MATCH (e:Employee)

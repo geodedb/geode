@@ -1540,6 +1540,23 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
     }
 
+    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-001; FEATURE="RequiredChainAfterOptional"; ASPECT=VariableCollection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // E27 Fix: Also collect required chains that come AFTER optional chains
+    // e.g., MATCH (e:Employee) OPTIONAL MATCH ... MATCH (m:Employee {name: e.manager})
+    // The third MATCH is required but comes after optional chains - we need to handle it
+    var required_chains_after_optional = std.ArrayList(usize).initCapacity(allocator, 0) catch unreachable;
+    defer required_chains_after_optional.deinit(allocator);
+    var seen_optional = false;
+    for (q.match.chains[1..], 1..) |chain, idx| {
+        if (chain.is_optional) {
+            seen_optional = true;
+        } else if (seen_optional and chain.head != null and chain.hops.len == 0) {
+            // This is a required simple node chain after an optional chain
+            if (chain.head.?.name) |v| try all_vars.append(allocator, v);
+            try required_chains_after_optional.append(allocator, idx);
+        }
+    }
+
     for (base_nodes.items) |base_node| {
         // Track if any optional chain matched
         var extended_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
@@ -1707,6 +1724,131 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
             try rows.append(allocator, row);
         }
+    }
+
+    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-002; FEATURE="RequiredChainAfterOptional"; ASPECT=PropertyPatternMatch; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // E27 Fix: Process required chains after optional chains
+    // For each row, look up nodes matching required chains with property patterns that reference other variables
+    if (required_chains_after_optional.items.len > 0) {
+        var processed_rows = std.ArrayList([]Value).initCapacity(allocator, rows.items.len) catch unreachable;
+        defer processed_rows.deinit(allocator);
+
+        for (rows.items) |row| {
+            // Build environment from current row for evaluating property patterns
+            const env = Env{
+                .allocator = allocator,
+                .names = all_vars.items,
+                .values = row,
+                .param_names = param_names,
+                .param_values = param_values,
+            };
+
+            // Process each required chain after optional
+            var current_row = row;
+            var all_chains_matched = true;
+
+            for (required_chains_after_optional.items) |chain_idx| {
+                const chain = q.match.chains[chain_idx];
+                const node_pattern = chain.head.?;
+                const target_labels = node_pattern.labels;
+                const target_props = node_pattern.props;
+
+                // Find the position in all_vars for this chain's variable
+                var var_idx: ?usize = null;
+                if (node_pattern.name) |var_name| {
+                    for (all_vars.items, 0..) |v, i| {
+                        if (std.mem.eql(u8, v, var_name)) {
+                            var_idx = i;
+                            break;
+                        }
+                    }
+                }
+
+                // Find matching node
+                var matched_node: ?*graph_store.Node = null;
+                var req_node_iter = store.nodes.iterator();
+                while (req_node_iter.next()) |entry| {
+                    const node = entry.value_ptr;
+
+                    // Filter by graph
+                    if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+
+                    // Filter by labels
+                    if (target_labels.len > 0) {
+                        var has_all_labels = true;
+                        for (target_labels) |required_label| {
+                            var found = false;
+                            for (node.labels) |node_label| {
+                                if (std.mem.eql(u8, required_label, node_label)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                has_all_labels = false;
+                                break;
+                            }
+                        }
+                        if (!has_all_labels) continue;
+                    }
+
+                    // Check property pattern (this can reference variables like e.manager)
+                    var matches_props = true;
+                    if (target_props) |properties| {
+                        for (properties) |prop| {
+                            if (node.properties.get(prop.key)) |node_prop_val| {
+                                const node_val = switch (node_prop_val) {
+                                    .Null => Value{ .Null = {} },
+                                    .Bool => |b| Value{ .Bool = b },
+                                    .Int => |i| Value{ .Int = i },
+                                    .String => |s| Value{ .Str = s },
+                                    .Float => Value{ .Null = {} },
+                                    .ExtValue => |ext| Value{ .ExtValue = ext },
+                                };
+                                // Evaluate property value using current row's bindings (env)
+                                const prop_val = eval.evalExpr(allocator, prop.value.*, env) catch Value{ .Null = {} };
+                                if (!valuesEqual(node_val, prop_val)) {
+                                    matches_props = false;
+                                    break;
+                                }
+                            } else {
+                                matches_props = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (matches_props) {
+                        matched_node = node;
+                        break;
+                    }
+                }
+
+                // Update row with matched node (or mark as not matching)
+                if (var_idx) |idx| {
+                    if (matched_node) |node| {
+                        current_row[idx] = Value{ .Node = node };
+                    } else {
+                        // Required chain didn't match - this row should be filtered out
+                        all_chains_matched = false;
+                        break;
+                    }
+                }
+            }
+
+            if (all_chains_matched) {
+                try processed_rows.append(allocator, current_row);
+            } else {
+                // Free the row since it won't be used
+                allocator.free(current_row);
+            }
+        }
+
+        // Replace rows with processed rows
+        rows.deinit(allocator);
+        rows = processed_rows;
+        // Transfer ownership - don't deinit processed_rows
+        processed_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
     }
 
     // Build columns

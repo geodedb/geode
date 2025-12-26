@@ -24,29 +24,38 @@ def run_command_in_container(container, command):
         logger.error(f"Command failed: {output.decode('utf-8')}")
     return exit_code, output.decode('utf-8')
 
-def chaos_packet_loss(container_name, duration="10s", loss_percent="20"):
-    # Using pumba via docker run or exec if pumba is a service
-    # Since pumba is a service, we can exec into it or just run a new pumba container attached to socket
-    # But simpler: use `tc` in the target container if available, OR use the pumba service.
-    # Our docker-compose has pumba service. We can send commands to it?
-    # Actually pumba runs as a daemon or one-off.
-    # Let's use the local docker client to run pumba commands ephemerally
-    client = get_docker_client()
-    logger.info(f"Injecting {loss_percent}% packet loss on {container_name} for {duration}")
+def parse_duration(duration_str):
+    """Parses a duration string (e.g., '10s', '1m') into seconds."""
+    if duration_str.endswith('s'):
+        return int(duration_str[:-1])
+    elif duration_str.endswith('m'):
+        return int(duration_str[:-1]) * 60
+    # Add more units as needed
+    return int(duration_str) # Assume seconds if no unit
 
-    # We use the pumba image to run the command against the target container
-    # Note: container_name in docker network might differ from actual docker container name
-    # In compose: ha-node-1
+def chaos_packet_loss(container_name, duration="10s", loss_percent="20"):
+    client = get_docker_client()
+    # Inject packet loss using native tc inside the container
+    # Requires 'iproute2' installed in the container and capability NET_ADMIN
+    target_container = client.containers.get(container_name)
+
+    logger.info(f"Adding {loss_percent}% packet loss to {container_name}")
+    # Initialize netem
+    exit_code, output = target_container.exec_run(f"tc qdisc add dev eth0 root netem loss {loss_percent}%", user="root")
+    if exit_code != 0 and "File exists" not in output.decode(): # Ignore if already exists, but might fail logic
+         logger.warning(f"tc qdisc add failed (might exist): {output.decode()}")
+         # Try changing if it exists
+         exit_code, output = target_container.exec_run(f"tc qdisc change dev eth0 root netem loss {loss_percent}%", user="root")
+         if exit_code != 0:
+             raise Exception(f"Failed to inject packet loss: {output.decode()}")
+
     try:
-        client.containers.run(
-            "gaiaadm/pumba:latest",
-            f"netem --duration {duration} --tc-image gaiadocker/iproute2 loss --percent {loss_percent} {container_name}",
-            volumes={'/var/run/docker.sock': {'bind': '/var/run/docker.sock', 'mode': 'rw'}},
-            remove=True,
-            network="ha_ha-net" # Important to be able to see the container if needed, though pumba uses socket
-        )
-    except Exception as e:
-        logger.error(f"Crypto chaos failed: {e}")
+        time.sleep(parse_duration(duration))
+    finally:
+        logger.info(f"Removing packet loss from {container_name}")
+        exit_code, output = target_container.exec_run("tc qdisc del dev eth0 root", user="root")
+        if exit_code != 0:
+             logger.error(f"Failed to clean up tc rules: {output.decode()}")
 
 def verify_leader(containers):
     # Check which node is leader via geodec or metrics

@@ -27,7 +27,7 @@ cd "$SCRIPT_DIR"
 docker compose build runner
 
 echo -e "${GREEN}Starting Environment...${NC}"
-docker compose up -d node-1 node-2 node-3 pumba
+docker compose up -d node-1 node-2 node-3
 
 echo "Waiting for cluster to stabilize (30s)..."
 sleep 30
