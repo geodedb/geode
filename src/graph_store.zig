@@ -798,6 +798,13 @@ pub const GraphStore = struct {
                     },
                 }
             }
+
+            // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNamePersistence; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+            // Write graph_name length and graph_name for multi-graph isolation
+            var graph_name_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &graph_name_len_buf, @intCast(node.graph_name.len), .little);
+            _ = try file.write(&graph_name_len_buf);
+            _ = try file.write(node.graph_name);
         }
 
         // Write each edge
@@ -870,6 +877,13 @@ pub const GraphStore = struct {
                     },
                 }
             }
+
+            // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNamePersistence; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+            // Write graph_name length and graph_name for multi-graph isolation
+            var graph_name_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &graph_name_len_buf, @intCast(edge.graph_name.len), .little);
+            _ = try file.write(&graph_name_len_buf);
+            _ = try file.write(edge.graph_name);
         }
     }
 
@@ -1104,6 +1118,19 @@ pub const GraphStore = struct {
                 try node.properties.put(key_data, value);
             }
 
+            // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNameLoad; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+            // Read graph_name for multi-graph isolation
+            var graph_name_len_buf: [4]u8 = undefined;
+            if ((try file.read(&graph_name_len_buf)) < 4) break;
+            const graph_name_len = std.mem.readInt(u32, &graph_name_len_buf, .little);
+
+            const graph_name_data = try self.allocator.alloc(u8, graph_name_len);
+            if ((try file.read(graph_name_data)) < graph_name_len) {
+                self.allocator.free(graph_name_data);
+                break;
+            }
+            node.graph_name = graph_name_data;
+
             try self.nodes.put(node_id, node);
         }
 
@@ -1183,12 +1210,25 @@ pub const GraphStore = struct {
                 try properties.put(key_data, value);
             }
 
+            // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNameLoad; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+            // Read graph_name for multi-graph isolation
+            var graph_name_len_buf: [4]u8 = undefined;
+            if ((try file.read(&graph_name_len_buf)) < 4) break;
+            const graph_name_len = std.mem.readInt(u32, &graph_name_len_buf, .little);
+
+            const graph_name_data = try self.allocator.alloc(u8, graph_name_len);
+            if ((try file.read(graph_name_data)) < graph_name_len) {
+                self.allocator.free(graph_name_data);
+                break;
+            }
+
             const edge = Edge{
                 .id = edge_id,
                 .from_id = from_id,
                 .to_id = to_id,
                 .label = label_data,
                 .properties = properties,
+                .graph_name = graph_name_data,
             };
 
             try self.edges.put(edge_id, edge);

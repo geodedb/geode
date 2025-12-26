@@ -2049,8 +2049,8 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         },
         .PatternCount => |pc| blk_count: {
             // Pattern comprehension count: size((pattern))
-            // Call the execution layer to count pattern matches
-            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.*) catch {
+            // Call the execution layer to count pattern matches (pass env for correlated patterns)
+            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.*, env) catch {
                 break :blk_count Value{ .Int = 0 };
             };
             break :blk_count Value{ .Int = count };
@@ -2058,8 +2058,8 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=Evaluation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
         .Exists => |ex| blk_exists: {
             // EXISTS predicate: return true if pattern matches at least once
-            // Call the execution layer to count pattern matches
-            const count = getExecutionCallbacks().countPatternMatches(allocator, ex.pattern.*) catch {
+            // Call the execution layer to count pattern matches (pass env for correlated subqueries)
+            const count = getExecutionCallbacks().countPatternMatches(allocator, ex.pattern.*, env) catch {
                 break :blk_exists Value{ .Bool = false };
             };
             break :blk_exists Value{ .Bool = count > 0 };

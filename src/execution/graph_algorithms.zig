@@ -16,8 +16,9 @@ const Env = value_types.Env;
 // Extracted graph algorithm functions from execution.zig for better modularity (M1 Phase 1)
 
 /// Count the number of matches for a given graph pattern
-/// CANARY: REQ=REQ-GQL-PATTERN-COUNT; FEATURE="PatternMatching"; ASPECT=COUNT; STATUS=IMPL; OWNER=execution; UPDATED=2025-10-17
-pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPattern) !i64 {
+/// CANARY: REQ=REQ-GQL-PATTERN-COUNT; FEATURE="PatternMatching"; ASPECT=COUNT; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+/// Now accepts env parameter for correlated subqueries (EXISTS with outer variable references)
+pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPattern, env: Env) !i64 {
     const store = graph_store.getGlobalStore(allocator);
     var count: i64 = 0;
 
@@ -25,7 +26,119 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
     if (pattern.chains.len > 0) {
         const chain = pattern.chains[0];
 
-        if (chain.head) |node_pattern| {
+        // For relationship patterns like (x)-[:REL]->(y), the left node is in hops[0].left, not head
+        const node_pattern_opt: ?ast.NodePattern = if (chain.head) |h| h else if (chain.hops.len > 0) chain.hops[0].left else null;
+
+        if (node_pattern_opt) |node_pattern| {
+            // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="CorrelatedExists"; ASPECT=OuterVariableBinding; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+            // Check if the node pattern has a variable that's bound in the outer environment
+            if (node_pattern.name) |var_name| {
+                // Look up the variable in the environment
+                for (env.names, 0..) |name, i| {
+                    if (std.mem.eql(u8, name, var_name)) {
+                        // Variable is bound - use the bound node for pattern matching
+                        const bound_value = env.values[i];
+                        if (bound_value == .Node) {
+                            const bound_node = bound_value.Node;
+                            // Check if this bound node matches the remaining pattern (labels, properties)
+                            var matches = true;
+
+                            // Check labels on the bound node
+                            for (node_pattern.labels) |required_label| {
+                                var has_label = false;
+                                for (bound_node.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        has_label = true;
+                                        break;
+                                    }
+                                }
+                                if (!has_label) {
+                                    matches = false;
+                                    break;
+                                }
+                            }
+
+                            // Check properties on the bound node
+                            if (matches and node_pattern.props != null) {
+                                for (node_pattern.props.?) |prop| {
+                                    const expected = try eval.evalExpr(allocator, prop.value.*, env);
+                                    if (bound_node.properties.get(prop.key)) |node_prop_val| {
+                                        const node_val = switch (node_prop_val) {
+                                            .String => |s| Value{ .Str = s },
+                                            .Int => |ii| Value{ .Int = ii },
+                                            .Bool => |b| Value{ .Bool = b },
+                                            .Float => Value{ .Null = {} },
+                                            .Null => Value{ .Null = {} },
+                                            .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        };
+                                        if (!valuesEqual(node_val, expected)) {
+                                            matches = false;
+                                            break;
+                                        }
+                                    } else {
+                                        matches = false;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // If bound node matches, now check if the relationship pattern also matches
+                            if (matches and chain.hops.len > 0) {
+                                const hop = chain.hops[0];
+                                const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+
+                                // Count edges from this bound node
+                                var edge_iter = store.edges.iterator();
+                                while (edge_iter.next()) |edge_entry| {
+                                    const edge = edge_entry.value_ptr.*;
+
+                                    // Check if edge starts from our bound node
+                                    if (edge.from_id != bound_node.id) continue;
+
+                                    // Filter by relationship type if specified
+                                    if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) {
+                                        continue;
+                                    }
+
+                                    // Check target node pattern (right side of the hop)
+                                    const target_pattern = hop.right;
+                                    if (target_pattern.labels.len > 0) {
+                                        // Has label constraints on target
+                                        if (store.nodes.get(edge.to_id)) |target_node| {
+                                            var target_matches = true;
+                                            for (target_pattern.labels) |required_label| {
+                                                var has_label = false;
+                                                for (target_node.labels) |node_label| {
+                                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                                        has_label = true;
+                                                        break;
+                                                    }
+                                                }
+                                                if (!has_label) {
+                                                    target_matches = false;
+                                                    break;
+                                                }
+                                            }
+                                            if (target_matches) count += 1;
+                                        }
+                                    } else {
+                                        // No label constraints - any target node matches
+                                        count += 1;
+                                    }
+                                }
+                                return count;
+                            }
+
+                            // No relationship hops - just count if the node matches
+                            if (matches) count = 1;
+                            return count;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // No outer variable binding - fall through to regular node counting
             // Count nodes matching the pattern
             var iter = store.nodes.iterator();
             while (iter.next()) |entry| {
@@ -50,8 +163,8 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 // Check properties
                 if (matches and node_pattern.props != null) {
                     for (node_pattern.props.?) |prop| {
-                        // For pattern counting, we evaluate the property value
-                        const expected = try eval.evalExpr(allocator, prop.value.*, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                        // For pattern counting, we evaluate the property value using the environment
+                        const expected = try eval.evalExpr(allocator, prop.value.*, env);
 
                         // Check if node has this property with matching value
                         if (node.properties.get(prop.key)) |node_prop_val| {

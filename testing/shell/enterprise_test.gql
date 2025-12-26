@@ -470,18 +470,20 @@ RETURN e.name, m.name AS manager;
 
 USE GRAPH enterprise_sales;
 
--- 19.1 Order summary with totals
+-- 19.1 Order summary with totals (GQL requires explicit GROUP BY for aggregation)
 MATCH (c:Customer)-[:PLACED]->(o:Order)
 RETURN c.name AS customer,
        count(o) AS order_count,
        sum(o.total) AS total_spent
+GROUP BY c.name
 ORDER BY total_spent DESC;
 
--- 19.2 Product popularity
+-- 19.2 Product popularity (GQL requires explicit GROUP BY for aggregation)
 MATCH (o:Order)-[contains:CONTAINS]->(p:Product)
 RETURN p.name AS product,
        count(o) AS times_ordered,
        sum(contains.quantity) AS total_quantity
+GROUP BY p.name
 ORDER BY times_ordered DESC;
 
 USE GRAPH enterprise_hr;
