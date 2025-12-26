@@ -25,6 +25,51 @@ pub fn getExpressionNameFromAst(expr: ast.Expr) []const u8 {
     };
 }
 
+// E32 Fix: Extract node variable name from expression tree (e.g., "e" from "e.active")
+// CANARY: REQ=REQ-GQL-AGG-CASE-001; FEATURE="CaseInAggregation"; ASPECT=VariableExtraction; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+fn extractNodeVariableFromExpr(expr: ast.Expr) ?[]const u8 {
+    switch (expr) {
+        .Member => |member| {
+            // For e.active, member.target is the variable (e)
+            if (member.target.* == .Ident) {
+                return member.target.Ident.orig;
+            }
+        },
+        .PropertyAccess => |prop| {
+            // For PropertyAccess, the object is already the variable name string
+            return prop.object;
+        },
+        .Binary => |binary| {
+            // Try left side first, then right
+            if (extractNodeVariableFromExpr(binary.left.*)) |v| return v;
+            if (extractNodeVariableFromExpr(binary.right.*)) |v| return v;
+        },
+        .Case => |case_expr| {
+            // Check WHEN conditions and THEN expressions
+            for (case_expr.whens) |when| {
+                if (extractNodeVariableFromExpr(when.when.*)) |v| return v;
+                if (extractNodeVariableFromExpr(when.then_expr.*)) |v| return v;
+            }
+            if (case_expr.else_expr) |else_e| {
+                if (extractNodeVariableFromExpr(else_e.*)) |v| return v;
+            }
+            if (case_expr.operand) |op| {
+                if (extractNodeVariableFromExpr(op.*)) |v| return v;
+            }
+        },
+        .Call => |call| {
+            for (call.args) |arg| {
+                if (extractNodeVariableFromExpr(arg.*)) |v| return v;
+            }
+        },
+        .Unary => |unary| {
+            return extractNodeVariableFromExpr(unary.expr.*);
+        },
+        else => {},
+    }
+    return null;
+}
+
 pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, nodes: []*graph_store.Node) !Value {
     switch (expr) {
         .Call => |call| {
@@ -173,6 +218,50 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 return Value{ .Decimal = .{ .coeff = @intFromFloat(sum_float * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } };
                             }
                             return Value{ .Int = sum_int };
+                        } else {
+                            // E32 Fix: Handle complex expressions like CASE in SUM aggregation
+                            // CANARY: REQ=REQ-GQL-AGG-CASE-002; FEATURE="CaseInAggregation"; ASPECT=SumEvaluation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                            // For complex expressions, evaluate for each node and sum results
+                            if (extractNodeVariableFromExpr(call.args[0].*)) |var_name| {
+                                var sum_int: i64 = 0;
+                                var sum_float: f64 = 0;
+                                var has_float = false;
+
+                                // Pre-allocate arrays for environment
+                                var env_names = [_][]const u8{var_name};
+                                var env_values: [1]Value = undefined;
+
+                                for (nodes) |node| {
+                                    // Create Value.Node for environment (use pointer to existing node)
+                                    env_values[0] = Value{ .Node = node };
+
+                                    const env = Env{
+                                        .names = &env_names,
+                                        .values = &env_values,
+                                        .allocator = allocator,
+                                    };
+
+                                    // Evaluate the expression
+                                    const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                                    switch (val) {
+                                        .Int => |i| {
+                                            sum_int += i;
+                                            sum_float += @floatFromInt(i);
+                                        },
+                                        .Decimal => |d| {
+                                            has_float = true;
+                                            const decimal_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+                                            sum_float += decimal_float;
+                                        },
+                                        else => {},
+                                    }
+                                }
+
+                                if (has_float) {
+                                    return Value{ .Decimal = .{ .coeff = @intFromFloat(sum_float * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } };
+                                }
+                                return Value{ .Int = sum_int };
+                            }
                         }
                     }
                     return Value{ .Int = 0 };

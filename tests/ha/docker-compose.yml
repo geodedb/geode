@@ -10,16 +10,16 @@ services:
       - NODE_ID=node-1
       - NODE_ROLE=leader
       - CLUSTER_NAME=ha-test-cluster
-      - RAFT_PORT=8300
-      - RAFT_PEERS=node-2:8300,node-3:8300
-      - LOG_LEVEL=debug
+      - RAFT_PORT=6282
+      - RAFT_PEERS=node-2:6282,node-3:6282
+      - LOG_LEVEL=info
       - GEODE_DISTRIBUTED=true
     command: >
-      --listen-quic 0.0.0.0:7567
+      --listen 0.0.0.0:3141
       --data-dir /data
       --node-id node-1
-      --raft-bind 0.0.0.0:8300
-      --raft-advertise node-1:8300
+      --raft-bind 0.0.0.0:6282
+      --raft-advertise node-1:6282
       --bootstrap-expect 3
       --log-json
     volumes:
@@ -27,7 +27,7 @@ services:
     networks:
       - ha-net
     healthcheck:
-      test: ["CMD", "geodec", "RETURN 1", "--server", "127.0.0.1:7567"]
+      test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:3141", "--insecure"]
       interval: 5s
       timeout: 2s
       retries: 5
@@ -41,17 +41,17 @@ services:
       - NODE_ID=node-2
       - NODE_ROLE=follower
       - CLUSTER_NAME=ha-test-cluster
-      - RAFT_PORT=8300
-      - RAFT_JOIN=node-1:8300
-      - LOG_LEVEL=debug
+      - RAFT_PORT=6282
+      - RAFT_JOIN=node-1:6282
+      - LOG_LEVEL=info
       - GEODE_DISTRIBUTED=true
     command: >
-      --listen-quic 0.0.0.0:7567
+      --listen 0.0.0.0:3141
       --data-dir /data
       --node-id node-2
-      --raft-bind 0.0.0.0:8300
-      --raft-advertise node-2:8300
-      --raft-join node-1:8300
+      --raft-bind 0.0.0.0:6282
+      --raft-advertise node-2:6282
+      --raft-join node-1:6282
       --log-json
     volumes:
       - node2-data:/data
@@ -60,7 +60,7 @@ services:
     depends_on:
       - node-1
     healthcheck:
-      test: ["CMD", "geodec", "RETURN 1", "--server", "127.0.0.1:7567"]
+      test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:3141", "--insecure"]
       interval: 5s
       timeout: 2s
       retries: 5
@@ -74,17 +74,17 @@ services:
       - NODE_ID=node-3
       - NODE_ROLE=follower
       - CLUSTER_NAME=ha-test-cluster
-      - RAFT_PORT=8300
-      - RAFT_JOIN=node-1:8300
-      - LOG_LEVEL=debug
+      - RAFT_PORT=6282
+      - RAFT_JOIN=node-1:6282
+      - LOG_LEVEL=info
       - GEODE_DISTRIBUTED=true
     command: >
-      --listen-quic 0.0.0.0:7567
+      --listen 0.0.0.0:3141
       --data-dir /data
       --node-id node-3
-      --raft-bind 0.0.0.0:8300
-      --raft-advertise node-3:8300
-      --raft-join node-1:8300
+      --raft-bind 0.0.0.0:6282
+      --raft-advertise node-3:6282
+      --raft-join node-1:6282
       --log-json
     volumes:
       - node3-data:/data
@@ -93,7 +93,7 @@ services:
     depends_on:
       - node-1
     healthcheck:
-      test: ["CMD", "geodec", "RETURN 1", "--server", "127.0.0.1:7567"]
+      test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:3141", "--insecure"]
       interval: 5s
       timeout: 2s
       retries: 5
@@ -106,6 +106,8 @@ services:
     # Pumba needs access to docker socket to control containers
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DOCKER_API_VERSION=1.44
     command: --interval 10000000s pause --duration 1s ha-node-1 # Dummy command to keep it running, controls sent via runner
     networks:
       - ha-net
@@ -121,7 +123,7 @@ services:
       - ./suite.yaml:/app/suite.yaml
       - .:/app/tests
     environment:
-      - GEODE_NODES=node-1:7567,node-2:7567,node-3:7567
+      - GEODE_NODES=node-1:3141,node-2:3141,node-3:3141
     networks:
       - ha-net
     depends_on:

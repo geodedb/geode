@@ -43,7 +43,7 @@ def chaos_packet_loss(container_name, duration="10s", loss_percent="20"):
             f"netem --duration {duration} --tc-image gaiadocker/iproute2 loss --percent {loss_percent} {container_name}",
             volumes={'/var/run/docker.sock': {'bind': '/var/run/docker.sock', 'mode': 'rw'}},
             remove=True,
-            network="ha-net" # Important to be able to see the container if needed, though pumba uses socket
+            network="ha_ha-net" # Important to be able to see the container if needed, though pumba uses socket
         )
     except Exception as e:
         logger.error(f"Crypto chaos failed: {e}")
@@ -54,8 +54,8 @@ def verify_leader(containers):
     leader = None
     for c in containers:
         try:
-            # Assuming geodec is available in the container
-            code, output = run_command_in_container(c, "geodec query 'RETURN 1' --server 127.0.0.1:7567")
+            # Assuming geode is available in the container
+            code, output = run_command_in_container(c, "geode query 'RETURN 1' --server 127.0.0.1:3141 --insecure")
             if code == 0:
                 # If we can write/read, we might be leader or forwarded.
                 # Use a raft status command if available.

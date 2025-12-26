@@ -945,6 +945,34 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                         if (val != .Null) count += 1;
                     }
                     return Value{ .Int = count };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
+                    // E26 Fix: COUNT(DISTINCT expr) - count distinct non-null values
+                    // CANARY: REQ=REQ-GQL-MULTINODE-COUNTDISTINCT-001; FEATURE="MultiNodeCountDistinct"; ASPECT=Aggregation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+                    var unique_node_ids = std.AutoHashMap(u64, void).init(allocator);
+                    defer unique_node_ids.deinit();
+                    var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
+                    defer unique_int_values.deinit();
+                    var unique_str_values = std.StringHashMap(void).init(allocator);
+                    defer unique_str_values.deinit();
+
+                    for (group_envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        switch (val) {
+                            .Node => |n| {
+                                try unique_node_ids.put(n.id, {});
+                            },
+                            .Int => |i| {
+                                try unique_int_values.put(i, {});
+                            },
+                            .Str => |s| {
+                                try unique_str_values.put(s, {});
+                            },
+                            .Null => {},
+                            else => {},
+                        }
+                    }
+                    const total: i64 = @intCast(unique_node_ids.count() + unique_int_values.count() + unique_str_values.count());
+                    return Value{ .Int = total };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     var sum: i64 = 0;
                     for (group_envs) |env| {
@@ -1356,6 +1384,41 @@ fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, grou
     return Value{ .Null = {} };
 }
 
+// E30/E31 Fix: Helper to check if an expression references a specific variable
+// CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-VAR-001; FEATURE="OptionalMatchWhereVar"; ASPECT=VarReference; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+fn whereExprReferencesVar(expr: ast.Expr, var_name: []const u8) bool {
+    return switch (expr) {
+        .Ident => |ident| std.mem.eql(u8, ident.orig, var_name),
+        .Member => |member| {
+            if (member.target.* == .Ident) {
+                return std.mem.eql(u8, member.target.Ident.orig, var_name);
+            }
+            return whereExprReferencesVar(member.target.*, var_name);
+        },
+        .PropertyAccess => |prop| std.mem.eql(u8, prop.object, var_name),
+        .Binary => |binary| whereExprReferencesVar(binary.left.*, var_name) or whereExprReferencesVar(binary.right.*, var_name),
+        .Unary => |unary| whereExprReferencesVar(unary.expr.*, var_name),
+        .IsNull => |is_null| whereExprReferencesVar(is_null.target.*, var_name),
+        .Call => |call| {
+            for (call.args) |arg| {
+                if (whereExprReferencesVar(arg.*, var_name)) return true;
+            }
+            return false;
+        },
+        .Case => |case_expr| {
+            for (case_expr.whens) |when| {
+                if (whereExprReferencesVar(when.when.*, var_name)) return true;
+                if (whereExprReferencesVar(when.then_expr.*, var_name)) return true;
+            }
+            if (case_expr.else_expr) |else_e| {
+                if (whereExprReferencesVar(else_e.*, var_name)) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
 // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-004; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoinImpl; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
 // CANARY: REQ=REQ-MULTI-GRAPH-009; FEATURE="MultiGraphIsolation"; ASPECT=OptionalMatchFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH + OPTIONAL MATCH patterns as left outer join with graph isolation
@@ -1403,29 +1466,54 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
         // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-001; FEATURE="OptionalMatchWhereFilter"; ASPECT=RequiredNodeFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
         // Apply WHERE clause to filter base nodes before optional matching
+        // BUT ONLY if WHERE doesn't reference optional variables
+        // E30/E31 Fix: Skip pre-filter when WHERE uses optional variables like "m IS NULL"
         if (q.where_clause) |where_expr| {
-            // Create environment with the required variable bound to the current node
-            const env = if (required_var) |var_name| Env{
-                .names = &[_][]const u8{var_name},
-                .values = &[_]Value{Value{ .Node = node }},
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            } else Env{
-                .names = &.{},
-                .values = &.{},
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            const where_result = try eval.evalExpr(allocator, where_expr, env);
-            const passes_where = switch (where_result) {
-                .Bool => |b| b,
-                .Null => false,
-                .Int => |i| i != 0,
-                else => false,
-            };
-            if (!passes_where) continue;
+            // Check if WHERE references any optional match variables
+            var where_uses_optional = false;
+            for (q.match.chains[1..]) |chain| {
+                if (chain.is_optional and chain.hops.len > 0) {
+                    const hop = chain.hops[0];
+                    if (hop.rel.name) |rel_var| {
+                        if (whereExprReferencesVar(where_expr, rel_var)) {
+                            where_uses_optional = true;
+                            break;
+                        }
+                    }
+                    if (hop.right.name) |right_var| {
+                        if (whereExprReferencesVar(where_expr, right_var)) {
+                            where_uses_optional = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Only apply pre-filter if WHERE doesn't use optional vars
+            if (!where_uses_optional) {
+                // Create environment with the required variable bound to the current node
+                const env = if (required_var) |var_name| Env{
+                    .names = &[_][]const u8{var_name},
+                    .values = &[_]Value{Value{ .Node = node }},
+                    .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
+                } else Env{
+                    .names = &.{},
+                    .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
+                };
+                const where_result = try eval.evalExpr(allocator, where_expr, env);
+                const passes_where = switch (where_result) {
+                    .Bool => |b| b,
+                    .Null => false,
+                    .Int => |i| i != 0,
+                    else => false,
+                };
+                if (!passes_where) continue;
+            }
         }
 
         try base_nodes.append(allocator, node);
@@ -1632,6 +1720,50 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         .rows = try rows.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
+
+    // E30/E31 Fix: Apply WHERE clause AFTER optional matching when it references optional variables
+    // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-POST-001; FEATURE="OptionalMatchWherePost"; ASPECT=PostOptionalFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // For queries like: MATCH (w) OPTIONAL MATCH (w)-[:R]->(m) WHERE m IS NULL RETURN w.name
+    // The WHERE clause must be evaluated after optional matching so m is in scope
+    if (q.where_clause) |where_expr| {
+        // Check if WHERE references any optional match variables
+        var references_optional_var = false;
+        for (all_vars.items[if (required_var != null) @as(usize, 1) else 0..]) |opt_var| {
+            if (whereExprReferencesVar(where_expr, opt_var)) {
+                references_optional_var = true;
+                break;
+            }
+        }
+
+        if (references_optional_var) {
+            // Filter rows based on WHERE clause evaluation
+            var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+            defer filtered_rows.deinit(allocator);
+
+            for (intermediate_result.rows) |row| {
+                const env = Env{
+                    .names = intermediate_result.columns,
+                    .values = row,
+                    .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
+                };
+                const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Null = {} };
+                const passes = switch (where_result) {
+                    .Bool => |b| b,
+                    .Null => false,
+                    .Int => |i| i != 0,
+                    else => false,
+                };
+                if (passes) {
+                    try filtered_rows.append(allocator, row);
+                }
+            }
+
+            // Update intermediate result with filtered rows
+            intermediate_result.rows = try filtered_rows.toOwnedSlice(allocator);
+        }
+    }
 
     // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-WITH-001; FEATURE="OptionalMatchWithAggregation"; ASPECT=WithClauseHandling; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
     // Process WITH clause if present (needed for aggregations like count(r))

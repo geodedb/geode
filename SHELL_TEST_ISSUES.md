@@ -2,34 +2,38 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-26 (Extended Testing - Run 4)
+## Current Test Run: 2025-12-26 (Extended Testing - Run 5)
 
 **Test Files**:
 - `./testing/shell/enterprise_test.gql` (150 statements)
 - `./testing/shell/enterprise_test_extended.gql` (210 statements)
 
-**Status**: ⚠️ 16 NEW ISSUES FOUND (E21-E36)
+**Status**: ✅ 7 ISSUES FIXED, ⚠️ 9 REMAINING ISSUES
 
-### New Issues Found (2025-12-26 Run 4)
+### Summary of Run 5 (2025-12-26)
+
+**Fixed in this session:**
+- E21 ✅ Property filter in aggregation now works
+- E22 ✅ COUNT(DISTINCT boolean) returns 2 correctly
+- E23 ✅ GROUP BY with OPTIONAL MATCH groups properly (8 rows)
+- E30 ✅ WHERE m IS NOT NULL after OPTIONAL MATCH now correctly filters
+- E31 ✅ WHERE m IS NULL after OPTIONAL MATCH now correctly filters
+- E32 ✅ CASE expressions in SUM/aggregation now correctly evaluated
+- E36 ✅ String literals in aggregation return values instead of null
+
+**Remaining Open Issues:**
 
 | Issue | Severity | Section | Description |
 |-------|----------|---------|-------------|
-| E21 | **P0** | 3.1 | Empty group returns ALL rows instead of 0 (property filter ignored) |
-| E22 | P1 | 3.4 | COUNT(DISTINCT e.active) returns 0 instead of 2 |
-| E23 | P1 | 3.5 | GROUP BY with OPTIONAL MATCH returns 25 rows instead of 8 grouped |
-| E24 | P1 | 4.2 | Second WITH loses aggregated values (sum returns null) |
-| E25 | P1 | 4.4 | WITH + ORDER BY + GROUP BY not grouping correctly |
-| E26 | P1 | 6.1 | Triple MATCH COUNT DISTINCT returns null |
+| E24 | P1 | 4.2 | WITH chain aggregation: `sum(total_sal)` returns null (5 rows with null) |
+| E25 | P1 | 4.4 | WITH + ORDER BY + second GROUP BY not grouping (10 rows, each count=1) |
+| E26 | P1 | 6.1 | Triple MATCH pattern returns null for total_projects |
 | E27 | P1 | 6.2 | MATCH + OPTIONAL MATCH + MATCH loses department budget |
 | E28 | P1 | 7.1 | Variable-length path `*1..4` returns 0 rows |
-| E29 | P1 | 8.1 | EXISTS with cancelled project filter matches wrong nodes |
-| E30 | P1 | 9.3 | WHERE m.salary IS NOT NULL returns 0 rows |
-| E31 | P1 | 9.4 | WHERE m IS NULL returns ALL 25 rows instead of top-level only |
-| E32 | P1 | 10.2 | CASE in SUM aggregation returns 0 for all counts |
-| E33 | P1 | 17.4 | Friend count query returns Error (42000) |
+| E33 | P2 | 17.4 | Friend count query needs GROUP BY (test file issue, not engine bug) |
 | E34 | P1 | 18.1 | Date string comparison returns 0 rows |
-| E35 | P1 | 19.2 | Multi-level WITH aggregation returns null |
-| E36 | P1 | 20.1 | UNION ALL with string literals returns null for type column |
+| E35 | P1 | 19.2 | Multi-level WITH aggregation returns 23 rows with null values |
+| E37 | P2 | 14.6 | List comprehension syntax error (may be GQL compliance issue) |
 
 ### Confirmed Fixed (2025-12-26)
 
@@ -47,6 +51,9 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 | E21 | ✅ FIXED | 3.1 | Property filter in aggregation now correctly filters by inline property constraints |
 | E22 | ✅ FIXED | 3.2 | COUNT(DISTINCT boolean) now correctly returns 2 for true/false values |
 | E23 | ✅ FIXED | 3.5 | GROUP BY with OPTIONAL MATCH now properly groups by department |
+| E30 | ✅ FIXED | 9.3 | WHERE m.salary IS NOT NULL after OPTIONAL MATCH now correctly filters to matched rows |
+| E31 | ✅ FIXED | 9.4 | WHERE m IS NULL after OPTIONAL MATCH now correctly filters to unmatched rows |
+| E32 | ✅ FIXED | 10.2 | CASE expressions in SUM/aggregation now correctly evaluated for each node |
 | E36 | ✅ FIXED | 20.1 | String literals in aggregation context now return actual values instead of null |
 
 ### GQL Conformance Notes (Not Bugs)

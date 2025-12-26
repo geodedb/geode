@@ -18,7 +18,7 @@ RUN pip install docker pyyaml pytest requests
 WORKDIR /app
 
 # Copy the runner script
-COPY tests/ha/runner.py /app/runner.py
+COPY runner.py /app/runner.py
 
 # Entrypoint
 CMD ["python", "runner.py"]

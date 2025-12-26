@@ -29,6 +29,7 @@ const allocateColumnStrings = execution.allocateColumnStrings;
 
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
+const return_and_sorting = @import("return_and_sorting.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
 // Local type aliases
@@ -49,6 +50,150 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         // Suspiciously large column count - likely corrupted memory
         std.debug.print("ERROR: Corrupted columns.len = {d}\n", .{current_result.columns.len});
         return error.CorruptedExecutionResult;
+    }
+
+    // CANARY: REQ=REQ-GQL-CHAIN-AGG-TOPLEVEL-001; FEATURE="ChainedAggregationTopLevel"; ASPECT=DetectFinalAgg; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // E24/E35 Fix: Find the FINAL query in the chain and check if it has aggregation
+    // If so, we need to process all rows together, not one at a time
+    var chain_final_query: ast.Query = next_query_ptr.*;
+    while (chain_final_query.next_query) |nq| {
+        chain_final_query = nq.*;
+    }
+
+    var final_has_aggregation = false;
+    for (chain_final_query.ret.items) |item| {
+        if (return_and_sorting.isAggregationExpr(item.expr)) {
+            final_has_aggregation = true;
+            break;
+        }
+    }
+
+    if (final_has_aggregation) {
+        // Process all rows together through the chain, then aggregate at the end
+        // First transform all current_result rows through intermediate WITH clauses
+        var all_chain_envs = std.ArrayList(Env).initCapacity(allocator, current_result.rows.len) catch unreachable;
+        defer {
+            for (all_chain_envs.items) |env| {
+                allocator.free(env.names);
+                allocator.free(env.values);
+            }
+            all_chain_envs.deinit(allocator);
+        }
+
+        for (current_result.rows) |current_row| {
+            // Start with bindings from current row
+            var env_names = try allocator.alloc([]const u8, current_result.columns.len);
+            var env_values = try allocator.alloc(Value, current_result.columns.len);
+            for (current_result.columns, current_row, 0..) |col, val, i| {
+                env_names[i] = col;
+                env_values[i] = val;
+            }
+
+            // Apply each intermediate query's WITH clause and WHERE filter
+            var query_iter: ?*ast.Query = next_query_ptr;
+            var passes_filter = true;
+            while (query_iter) |q| {
+                // Apply WITH clause if present
+                if (q.with_clause) |with_clause| {
+                    const with_env = Env{
+                        .allocator = allocator,
+                        .names = env_names,
+                        .values = env_values,
+                        .param_names = &.{},
+                        .param_values = &.{},
+                    };
+                    var new_names = try allocator.alloc([]const u8, with_clause.items.len);
+                    var new_values = try allocator.alloc(Value, with_clause.items.len);
+                    for (with_clause.items, 0..) |item, i| {
+                        new_values[i] = eval.evalExpr(allocator, item.expr, with_env) catch Value{ .Null = {} };
+                        new_names[i] = if (item.alias) |alias|
+                            alias
+                        else if (item.expr == .Ident)
+                            item.expr.Ident.orig
+                        else
+                            "?column?";
+                    }
+                    allocator.free(env_names);
+                    allocator.free(env_values);
+                    env_names = new_names;
+                    env_values = new_values;
+                }
+
+                // Apply WHERE clause if present
+                if (q.where_clause) |where_expr| {
+                    const filter_env = Env{
+                        .allocator = allocator,
+                        .names = env_names,
+                        .values = env_values,
+                        .param_names = &.{},
+                        .param_values = &.{},
+                    };
+                    const where_result = eval.evalExpr(allocator, where_expr, filter_env) catch Value{ .Bool = false };
+                    passes_filter = switch (where_result) {
+                        .Bool => |b| b,
+                        else => false,
+                    };
+                    if (!passes_filter) break;
+                }
+
+                query_iter = q.next_query;
+            }
+
+            if (passes_filter) {
+                try all_chain_envs.append(allocator, Env{
+                    .allocator = allocator,
+                    .names = env_names,
+                    .values = env_values,
+                    .param_names = &.{},
+                    .param_values = &.{},
+                });
+            } else {
+                allocator.free(env_names);
+                allocator.free(env_values);
+            }
+        }
+
+        // Now compute aggregation over all filtered rows using final query
+        const items = chain_final_query.ret.items;
+        var columns = try allocator.alloc([]const u8, items.len);
+        for (items, 0..) |item, i| {
+            columns[i] = if (item.alias) |alias|
+                try allocator.dupe(u8, alias)
+            else
+                try allocator.dupe(u8, "?column?");
+        }
+
+        var row = try allocator.alloc(Value, items.len);
+        for (items, 0..) |item, i| {
+            if (return_and_sorting.isAggregationExpr(item.expr)) {
+                row[i] = try computeChainAggregation(allocator, item.expr, all_chain_envs.items);
+            } else {
+                if (all_chain_envs.items.len > 0) {
+                    row[i] = eval.evalExpr(allocator, item.expr, all_chain_envs.items[0]) catch Value{ .Null = {} };
+                } else {
+                    row[i] = Value{ .Null = {} };
+                }
+            }
+        }
+
+        var rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+
+        // Clean up current_result
+        for (current_result.columns) |col| {
+            allocator.free(col);
+        }
+        allocator.free(current_result.columns);
+        for (current_result.rows) |r| {
+            allocator.free(r);
+        }
+        allocator.free(current_result.rows);
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        };
     }
 
     // Now execute the next query with the current result as bindings
@@ -218,7 +363,147 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
             return error.CorruptedExecutionResult;
         }
 
-        // Chain to next query using the result as bindings
+        // CANARY: REQ=REQ-GQL-WITH-CHAIN-AGG-001; FEATURE="ChainedWithAggregation"; ASPECT=AggregateOverAllRows; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // E24/E35 Fix: Check if next query's RETURN contains aggregation
+        // If so, we need to aggregate over ALL filtered rows, not process one at a time
+        var has_aggregation = false;
+        for (next_query_ptr.ret.items) |item| {
+            if (return_and_sorting.isAggregationExpr(item.expr)) {
+                has_aggregation = true;
+                break;
+            }
+        }
+
+        if (has_aggregation and next_query_ptr.next_query == null) {
+            // Process all rows together for aggregation
+            // First apply WITH clause and WHERE filter to each row, collect filtered bindings
+            var filtered_envs = std.ArrayList(Env).initCapacity(allocator, current_result.rows.len) catch unreachable;
+            defer {
+                for (filtered_envs.items) |env| {
+                    allocator.free(env.names);
+                    allocator.free(env.values);
+                }
+                filtered_envs.deinit(allocator);
+            }
+
+            for (current_result.rows) |current_row| {
+                // Build environment from current row
+                var env_names = try allocator.alloc([]const u8, current_result.columns.len);
+                var env_values = try allocator.alloc(Value, current_result.columns.len);
+
+                for (current_result.columns, current_row, 0..) |col_name, col_value, i| {
+                    env_names[i] = col_name;
+                    env_values[i] = col_value;
+                }
+
+                var current_names = env_names;
+                var current_values = env_values;
+
+                // Apply WITH clause if present
+                if (next_query_ptr.with_clause) |with_clause| {
+                    const with_env = Env{
+                        .allocator = allocator,
+                        .names = env_names,
+                        .values = env_values,
+                        .param_names = &.{},
+                        .param_values = &.{},
+                    };
+
+                    var new_names = try allocator.alloc([]const u8, with_clause.items.len);
+                    var new_values = try allocator.alloc(Value, with_clause.items.len);
+
+                    for (with_clause.items, 0..) |item, i| {
+                        new_values[i] = eval.evalExpr(allocator, item.expr, with_env) catch Value{ .Null = {} };
+                        new_names[i] = if (item.alias) |alias|
+                            alias
+                        else if (item.expr == .Ident)
+                            item.expr.Ident.orig
+                        else
+                            "?column?";
+                    }
+
+                    allocator.free(env_names);
+                    allocator.free(env_values);
+                    current_names = new_names;
+                    current_values = new_values;
+                }
+
+                // Apply WHERE filter
+                var passes_filter = true;
+                if (next_query_ptr.where_clause) |where_expr| {
+                    const filter_env = Env{
+                        .allocator = allocator,
+                        .names = current_names,
+                        .values = current_values,
+                        .param_names = &.{},
+                        .param_values = &.{},
+                    };
+                    const where_result = eval.evalExpr(allocator, where_expr, filter_env) catch Value{ .Bool = false };
+                    passes_filter = switch (where_result) {
+                        .Bool => |b| b,
+                        else => false,
+                    };
+                }
+
+                if (passes_filter) {
+                    try filtered_envs.append(allocator, Env{
+                        .allocator = allocator,
+                        .names = current_names,
+                        .values = current_values,
+                        .param_names = &.{},
+                        .param_values = &.{},
+                    });
+                } else {
+                    allocator.free(current_names);
+                    allocator.free(current_values);
+                }
+            }
+
+            // Now compute aggregation over all filtered rows
+            const items = next_query_ptr.ret.items;
+            var columns = try allocator.alloc([]const u8, items.len);
+            for (items, 0..) |item, i| {
+                columns[i] = if (item.alias) |alias|
+                    try allocator.dupe(u8, alias)
+                else
+                    try allocator.dupe(u8, "?column?");
+            }
+
+            var row = try allocator.alloc(Value, items.len);
+            for (items, 0..) |item, i| {
+                if (return_and_sorting.isAggregationExpr(item.expr)) {
+                    row[i] = try computeChainAggregation(allocator, item.expr, filtered_envs.items);
+                } else {
+                    // Non-aggregation: use first row's value
+                    if (filtered_envs.items.len > 0) {
+                        row[i] = eval.evalExpr(allocator, item.expr, filtered_envs.items[0]) catch Value{ .Null = {} };
+                    } else {
+                        row[i] = Value{ .Null = {} };
+                    }
+                }
+            }
+
+            var rows = try allocator.alloc([]Value, 1);
+            rows[0] = row;
+
+            // Clean up current_result
+            for (current_result.columns) |col| {
+                allocator.free(col);
+            }
+            allocator.free(current_result.columns);
+            for (current_result.rows) |r| {
+                allocator.free(r);
+            }
+            allocator.free(current_result.rows);
+
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            };
+        }
+
+        // Chain to next query using the result as bindings (original per-row logic)
         var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
         var final_columns: [][]const u8 = &.{};
         var final_flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
@@ -291,6 +576,106 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
 
     // No further chaining, just execute with bindings
     return executeQueryWithBindingsImpl(allocator, q, context, binding_names, binding_values);
+}
+
+// E24/E35 Fix: Compute aggregation over chained WITH clause environments
+// CANARY: REQ=REQ-GQL-WITH-CHAIN-AGG-002; FEATURE="ChainedWithAggregation"; ASPECT=ComputeAggregation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: []const Env) !Value {
+    switch (expr) {
+        .Call => |call| {
+            if (call.callee.* == .Ident) {
+                const func_name = call.callee.Ident.orig;
+
+                if (std.ascii.eqlIgnoreCase(func_name, "count")) {
+                    if (call.args.len == 1 and call.args[0].* == .Ident and std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
+                        return Value{ .Int = @intCast(envs.len) };
+                    }
+                    // COUNT(expr) - count non-null values
+                    var count: i64 = 0;
+                    for (envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val != .Null) count += 1;
+                    }
+                    return Value{ .Int = count };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
+                    var unique_int = std.AutoHashMap(i64, void).init(allocator);
+                    defer unique_int.deinit();
+                    var unique_str = std.StringHashMap(void).init(allocator);
+                    defer unique_str.deinit();
+
+                    for (envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        switch (val) {
+                            .Int => |i| try unique_int.put(i, {}),
+                            .Str => |s| try unique_str.put(s, {}),
+                            else => {},
+                        }
+                    }
+                    return Value{ .Int = @intCast(unique_int.count() + unique_str.count()) };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
+                    var sum: i64 = 0;
+                    for (envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val == .Int) sum += val.Int;
+                    }
+                    return Value{ .Int = sum };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
+                    var sum: i64 = 0;
+                    var count: i64 = 0;
+                    for (envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val == .Int) {
+                            sum += val.Int;
+                            count += 1;
+                        }
+                    }
+                    if (count == 0) return Value{ .Null = {} };
+                    return Value{ .Int = @divTrunc(sum, count) };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
+                    var min: ?i64 = null;
+                    for (envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val == .Int) {
+                            if (min == null or val.Int < min.?) min = val.Int;
+                        }
+                    }
+                    if (min) |m| return Value{ .Int = m };
+                    return Value{ .Null = {} };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
+                    var max: ?i64 = null;
+                    for (envs) |env| {
+                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
+                        if (val == .Int) {
+                            if (max == null or val.Int > max.?) max = val.Int;
+                        }
+                    }
+                    if (max) |m| return Value{ .Int = m };
+                    return Value{ .Null = {} };
+                }
+            }
+        },
+        .Binary => |bin| {
+            const left = try computeChainAggregation(allocator, bin.left.*, envs);
+            const right = try computeChainAggregation(allocator, bin.right.*, envs);
+            if (left == .Int and right == .Int) {
+                return switch (bin.op) {
+                    .Sub => Value{ .Int = left.Int - right.Int },
+                    .Add => Value{ .Int = left.Int + right.Int },
+                    .Mul => Value{ .Int = left.Int * right.Int },
+                    .Div => if (right.Int != 0) Value{ .Int = @divTrunc(left.Int, right.Int) } else Value{ .Null = {} },
+                    else => Value{ .Null = {} },
+                };
+            }
+            return Value{ .Null = {} };
+        },
+        else => {
+            // For non-aggregation expressions, use first row
+            if (envs.len > 0) {
+                return eval.evalExpr(allocator, expr, envs[0]) catch Value{ .Null = {} };
+            }
+        },
+    }
+    return Value{ .Null = {} };
 }
 
 const CombinedParams = struct {
