@@ -135,14 +135,26 @@ ORDER BY remaining_budget DESC;
 | Marketing   | 1922000          |
 ```
 
-**Root Cause**: The ORDER BY sorting logic in `return_and_sorting.zig` was not correctly handling the DESC direction for all value types, particularly for computed expressions that may be integers.
+**Root Cause**: Multiple execution paths in `match_operations.zig` were missing ORDER BY application before returning results:
+1. `executeMultiNodeMatch` (handles `MATCH (d:Dept) MATCH (e:Emp)` with GROUP BY) returned results without sorting
+2. `executeMultiChainRelationshipMatch` (handles multi-chain relationship patterns) returned results without sorting
+
+The `sortRows` function in `return_and_sorting.zig` was correct, but it was never being called in these execution paths.
 
 **Fix Applied** (2025-12-26):
-1. Enhanced `sortRows` in `return_and_sorting.zig` to properly apply direction reversal for all comparable types
-2. Added sorting support for both ASC and DESC with Integer, Decimal, and String types
-3. Added CANARY marker: REQ-GQL-ORDER-DESC-001
+1. Added ORDER BY application in `executeMultiNodeMatch` (lines 911-927):
+   - Creates `ExecutionResult` variable instead of returning inline
+   - Calls `sortRows` if `q.order_by` is present
+   - Calls `applyDistinct` if `q.ret.distinct` is true
+   - Added CANARY marker: REQ-GQL-ORDER-MULTINODE-001
+2. Added ORDER BY application in `executeMultiChainRelationshipMatch` (lines 1208-1224):
+   - Same pattern as above
+   - Added CANARY marker: REQ-GQL-ORDER-MULTICHAIN-001
 
-**Verification**: Query now returns departments in correct descending order by remaining_budget.
+**Verification**: Query now returns departments in correct descending order:
+- Engineering: 4685000 (highest)
+- Sales: 2915000
+- Marketing: 1922000 (lowest)
 
 ---
 

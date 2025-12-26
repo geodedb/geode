@@ -908,11 +908,23 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         }
     }
 
-    return ExecutionResult{
+    // CANARY: REQ=REQ-GQL-ORDER-MULTINODE-001; FEATURE="OrderByMultiNode"; ASPECT=FinalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // Apply ORDER BY AFTER GROUP BY aggregation to sort final projected results
+    var result = ExecutionResult{
         .columns = columns,
         .rows = try rows.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
+
+    if (q.order_by) |order| {
+        try sortRows(allocator, &result, order);
+    }
+
+    if (q.ret.distinct) {
+        try applyDistinct(allocator, &result);
+    }
+
+    return result;
 }
 
 // CANARY: REQ=REQ-GQL-MULTINODE-AGG-001; FEATURE="MultiNodeAggregation"; ASPECT=Computation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
@@ -1193,11 +1205,23 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         try rows.append(allocator, row);
     }
 
-    return ExecutionResult{
+    // CANARY: REQ=REQ-GQL-ORDER-MULTICHAIN-001; FEATURE="OrderByMultiChain"; ASPECT=FinalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // Apply ORDER BY AFTER collecting relationship match results to sort final projected results
+    var result = ExecutionResult{
         .columns = columns,
         .rows = try rows.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
+
+    if (q.order_by) |order| {
+        try sortRows(allocator, &result, order);
+    }
+
+    if (q.ret.distinct) {
+        try applyDistinct(allocator, &result);
+    }
+
+    return result;
 }
 
 // Helper function to check if a node matches required labels
@@ -3332,6 +3356,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
             }
 
+            // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-002; FEATURE="OrderByPostWithAgg"; ASPECT=FinalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+            // Apply ORDER BY AFTER WITH clause transformation to sort final projected results (aggregation path)
+            if (q.order_by) |order| {
+                try sortRows(allocator, &result, order);
+            }
+
             // Apply DISTINCT deduplication if requested
             if (q.ret.distinct) {
                 try applyDistinct(allocator, &result);
@@ -4743,10 +4773,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             },
         };
 
-        // Apply ORDER BY if present
-        if (q.order_by) |order| {
-            try sortRows(allocator, &result, order);
-        }
+        // NOTE: ORDER BY is applied AFTER WITH clause transformation below
+        // to sort the final projected results, not the raw MATCH results
 
         // Apply WITH clause for query pipelining if present
         if (q.with_clause) |with_clause| {
@@ -4842,6 +4870,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .flags = with_result.flags,
                 };
             }
+        }
+
+        // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-001; FEATURE="OrderByPostWith"; ASPECT=FinalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // Apply ORDER BY AFTER WITH clause transformation to sort final projected results
+        if (q.order_by) |order| {
+            try sortRows(allocator, &result, order);
         }
 
         // Apply DISTINCT deduplication if requested
