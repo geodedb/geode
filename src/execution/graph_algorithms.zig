@@ -101,29 +101,51 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                     }
 
                                     // Check target node pattern (right side of the hop)
+                                    // CANARY: REQ=REQ-GQL-EXISTS-PROPS-001; FEATURE="ExistsTargetNodeProps"; ASPECT=PropertyFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
                                     const target_pattern = hop.right;
-                                    if (target_pattern.labels.len > 0) {
-                                        // Has label constraints on target
-                                        if (store.nodes.get(edge.to_id)) |target_node| {
-                                            var target_matches = true;
-                                            for (target_pattern.labels) |required_label| {
-                                                var has_label = false;
-                                                for (target_node.labels) |node_label| {
-                                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                                        has_label = true;
+                                    if (store.nodes.get(edge.to_id)) |target_node| {
+                                        var target_matches = true;
+
+                                        // Check label constraints on target
+                                        for (target_pattern.labels) |required_label| {
+                                            var has_label = false;
+                                            for (target_node.labels) |node_label| {
+                                                if (std.mem.eql(u8, required_label, node_label)) {
+                                                    has_label = true;
+                                                    break;
+                                                }
+                                            }
+                                            if (!has_label) {
+                                                target_matches = false;
+                                                break;
+                                            }
+                                        }
+
+                                        // Check property constraints on target (e.g., {status: 'cancelled'})
+                                        if (target_matches and target_pattern.props != null) {
+                                            for (target_pattern.props.?) |prop| {
+                                                const expected = eval.evalExpr(allocator, prop.value.*, env) catch Value{ .Null = {} };
+                                                if (target_node.properties.get(prop.key)) |node_prop_val| {
+                                                    const node_val = switch (node_prop_val) {
+                                                        .String => |s| Value{ .Str = s },
+                                                        .Int => |ii| Value{ .Int = ii },
+                                                        .Bool => |b| Value{ .Bool = b },
+                                                        .Float => Value{ .Null = {} },
+                                                        .Null => Value{ .Null = {} },
+                                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                                    };
+                                                    if (!valuesEqual(node_val, expected)) {
+                                                        target_matches = false;
                                                         break;
                                                     }
-                                                }
-                                                if (!has_label) {
+                                                } else {
                                                     target_matches = false;
                                                     break;
                                                 }
                                             }
-                                            if (target_matches) count += 1;
                                         }
-                                    } else {
-                                        // No label constraints - any target node matches
-                                        count += 1;
+
+                                        if (target_matches) count += 1;
                                     }
                                 }
                                 return count;

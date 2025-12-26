@@ -9,41 +9,70 @@ NC='\033[0m'
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR="$SCRIPT_DIR/../.."
 
+# Default mode
+MODE="ha"
+
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --integration) MODE="integration" ;;
+        --all) MODE="all" ;;
+        -h|--help) echo "Usage: $0 [--integration|--all]"; exit 0 ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+cleanup() {
+    echo -e "${GREEN}Cleaning up...${NC}"
+    cd "$SCRIPT_DIR"
+    docker compose down -v 2>/dev/null || true
+    docker compose -f docker-compose.clients.yml down -v 2>/dev/null || true
+}
+
+# Trap cleanup on exit
+trap cleanup EXIT
+
 echo -e "${GREEN}Building Geode Base Image (geode:test)...${NC}"
-# Build the main geode image tagged as geode:test from the root
-# We assume this script is run from tests/ha, so we go up two levels
 cd "$ROOT_DIR"
 docker build -t geode:test -f Dockerfile .
 
-echo -e "${GREEN}Building Runner Image...${NC}"
-# Build runner from tests/ha context
-# We need to be in root for context if we want to copy things,
-# but docker compose builds from tests/ha usually.
-# Let's rely on docker compose build which uses context: . in tests/ha
-# But our docker compose references . for runner context.
-# So we need to ensure we run compose from tests/ha
-cd "$SCRIPT_DIR"
-
-docker compose build runner
-
 echo -e "${GREEN}Starting Environment...${NC}"
+cd "$SCRIPT_DIR"
 docker compose up -d node-1 node-2 node-3
 
 echo "Waiting for cluster to stabilize (30s)..."
 sleep 30
 
-echo -e "${GREEN}Running Tests...${NC}"
-docker compose up --abort-on-container-exit runner
+EXIT_CODE=0
 
-EXIT_CODE=$?
-
-echo -e "${GREEN}Cleaning up...${NC}"
-docker compose down -v
-
-if [ $EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}SUCCESS: All HA tests passed!${NC}"
-else
-    echo -e "${RED}FAILURE: Tests failed with exit code $EXIT_CODE${NC}"
+if [[ "$MODE" == "ha" || "$MODE" == "all" ]]; then
+    echo -e "${GREEN}Running HA Tests...${NC}"
+    cd "$SCRIPT_DIR"
+    docker compose build runner
+    # Use exit-code-from to propagate the runner's exit code
+    docker compose up --exit-code-from runner
+    EXIT_CODE=$?
 fi
 
-exit $EXIT_CODE
+if [[ "$EXIT_CODE" -eq 0 && ("$MODE" == "integration" || "$MODE" == "all") ]]; then
+    echo -e "${GREEN}Running Integration Clients...${NC}"
+    cd "$SCRIPT_DIR"
+
+    echo "Building client images..."
+    docker compose -f docker-compose.clients.yml build
+
+    echo "Starting integration tests..."
+    # Use exit-code-from results-collector
+    docker compose -f docker-compose.clients.yml up --exit-code-from results-collector
+    EXIT_CODE=$?
+fi
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo -e "${GREEN}SUCCESS: All tests passed!${NC}"
+else
+    echo -e "${RED}FAILURE: Tests failed with exit code $EXIT_CODE${NC}"
+    # Ensure we return the failure code
+    exit $EXIT_CODE
+fi
+

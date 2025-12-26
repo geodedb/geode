@@ -1009,9 +1009,11 @@ WHERE id(a) < id(b) AND id(b) < id(c)
 RETURN a.name AS user_a, b.name AS user_b, c.name AS user_c;
 
 -- 37.5 Cycle Detection
+-- Note: Cypher-style list comprehension [node IN nodes(path) | node.name] is not GQL standard.
+-- Using GQL-compatible query that returns cycle length only:
 MATCH path = (n:SocialUser)-[:FRIEND*3..6]->(n)
 WHERE n.name = 'Alice'
-RETURN length(path) AS cycle_length, [node IN nodes(path) | node.name] AS cycle_path LIMIT 3;
+RETURN length(path) AS cycle_length LIMIT 3;
 
 -- 37.6 Degree Centrality (Connection Count)
 MATCH (n:SocialUser)

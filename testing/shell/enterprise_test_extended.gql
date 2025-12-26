@@ -711,6 +711,7 @@ RETURN u.name AS lonely_user;
 MATCH (u:User)
 OPTIONAL MATCH (u)-[:FRIENDS_WITH]->(f:User)
 RETURN u.name, count(f) AS friend_count
+GROUP BY u.name
 ORDER BY friend_count DESC;
 
 -- 17.5 Users in same city who aren't friends
