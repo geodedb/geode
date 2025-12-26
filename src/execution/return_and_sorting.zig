@@ -19,6 +19,70 @@ const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+// CANARY: REQ=REQ-GQL-ORDERBY-EXPR-001; FEATURE="OrderByExpressionEval"; ASPECT=MemberResolution; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+// Evaluates ORDER BY expressions with special handling for member expressions like `i.price`.
+// When evaluating `i.price`, this function first tries to look up "price" as a column name,
+// falling back to normal evaluation only if not found.
+fn evalOrderByExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env) !Value {
+    switch (expr) {
+        .Member => |member| {
+            // For member expressions like i.price, try to look up by property name first
+            const prop_name = member.field;
+
+            // Check if property name matches a column
+            for (env.names, 0..) |col_name, idx| {
+                if (std.mem.eql(u8, col_name, prop_name)) {
+                    return env.values[idx];
+                }
+            }
+
+            // Try qualified name (e.g., "i.price") if target is an identifier
+            if (member.target.* == .Ident) {
+                const target_name = member.target.Ident.orig;
+                for (env.names, 0..) |col_name, idx| {
+                    // Check if column matches "target.property" pattern
+                    if (col_name.len == target_name.len + 1 + prop_name.len) {
+                        if (std.mem.startsWith(u8, col_name, target_name) and
+                            col_name[target_name.len] == '.' and
+                            std.mem.endsWith(u8, col_name, prop_name))
+                        {
+                            return env.values[idx];
+                        }
+                    }
+                }
+            }
+
+            // Fall back to normal evaluation
+            return eval.evalExpr(allocator, expr, env);
+        },
+        .Binary => |b| {
+            // For binary expressions, recursively evaluate both sides with member resolution
+            const left_val = try evalOrderByExpr(allocator, b.left.*, env);
+            const right_val = try evalOrderByExpr(allocator, b.right.*, env);
+            return eval.evalBinary(allocator, b.op, left_val, right_val);
+        },
+        .Unary => |u| {
+            const val = try evalOrderByExpr(allocator, u.expr.*, env);
+            return switch (u.op) {
+                .Not => .{ .Bool = !value_types.truthy(val) },
+                .Neg => switch (val) {
+                    .Int => |i| .{ .Int = -i },
+                    .Decimal => |d| .{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale } },
+                    else => error.TypeMismatch,
+                },
+                .Pos => switch (val) {
+                    .Int, .Decimal => val,
+                    else => error.TypeMismatch,
+                },
+            };
+        },
+        else => {
+            // For other expressions, use standard evaluation
+            return eval.evalExpr(allocator, expr, env);
+        },
+    }
+}
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-009; FEATURE="FileModularization"; ASPECT=ReturnAndSorting; STATUS=IMPL; OWNER=refactoring; UPDATED=2025-10-17
 pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.OrderBy) !void {
     // Check if we're using ordinals (need to add flag) - do this before early return
@@ -129,8 +193,9 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
                             .values = result.rows[i + 1],
                             .allocator = allocator,
                         };
-                        val1 = eval.evalExpr(allocator, key.expr, env1) catch .{ .Null = {} };
-                        val2 = eval.evalExpr(allocator, key.expr, env2) catch .{ .Null = {} };
+                        // CANARY: REQ=REQ-GQL-ORDERBY-EXPR-001; FEATURE="OrderByExpressionEval"; ASPECT=MemberFallback; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                        val1 = evalOrderByExpr(allocator, key.expr, env1) catch .{ .Null = {} };
+                        val2 = evalOrderByExpr(allocator, key.expr, env2) catch .{ .Null = {} };
                     }
                 } else {
                     // Complex expression - need to evaluate it for each row
@@ -146,9 +211,10 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
                         .allocator = allocator,
                     };
 
-                    // Evaluate expressions (errors default to Null)
-                    val1 = eval.evalExpr(allocator, key.expr, env1) catch .{ .Null = {} };
-                    val2 = eval.evalExpr(allocator, key.expr, env2) catch .{ .Null = {} };
+                    // CANARY: REQ=REQ-GQL-ORDERBY-EXPR-001; FEATURE="OrderByExpressionEval"; ASPECT=ComplexExpr; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                    // Use evalOrderByExpr to handle member expressions like i.price in ORDER BY
+                    val1 = evalOrderByExpr(allocator, key.expr, env1) catch .{ .Null = {} };
+                    val2 = evalOrderByExpr(allocator, key.expr, env2) catch .{ .Null = {} };
                 }
 
                 const cmp = compareValuesWithNullsPolicy(val1, val2, key.nulls);

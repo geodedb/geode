@@ -163,6 +163,33 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         try sortRows(allocator, &result, order);
     }
 
+    // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // Apply SKIP and LIMIT from the final query in the chain after ORDER BY
+    if (final_query.offset) |skip_count| {
+        if (skip_count < result.rows.len) {
+            const new_rows = try allocator.alloc([]Value, result.rows.len - skip_count);
+            for (result.rows[skip_count..], 0..) |row, i| {
+                new_rows[i] = row;
+            }
+            allocator.free(result.rows);
+            result.rows = new_rows;
+        } else {
+            allocator.free(result.rows);
+            result.rows = try allocator.alloc([]Value, 0);
+        }
+    }
+
+    if (final_query.limit) |limit_count| {
+        if (limit_count < result.rows.len) {
+            const new_rows = try allocator.alloc([]Value, limit_count);
+            for (result.rows[0..limit_count], 0..) |row, i| {
+                new_rows[i] = row;
+            }
+            allocator.free(result.rows);
+            result.rows = new_rows;
+        }
+    }
+
     return result;
 }
 

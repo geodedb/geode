@@ -1,13 +1,14 @@
 # Shell Test Issues - December 2025
 
-Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql` and `./testing/shell/enterprise_test.gql`).
+Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-26 (Enterprise Test Analysis - Run 2)
+## Current Test Run: 2025-12-26 (Extended Testing - Run 3)
 
-**Test File**: `./testing/shell/enterprise_test.gql`
-**Statements Executed**: 150
-**Explicit Errors**: 0 (no 42000 errors)
-**Status**: ✅ ALL ISSUES FIXED
+**Test Files**:
+- `./testing/shell/enterprise_test.gql` (150 statements)
+- `./testing/shell/enterprise_test_extended.gql` (100+ edge cases)
+
+**Status**: ✅ ALL MAJOR ISSUES FIXED
 
 ### Confirmed Fixed (2025-12-26)
 
@@ -19,6 +20,15 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 | E15-NEW | ✅ FIXED | 18.1 | WITH projection + WHERE now correctly filters post-transformation |
 | E16-NEW | ✅ FIXED | 18.2 | WHERE before OPTIONAL MATCH now filters base nodes |
 | E17-NEW | ✅ FIXED | 19.3 | ORDER BY DESC on computed expressions now sorts correctly |
+| E18-NEW | ✅ FIXED | Extended | Triple WITH chain LIMIT was ignored - now applies correctly |
+| E19-NEW | ✅ FIXED | Extended | ORDER BY on member expressions (i.price * i.qty) now works |
+
+### Known Limitations (Low Priority)
+
+| Issue | Category | Description | Workaround |
+|-------|----------|-------------|------------|
+| L1 | ORDER BY | ORDER BY on aggregate expression directly (e.g., `sum(qty)`) doesn't sort | Use alias instead: `ORDER BY total_qty` |
+| L2 | ORDER BY | ORDER BY on computed expression requires component columns in RETURN | Include component columns or use alias |
 
 ---
 
@@ -155,6 +165,69 @@ The `sortRows` function in `return_and_sorting.zig` was correct, but it was neve
 - Engineering: 4685000 (highest)
 - Sales: 2915000
 - Marketing: 1922000 (lowest)
+
+---
+
+## Issue E18-NEW: Triple WITH Chain Ignores LIMIT (P1) ✅ FIXED
+
+**Section**: Extended Testing (Section 5.1)
+
+**Query**:
+```gql
+MATCH (e:Employee)
+WITH e.name AS n1, e.salary AS s1
+WITH n1 AS n2, s1 AS s2
+WITH n2 AS person, s2 AS comp
+RETURN person, comp ORDER BY comp DESC LIMIT 5;
+```
+
+**Expected**: 5 rows (top 5 salaries)
+
+**Actual Before Fix**: All 14 rows returned (LIMIT ignored)
+
+**Root Cause**: The `executeQueryChain` function in `query_execution.zig` was applying ORDER BY from the final query in the chain, but LIMIT and SKIP were never applied. The function returned results directly without pagination.
+
+**Fix Applied** (2025-12-26):
+1. Modified `executeQueryChain` in `query_execution.zig` (lines 166-191)
+2. After ORDER BY, now applies SKIP from `final_query.offset`
+3. After SKIP, applies LIMIT from `final_query.limit`
+4. Added CANARY marker: REQ-GQL-CHAIN-LIMIT-001
+
+**Verification**: Query now returns exactly 5 rows with top salaries.
+
+---
+
+## Issue E19-NEW: ORDER BY on Member Expression Not Sorting (P1) ✅ FIXED
+
+**Section**: Extended Testing (Section 5.1)
+
+**Query**:
+```gql
+MATCH (i:Item)
+RETURN i.name, i.price, i.qty, i.price * i.qty AS total
+ORDER BY i.price * i.qty DESC;
+```
+
+**Expected**: Sorted by computed value (400, 250, 240, 200)
+
+**Actual Before Fix**: Random order (200, 250, 400, 240)
+
+**Root Cause**: The `sortRows` function in `return_and_sorting.zig` was trying to evaluate the ORDER BY expression using standard `evalExpr`. For expressions like `i.price * i.qty`, the evaluation failed because:
+1. The result columns are named "price", "qty" (no "i" variable)
+2. `evalExpr` tried to look up "i" as a variable, got Null
+3. `Null * Null = Null`, so all sort keys were Null (no sorting)
+
+**Fix Applied** (2025-12-26):
+1. Added `evalOrderByExpr` function in `return_and_sorting.zig` (lines 22-84)
+2. For Member expressions like `i.price`, looks up "price" column directly
+3. For Binary expressions, recursively evaluates with member resolution
+4. Modified complex expression evaluation to use `evalOrderByExpr`
+5. Made `evalBinary` public in `eval.zig`
+6. Added CANARY marker: REQ-GQL-ORDERBY-EXPR-001
+
+**Verification**: Query now returns rows sorted correctly by computed expression.
+
+**Note**: ORDER BY still requires component columns to be in RETURN (use alias as workaround).
 
 ---
 

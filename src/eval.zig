@@ -213,7 +213,7 @@ const eqVals = value_types.eqVals;
 // Phase 6 M6.1: Integer comparison function moved to eval/type_promotion.zig
 // Function: cmpIntsOp
 
-fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
+pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
         .And => and3(l, r),
         .Or => or3(l, r),

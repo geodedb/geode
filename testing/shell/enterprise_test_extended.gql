@@ -1,0 +1,795 @@
+-- ============================================================================
+-- GEODE ENTERPRISE EXTENDED TEST FILE
+-- ============================================================================
+-- Comprehensive edge case and stress testing for advanced Geode features.
+-- Run with: ./zig-out/bin/geode shell --insecure
+-- Then: /source ./testing/shell/enterprise_test_extended.gql
+-- ============================================================================
+
+-- ============================================================================
+-- SECTION 1: EXTENDED SCHEMA SETUP
+-- ============================================================================
+
+-- 1.1 Create test graphs
+CREATE GRAPH IF NOT EXISTS extended_corp;
+CREATE GRAPH IF NOT EXISTS extended_inventory;
+CREATE GRAPH IF NOT EXISTS extended_social;
+
+-- 1.2 Build complex corporate structure
+USE GRAPH extended_corp;
+MATCH (n) DETACH DELETE n;
+
+-- Departments with various budget levels including zero and NULL simulation
+CREATE (:Department {name: 'Engineering', budget: 10000000, location: 'Building A', active: true, founded: '2010-01-01'});
+CREATE (:Department {name: 'Sales', budget: 5000000, location: 'Building B', active: true, founded: '2012-06-15'});
+CREATE (:Department {name: 'Marketing', budget: 3000000, location: 'Building B', active: true, founded: '2015-03-20'});
+CREATE (:Department {name: 'HR', budget: 1000000, location: 'Building A', active: true, founded: '2010-01-01'});
+CREATE (:Department {name: 'Research', budget: 8000000, location: 'Building C', active: true, founded: '2018-09-01'});
+CREATE (:Department {name: 'Legal', budget: 2000000, location: 'Building A', active: true, founded: '2011-04-10'});
+CREATE (:Department {name: 'Finance', budget: 1500000, location: 'Building A', active: true, founded: '2010-01-01'});
+CREATE (:Department {name: 'Support', budget: 500000, location: 'Building D', active: false, founded: '2020-01-01'});
+CREATE (:Department {name: 'NewDept', budget: 0, location: 'Building E', active: true, founded: '2024-01-01'});
+
+-- Employees with various salary levels, departments, and edge case data
+-- Engineering (5 employees)
+CREATE (:Employee {id: 'E001', name: 'Alice Chen', department: 'Engineering', salary: 150000, level: 5, hire_date: '2015-03-01', active: true, email: 'alice@corp.com'});
+CREATE (:Employee {id: 'E002', name: 'Bob Williams', department: 'Engineering', salary: 130000, level: 4, hire_date: '2017-06-15', active: true, email: 'bob@corp.com'});
+CREATE (:Employee {id: 'E003', name: 'Charlie Davis', department: 'Engineering', salary: 110000, level: 3, hire_date: '2019-01-10', active: true, email: 'charlie@corp.com'});
+CREATE (:Employee {id: 'E004', name: 'Diana Miller', department: 'Engineering', salary: 95000, level: 2, hire_date: '2021-08-20', active: true, email: 'diana@corp.com'});
+CREATE (:Employee {id: 'E005', name: 'Edward Brown', department: 'Engineering', salary: 85000, level: 1, hire_date: '2023-02-01', active: true, email: 'edward@corp.com'});
+
+-- Sales (4 employees)
+CREATE (:Employee {id: 'E006', name: 'Fiona Garcia', department: 'Sales', salary: 120000, level: 5, hire_date: '2014-05-10', active: true, email: 'fiona@corp.com'});
+CREATE (:Employee {id: 'E007', name: 'George Martinez', department: 'Sales', salary: 95000, level: 3, hire_date: '2018-09-01', active: true, email: 'george@corp.com'});
+CREATE (:Employee {id: 'E008', name: 'Hannah Lee', department: 'Sales', salary: 88000, level: 2, hire_date: '2020-11-15', active: true, email: 'hannah@corp.com'});
+CREATE (:Employee {id: 'E009', name: 'Ivan Petrov', department: 'Sales', salary: 75000, level: 1, hire_date: '2022-04-01', active: false, email: 'ivan@corp.com'});
+
+-- Marketing (3 employees)
+CREATE (:Employee {id: 'E010', name: 'Julia Thompson', department: 'Marketing', salary: 105000, level: 4, hire_date: '2016-07-01', active: true, email: 'julia@corp.com'});
+CREATE (:Employee {id: 'E011', name: 'Kevin White', department: 'Marketing', salary: 85000, level: 2, hire_date: '2019-12-01', active: true, email: 'kevin@corp.com'});
+CREATE (:Employee {id: 'E012', name: 'Laura Black', department: 'Marketing', salary: 78000, level: 1, hire_date: '2021-06-15', active: true, email: 'laura@corp.com'});
+
+-- HR (2 employees)
+CREATE (:Employee {id: 'E013', name: 'Mike Johnson', department: 'HR', salary: 90000, level: 4, hire_date: '2013-02-01', active: true, email: 'mike@corp.com'});
+CREATE (:Employee {id: 'E014', name: 'Nancy Wilson', department: 'HR', salary: 72000, level: 2, hire_date: '2020-03-15', active: true, email: 'nancy@corp.com'});
+
+-- Research (4 employees)
+CREATE (:Employee {id: 'E015', name: 'Oscar Taylor', department: 'Research', salary: 140000, level: 5, hire_date: '2018-10-01', active: true, email: 'oscar@corp.com'});
+CREATE (:Employee {id: 'E016', name: 'Patricia Adams', department: 'Research', salary: 125000, level: 4, hire_date: '2019-05-15', active: true, email: 'patricia@corp.com'});
+CREATE (:Employee {id: 'E017', name: 'Quinn Roberts', department: 'Research', salary: 115000, level: 3, hire_date: '2020-08-01', active: true, email: 'quinn@corp.com'});
+CREATE (:Employee {id: 'E018', name: 'Rachel Green', department: 'Research', salary: 98000, level: 2, hire_date: '2022-01-10', active: true, email: 'rachel@corp.com'});
+
+-- Legal (1 employee) - test single-employee department
+CREATE (:Employee {id: 'E019', name: 'Steven Clark', department: 'Legal', salary: 135000, level: 5, hire_date: '2012-04-01', active: true, email: 'steven@corp.com'});
+
+-- Finance (2 employees)
+CREATE (:Employee {id: 'E020', name: 'Tina Hall', department: 'Finance', salary: 110000, level: 4, hire_date: '2015-11-01', active: true, email: 'tina@corp.com'});
+CREATE (:Employee {id: 'E021', name: 'Ulrich Fox', department: 'Finance', salary: 92000, level: 3, hire_date: '2019-07-15', active: true, email: 'ulrich@corp.com'});
+
+-- Support (0 active employees) - test empty department after filter
+CREATE (:Employee {id: 'E022', name: 'Victor Stone', department: 'Support', salary: 65000, level: 1, hire_date: '2023-06-01', active: false, email: 'victor@corp.com'});
+
+-- NewDept (0 employees) - test department with no employees
+
+-- Edge case: Employee with same salary as another
+CREATE (:Employee {id: 'E023', name: 'Wendy Park', department: 'Engineering', salary: 95000, level: 2, hire_date: '2021-09-01', active: true, email: 'wendy@corp.com'});
+
+-- Edge case: Employee with very high salary
+CREATE (:Employee {id: 'E024', name: 'Xavier Rich', department: 'Engineering', salary: 500000, level: 6, hire_date: '2010-01-01', active: true, email: 'xavier@corp.com'});
+
+-- Edge case: Employee with minimum salary
+CREATE (:Employee {id: 'E025', name: 'Yolanda Min', department: 'Support', salary: 35000, level: 1, hire_date: '2024-01-01', active: true, email: 'yolanda@corp.com'});
+
+-- Create management hierarchy
+MATCH (e:Employee {name: 'Alice Chen'}), (d:Department {name: 'Engineering'}) CREATE (e)-[:MANAGES]->(d);
+MATCH (e:Employee {name: 'Fiona Garcia'}), (d:Department {name: 'Sales'}) CREATE (e)-[:MANAGES]->(d);
+MATCH (e:Employee {name: 'Julia Thompson'}), (d:Department {name: 'Marketing'}) CREATE (e)-[:MANAGES]->(d);
+MATCH (e:Employee {name: 'Mike Johnson'}), (d:Department {name: 'HR'}) CREATE (e)-[:MANAGES]->(d);
+MATCH (e:Employee {name: 'Oscar Taylor'}), (d:Department {name: 'Research'}) CREATE (e)-[:MANAGES]->(d);
+MATCH (e:Employee {name: 'Steven Clark'}), (d:Department {name: 'Legal'}) CREATE (e)-[:MANAGES]->(d);
+MATCH (e:Employee {name: 'Tina Hall'}), (d:Department {name: 'Finance'}) CREATE (e)-[:MANAGES]->(d);
+
+-- Create reporting relationships (multi-level hierarchy)
+MATCH (e:Employee {name: 'Bob Williams'}), (m:Employee {name: 'Alice Chen'}) CREATE (e)-[:REPORTS_TO]->(m);
+MATCH (e:Employee {name: 'Charlie Davis'}), (m:Employee {name: 'Alice Chen'}) CREATE (e)-[:REPORTS_TO]->(m);
+MATCH (e:Employee {name: 'Diana Miller'}), (m:Employee {name: 'Bob Williams'}) CREATE (e)-[:REPORTS_TO]->(m);
+MATCH (e:Employee {name: 'Edward Brown'}), (m:Employee {name: 'Bob Williams'}) CREATE (e)-[:REPORTS_TO]->(m);
+MATCH (e:Employee {name: 'Wendy Park'}), (m:Employee {name: 'Charlie Davis'}) CREATE (e)-[:REPORTS_TO]->(m);
+
+MATCH (e:Employee {name: 'George Martinez'}), (m:Employee {name: 'Fiona Garcia'}) CREATE (e)-[:REPORTS_TO]->(m);
+MATCH (e:Employee {name: 'Hannah Lee'}), (m:Employee {name: 'George Martinez'}) CREATE (e)-[:REPORTS_TO]->(m);
+MATCH (e:Employee {name: 'Ivan Petrov'}), (m:Employee {name: 'George Martinez'}) CREATE (e)-[:REPORTS_TO]->(m);
+
+MATCH (e:Employee {name: 'Kevin White'}), (m:Employee {name: 'Julia Thompson'}) CREATE (e)-[:REPORTS_TO]->(m);
+MATCH (e:Employee {name: 'Laura Black'}), (m:Employee {name: 'Kevin White'}) CREATE (e)-[:REPORTS_TO]->(m);
+
+MATCH (e:Employee {name: 'Nancy Wilson'}), (m:Employee {name: 'Mike Johnson'}) CREATE (e)-[:REPORTS_TO]->(m);
+
+MATCH (e:Employee {name: 'Patricia Adams'}), (m:Employee {name: 'Oscar Taylor'}) CREATE (e)-[:REPORTS_TO]->(m);
+MATCH (e:Employee {name: 'Quinn Roberts'}), (m:Employee {name: 'Patricia Adams'}) CREATE (e)-[:REPORTS_TO]->(m);
+MATCH (e:Employee {name: 'Rachel Green'}), (m:Employee {name: 'Patricia Adams'}) CREATE (e)-[:REPORTS_TO]->(m);
+
+MATCH (e:Employee {name: 'Ulrich Fox'}), (m:Employee {name: 'Tina Hall'}) CREATE (e)-[:REPORTS_TO]->(m);
+
+-- Create mentorship relationships (cross-department)
+MATCH (e:Employee {name: 'Alice Chen'}), (m:Employee {name: 'Oscar Taylor'}) CREATE (e)-[:MENTORS]->(m);
+MATCH (e:Employee {name: 'Fiona Garcia'}), (m:Employee {name: 'Julia Thompson'}) CREATE (e)-[:MENTORS]->(m);
+MATCH (e:Employee {name: 'Steven Clark'}), (m:Employee {name: 'Tina Hall'}) CREATE (e)-[:MENTORS]->(m);
+
+-- Create peer collaboration relationships (bidirectional simulation)
+MATCH (e1:Employee {name: 'Bob Williams'}), (e2:Employee {name: 'Patricia Adams'}) CREATE (e1)-[:COLLABORATES_WITH {project: 'AI Initiative'}]->(e2);
+MATCH (e1:Employee {name: 'Patricia Adams'}), (e2:Employee {name: 'Bob Williams'}) CREATE (e1)-[:COLLABORATES_WITH {project: 'AI Initiative'}]->(e2);
+MATCH (e1:Employee {name: 'Charlie Davis'}), (e2:Employee {name: 'Quinn Roberts'}) CREATE (e1)-[:COLLABORATES_WITH {project: 'Cloud Migration'}]->(e2);
+
+-- Projects
+CREATE (:Project {name: 'AI Initiative', budget: 2000000, status: 'active', start_date: '2023-01-01'});
+CREATE (:Project {name: 'Cloud Migration', budget: 1500000, status: 'active', start_date: '2023-06-01'});
+CREATE (:Project {name: 'Mobile App', budget: 800000, status: 'completed', start_date: '2022-01-01'});
+CREATE (:Project {name: 'Data Platform', budget: 3000000, status: 'planning', start_date: '2024-06-01'});
+CREATE (:Project {name: 'Legacy Cleanup', budget: 0, status: 'cancelled', start_date: '2023-03-01'});
+
+-- Project assignments
+MATCH (e:Employee {name: 'Bob Williams'}), (p:Project {name: 'AI Initiative'}) CREATE (e)-[:WORKS_ON {role: 'Lead', hours: 30}]->(p);
+MATCH (e:Employee {name: 'Patricia Adams'}), (p:Project {name: 'AI Initiative'}) CREATE (e)-[:WORKS_ON {role: 'Researcher', hours: 40}]->(p);
+MATCH (e:Employee {name: 'Charlie Davis'}), (p:Project {name: 'Cloud Migration'}) CREATE (e)-[:WORKS_ON {role: 'Developer', hours: 25}]->(p);
+MATCH (e:Employee {name: 'Quinn Roberts'}), (p:Project {name: 'Cloud Migration'}) CREATE (e)-[:WORKS_ON {role: 'Architect', hours: 35}]->(p);
+MATCH (e:Employee {name: 'Diana Miller'}), (p:Project {name: 'Mobile App'}) CREATE (e)-[:WORKS_ON {role: 'Developer', hours: 40}]->(p);
+
+-- ============================================================================
+-- SECTION 2: EDGE CASE - EMPTY RESULTS AND BOUNDARY CONDITIONS
+-- ============================================================================
+
+-- 2.1 Query that returns no results
+MATCH (e:Employee {department: 'NonExistent'})
+RETURN e.name AS name;
+
+-- 2.2 Department with no employees (NewDept)
+MATCH (d:Department {name: 'NewDept'})
+OPTIONAL MATCH (e:Employee {department: 'NewDept'})
+RETURN d.name AS dept, count(e) AS emp_count;
+
+-- 2.3 Filter that excludes all results
+MATCH (e:Employee)
+WHERE e.salary > 1000000
+RETURN e.name AS millionaires;
+
+-- 2.4 LIMIT 0 edge case
+MATCH (e:Employee)
+RETURN e.name
+LIMIT 0;
+
+-- 2.5 SKIP beyond result count
+MATCH (e:Employee)
+RETURN e.name
+ORDER BY e.salary DESC
+SKIP 100 LIMIT 10;
+
+-- ============================================================================
+-- SECTION 3: COMPLEX AGGREGATION EDGE CASES
+-- ============================================================================
+
+-- 3.1 Aggregation on empty group
+MATCH (e:Employee {department: 'Support', active: true})
+RETURN count(*) AS active_support, sum(e.salary) AS total_salary, avg(e.salary) AS avg_salary;
+
+-- 3.2 Multiple aggregations with same GROUP BY
+MATCH (e:Employee)
+WHERE e.active = true
+RETURN e.department AS dept,
+       count(*) AS total,
+       sum(e.salary) AS sum_sal,
+       avg(e.salary) AS avg_sal,
+       min(e.salary) AS min_sal,
+       max(e.salary) AS max_sal,
+       count(DISTINCT e.level) AS unique_levels
+GROUP BY e.department
+ORDER BY sum_sal DESC;
+
+-- 3.3 Aggregation with zero values
+MATCH (d:Department)
+RETURN d.name, d.budget,
+       CASE WHEN d.budget = 0 THEN 'No Budget' ELSE 'Has Budget' END AS status
+ORDER BY d.budget ASC;
+
+-- 3.4 COUNT DISTINCT on various types
+MATCH (e:Employee)
+RETURN count(DISTINCT e.department) AS unique_depts,
+       count(DISTINCT e.level) AS unique_levels,
+       count(DISTINCT e.active) AS unique_statuses;
+
+-- 3.5 Aggregation with NULL handling
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+RETURN e.department AS dept,
+       count(m) AS has_manager_count,
+       count(*) AS total_count
+GROUP BY e.department
+ORDER BY has_manager_count DESC;
+
+-- ============================================================================
+-- SECTION 4: COMPLEX WITH CLAUSE CHAINS
+-- ============================================================================
+
+-- 4.1 Triple WITH chain
+MATCH (e:Employee)
+WITH e.department AS dept, count(*) AS cnt, avg(e.salary) AS avg
+WITH dept, cnt, avg
+WHERE cnt >= 2
+WITH dept, cnt, avg, cnt * avg AS dept_impact
+RETURN dept, cnt, avg, dept_impact
+ORDER BY dept_impact DESC;
+
+-- 4.2 WITH + aggregation + filter + aggregation
+MATCH (e:Employee)
+WITH e.department AS dept, sum(e.salary) AS total_sal
+WITH dept, total_sal
+WHERE total_sal > 200000
+RETURN count(*) AS high_payroll_depts, sum(total_sal) AS combined_payroll;
+
+-- 4.3 WITH changing column names through chain
+MATCH (e:Employee)
+WITH e.name AS original_name, e.salary AS original_salary
+WITH original_name AS employee, original_salary AS pay
+WITH employee AS person, pay AS compensation
+RETURN person, compensation
+ORDER BY compensation DESC
+LIMIT 5;
+
+-- 4.4 WITH with ORDER BY in middle
+MATCH (e:Employee)
+WITH e ORDER BY e.salary DESC
+LIMIT 10
+WITH e.department AS dept, count(*) AS top_earner_count
+RETURN dept, top_earner_count
+ORDER BY top_earner_count DESC;
+
+-- ============================================================================
+-- SECTION 5: COMPLEX ORDER BY EDGE CASES
+-- ============================================================================
+
+-- 5.1 ORDER BY on computed expression
+MATCH (e:Employee)
+RETURN e.name, e.salary, e.level, e.salary / e.level AS salary_per_level
+ORDER BY e.salary / e.level DESC
+LIMIT 10;
+
+-- 5.2 ORDER BY with multiple directions
+MATCH (e:Employee)
+RETURN e.department, e.level, e.salary, e.name
+ORDER BY e.department ASC, e.level DESC, e.salary DESC, e.name ASC;
+
+-- 5.3 ORDER BY on aggregated column alias
+MATCH (e:Employee)
+RETURN e.department AS dept, avg(e.salary) AS avg_salary
+GROUP BY e.department
+ORDER BY avg_salary ASC;
+
+-- 5.4 ORDER BY with NULLS (employees without managers)
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+RETURN e.name AS employee, m.salary AS manager_salary
+ORDER BY manager_salary DESC NULLS LAST;
+
+-- 5.5 ORDER BY with same values (stability test)
+MATCH (e:Employee)
+WHERE e.salary = 95000
+RETURN e.name, e.salary, e.department
+ORDER BY e.salary DESC, e.name ASC;
+
+-- ============================================================================
+-- SECTION 6: MULTI-MATCH COMPLEX PATTERNS
+-- ============================================================================
+
+-- 6.1 Triple MATCH with aggregation
+MATCH (d:Department)
+MATCH (e:Employee)
+MATCH (p:Project)
+WHERE e.department = d.name
+RETURN d.name AS dept, count(DISTINCT e) AS employees, count(DISTINCT p) AS total_projects
+GROUP BY d.name
+ORDER BY employees DESC;
+
+-- 6.2 MATCH + OPTIONAL MATCH + MATCH
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+MATCH (d:Department {name: e.department})
+RETURN e.name, m.name AS manager, d.budget
+ORDER BY d.budget DESC
+LIMIT 10;
+
+-- 6.3 Multiple MATCH with cross-product filtering
+MATCH (e1:Employee)
+MATCH (e2:Employee)
+WHERE e1.department = e2.department AND e1.id < e2.id
+RETURN e1.name AS employee1, e2.name AS employee2, e1.department AS dept
+ORDER BY e1.department, e1.name;
+
+-- 6.4 MATCH with self-comparison
+MATCH (e:Employee)
+MATCH (other:Employee)
+WHERE e.department = other.department AND e.salary > other.salary
+RETURN e.name AS higher_earner, other.name AS lower_earner, e.department AS dept, e.salary - other.salary AS difference
+ORDER BY difference DESC
+LIMIT 10;
+
+-- ============================================================================
+-- SECTION 7: DEEP RELATIONSHIP TRAVERSAL
+-- ============================================================================
+
+-- 7.1 Variable-length path 1..4 hops
+MATCH (e:Employee {name: 'Alice Chen'})-[:REPORTS_TO*1..4]->(subordinate:Employee)
+RETURN e.name AS manager, subordinate.name AS subordinate;
+
+-- 7.2 Reverse traversal (who reports up to top)
+MATCH (e:Employee)-[:REPORTS_TO*1..5]->(top:Employee)
+WHERE NOT EXISTS { MATCH (top)-[:REPORTS_TO]->(:Employee) }
+RETURN e.name AS employee, top.name AS ultimate_manager
+ORDER BY e.name;
+
+-- 7.3 Path with relationship properties
+MATCH (e:Employee)-[w:WORKS_ON]->(p:Project)
+RETURN e.name, p.name AS project, w.role, w.hours
+ORDER BY w.hours DESC;
+
+-- 7.4 Multiple relationship types in path
+MATCH (e:Employee)-[:REPORTS_TO|MENTORS*1..3]->(other:Employee)
+WHERE e.name = 'Diana Miller'
+RETURN DISTINCT other.name AS connected_to;
+
+-- ============================================================================
+-- SECTION 8: SUBQUERY EDGE CASES
+-- ============================================================================
+
+-- 8.1 EXISTS with empty inner match
+MATCH (e:Employee)
+WHERE EXISTS {
+    MATCH (e)-[:WORKS_ON]->(:Project {status: 'cancelled'})
+}
+RETURN e.name AS works_on_cancelled;
+
+-- 8.2 NOT EXISTS - employees not on any project
+MATCH (e:Employee)
+WHERE NOT EXISTS {
+    MATCH (e)-[:WORKS_ON]->(:Project)
+}
+RETURN e.name AS no_projects
+ORDER BY e.name;
+
+-- 8.3 COUNT subquery with zero result
+MATCH (d:Department)
+RETURN d.name AS department,
+       COUNT { MATCH (:Employee {department: d.name, active: false}) } AS inactive_count
+ORDER BY inactive_count DESC;
+
+-- 8.4 Nested subquery condition
+MATCH (e:Employee)
+WHERE e.salary > 100000
+  AND EXISTS { MATCH (e)-[:REPORTS_TO]->(:Employee) }
+RETURN e.name AS high_earner_with_manager
+ORDER BY e.salary DESC;
+
+-- ============================================================================
+-- SECTION 9: NULL HANDLING EDGE CASES
+-- ============================================================================
+
+-- 9.1 COALESCE chain
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+OPTIONAL MATCH (e)-[:MENTORS]->(mentee:Employee)
+RETURN e.name,
+       coalesce(m.name, 'No Manager') AS manager,
+       coalesce(mentee.name, 'No Mentee') AS mentee;
+
+-- 9.2 NULL in arithmetic (should propagate)
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+RETURN e.name, m.salary AS manager_salary, m.salary + 1000 AS manager_salary_plus
+ORDER BY e.name
+LIMIT 10;
+
+-- 9.3 NULL comparison behavior
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+WHERE m.salary IS NOT NULL
+RETURN e.name AS has_manager_with_salary;
+
+-- 9.4 IS NULL filter
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+WHERE m IS NULL
+RETURN e.name AS top_level
+ORDER BY e.name;
+
+-- ============================================================================
+-- SECTION 10: CASE EXPRESSION EDGE CASES
+-- ============================================================================
+
+-- 10.1 Nested CASE expressions
+MATCH (e:Employee)
+RETURN e.name,
+       CASE
+           WHEN e.salary >= 140000 THEN
+               CASE WHEN e.level >= 5 THEN 'Executive' ELSE 'Senior Expert' END
+           WHEN e.salary >= 100000 THEN 'Senior'
+           WHEN e.salary >= 70000 THEN 'Mid'
+           ELSE 'Junior'
+       END AS tier;
+
+-- 10.2 CASE in aggregation
+MATCH (e:Employee)
+RETURN e.department,
+       sum(CASE WHEN e.active = true THEN 1 ELSE 0 END) AS active_count,
+       sum(CASE WHEN e.active = false THEN 1 ELSE 0 END) AS inactive_count
+GROUP BY e.department
+ORDER BY active_count DESC;
+
+-- 10.3 CASE with NULL comparison
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+RETURN e.name,
+       CASE
+           WHEN m IS NULL THEN 'Top Level'
+           WHEN m.salary > e.salary THEN 'Normal Hierarchy'
+           ELSE 'Unusual Hierarchy'
+       END AS hierarchy_status;
+
+-- ============================================================================
+-- SECTION 11: SET OPERATIONS EDGE CASES
+-- ============================================================================
+
+-- 11.1 UNION with empty set
+MATCH (e:Employee {department: 'NonExistent'})
+RETURN e.name AS person
+UNION
+MATCH (e:Employee {department: 'Legal'})
+RETURN e.name AS person;
+
+-- 11.2 INTERSECT with subset relationship
+MATCH (e:Employee) WHERE e.salary > 100000
+RETURN e.name AS person
+INTERSECT
+MATCH (e:Employee) WHERE e.salary > 120000
+RETURN e.name AS person;
+
+-- 11.3 EXCEPT all from set
+MATCH (e:Employee {department: 'Engineering'})
+RETURN e.name AS person
+EXCEPT
+MATCH (e:Employee {department: 'Engineering'})
+RETURN e.name AS person;
+
+-- 11.4 Complex UNION with ORDER BY
+MATCH (e:Employee) WHERE e.level = 5
+RETURN e.name AS leader, 'Department Head' AS role
+UNION ALL
+MATCH (e:Employee)-[:MANAGES]->(:Department)
+RETURN e.name AS leader, 'Manager' AS role
+ORDER BY leader;
+
+-- ============================================================================
+-- SECTION 12: STRING EDGE CASES
+-- ============================================================================
+
+-- 12.1 Empty string handling
+RETURN '' AS empty_string, size('') AS empty_size;
+
+-- 12.2 String with special characters
+RETURN 'Hello\nWorld' AS with_newline;
+RETURN 'Tab\there' AS with_tab;
+RETURN 'Quote: "test"' AS with_quotes;
+
+-- 12.3 Case-insensitive comparison
+MATCH (e:Employee)
+WHERE lower(e.department) = 'engineering'
+RETURN count(*) AS eng_count;
+
+-- 12.4 String concatenation simulation via CASE
+MATCH (e:Employee)
+RETURN e.name,
+       CASE
+           WHEN e.level >= 4 THEN 'Senior '
+           ELSE ''
+       END AS prefix,
+       e.department
+ORDER BY e.name
+LIMIT 5;
+
+-- ============================================================================
+-- SECTION 13: NUMERIC EDGE CASES
+-- ============================================================================
+
+-- 13.1 Division by non-zero
+MATCH (d:Department)
+WHERE d.budget > 0
+MATCH (e:Employee {department: d.name})
+RETURN d.name, d.budget, count(e) AS emp_count, d.budget / count(e) AS budget_per_emp
+GROUP BY d.name, d.budget
+ORDER BY budget_per_emp DESC;
+
+-- 13.2 Negative numbers in expressions
+RETURN -100 AS negative, abs(-100) AS absolute, sign(-100) AS sign_val;
+
+-- 13.3 Large number handling
+RETURN 9999999999 AS large_num, 9999999999 * 2 AS doubled;
+
+-- 13.4 Zero handling
+RETURN 0 AS zero, 0 + 1 AS zero_plus_one, 100 - 100 AS difference_zero;
+
+-- 13.5 Modulo and integer division edge cases
+RETURN 10 % 3 AS modulo_result;
+RETURN 10 / 3 AS integer_div;
+
+-- ============================================================================
+-- SECTION 14: LIST EDGE CASES
+-- ============================================================================
+
+-- 14.1 Empty list operations
+RETURN [] AS empty_list, size([]) AS empty_size;
+
+-- 14.2 Single element list
+RETURN [42] AS single, head([42]) AS single_head, tail([42]) AS single_tail;
+
+-- 14.3 List index edge cases
+RETURN [1,2,3,4,5][0] AS first;
+RETURN [1,2,3,4,5][4] AS last_valid;
+
+-- 14.4 List slicing edge cases
+RETURN [1,2,3,4,5][0..1] AS first_one;
+RETURN [1,2,3,4,5][0..5] AS all_elements;
+RETURN [1,2,3,4,5][2..2] AS empty_slice;
+
+-- 14.5 IN predicate edge cases
+RETURN 1 IN [] AS in_empty;
+RETURN null IN [1, 2, 3] AS null_in_list;
+
+-- ============================================================================
+-- SECTION 15: COMPLEX BUSINESS QUERIES
+-- ============================================================================
+
+-- 15.1 Department budget utilization (payroll / budget ratio)
+MATCH (d:Department)
+WHERE d.budget > 0
+MATCH (e:Employee {department: d.name})
+WHERE e.active = true
+RETURN d.name AS department,
+       d.budget,
+       sum(e.salary) AS total_payroll,
+       d.budget - sum(e.salary) AS remaining,
+       (sum(e.salary) * 100) / d.budget AS utilization_pct
+GROUP BY d.name, d.budget
+ORDER BY utilization_pct DESC;
+
+-- 15.2 Management span (direct reports per manager)
+MATCH (m:Employee)<-[:REPORTS_TO]-(e:Employee)
+RETURN m.name AS manager,
+       m.department,
+       count(e) AS direct_reports,
+       avg(e.salary) AS avg_report_salary
+GROUP BY m.name, m.department
+ORDER BY direct_reports DESC;
+
+-- 15.3 Cross-department collaboration analysis
+MATCH (e1:Employee)-[:COLLABORATES_WITH]->(e2:Employee)
+WHERE e1.department <> e2.department
+RETURN e1.department AS dept1, e2.department AS dept2, count(*) AS collaborations
+GROUP BY e1.department, e2.department
+ORDER BY collaborations DESC;
+
+-- 15.4 Employee without any relationships
+MATCH (e:Employee)
+WHERE NOT EXISTS { MATCH (e)-[:REPORTS_TO]->(:Employee) }
+  AND NOT EXISTS { MATCH (e)-[:MANAGES]->(:Department) }
+  AND NOT EXISTS { MATCH (e)-[:WORKS_ON]->(:Project) }
+  AND NOT EXISTS { MATCH (e)-[:MENTORS]->(:Employee) }
+  AND NOT EXISTS { MATCH (e)-[:COLLABORATES_WITH]->(:Employee) }
+RETURN e.name AS isolated_employee, e.department
+ORDER BY e.name;
+
+-- 15.5 Project team composition
+MATCH (p:Project)<-[w:WORKS_ON]-(e:Employee)
+RETURN p.name AS project,
+       p.status,
+       count(e) AS team_size,
+       sum(w.hours) AS total_hours,
+       sum(e.salary) AS team_payroll
+GROUP BY p.name, p.status
+ORDER BY team_size DESC;
+
+-- ============================================================================
+-- SECTION 16: GRAPH ISOLATION VERIFICATION
+-- ============================================================================
+
+-- 16.1 Setup second graph with overlapping schema
+USE GRAPH extended_inventory;
+MATCH (n) DETACH DELETE n;
+
+CREATE (:Product {sku: 'SKU001', name: 'Widget A', price: 100, stock: 500});
+CREATE (:Product {sku: 'SKU002', name: 'Widget B', price: 150, stock: 300});
+CREATE (:Product {sku: 'SKU003', name: 'Gadget X', price: 250, stock: 100});
+CREATE (:Warehouse {id: 'WH01', location: 'East', capacity: 10000});
+CREATE (:Warehouse {id: 'WH02', location: 'West', capacity: 8000});
+
+MATCH (p:Product {sku: 'SKU001'}), (w:Warehouse {id: 'WH01'}) CREATE (p)-[:STORED_IN {quantity: 300}]->(w);
+MATCH (p:Product {sku: 'SKU001'}), (w:Warehouse {id: 'WH02'}) CREATE (p)-[:STORED_IN {quantity: 200}]->(w);
+MATCH (p:Product {sku: 'SKU002'}), (w:Warehouse {id: 'WH01'}) CREATE (p)-[:STORED_IN {quantity: 300}]->(w);
+
+-- 16.2 Verify extended_corp Employee count
+USE GRAPH extended_corp;
+MATCH (e:Employee) RETURN count(*) AS corp_employees;
+
+-- 16.3 Verify no Employee in inventory graph
+USE GRAPH extended_inventory;
+MATCH (e:Employee) RETURN count(*) AS inventory_employees;
+
+-- 16.4 Verify no Product in corp graph (Product exists in both conceptually)
+USE GRAPH extended_corp;
+MATCH (p:Product) RETURN count(*) AS corp_products;
+
+-- 16.5 Inventory graph Product count
+USE GRAPH extended_inventory;
+MATCH (p:Product) RETURN count(*) AS inventory_products;
+
+-- ============================================================================
+-- SECTION 17: SOCIAL GRAPH PATTERNS
+-- ============================================================================
+
+USE GRAPH extended_social;
+MATCH (n) DETACH DELETE n;
+
+-- Create users
+CREATE (:User {id: 'U001', name: 'Alice', age: 30, city: 'NYC'});
+CREATE (:User {id: 'U002', name: 'Bob', age: 25, city: 'LA'});
+CREATE (:User {id: 'U003', name: 'Carol', age: 35, city: 'NYC'});
+CREATE (:User {id: 'U004', name: 'Dave', age: 28, city: 'Chicago'});
+CREATE (:User {id: 'U005', name: 'Eve', age: 32, city: 'LA'});
+CREATE (:User {id: 'U006', name: 'Frank', age: 40, city: 'NYC'});
+
+-- Create friendship network (bidirectional)
+MATCH (u1:User {name: 'Alice'}), (u2:User {name: 'Bob'}) CREATE (u1)-[:FRIENDS_WITH {since: '2020-01-01'}]->(u2);
+MATCH (u1:User {name: 'Bob'}), (u2:User {name: 'Alice'}) CREATE (u1)-[:FRIENDS_WITH {since: '2020-01-01'}]->(u2);
+MATCH (u1:User {name: 'Alice'}), (u2:User {name: 'Carol'}) CREATE (u1)-[:FRIENDS_WITH {since: '2019-06-15'}]->(u2);
+MATCH (u1:User {name: 'Carol'}), (u2:User {name: 'Alice'}) CREATE (u1)-[:FRIENDS_WITH {since: '2019-06-15'}]->(u2);
+MATCH (u1:User {name: 'Bob'}), (u2:User {name: 'Dave'}) CREATE (u1)-[:FRIENDS_WITH {since: '2021-03-20'}]->(u2);
+MATCH (u1:User {name: 'Dave'}), (u2:User {name: 'Bob'}) CREATE (u1)-[:FRIENDS_WITH {since: '2021-03-20'}]->(u2);
+MATCH (u1:User {name: 'Carol'}), (u2:User {name: 'Eve'}) CREATE (u1)-[:FRIENDS_WITH {since: '2018-11-10'}]->(u2);
+MATCH (u1:User {name: 'Eve'}), (u2:User {name: 'Carol'}) CREATE (u1)-[:FRIENDS_WITH {since: '2018-11-10'}]->(u2);
+MATCH (u1:User {name: 'Dave'}), (u2:User {name: 'Eve'}) CREATE (u1)-[:FRIENDS_WITH {since: '2022-01-05'}]->(u2);
+MATCH (u1:User {name: 'Eve'}), (u2:User {name: 'Dave'}) CREATE (u1)-[:FRIENDS_WITH {since: '2022-01-05'}]->(u2);
+
+-- Frank has no friends (isolated node test)
+
+-- 17.1 Friends of friends (2-hop)
+MATCH (u:User {name: 'Alice'})-[:FRIENDS_WITH]->()-[:FRIENDS_WITH]->(fof:User)
+WHERE fof.name <> 'Alice'
+RETURN DISTINCT fof.name AS friends_of_friends;
+
+-- 17.2 Common friends
+MATCH (u1:User {name: 'Alice'})-[:FRIENDS_WITH]->(common:User)<-[:FRIENDS_WITH]-(u2:User {name: 'Dave'})
+RETURN common.name AS mutual_friend;
+
+-- 17.3 Users with no friends
+MATCH (u:User)
+WHERE NOT EXISTS { MATCH (u)-[:FRIENDS_WITH]->(:User) }
+RETURN u.name AS lonely_user;
+
+-- 17.4 Friend count per user
+MATCH (u:User)
+OPTIONAL MATCH (u)-[:FRIENDS_WITH]->(f:User)
+RETURN u.name, count(f) AS friend_count
+ORDER BY friend_count DESC;
+
+-- 17.5 Users in same city who aren't friends
+MATCH (u1:User), (u2:User)
+WHERE u1.city = u2.city AND u1.id < u2.id
+  AND NOT EXISTS { MATCH (u1)-[:FRIENDS_WITH]->(u2) }
+RETURN u1.name AS user1, u2.name AS user2, u1.city AS city;
+
+-- ============================================================================
+-- SECTION 18: DATE EDGE CASES
+-- ============================================================================
+
+-- 18.1 Date comparison
+MATCH (e:Employee)
+WHERE e.hire_date < '2020-01-01'
+RETURN e.name, e.hire_date
+ORDER BY e.hire_date ASC;
+
+-- 18.2 Date extraction
+RETURN date('2024-06-15').year AS year, date('2024-06-15').month AS month, date('2024-06-15').day AS day;
+
+-- 18.3 Current date components
+RETURN date().year AS current_year, date().month AS current_month;
+
+-- ============================================================================
+-- SECTION 19: STRESS TESTS
+-- ============================================================================
+
+USE GRAPH extended_corp;
+
+-- 19.1 Large aggregation (all employees)
+MATCH (e:Employee)
+RETURN count(*) AS total,
+       sum(e.salary) AS total_salary,
+       avg(e.salary) AS avg_salary,
+       min(e.salary) AS min_salary,
+       max(e.salary) AS max_salary;
+
+-- 19.2 Complex multi-level aggregation
+MATCH (e:Employee)
+WITH e.department AS dept, e.level AS lvl, count(*) AS cnt, avg(e.salary) AS avg
+WITH dept, count(lvl) AS level_count, sum(cnt) AS total_in_dept, avg(avg) AS overall_avg
+RETURN dept, level_count, total_in_dept, overall_avg
+ORDER BY total_in_dept DESC;
+
+-- 19.3 Full cross-join (small data)
+MATCH (d:Department)
+MATCH (p:Project)
+WHERE d.active = true AND p.status = 'active'
+RETURN d.name AS dept, p.name AS project
+ORDER BY d.name, p.name;
+
+-- 19.4 Complex EXISTS chain
+MATCH (e:Employee)
+WHERE EXISTS { MATCH (e)-[:REPORTS_TO]->(:Employee) }
+   OR EXISTS { MATCH (e)-[:MANAGES]->(:Department) }
+   OR EXISTS { MATCH (e)-[:WORKS_ON]->(:Project) }
+RETURN e.name AS connected_employee
+ORDER BY e.name;
+
+-- ============================================================================
+-- SECTION 20: FINAL VERIFICATION
+-- ============================================================================
+
+-- 20.1 Summary counts across graphs
+USE GRAPH extended_corp;
+MATCH (e:Employee) RETURN 'Employees' AS type, count(*) AS count
+UNION ALL
+MATCH (d:Department) RETURN 'Departments' AS type, count(*) AS count
+UNION ALL
+MATCH (p:Project) RETURN 'Projects' AS type, count(*) AS count;
+
+USE GRAPH extended_inventory;
+MATCH (p:Product) RETURN 'Products' AS type, count(*) AS count
+UNION ALL
+MATCH (w:Warehouse) RETURN 'Warehouses' AS type, count(*) AS count;
+
+USE GRAPH extended_social;
+MATCH (u:User) RETURN 'Users' AS type, count(*) AS count;
+
+-- ============================================================================
+-- SECTION 21: CLEANUP
+-- ============================================================================
+
+USE GRAPH extended_corp;
+MATCH (n) DETACH DELETE n;
+DROP GRAPH IF EXISTS extended_corp;
+
+USE GRAPH extended_inventory;
+MATCH (n) DETACH DELETE n;
+DROP GRAPH IF EXISTS extended_inventory;
+
+USE GRAPH extended_social;
+MATCH (n) DETACH DELETE n;
+DROP GRAPH IF EXISTS extended_social;
+
+-- ============================================================================
+-- END OF EXTENDED ENTERPRISE TEST FILE
+-- ============================================================================
+-- Total: 21 sections with 100+ test cases covering:
+-- - Large multi-entity schema (25+ employees, 9 departments, 5 projects)
+-- - Empty result edge cases
+-- - Complex aggregation scenarios
+-- - Triple WITH chains
+-- - ORDER BY on computed expressions
+-- - Multi-MATCH complex patterns
+-- - Deep relationship traversal (1..5 hops)
+-- - Subquery edge cases
+-- - NULL handling scenarios
+-- - Nested CASE expressions
+-- - Set operation edge cases
+-- - String/numeric/list edge cases
+-- - Graph isolation verification
+-- - Social network patterns
+-- - Date operations
+-- - Stress tests
+-- ============================================================================
