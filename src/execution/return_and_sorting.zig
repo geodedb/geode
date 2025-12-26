@@ -282,6 +282,73 @@ fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.NullsPoli
         return if (a.Bool) 1 else -1;
     }
 
+    // CANARY: REQ=REQ-GQL-ORDERBY-DECIMAL-001; FEATURE="OrderByDecimalComparison"; ASPECT=DecimalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // Handle Decimal comparison for ORDER BY on aggregate results like avg()
+    if (a == .Decimal and b == .Decimal) {
+        // Convert decimals to comparable values (coeff / 10^scale)
+        const a_dec = a.Decimal;
+        const b_dec = b.Decimal;
+
+        // Normalize to same scale for comparison
+        // If scales differ, scale up the one with smaller scale
+        const a_scale = a_dec.scale;
+        const b_scale = b_dec.scale;
+
+        if (a_scale == b_scale) {
+            // Same scale - compare coefficients directly
+            if (a_dec.coeff < b_dec.coeff) return -1;
+            if (a_dec.coeff > b_dec.coeff) return 1;
+            return 0;
+        } else if (a_scale < b_scale) {
+            // Scale up a by (b_scale - a_scale) decimal places
+            const scale_diff = b_scale - a_scale;
+            var multiplier: i128 = 1;
+            for (0..scale_diff) |_| {
+                multiplier *= 10;
+            }
+            const scaled_a = a_dec.coeff * multiplier;
+            if (scaled_a < b_dec.coeff) return -1;
+            if (scaled_a > b_dec.coeff) return 1;
+            return 0;
+        } else {
+            // Scale up b by (a_scale - b_scale) decimal places
+            const scale_diff = a_scale - b_scale;
+            var multiplier: i128 = 1;
+            for (0..scale_diff) |_| {
+                multiplier *= 10;
+            }
+            const scaled_b = b_dec.coeff * multiplier;
+            if (a_dec.coeff < scaled_b) return -1;
+            if (a_dec.coeff > scaled_b) return 1;
+            return 0;
+        }
+    }
+
+    // Handle mixed Int/Decimal comparison
+    if (a == .Int and b == .Decimal) {
+        // Convert Int to Decimal scale for comparison
+        var multiplier: i128 = 1;
+        for (0..b.Decimal.scale) |_| {
+            multiplier *= 10;
+        }
+        const scaled_a = @as(i128, a.Int) * multiplier;
+        if (scaled_a < b.Decimal.coeff) return -1;
+        if (scaled_a > b.Decimal.coeff) return 1;
+        return 0;
+    }
+
+    if (a == .Decimal and b == .Int) {
+        // Convert Int to Decimal scale for comparison
+        var multiplier: i128 = 1;
+        for (0..a.Decimal.scale) |_| {
+            multiplier *= 10;
+        }
+        const scaled_b = @as(i128, b.Int) * multiplier;
+        if (a.Decimal.coeff < scaled_b) return -1;
+        if (a.Decimal.coeff > scaled_b) return 1;
+        return 0;
+    }
+
     // Different types - define an arbitrary order
     const type_order_a = getTypeOrder(a);
     const type_order_b = getTypeOrder(b);

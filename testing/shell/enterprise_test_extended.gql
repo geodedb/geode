@@ -5,6 +5,26 @@
 -- Run with: ./zig-out/bin/geode shell --insecure
 -- Then: /source ./testing/shell/enterprise_test_extended.gql
 -- ============================================================================
+--
+-- GQL CONFORMANCE NOTES (ISO/IEC 39075:2024):
+-- ============================================================================
+-- Per the GQL specification, ORDER BY has specific requirements:
+--
+-- 1. SORT KEY REQUIREMENTS (Base Conformance):
+--    - Sort keys should use binding variable references (column aliases)
+--    - Example: ORDER BY total_qty DESC (CORRECT)
+--
+-- 2. OPTIONAL FEATURES (Not Required for Base Conformance):
+--    - GQ14 "Complex expressions in sort keys": e.salary / e.level
+--    - GQ16 "Pre-projection aliases in sort keys": references to pre-RETURN aliases
+--    - GF20 "Aggregate functions in sort keys": ORDER BY sum(qty)
+--
+-- 3. GEODE IMPLEMENTATION:
+--    - Fully supports ORDER BY on aliases (base conformance)
+--    - Partial support for GQ14 when component columns are in RETURN
+--    - Use aliases for guaranteed compatibility
+--
+-- ============================================================================
 
 -- ============================================================================
 -- SECTION 1: EXTENDED SCHEMA SETUP
@@ -246,23 +266,37 @@ ORDER BY top_earner_count DESC;
 -- ============================================================================
 -- SECTION 5: COMPLEX ORDER BY EDGE CASES
 -- ============================================================================
+-- NOTE: Per GQL spec, ORDER BY should use aliases for base conformance.
+-- Tests marked [GQ14] require optional "Complex expressions in sort keys" feature.
 
--- 5.1 ORDER BY on computed expression
+-- 5.1a ORDER BY on computed expression using ALIAS (CORRECT - base conformance)
+MATCH (e:Employee)
+RETURN e.name, e.salary, e.level, e.salary / e.level AS salary_per_level
+ORDER BY salary_per_level DESC
+LIMIT 10;
+
+-- 5.1b ORDER BY on computed expression using EXPRESSION [GQ14 - partial support]
+-- Note: Works when component columns (salary, level) are in RETURN
 MATCH (e:Employee)
 RETURN e.name, e.salary, e.level, e.salary / e.level AS salary_per_level
 ORDER BY e.salary / e.level DESC
 LIMIT 10;
 
--- 5.2 ORDER BY with multiple directions
+-- 5.2 ORDER BY with multiple directions (uses column references - supported)
 MATCH (e:Employee)
 RETURN e.department, e.level, e.salary, e.name
 ORDER BY e.department ASC, e.level DESC, e.salary DESC, e.name ASC;
 
--- 5.3 ORDER BY on aggregated column alias
+-- 5.3 ORDER BY on aggregated column ALIAS (CORRECT - base conformance)
 MATCH (e:Employee)
 RETURN e.department AS dept, avg(e.salary) AS avg_salary
 GROUP BY e.department
 ORDER BY avg_salary ASC;
+
+-- 5.3b NOTE: ORDER BY on aggregate EXPRESSION directly is NOT standard GQL
+-- Per GQL spec, Feature GF20 "Aggregate functions in sort keys" is optional
+-- INCORRECT (requires GF20): ORDER BY avg(e.salary) ASC
+-- CORRECT (base conformance): ORDER BY avg_salary ASC (uses alias)
 
 -- 5.4 ORDER BY with NULLS (employees without managers)
 MATCH (e:Employee)

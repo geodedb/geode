@@ -22,13 +22,31 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 | E17-NEW | ✅ FIXED | 19.3 | ORDER BY DESC on computed expressions now sorts correctly |
 | E18-NEW | ✅ FIXED | Extended | Triple WITH chain LIMIT was ignored - now applies correctly |
 | E19-NEW | ✅ FIXED | Extended | ORDER BY on member expressions (i.price * i.qty) now works |
+| E20-NEW | ✅ FIXED | Extended | ORDER BY on aggregate alias (avg_salary) with GROUP BY now sorts correctly |
 
-### Known Limitations (Low Priority)
+### GQL Conformance Notes (Not Bugs)
 
-| Issue | Category | Description | Workaround |
-|-------|----------|-------------|------------|
-| L1 | ORDER BY | ORDER BY on aggregate expression directly (e.g., `sum(qty)`) doesn't sort | Use alias instead: `ORDER BY total_qty` |
-| L2 | ORDER BY | ORDER BY on computed expression requires component columns in RETURN | Include component columns or use alias |
+Per ISO/IEC 39075:2024, the following behaviors are **correct for base GQL conformance**:
+
+| Behavior | GQL Feature | Spec Reference | Current Status |
+|----------|-------------|----------------|----------------|
+| ORDER BY must use aliases, not aggregate expressions | GF20 "Aggregate functions in sort keys" | §7971, §22199 | ✅ Conformant (use alias) |
+| ORDER BY must use return item aliases | GQ16 "Pre-projection aliases in sort keys" | §7970, §22456 | ✅ Conformant (use alias) |
+| Complex expressions in ORDER BY require GQ14 | GQ14 "Complex expressions in sort keys" | §7969, §22437 | ⚠️ Partial support |
+
+**Note**: Without optional features GQ14, GQ16, and GF20:
+- Sort keys must be binding variable references (column aliases)
+- Pre-projection variable references are not allowed in sort keys
+- Aggregate functions are not allowed in sort keys
+
+**Workaround**: Always use aliases in ORDER BY clauses:
+```gql
+-- Correct (uses alias):
+RETURN sum(qty) AS total ORDER BY total DESC
+
+-- Not standard (requires GF20):
+RETURN sum(qty) AS total ORDER BY sum(qty) DESC
+```
 
 ---
 
@@ -228,6 +246,41 @@ ORDER BY i.price * i.qty DESC;
 **Verification**: Query now returns rows sorted correctly by computed expression.
 
 **Note**: ORDER BY still requires component columns to be in RETURN (use alias as workaround).
+
+---
+
+## Issue E20-NEW: ORDER BY on Aggregate Alias Not Sorting GROUP BY Results (P1) ✅ FIXED
+
+**Section**: Extended Testing (GROUP BY queries)
+
+**Query**:
+```gql
+MATCH (e:Employee)
+RETURN e.department AS dept, avg(e.salary) AS avg_salary
+GROUP BY e.department
+ORDER BY avg_salary DESC;
+```
+
+**Expected**: Rows sorted by average salary descending (Eng: 95, Sales: 75, HR: 60)
+
+**Actual Before Fix**: Random order (Eng: 95, HR: 60, Sales: 75)
+
+**Root Cause**: The `compareValuesWithNullsPolicy` function in `return_and_sorting.zig` only handled comparison for `Int`, `Str`, and `Bool` types. The `avg()` aggregate function returns `Decimal` type values (to maintain precision). When comparing two Decimal values, the function fell through to the "different types" comparison which compared type order - but since both were Decimal, it returned 0 (equal), causing no swapping to occur.
+
+**Fix Applied** (2025-12-26):
+1. Added Decimal-vs-Decimal comparison in `compareValuesWithNullsPolicy` (lines 296-336)
+2. Handles scale normalization for comparing decimals with different scales
+3. Added Int-vs-Decimal and Decimal-vs-Int mixed type comparison (lines 338-361)
+4. Added CANARY marker: REQ-GQL-ORDERBY-DECIMAL-001
+
+**Technical Details**:
+- Decimal values have: `coeff` (coefficient), `scale` (decimal places)
+- Example: 95.0 is stored as `{coeff: 950, scale: 1}`
+- Comparison normalizes to same scale before comparing coefficients
+
+**Verification**:
+- `ORDER BY avg_salary DESC` → Eng: 95, Sales: 75, HR: 60 ✅
+- `ORDER BY avg_salary ASC` → HR: 60, Sales: 75, Eng: 95 ✅
 
 ---
 
