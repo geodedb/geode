@@ -23,6 +23,7 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 - E35 ✅ Multi-level WITH aggregation now returns correct grouped rows
 - E37 ✅ List comprehension: TEST FILE FIX - replaced Cypher syntax with GQL-compatible query
 - NEW ✅ EXISTS subquery with property filter: Now correctly evaluates target node properties
+- NEW ✅ MATCH...WHERE...MATCH parser support: Patterns like `MATCH (d) WHERE d.x > 0 MATCH (e)` now parse correctly
 
 **Previously Fixed (Runs 1-5):**
 - E21 ✅ Property filter in aggregation now works
@@ -2087,3 +2088,68 @@ if (target_matches and target_pattern.props != null) {
 | Open Issues | 0 | ✅ None Remaining |
 
 **All shell test issues have been successfully resolved.** The Geode graph database now passes all enterprise test scenarios with correct query semantics.
+
+---
+
+## Issue: MATCH...WHERE...MATCH Parser Support (P1) ✅ FIXED
+
+**Section**: 13.1, 15.1 (and other multi-MATCH patterns)
+
+**Query Pattern**:
+```gql
+MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN e.name, d.name
+```
+
+**Error Before Fix**: `Error: Syntax error in query`
+
+**Root Cause**: The parser in `src/gql/parser.zig` did not handle a required MATCH clause appearing after a WHERE clause. When parsing `MATCH ... WHERE ... MATCH ...`, the parser would:
+1. Parse the first MATCH and WHERE correctly
+2. Not recognize that another MATCH clause could follow
+3. Fail with a syntax error
+
+**Fix Applied** (2025-12-26):
+Added MATCH-after-WHERE handling in `src/gql/parser.zig` lines 1750-1779:
+
+```zig
+// CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-26
+// Check for required MATCH after WHERE clause
+// e.g., MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN ...
+if (self.cur.kind == .MATCH) {
+    var post_where_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+    // First add the existing chains
+    for (combined_gp.chains) |chain| {
+        try post_where_chains.append(self.arena.allocator(), chain);
+    }
+    // Parse additional MATCH clauses
+    while (self.cur.kind == .MATCH) {
+        self.advance(); // consume MATCH
+        const additional_pattern = try self.parseGraphPattern();
+        for (additional_pattern.chains) |additional_chain| {
+            try post_where_chains.append(self.arena.allocator(), additional_chain);
+        }
+        // Check for WHERE clause after this MATCH
+        if (self.cur.kind == .WHERE) {
+            self.advance();
+            const new_where = try self.parseOrExpr();
+            if (where_expr) |existing_where| {
+                where_expr = try self.makeBinary(.And, existing_where, new_where);
+            } else {
+                where_expr = new_where;
+            }
+        }
+    }
+    combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
+}
+```
+
+**Key Changes**:
+1. After parsing WHERE clause, check if another MATCH follows
+2. Parse additional MATCH patterns and append to chain list
+3. If those MATCH clauses have their own WHERE, combine with AND
+4. Use `makeBinary(.And, ...)` for proper AST construction
+
+**Verification**:
+- `MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee) RETURN e, d` → Parses correctly ✓
+- Sections 13.1 and 15.1 in enterprise tests now pass ✓
+
+**Status**: FIXED (2025-12-26)

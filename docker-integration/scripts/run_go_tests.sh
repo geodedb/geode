@@ -26,7 +26,9 @@ MAX_RETRIES=60
 RETRY_COUNT=0
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     # Use UDP check for QUIC server (-u flag)
-    if nc -z -u -w 2 "${GEODE_HOST}" "${GEODE_PORT}" 2>/dev/null; then
+    # Try TCP first (default), then UDP (QUIC)
+    if nc -z -w 2 "${GEODE_HOST}" "${GEODE_PORT}" 2>/dev/null || \
+       nc -z -u -w 2 "${GEODE_HOST}" "${GEODE_PORT}" 2>/dev/null; then
         echo "Server is ready!"
         break
     fi

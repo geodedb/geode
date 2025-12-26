@@ -1747,6 +1747,37 @@ pub const Parser = struct {
                 combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
             }
 
+            // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-26
+            // Check for required MATCH after WHERE clause
+            // e.g., MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN ...
+            if (self.cur.kind == .MATCH) {
+                var post_where_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                // First add the existing chains
+                for (combined_gp.chains) |chain| {
+                    try post_where_chains.append(self.arena.allocator(), chain);
+                }
+                // Parse additional MATCH clauses
+                while (self.cur.kind == .MATCH) {
+                    self.advance(); // consume MATCH
+                    const additional_pattern = try self.parseGraphPattern();
+                    for (additional_pattern.chains) |additional_chain| {
+                        try post_where_chains.append(self.arena.allocator(), additional_chain);
+                    }
+                    // Check for WHERE clause after this MATCH
+                    if (self.cur.kind == .WHERE) {
+                        self.advance();
+                        // Combine with existing where_expr using AND
+                        const new_where = try self.parseOrExpr();
+                        if (where_expr) |existing_where| {
+                            where_expr = try self.makeBinary(.And, existing_where, new_where);
+                        } else {
+                            where_expr = new_where;
+                        }
+                    }
+                }
+                combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
+            }
+
             // After MATCH ... WHERE, check for CREATE - support multiple CREATE clauses
             // e.g., MATCH (a), (b), (c) CREATE (a)-[:R]->(b) CREATE (a)-[:R]->(c)
             if (self.cur.kind == .CREATE) {
