@@ -1771,6 +1771,140 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
     }
 
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-GROUPBY-001; FEATURE="OptionalMatchGroupBy"; ASPECT=GroupByHandling; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // E23 Fix: Handle GROUP BY clause for OPTIONAL MATCH queries
+    // When GROUP BY is present, we need to group the intermediate results and compute aggregations
+    if (q.group_by) |group_by| {
+        const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
+
+        // Group intermediate rows by GROUP BY key values
+        var groups = std.StringHashMap(std.ArrayList([]Value)).init(allocator);
+        var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        defer {
+            var iter = groups.iterator();
+            while (iter.next()) |entry| {
+                entry.value_ptr.deinit(allocator);
+            }
+            groups.deinit();
+            for (group_keys_list.items) |key| {
+                allocator.free(key);
+            }
+            group_keys_list.deinit(allocator);
+        }
+
+        // Group rows by GROUP BY key values
+        for (intermediate_result.rows) |input_row| {
+            // Create environment for evaluating GROUP BY key
+            const env = Env{
+                .names = intermediate_result.columns,
+                .values = input_row,
+                .allocator = allocator,
+                .param_names = param_names,
+                .param_values = param_values,
+            };
+
+            // Evaluate GROUP BY key(s) and serialize to string
+            var key_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+            const key_writer = key_buf.writer(allocator);
+            for (group_by.keys, 0..) |key_expr, k| {
+                if (k > 0) key_writer.writeAll("|") catch {};
+                const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
+                // Serialize key value to string
+                switch (key_val) {
+                    .Int => |i| key_writer.print("{d}", .{i}) catch {},
+                    .Str => |s| key_writer.writeAll(s) catch {},
+                    .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
+                    .Null => key_writer.writeAll("null") catch {},
+                    .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
+                    .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
+                    else => key_writer.writeAll("?") catch {},
+                }
+            }
+            const group_key = key_buf.toOwnedSlice(allocator) catch "";
+
+            // Add row to its group
+            if (groups.getPtr(group_key)) |group_list| {
+                group_list.append(allocator, input_row) catch {};
+                allocator.free(group_key);
+            } else {
+                var new_list = std.ArrayList([]Value).initCapacity(allocator, 4) catch unreachable;
+                new_list.append(allocator, input_row) catch {};
+                groups.put(group_key, new_list) catch {};
+                group_keys_list.append(allocator, group_key) catch {};
+            }
+        }
+
+        // For each group, compute aggregations and produce one output row
+        var result_rows = std.ArrayList([]Value).initCapacity(allocator, groups.count()) catch unreachable;
+
+        var group_iter = groups.iterator();
+        while (group_iter.next()) |group_entry| {
+            const group_rows = group_entry.value_ptr.items;
+            if (group_rows.len == 0) continue;
+
+            // Use first row as the base for non-aggregated expressions
+            const first_row = group_rows[0];
+            const base_env = Env{
+                .names = intermediate_result.columns,
+                .values = first_row,
+                .allocator = allocator,
+                .param_names = param_names,
+                .param_values = param_values,
+            };
+
+            var new_row = try allocator.alloc(Value, q.ret.items.len);
+
+            // Evaluate each RETURN item
+            for (q.ret.items, 0..) |item, i| {
+                // Check if this is an aggregation expression
+                if (isAggregationExpr(item.expr)) {
+                    // Compute aggregation over all rows in the group
+                    new_row[i] = try execution.computeGroupAggregation(allocator, item.expr, group_rows, intermediate_result.columns);
+                } else {
+                    // Non-aggregation expression: evaluate with first row
+                    new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                }
+            }
+
+            // Apply HAVING filter if present
+            if (q.having) |having_expr| {
+                const having_env = Env{
+                    .names = return_columns,
+                    .values = new_row,
+                    .allocator = allocator,
+                };
+                const having_result = eval.evalExpr(allocator, having_expr, having_env) catch Value{ .Bool = false };
+                const passes_having = switch (having_result) {
+                    .Bool => |b| b,
+                    .Int => |hv| hv != 0,
+                    else => false,
+                };
+                if (!passes_having) {
+                    allocator.free(new_row);
+                    continue;
+                }
+            }
+
+            try result_rows.append(allocator, new_row);
+        }
+
+        // Clean up intermediate result
+        for (intermediate_result.columns) |col| {
+            allocator.free(col);
+        }
+        allocator.free(intermediate_result.columns);
+        for (intermediate_result.rows) |row| {
+            allocator.free(row);
+        }
+        allocator.free(intermediate_result.rows);
+
+        return ExecutionResult{
+            .columns = return_columns,
+            .rows = try result_rows.toOwnedSlice(allocator),
+            .flags = intermediate_result.flags,
+        };
+    }
+
     // Evaluate RETURN expressions using matched/WITH variables as environment
     const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
     var return_rows = try allocator.alloc([]Value, intermediate_result.rows.len);
@@ -3091,6 +3225,40 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
                     }
                     if (!has_all_labels) continue;
+                }
+
+                // CANARY: REQ=REQ-GQL-AGG-PROP-FILTER-001; FEATURE="AggregationPropertyFilter"; ASPECT=PropertyConstraints; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // E21 Fix: Check property constraints from MATCH pattern (e.g., {department: 'Support', active: true})
+                if (match_props) |props| {
+                    var passes_props = true;
+                    for (props) |prop| {
+                        if (node.properties.get(prop.key)) |node_prop_val| {
+                            // Convert PropertyValue to Value for comparison
+                            const node_val = switch (node_prop_val) {
+                                .Null => Value{ .Null = {} },
+                                .Bool => |b| Value{ .Bool = b },
+                                .Int => |i| Value{ .Int = i },
+                                .String => |s| Value{ .Str = s },
+                                .Float => Value{ .Null = {} },
+                                .ExtValue => |ext| Value{ .ExtValue = ext },
+                            };
+                            // Evaluate the expected property value
+                            const empty_env = eval.Env{
+                                .names = &.{},
+                                .values = &.{},
+                                .allocator = allocator,
+                            };
+                            const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                            if (!valuesEqual(node_val, prop_val)) {
+                                passes_props = false;
+                                break;
+                            }
+                        } else {
+                            passes_props = false;
+                            break;
+                        }
+                    }
+                    if (!passes_props) continue;
                 }
 
                 // Create environment with matched node for WHERE clause evaluation (reuse arrays)

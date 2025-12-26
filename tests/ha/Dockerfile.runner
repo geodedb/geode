@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    docker.io \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install python dependencies
+RUN pip install docker pyyaml pytest requests
+
+# Install compatible geode client (assuming it's available or we can use generic http/quic)
+# For this harness, we might just shell out to the geode binary if we copy it,
+# or use a python client if available.
+# Let's assume we copy the geode binary from the main build for CLI access
+# This requires the context to be the root of the repo
+
+WORKDIR /app
+
+# Copy the runner script
+COPY tests/ha/runner.py /app/runner.py
+
+# Entrypoint
+CMD ["python", "runner.py"]

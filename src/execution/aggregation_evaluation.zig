@@ -78,6 +78,9 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                         defer unique_int_values.deinit();
                         var unique_str_values = std.StringHashMap(void).init(allocator);
                         defer unique_str_values.deinit();
+                        // E22 Fix: Track boolean values separately
+                        var has_true = false;
+                        var has_false = false;
 
                         // Handle property access for COUNT(DISTINCT n.prop)
                         if (call.args[0].* == .PropertyAccess) {
@@ -88,6 +91,13 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                         try unique_int_values.put(prop_val.Int, {});
                                     } else if (prop_val == .String) {
                                         try unique_str_values.put(prop_val.String, {});
+                                    } else if (prop_val == .Bool) {
+                                        // E22 Fix: Handle boolean values for COUNT DISTINCT
+                                        if (prop_val.Bool) {
+                                            has_true = true;
+                                        } else {
+                                            has_false = true;
+                                        }
                                     }
                                 }
                             }
@@ -99,6 +109,13 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                         try unique_int_values.put(prop_val.Int, {});
                                     } else if (prop_val == .String) {
                                         try unique_str_values.put(prop_val.String, {});
+                                    } else if (prop_val == .Bool) {
+                                        // E22 Fix: Handle boolean values for COUNT DISTINCT
+                                        if (prop_val.Bool) {
+                                            has_true = true;
+                                        } else {
+                                            has_false = true;
+                                        }
                                     }
                                 }
                             }
@@ -109,7 +126,9 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             }
                         }
 
-                        return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count()) };
+                        // E22 Fix: Add boolean count to total
+                        const bool_count: usize = (if (has_true) @as(usize, 1) else 0) + (if (has_false) @as(usize, 1) else 0);
+                        return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count() + bool_count) };
                     }
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
@@ -399,6 +418,20 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                 }
             }
         },
+        // E36 Fix: Handle constant expressions (string literals, numbers, etc.) in aggregation context
+        // CANARY: REQ=REQ-GQL-AGG-CONST-001; FEATURE="AggregationConstants"; ASPECT=StringLiterals; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        .String => |s| {
+            return Value{ .Str = s };
+        },
+        .Int => |i| {
+            return Value{ .Int = i };
+        },
+        .Bool => |b| {
+            return Value{ .Bool = b };
+        },
+        .Decimal => |d| {
+            return Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } };
+        },
         else => {},
     }
 
@@ -531,6 +564,9 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                             defer unique_int_values.deinit();
                             var unique_str_values = std.StringHashMap(void).init(allocator);
                             defer unique_str_values.deinit();
+                            // E22 Fix: Track boolean values separately
+                            var has_true = false;
+                            var has_false = false;
 
                             // Handle property access for COUNT(DISTINCT n.prop)
                             if (call.args[0].* == .PropertyAccess) {
@@ -543,6 +579,8 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                             try unique_int_values.put(prop_val.Int, {});
                                         } else if (prop_val == .Str) {
                                             try unique_str_values.put(prop_val.Str, {});
+                                        } else if (prop_val == .Bool) {
+                                            if (prop_val.Bool) has_true = true else has_false = true;
                                         }
                                     }
                                 }
@@ -556,12 +594,16 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                             try unique_int_values.put(prop_val.Int, {});
                                         } else if (prop_val == .Str) {
                                             try unique_str_values.put(prop_val.Str, {});
+                                        } else if (prop_val == .Bool) {
+                                            if (prop_val.Bool) has_true = true else has_false = true;
                                         }
                                     }
                                 }
                             }
 
-                            return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count()) };
+                            // E22 Fix: Add boolean count to total
+                            const bool_count: usize = (if (has_true) @as(usize, 1) else 0) + (if (has_false) @as(usize, 1) else 0);
+                            return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count() + bool_count) };
                         }
 
                         // COUNT(n.v) - count nodes with non-null v property

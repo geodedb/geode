@@ -1636,7 +1636,7 @@ pub fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []co
 
 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-002; FEATURE="WithGroupByAggregation"; ASPECT=AggregationComputation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
 /// Compute aggregation function over a group of rows
-fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []const Value, columns: []const []const u8) !Value {
+pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []const Value, columns: []const []const u8) !Value {
     // expr should be a Call expression for aggregation functions
     if (expr != .Call) return Value{ .Null = {} };
 

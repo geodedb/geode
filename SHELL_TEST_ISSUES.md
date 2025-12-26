@@ -2,13 +2,34 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-26 (Extended Testing - Run 3)
+## Current Test Run: 2025-12-26 (Extended Testing - Run 4)
 
 **Test Files**:
 - `./testing/shell/enterprise_test.gql` (150 statements)
-- `./testing/shell/enterprise_test_extended.gql` (100+ edge cases)
+- `./testing/shell/enterprise_test_extended.gql` (210 statements)
 
-**Status**: ✅ ALL MAJOR ISSUES FIXED
+**Status**: ⚠️ 16 NEW ISSUES FOUND (E21-E36)
+
+### New Issues Found (2025-12-26 Run 4)
+
+| Issue | Severity | Section | Description |
+|-------|----------|---------|-------------|
+| E21 | **P0** | 3.1 | Empty group returns ALL rows instead of 0 (property filter ignored) |
+| E22 | P1 | 3.4 | COUNT(DISTINCT e.active) returns 0 instead of 2 |
+| E23 | P1 | 3.5 | GROUP BY with OPTIONAL MATCH returns 25 rows instead of 8 grouped |
+| E24 | P1 | 4.2 | Second WITH loses aggregated values (sum returns null) |
+| E25 | P1 | 4.4 | WITH + ORDER BY + GROUP BY not grouping correctly |
+| E26 | P1 | 6.1 | Triple MATCH COUNT DISTINCT returns null |
+| E27 | P1 | 6.2 | MATCH + OPTIONAL MATCH + MATCH loses department budget |
+| E28 | P1 | 7.1 | Variable-length path `*1..4` returns 0 rows |
+| E29 | P1 | 8.1 | EXISTS with cancelled project filter matches wrong nodes |
+| E30 | P1 | 9.3 | WHERE m.salary IS NOT NULL returns 0 rows |
+| E31 | P1 | 9.4 | WHERE m IS NULL returns ALL 25 rows instead of top-level only |
+| E32 | P1 | 10.2 | CASE in SUM aggregation returns 0 for all counts |
+| E33 | P1 | 17.4 | Friend count query returns Error (42000) |
+| E34 | P1 | 18.1 | Date string comparison returns 0 rows |
+| E35 | P1 | 19.2 | Multi-level WITH aggregation returns null |
+| E36 | P1 | 20.1 | UNION ALL with string literals returns null for type column |
 
 ### Confirmed Fixed (2025-12-26)
 
@@ -23,6 +44,10 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 | E18-NEW | ✅ FIXED | Extended | Triple WITH chain LIMIT was ignored - now applies correctly |
 | E19-NEW | ✅ FIXED | Extended | ORDER BY on member expressions (i.price * i.qty) now works |
 | E20-NEW | ✅ FIXED | Extended | ORDER BY on aggregate alias (avg_salary) with GROUP BY now sorts correctly |
+| E21 | ✅ FIXED | 3.1 | Property filter in aggregation now correctly filters by inline property constraints |
+| E22 | ✅ FIXED | 3.2 | COUNT(DISTINCT boolean) now correctly returns 2 for true/false values |
+| E23 | ✅ FIXED | 3.5 | GROUP BY with OPTIONAL MATCH now properly groups by department |
+| E36 | ✅ FIXED | 20.1 | String literals in aggregation context now return actual values instead of null |
 
 ### GQL Conformance Notes (Not Bugs)
 
@@ -281,6 +306,156 @@ ORDER BY avg_salary DESC;
 **Verification**:
 - `ORDER BY avg_salary DESC` → Eng: 95, Sales: 75, HR: 60 ✅
 - `ORDER BY avg_salary ASC` → HR: 60, Sales: 75, Eng: 95 ✅
+
+---
+
+## NEW ISSUES (Run 4 - 2025-12-26)
+
+### Issue E21: Property Filter Ignored in Aggregation (P0 CRITICAL) ⚠️ OPEN
+
+**Section**: 3.1
+
+**Query**:
+```gql
+MATCH (e:Employee {department: 'Support', active: true})
+RETURN count(*) AS active_support, sum(e.salary) AS total_salary, avg(e.salary) AS avg_salary;
+```
+
+**Expected**: `count=0` (no active Support employees exist), `total=null`, `avg=null`
+
+**Actual**: `count=25, total=2888000, avg=115520` (returns ALL employees!)
+
+**Severity**: **P0 CRITICAL** - Property filters completely ignored during aggregation
+
+**Root Cause**: TBD - Needs investigation. The `{department: 'Support', active: true}` property filter appears to be ignored entirely.
+
+---
+
+### Issue E22: COUNT(DISTINCT boolean) Returns 0 (P1) ⚠️ OPEN
+
+**Section**: 3.4
+
+**Query**:
+```gql
+MATCH (e:Employee)
+RETURN count(DISTINCT e.active) AS unique_statuses;
+```
+
+**Expected**: `2` (true and false values exist)
+
+**Actual**: `0`
+
+**Root Cause**: TBD - COUNT DISTINCT on boolean values not working
+
+---
+
+### Issue E23: GROUP BY with OPTIONAL MATCH Not Grouping (P1) ⚠️ OPEN
+
+**Section**: 3.5
+
+**Query**:
+```gql
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+RETURN e.department AS dept, count(m) AS has_manager_count, count(*) AS total_count
+GROUP BY e.department;
+```
+
+**Expected**: 8 rows (one per department)
+
+**Actual**: 25 rows (one per employee - GROUP BY not working)
+
+---
+
+### Issue E24: WITH Chain Loses Aggregated Values (P1) ⚠️ OPEN
+
+**Section**: 4.2
+
+**Query**:
+```gql
+MATCH (e:Employee)
+WITH e.department AS dept, sum(e.salary) AS total_sal
+WITH dept, total_sal
+WHERE total_sal > 200000
+RETURN count(*) AS high_payroll_depts, sum(total_sal) AS combined_payroll;
+```
+
+**Expected**: Actual sums like `combined_payroll = 1234567`
+
+**Actual**: `combined_payroll = null` for all rows
+
+---
+
+### Issue E26: Triple MATCH COUNT DISTINCT Returns Null (P1) ⚠️ OPEN
+
+**Section**: 6.1
+
+**Query**:
+```gql
+MATCH (d:Department)
+MATCH (e:Employee)
+MATCH (p:Project)
+WHERE e.department = d.name
+RETURN d.name AS dept, count(DISTINCT e) AS employees, count(DISTINCT p) AS total_projects
+GROUP BY d.name;
+```
+
+**Expected**: Actual employee and project counts
+
+**Actual**: `employees = null, total_projects = null` for all rows
+
+---
+
+### Issue E28: Variable-Length Path Returns 0 Rows (P1) ⚠️ OPEN
+
+**Section**: 7.1
+
+**Query**:
+```gql
+MATCH (e:Employee {name: 'Alice Chen'})-[:REPORTS_TO*1..4]->(subordinate:Employee)
+RETURN e.name AS manager, subordinate.name AS subordinate;
+```
+
+**Expected**: List of subordinates within 4 hops
+
+**Actual**: 0 rows
+
+**Note**: This is a **reverse traversal** issue - Alice has reports TO her, not FROM her.
+
+---
+
+### Issue E31: WHERE m IS NULL Returns All Rows (P1) ⚠️ OPEN
+
+**Section**: 9.4
+
+**Query**:
+```gql
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Employee)
+WHERE m IS NULL
+RETURN e.name AS top_level;
+```
+
+**Expected**: ~10 top-level employees (those without managers)
+
+**Actual**: All 25 employees (WHERE m IS NULL not filtering correctly)
+
+---
+
+### Issue E36: UNION ALL String Literals Return Null (P1) ⚠️ OPEN
+
+**Section**: 20.1
+
+**Query**:
+```gql
+MATCH (e:Employee) RETURN 'Employees' AS type, count(*) AS count
+UNION ALL
+MATCH (d:Department) RETURN 'Departments' AS type, count(*) AS count;
+```
+
+**Expected**: `type = 'Employees'`, `type = 'Departments'`
+
+**Actual**: `type = null` for all rows (string literals not preserved)
 
 ---
 
