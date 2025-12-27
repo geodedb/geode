@@ -9,21 +9,31 @@ NC='\033[0m'
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR="$SCRIPT_DIR/../.."
 
-# Default mode
+# Default mode and settings
 MODE="ha"
+KEEP_ON_FAILURE=false
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --integration) MODE="integration" ;;
         --all) MODE="all" ;;
-        -h|--help) echo "Usage: $0 [--integration|--all]"; exit 0 ;;
+        --keep) KEEP_ON_FAILURE=true ;;
+        -h|--help) echo "Usage: $0 [--integration|--all] [--keep]"; exit 0 ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
     shift
 done
 
 cleanup() {
+    EXIT_CODE=$?
+    if [[ "$EXIT_CODE" -ne 0 && "$KEEP_ON_FAILURE" == "true" ]]; then
+        echo -e "${RED}Tests failed. Keeping containers running for debugging due to --keep flag.${NC}"
+        echo "You can inspect logs with: docker compose -f docker-compose.clients.yml logs"
+        echo "When done, run: docker compose -f docker-compose.clients.yml down -v && docker compose down -v"
+        return
+    fi
+
     echo -e "${GREEN}Cleaning up...${NC}"
     cd "$SCRIPT_DIR"
     docker compose down -v 2>/dev/null || true

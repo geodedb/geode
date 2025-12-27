@@ -8,7 +8,7 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 - `./testing/shell/enterprise_test.gql` (150 statements)
 - `./testing/shell/enterprise_test_extended.gql` (210 statements)
 
-**Status**: ✅ 16 ISSUES FIXED, ⚠️ 0 REMAINING ISSUES - ALL COMPLETE!
+**Status**: ✅ 17 ISSUES FIXED, ⚠️ 1 REMAINING ISSUE
 
 ### Summary of Run 6 (2025-12-26)
 
@@ -26,6 +26,8 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 - NEW ✅ MATCH...WHERE...MATCH parser support: Patterns like `MATCH (d) WHERE d.x > 0 MATCH (e)` now parse correctly
 - NEW ✅ Property pattern variable resolution: `{department: d.name}` now correctly resolves variables in multi-MATCH
 - NEW ✅ Section 2.2: TEST FILE FIX - added missing GROUP BY clause
+- NEW ✅ Section 13.1: GROUP BY with property pattern now correctly filters (Engineering=2, Sales=2, Marketing=1)
+- NEW ✅ Section 15.1: Property pattern without GROUP BY correctly matches per department
 
 **Previously Fixed (Runs 1-5):**
 - E21 ✅ Property filter in aggregation now works
@@ -38,7 +40,13 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 
 **Remaining Open Issues:**
 
-✅ **ALL ISSUES RESOLVED** - No remaining open issues!
+⚠️ **1 ISSUE REMAINING** - OPTIONAL MATCH preserving rows
+
+| Issue | Section | Status | Description |
+|-------|---------|--------|-------------|
+| OPT-MATCH-PRESERVE | 2.2 | ⚠️ OPEN | OPTIONAL MATCH with no matches should preserve outer rows with NULL |
+
+**Note**: Section 2.2 query `MATCH (d) OPTIONAL MATCH (e) ... GROUP BY d.name` returns 0 rows when there are no employees. Expected behavior: return 1 row with emp_count=0.
 
 | Issue | Resolution |
 |-------|------------|

@@ -101,6 +101,7 @@ services:
       - integration-logs:/logs
       - integration-results:/results
       - ../../geodetestlab:/geodetestlab:ro
+      - ../../zig-out/bin/geode:/usr/local/bin/geode:ro
     environment:
       - GEODE_SERVER=node-1:3141
       - GEODE_HOST=node-1
@@ -248,5 +249,5 @@ services:
         condition: service_started
       client-zig:
         condition: service_started
-    command: ["/bin/sh", "-c", "echo 'Waiting for client tests to complete...'; sleep 10; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do if [ -f /results/go/summary.json ] && [ -f /results/python/summary.json ] && [ -f /results/rust/summary.json ] && [ -f /results/zig/summary.json ] && [ -f /results/geodetestlab/summary.json ]; then echo 'All results found, collecting...'; /app/scripts/collect_results.sh; exit 0; fi; echo \"Waiting for results... (attempt $$i/20)\"; sleep 10; done; echo 'Timeout waiting for results, collecting what we have...'; /app/scripts/collect_results.sh"]
+    command: ["/bin/sh", "-c", "echo 'Waiting for client tests to complete...'; sleep 10; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do if [ -f /results/go/summary.json ] && [ -f /results/python/summary.json ] && [ -f /results/rust/summary.json ] && [ -f /results/zig/summary.json ] && [ -f /results/geodetestlab/summary.json ]; then echo 'All results found, collecting...'; /app/scripts/collect_results.sh; exit $$?; fi; echo \"Waiting for results... (attempt $$i/20)\"; sleep 10; done; echo 'Timeout waiting for results, collecting what we have...'; /app/scripts/collect_results.sh"]
     restart: "no"

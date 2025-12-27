@@ -911,6 +911,39 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                             }
                         }
 
+                        // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-004; FEATURE="PropertyPatternVariableReference"; ASPECT=GroupByVerification; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+                        // Check property patterns with variable references for GROUP BY path
+                        for (self.q.match.chains, combo_list.items) |chain, node| {
+                            if (chain.head) |node_pattern| {
+                                if (node_pattern.props) |props| {
+                                    for (props) |prop| {
+                                        if (containsVariableReference(prop.value.*)) {
+                                            const expected_val = eval.evalExpr(self.allocator, prop.value.*, env) catch Value{ .Null = {} };
+                                            if (node.properties.get(prop.key)) |node_prop_val| {
+                                                const node_val = switch (node_prop_val) {
+                                                    .Null => Value{ .Null = {} },
+                                                    .Bool => |b| Value{ .Bool = b },
+                                                    .Int => |ii| Value{ .Int = ii },
+                                                    .String => |s| Value{ .Str = s },
+                                                    .Float => Value{ .Null = {} },
+                                                    .ExtValue => |ext| Value{ .ExtValue = ext },
+                                                };
+                                                if (!valuesEqual(node_val, expected_val)) {
+                                                    self.allocator.free(env_names);
+                                                    self.allocator.free(env_values);
+                                                    return; // Property doesn't match - skip
+                                                }
+                                            } else {
+                                                self.allocator.free(env_names);
+                                                self.allocator.free(env_values);
+                                                return; // Property not found - skip
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Compute group key
                         var key_buf = std.ArrayList(u8).initCapacity(self.allocator, 128) catch unreachable;
                         const key_writer = key_buf.writer(self.allocator);

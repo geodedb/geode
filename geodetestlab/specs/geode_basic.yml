@@ -3,7 +3,7 @@ name: "Geode Basic Functionality Tests"
 description: "Core Geode database functionality testing including server, queries, and authentication"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "geode"
   working_dir: null
   env:
     GEODE_LOG_LEVEL: "info"
@@ -122,7 +122,7 @@ tests:
       stdout_contains: ["serve", "Start", "server"]
     tags: ["server", "help"]
 
-  - name: "shell-help" 
+  - name: "shell-help"
     description: "Test shell subcommand help"
     args: ["shell", "--help"]
     expect:
