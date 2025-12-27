@@ -2742,8 +2742,10 @@ pub const Parser = struct {
                         vp.* = left;
                         return .{ .In = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
                     } else {
+                        // CANARY: REQ=REQ-GQL-IN-LISTEXPR-001; FEATURE="InListExpr"; ASPECT=FunctionCall; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
                         // IN <expression> - expression that evaluates to a list (e.g., labels(n))
-                        const list_expr = try self.parsePrimaryExpr();
+                        // Use parsePostfixExpr to handle function calls like labels(n), not just identifiers
+                        const list_expr = try self.parsePostfixExpr();
                         const a = self.arena.allocator();
                         const vp = try a.create(ast.Expr);
                         vp.* = left;
@@ -2791,8 +2793,10 @@ pub const Parser = struct {
                         vp.* = left;
                         return .{ .NotIn = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
                     } else {
+                        // CANARY: REQ=REQ-GQL-IN-LISTEXPR-002; FEATURE="NotInListExpr"; ASPECT=FunctionCall; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
                         // NOT IN <expression> - expression that evaluates to a list (e.g., labels(n))
-                        const list_expr = try self.parsePrimaryExpr();
+                        // Use parsePostfixExpr to handle function calls like labels(n), not just identifiers
+                        const list_expr = try self.parsePostfixExpr();
                         const a = self.arena.allocator();
                         const vp = try a.create(ast.Expr);
                         vp.* = left;

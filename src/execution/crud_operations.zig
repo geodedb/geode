@@ -20,6 +20,29 @@ const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 // Local type aliases
 const Value = value_types.Value;
 const Env = value_types.Env;
+const ExtValue = @import("../eval_extended.zig").ExtValue;
+
+// CANARY: REQ=REQ-LIST-PROP-002; FEATURE="ListProperties"; ASPECT=Conversion; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+/// Convert a Value.List ([]Value) to an ExtValue.List ([]ExtValue)
+fn valueListToExtValueList(allocator: std.mem.Allocator, values: []Value) ![]ExtValue {
+    var result = try allocator.alloc(ExtValue, values.len);
+    for (values, 0..) |v, i| {
+        result[i] = switch (v) {
+            .Null => ExtValue{ .Null = {} },
+            .Int => |n| ExtValue{ .Int = n },
+            .Bool => |b| ExtValue{ .Bool = b },
+            .Str => |s| ExtValue{ .Str = s },
+            .Decimal => |d| ExtValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+            .ExtValue => |ext| ext,
+            .List => |nested| blk: {
+                const nested_ext = try valueListToExtValueList(allocator, nested);
+                break :blk ExtValue{ .List = nested_ext };
+            },
+            else => ExtValue{ .Null = {} }, // Node, Edge, Map, Path -> Null for now
+        };
+    }
+    return result;
+}
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-004; FEATURE="ExecutionRefactoring"; ASPECT=CRUD_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
 // Extracted CRUD operations (CREATE/INSERT/MERGE/DELETE) from execution.zig for better modularity (M1 Phase 4)
@@ -104,6 +127,12 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+                        // Handle list properties by converting to ExtValue.List
+                        .List => |list| blk: {
+                            const ext_list = try valueListToExtValueList(allocator, list);
+                            break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
+                        },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -275,6 +304,12 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+                        // Handle list properties by converting to ExtValue.List
+                        .List => |list| blk: {
+                            const ext_list = try valueListToExtValueList(allocator, list);
+                            break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
+                        },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -1008,6 +1043,12 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+                        // Handle list properties by converting to ExtValue.List
+                        .List => |list| blk: {
+                            const ext_list = try valueListToExtValueList(allocator, list);
+                            break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
+                        },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -1271,6 +1312,12 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+                        // Handle list properties by converting to ExtValue.List
+                        .List => |list| blk: {
+                            const ext_list = try valueListToExtValueList(allocator, list);
+                            break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
+                        },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };

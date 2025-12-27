@@ -194,7 +194,13 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             for (nodes) |node| {
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
-                                        sum_int += val.Int;
+                                        // Use overflow-safe addition
+                                        const result = @addWithOverflow(sum_int, val.Int);
+                                        if (result[1] != 0) {
+                                            has_float = true;
+                                        } else {
+                                            sum_int = result[0];
+                                        }
                                         sum_float += @floatFromInt(val.Int);
                                     } else if (val == .Float) {
                                         has_float = true;
@@ -207,7 +213,13 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                             const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
                                             sum_float += decimal_float;
                                         } else if (ext == .Int) {
-                                            sum_int += ext.Int;
+                                            // Use overflow-safe addition
+                                            const result = @addWithOverflow(sum_int, ext.Int);
+                                            if (result[1] != 0) {
+                                                has_float = true;
+                                            } else {
+                                                sum_int = result[0];
+                                            }
                                             sum_float += @floatFromInt(ext.Int);
                                         }
                                     }
@@ -245,7 +257,14 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
                                     switch (val) {
                                         .Int => |i| {
-                                            sum_int += i;
+                                            // Use overflow-safe addition
+                                            const result = @addWithOverflow(sum_int, i);
+                                            if (result[1] != 0) {
+                                                // Overflow occurred - fall back to float
+                                                has_float = true;
+                                            } else {
+                                                sum_int = result[0];
+                                            }
                                             sum_float += @floatFromInt(i);
                                         },
                                         .Decimal => |d| {
@@ -295,7 +314,8 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-                    // MIN aggregation over group
+                    // CANARY: REQ=REQ-STRING-MINMAX-001; FEATURE="StringMinMax"; ASPECT=MinAggregation; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // MIN aggregation over group - supports both integers and strings
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -305,25 +325,34 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             null;
 
                         if (field_name) |field| {
-                            var min_val: ?i64 = null;
+                            var min_int: ?i64 = null;
+                            var min_str: ?[]const u8 = null;
                             for (nodes) |node| {
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
-                                        if (min_val == null or val.Int < min_val.?) {
-                                            min_val = val.Int;
+                                        if (min_int == null or val.Int < min_int.?) {
+                                            min_int = val.Int;
+                                        }
+                                    } else if (val == .String) {
+                                        if (min_str == null or std.mem.lessThan(u8, val.String, min_str.?)) {
+                                            min_str = val.String;
                                         }
                                     }
                                 }
                             }
-                            if (min_val) |v| {
+                            if (min_int) |v| {
                                 return Value{ .Int = v };
+                            }
+                            if (min_str) |s| {
+                                return Value{ .Str = s };
                             }
                             return Value{ .Null = {} };
                         }
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-                    // MAX aggregation over group
+                    // CANARY: REQ=REQ-STRING-MINMAX-002; FEATURE="StringMinMax"; ASPECT=MaxAggregation; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // MAX aggregation over group - supports both integers and strings
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -333,18 +362,26 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             null;
 
                         if (field_name) |field| {
-                            var max_val: ?i64 = null;
+                            var max_int: ?i64 = null;
+                            var max_str: ?[]const u8 = null;
                             for (nodes) |node| {
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
-                                        if (max_val == null or val.Int > max_val.?) {
-                                            max_val = val.Int;
+                                        if (max_int == null or val.Int > max_int.?) {
+                                            max_int = val.Int;
+                                        }
+                                    } else if (val == .String) {
+                                        if (max_str == null or std.mem.lessThan(u8, max_str.?, val.String)) {
+                                            max_str = val.String;
                                         }
                                     }
                                 }
                             }
-                            if (max_val) |v| {
+                            if (max_int) |v| {
                                 return Value{ .Int = v };
+                            }
+                            if (max_str) |s| {
+                                return Value{ .Str = s };
                             }
                             return Value{ .Null = {} };
                         }
@@ -751,7 +788,13 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                 const node = entry.value_ptr;
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
-                                        sum_int += val.Int;
+                                        // Use overflow-safe addition
+                                        const result = @addWithOverflow(sum_int, val.Int);
+                                        if (result[1] != 0) {
+                                            has_float = true;
+                                        } else {
+                                            sum_int = result[0];
+                                        }
                                         sum_float += @floatFromInt(val.Int);
                                     } else if (val == .Float) {
                                         has_float = true;
@@ -764,7 +807,13 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                             const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
                                             sum_float += decimal_float;
                                         } else if (ext == .Int) {
-                                            sum_int += ext.Int;
+                                            // Use overflow-safe addition
+                                            const result = @addWithOverflow(sum_int, ext.Int);
+                                            if (result[1] != 0) {
+                                                has_float = true;
+                                            } else {
+                                                sum_int = result[0];
+                                            }
                                             sum_float += @floatFromInt(ext.Int);
                                         }
                                     }
@@ -826,7 +875,8 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-                    // MIN aggregation
+                    // CANARY: REQ=REQ-STRING-MINMAX-003; FEATURE="StringMinMax"; ASPECT=MinStore; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // MIN aggregation - supports both integers and strings
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -836,27 +886,36 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                             null;
 
                         if (field_name) |field| {
-                            var min_val: ?i64 = null;
+                            var min_int: ?i64 = null;
+                            var min_str: ?[]const u8 = null;
                             var iter = store.nodes.iterator();
                             while (iter.next()) |entry| {
                                 const node = entry.value_ptr;
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
-                                        if (min_val == null or val.Int < min_val.?) {
-                                            min_val = val.Int;
+                                        if (min_int == null or val.Int < min_int.?) {
+                                            min_int = val.Int;
+                                        }
+                                    } else if (val == .String) {
+                                        if (min_str == null or std.mem.lessThan(u8, val.String, min_str.?)) {
+                                            min_str = val.String;
                                         }
                                     }
                                 }
                             }
-                            if (min_val) |v| {
+                            if (min_int) |v| {
                                 return Value{ .Int = v };
+                            }
+                            if (min_str) |s| {
+                                return Value{ .Str = s };
                             }
                             return Value{ .Null = {} };
                         }
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-                    // MAX aggregation
+                    // CANARY: REQ=REQ-STRING-MINMAX-004; FEATURE="StringMinMax"; ASPECT=MaxStore; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // MAX aggregation - supports both integers and strings
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -866,20 +925,28 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                             null;
 
                         if (field_name) |field| {
-                            var max_val: ?i64 = null;
+                            var max_int: ?i64 = null;
+                            var max_str: ?[]const u8 = null;
                             var iter = store.nodes.iterator();
                             while (iter.next()) |entry| {
                                 const node = entry.value_ptr;
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
-                                        if (max_val == null or val.Int > max_val.?) {
-                                            max_val = val.Int;
+                                        if (max_int == null or val.Int > max_int.?) {
+                                            max_int = val.Int;
+                                        }
+                                    } else if (val == .String) {
+                                        if (max_str == null or std.mem.lessThan(u8, max_str.?, val.String)) {
+                                            max_str = val.String;
                                         }
                                     }
                                 }
                             }
-                            if (max_val) |v| {
+                            if (max_int) |v| {
                                 return Value{ .Int = v };
+                            }
+                            if (max_str) |s| {
+                                return Value{ .Str = s };
                             }
                             return Value{ .Null = {} };
                         }
@@ -1001,7 +1068,15 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                             const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
                             switch (val) {
                                 .Int => |i| {
-                                    sum_int += i;
+                                    // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-005; FEATURE="OverflowSafeSum"; ASPECT=IntOverflow; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                                    // Use overflow-safe addition to prevent integer overflow panic
+                                    const result = @addWithOverflow(sum_int, i);
+                                    if (result[1] != 0) {
+                                        // Overflow occurred - fall back to float
+                                        has_float = true;
+                                    } else {
+                                        sum_int = result[0];
+                                    }
                                     sum_float += @floatFromInt(i);
                                 },
                                 .Decimal => |d| {
@@ -1015,7 +1090,15 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                         const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
                                         sum_float += decimal_float;
                                     } else if (ext == .Int) {
-                                        sum_int += ext.Int;
+                                        // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-006; FEATURE="OverflowSafeSum"; ASPECT=ExtIntOverflow; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                                        // Use overflow-safe addition to prevent integer overflow panic
+                                        const result = @addWithOverflow(sum_int, ext.Int);
+                                        if (result[1] != 0) {
+                                            // Overflow occurred - fall back to float
+                                            has_float = true;
+                                        } else {
+                                            sum_int = result[0];
+                                        }
                                         sum_float += @floatFromInt(ext.Int);
                                     }
                                 },
@@ -1061,9 +1144,11 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-                    // MIN aggregation over bindings
+                    // CANARY: REQ=REQ-STRING-MINMAX-005; FEATURE="StringMinMax"; ASPECT=MinBindings; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // MIN aggregation over bindings - supports both integers and strings
                     if (call.args.len == 1) {
-                        var min_val: ?i64 = null;
+                        var min_int: ?i64 = null;
+                        var min_str: ?[]const u8 = null;
                         for (bindings) |binding| {
                             const env = Env{
                                 .names = binding.env_names,
@@ -1072,21 +1157,30 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                             };
                             const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
                             if (val == .Int) {
-                                if (min_val == null or val.Int < min_val.?) {
-                                    min_val = val.Int;
+                                if (min_int == null or val.Int < min_int.?) {
+                                    min_int = val.Int;
+                                }
+                            } else if (val == .Str) {
+                                if (min_str == null or std.mem.lessThan(u8, val.Str, min_str.?)) {
+                                    min_str = val.Str;
                                 }
                             }
                         }
-                        if (min_val) |v| {
+                        if (min_int) |v| {
                             return Value{ .Int = v };
+                        }
+                        if (min_str) |s| {
+                            return Value{ .Str = s };
                         }
                         return Value{ .Null = {} };
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-                    // MAX aggregation over bindings
+                    // CANARY: REQ=REQ-STRING-MINMAX-006; FEATURE="StringMinMax"; ASPECT=MaxBindings; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // MAX aggregation over bindings - supports both integers and strings
                     if (call.args.len == 1) {
-                        var max_val: ?i64 = null;
+                        var max_int: ?i64 = null;
+                        var max_str: ?[]const u8 = null;
                         for (bindings) |binding| {
                             const env = Env{
                                 .names = binding.env_names,
@@ -1095,13 +1189,20 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                             };
                             const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
                             if (val == .Int) {
-                                if (max_val == null or val.Int > max_val.?) {
-                                    max_val = val.Int;
+                                if (max_int == null or val.Int > max_int.?) {
+                                    max_int = val.Int;
+                                }
+                            } else if (val == .Str) {
+                                if (max_str == null or std.mem.lessThan(u8, max_str.?, val.Str)) {
+                                    max_str = val.Str;
                                 }
                             }
                         }
-                        if (max_val) |v| {
+                        if (max_int) |v| {
                             return Value{ .Int = v };
+                        }
+                        if (max_str) |s| {
+                            return Value{ .Str = s };
                         }
                         return Value{ .Null = {} };
                     }

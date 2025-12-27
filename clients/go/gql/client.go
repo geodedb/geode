@@ -239,7 +239,7 @@ type Conn struct {
 	bufRd   *bufio.Reader
 	nc      net.Conn
 	qConn   interface{} // quic.Connection or quic.EarlyConnection
-	qStream interface{} // *quic.Stream (pointer to avoid copy)
+	qStream *quic.Stream // *quic.Stream (pointer)
 	cancel  func()
 	useQUIC bool
 }
@@ -345,15 +345,13 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 
 		c := &Conn{
 			qConn:   qConn,
-			qStream: &qStream, // Store pointer to avoid copy
+			qStream: qStream, // Store interface directly
 			bufRd:   bufio.NewReaderSize(qStream, 64<<10),
 			useQUIC: true,
 		}
 		c.cancel = func() {
 			if stream := c.qStream; stream != nil {
-				if s, ok := stream.(*quic.Stream); ok {
-					_ = (*s).Close()
-				}
+				_ = (*stream).Close()
 			}
 			if conn := c.qConn; conn != nil {
 				if qc, ok := conn.(interface {
@@ -460,10 +458,10 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 			_ = qConn.CloseWithError(0, "failed to open stream")
 			return nil, err
 		}
-		c := &Conn{qConn: qConn, qStream: &qStream, bufRd: bufio.NewReaderSize(qStream, 64<<10), useQUIC: true}
+		c := &Conn{qConn: qConn, qStream: qStream, bufRd: bufio.NewReaderSize(qStream, 64<<10), useQUIC: true}
 		c.cancel = func() {
-			if s, ok := c.qStream.(*quic.Stream); ok {
-				_ = (*s).Close()
+			if c.qStream != nil {
+				_ = (*c.qStream).Close()
 			}
 			if qc, ok := c.qConn.(interface {
 				CloseWithError(quic.ApplicationErrorCode, string) error
@@ -552,10 +550,8 @@ func (db *DB) Connect(ctx context.Context) (*Conn, error) {
 
 func (c *Conn) Close() error {
 	if c.useQUIC {
-		if stream := c.qStream; stream != nil {
-			if s, ok := stream.(*quic.Stream); ok {
-				_ = (*s).Close()
-			}
+		if c.qStream != nil {
+			_ = (*c.qStream).Close()
 		}
 		if conn := c.qConn; conn != nil {
 			if qc, ok := conn.(interface {
@@ -598,10 +594,8 @@ func (c *Conn) writeJSON(v any) error {
 	b = append(b, '\n')
 	if c.useQUIC {
 		if stream := c.qStream; stream != nil {
-			if s, ok := stream.(*quic.Stream); ok {
-				_, e = (*s).Write(b)
-				return e
-			}
+			_, e = (*stream).Write(b)
+			return e
 		}
 		return fmt.Errorf("invalid QUIC stream")
 	}

@@ -67,6 +67,30 @@ const isNull = value_types.isNull;
 // Phase 5 M5.2: Use truthy from value_types module
 const truthy = value_types.truthy;
 
+// CANARY: REQ=REQ-LIST-PROP-005; FEATURE="ListProperties"; ASPECT=Conversion; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+/// Convert ExtValue.List ([]ExtValue) back to Value.List ([]Value)
+/// Strings must be duplicated to avoid dangling pointers
+const ExtValue = @import("eval_extended.zig").ExtValue;
+fn extValueListToValueList(allocator: std.mem.Allocator, ext_values: []ExtValue) ![]Value {
+    var result = try allocator.alloc(Value, ext_values.len);
+    for (ext_values, 0..) |ext, i| {
+        result[i] = switch (ext) {
+            .Null => Value{ .Null = {} },
+            .Int => |n| Value{ .Int = n },
+            .Bool => |b| Value{ .Bool = b },
+            // Duplicate strings to avoid dangling pointers after ExtValue is freed
+            .Str => |s| Value{ .Str = try allocator.dupe(u8, s) },
+            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+            .List => |nested| blk: {
+                const nested_values = try extValueListToValueList(allocator, nested);
+                break :blk Value{ .List = nested_values };
+            },
+            else => Value{ .ExtValue = ext }, // Other ExtValue types stay as ExtValue
+        };
+    }
+    return result;
+}
+
 
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-001; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotionImport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
@@ -1982,7 +2006,15 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                         .Bool => |b| Value{ .Bool = b },
                         .Null => Value{ .Null = {} },
-                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                        // CANARY: REQ=REQ-LIST-PROP-006; FEATURE="ListProperties"; ASPECT=MemberAccess; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                        // Handle ExtValue specially - convert List back to Value.List
+                        .ExtValue => |ext| switch (ext) {
+                            .List => |list| blk_list: {
+                                const value_list = extValueListToValueList(allocator, list) catch break :blk_list Value{ .Null = {} };
+                                break :blk_list Value{ .List = value_list };
+                            },
+                            else => Value{ .ExtValue = ext },
+                        },
                     };
                     break :blk_member result;
                 }
@@ -2015,7 +2047,15 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                         .Bool => |b| Value{ .Bool = b },
                         .Null => Value{ .Null = {} },
-                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                        // CANARY: REQ=REQ-LIST-PROP-007; FEATURE="ListProperties"; ASPECT=EdgeMemberAccess; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                        // Handle ExtValue specially - convert List back to Value.List
+                        .ExtValue => |ext| switch (ext) {
+                            .List => |list| blk_list: {
+                                const value_list = extValueListToValueList(allocator, list) catch break :blk_list Value{ .Null = {} };
+                                break :blk_list Value{ .List = value_list };
+                            },
+                            else => Value{ .ExtValue = ext },
+                        },
                     };
                     break :blk_member result;
                 }
@@ -2236,7 +2276,15 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             .String => |s| Value{ .Str = s },
                             .Int => |i| Value{ .Int = i },
                             .Bool => |b| Value{ .Bool = b },
-                            .ExtValue => |ext| Value{ .ExtValue = ext }, // Preserve ExtValue types (Geometry, VectorF32, etc.)
+                            // CANARY: REQ=REQ-LIST-PROP-003; FEATURE="ListProperties"; ASPECT=Retrieval; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                            // Handle ExtValue specially - convert List back to Value.List
+                            .ExtValue => |ext| switch (ext) {
+                                .List => |list| blk_list: {
+                                    const value_list = extValueListToValueList(allocator, list) catch break :blk_list Value{ .Null = {} };
+                                    break :blk_list Value{ .List = value_list };
+                                },
+                                else => Value{ .ExtValue = ext }, // Preserve other ExtValue types (Geometry, VectorF32, etc.)
+                            },
                             else => Value{ .Null = {} },
                         };
                         break :blk_node converted;
@@ -2249,7 +2297,15 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             .String => |s| Value{ .Str = s },
                             .Int => |i| Value{ .Int = i },
                             .Bool => |b| Value{ .Bool = b },
-                            .ExtValue => |ext| Value{ .ExtValue = ext }, // Preserve ExtValue types (Geometry, VectorF32, etc.)
+                            // CANARY: REQ=REQ-LIST-PROP-004; FEATURE="ListProperties"; ASPECT=EdgeRetrieval; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                            // Handle ExtValue specially - convert List back to Value.List
+                            .ExtValue => |ext| switch (ext) {
+                                .List => |list| blk_list: {
+                                    const value_list = extValueListToValueList(allocator, list) catch break :blk_list Value{ .Null = {} };
+                                    break :blk_list Value{ .List = value_list };
+                                },
+                                else => Value{ .ExtValue = ext }, // Preserve other ExtValue types (Geometry, VectorF32, etc.)
+                            },
                             else => Value{ .Null = {} },
                         };
                         break :blk_edge converted;

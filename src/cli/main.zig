@@ -524,6 +524,8 @@ fn writeAllToStream(
     var stalled: usize = 0;
     const max_retries: usize = 200;
 
+    std.debug.print("[QUIC-CLI] Writing {} bytes to stream {}\n", .{ data.len, stream_id });
+
     while (written < data.len) {
         const n = conn.inner.writeStream(stream_id, data[written..], false) catch |err| switch (err) {
             error.FlowControlBlocked, error.WouldBlock => {
@@ -1553,7 +1555,64 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     }
 
     // Start listening
-    try quic_server.listen();
+    quic_server.listen() catch |err| {
+        switch (err) {
+            error.AddressInUse => {
+                std.debug.print("\n❌ Error: Address {s}:{} is already in use.\n", .{ listen_addr, listen_port });
+                std.debug.print("   Another server may already be running on this port.\n\n", .{});
+                std.debug.print("   To find the process using this port:\n", .{});
+                switch (builtin.os.tag) {
+                    .linux => {
+                        std.debug.print("     lsof -i :{}\n", .{listen_port});
+                        std.debug.print("     ss -tlnp | grep {}\n", .{listen_port});
+                    },
+                    .macos => {
+                        std.debug.print("     lsof -i :{}\n", .{listen_port});
+                        std.debug.print("     netstat -anv | grep {}\n", .{listen_port});
+                    },
+                    .windows => {
+                        std.debug.print("     netstat -ano | findstr {}\n", .{listen_port});
+                        std.debug.print("     Get-Process -Id (Get-NetTCPConnection -LocalPort {}).OwningProcess\n", .{listen_port});
+                    },
+                    else => {
+                        std.debug.print("     netstat -an | grep {}\n", .{listen_port});
+                    },
+                }
+                std.debug.print("\n   To use a different port:\n", .{});
+                std.debug.print("     geode serve --listen {s}:3142\n", .{listen_addr});
+                std.process.exit(1);
+            },
+            error.AddressNotAvailable => {
+                std.debug.print("\n❌ Error: Address {s} is not available on this system.\n", .{listen_addr});
+                std.debug.print("   Check that the address is valid and the network interface exists.\n\n", .{});
+                std.debug.print("   To use a different address:\n", .{});
+                std.debug.print("     geode serve --listen 0.0.0.0:{}   # All interfaces\n", .{listen_port});
+                std.debug.print("     geode serve --listen 127.0.0.1:{} # Localhost only\n", .{listen_port});
+                std.process.exit(1);
+            },
+            error.PermissionDenied => {
+                std.debug.print("\n❌ Error: Permission denied to bind to {s}:{}.\n", .{ listen_addr, listen_port });
+                if (listen_port < 1024) {
+                    std.debug.print("   Ports below 1024 require elevated privileges.\n\n", .{});
+                    std.debug.print("   Options:\n", .{});
+                    switch (builtin.os.tag) {
+                        .linux, .macos => {
+                            std.debug.print("     sudo geode serve --listen {s}:{}\n", .{ listen_addr, listen_port });
+                        },
+                        .windows => {
+                            std.debug.print("     Run as Administrator\n", .{});
+                        },
+                        else => {},
+                    }
+                    std.debug.print("     geode serve --listen {s}:3141  # Use port >= 1024\n", .{listen_addr});
+                } else {
+                    std.debug.print("   Check file permissions and firewall settings.\n", .{});
+                }
+                std.process.exit(1);
+            },
+            else => return err,
+        }
+    };
     std.debug.print("✅ Server ready - accepting QUIC connections\n", .{});
 
     // Track active connections with per-stream state
@@ -1585,6 +1644,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         // Try to accept newly-ready connections (non-blocking)
         // Connections become available after QUIC handshake completes
         while (quic_server.tryAccept()) |conn| {
+            std.debug.print("[QUIC-CLI] Accepted new connection\n", .{});
             connection_count += 1;
             var conn_state = ConnectionState.init(allocator, conn);
             active_connections.append(allocator, conn_state) catch {
@@ -1609,21 +1669,54 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             // Only try to read streams if handshake is confirmed
             if (!conn_state.conn.isHandshakeConfirmed()) {
                 // Handshake still in progress - skip for now
+                if (loop_iteration % 1000 == 0) {
+                    std.debug.print("[QUIC-CLI] Handshake NOT confirmed for connection {}\n", .{i});
+                }
                 i += 1;
                 continue;
             }
 
-            // Poll stream IDs directly (client-initiated bidirectional: 0, 4, 8, 12...)
-            // vendor/quic requires polling stream IDs, not accepting stream objects
-            var stream_id: u64 = 0;
-            while (stream_id < 256) : (stream_id += 4) {
+            // Accept new streams
+            while (true) {
+                const stream = conn_state.conn.acceptStream() catch |err| switch (err) {
+                    error.WouldBlock => break, // No more new streams
+                    else => {
+                        std.debug.print("[QUIC-CLI] acceptStream error: {}\n", .{err});
+                        break;
+                    },
+                };
+
+                const stream_id = stream.stream_id;
+                // We just need the ID, we can free the wrapper as we use the ID for reading
+                // But wait, QuicStream wrapper owns nothing but the pointer.
+                // However, we should clean it up to avoid leaks if it allocates.
+                // transport/quic.zig QuicStream allocates nothing extra usually, but let's check.
+                // Actually QuicConnection.acceptStream allocates the wrapper struct.
+                conn_state.conn.allocator.destroy(stream);
+
+                std.debug.print("[QUIC-CLI] Accepted stream {}\n", .{stream_id});
+
+                // Initialize state for this stream
+                if (!conn_state.streams.contains(stream_id)) {
+                    var new_state = StreamState.init(allocator) catch continue;
+                    conn_state.streams.put(stream_id, new_state) catch {
+                        new_state.deinit(allocator);
+                        continue;
+                    };
+                }
+            }
+
+            // Poll active streams
+            var stream_iter = conn_state.streams.keyIterator();
+            while (stream_iter.next()) |stream_id_ptr| {
+                const stream_id = stream_id_ptr.*;
                 while (true) {
                     var buf: [MAX_LINE_SIZE]u8 = undefined;
-                    const n = conn_state.conn.inner.readStream(stream_id, buf[0..]) catch |err| switch (err) {
-                        error.WouldBlock, error.InvalidStream => break,
-                    };
+                    const n = conn_state.conn.inner.readStream(stream_id, buf[0..]) catch break;
 
                     if (n == 0) break;
+
+                    std.debug.print("[QUIC-CLI] Read {} bytes from stream {}\n", .{ n, stream_id });
 
                     processStreamBuffer(allocator, &quic_server, conn_state, &stream_count, stream_id, buf[0..n]) catch |err| {
                         std.debug.print("[STREAM-POLL] Error processing stream {}: {}\n", .{ stream_id, err });

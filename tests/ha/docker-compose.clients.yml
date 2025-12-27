@@ -132,6 +132,7 @@ services:
       - GEODE_SERVER=node-1:3141
       - GEODE_HOST=node-1
       - GEODE_PORT=3141
+      - QUIC_GO_LOG_LEVEL=debug
       - TEST_MODE=${TEST_MODE:-standard}
     depends_on:
       migration-runner:

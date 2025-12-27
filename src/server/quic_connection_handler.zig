@@ -69,6 +69,7 @@ pub fn handleQuicConnection(
     _ = env_wal_compact_interval;
     _ = _force_serialization_failure_unused;
     defer conn.close();
+    std.debug.print("[QUIC-HANDLER] Entering handleQuicConnection\n", .{});
 
     // Poll the endpoint to process incoming STREAM frames before accepting
     // vendor/quic requires explicit polling to receive packets and populate stream queues
@@ -83,9 +84,9 @@ pub fn handleQuicConnection(
     }
 
     // Accept a stream for the protocol communication
-    log.debug("Attempting to accept stream", .{});
+    std.debug.print("[QUIC-HANDLER] Attempting to accept stream\n", .{});
     const stream = try conn.acceptStream();
-    log.debug("Stream accepted successfully", .{});
+    std.debug.print("[QUIC-HANDLER] Stream accepted successfully\n", .{});
     defer stream.close();
 
     // Initialize WAL
@@ -408,7 +409,7 @@ pub fn processMessage(
                             var pr: [][]const eval.Value = &.{};
                             std.debug.print("[DEBUG] Before parseParams: params_json is {s}\n", .{if (rq.params_json) |p| p else "NULL"});
                             parseParams(gpa, rq.params_json, &pn, &pr);
-                            std.debug.print("[DEBUG] After parseParams: pn.len={d}, pr.len={d}\n", .{pn.len, pr.len});
+                            std.debug.print("[DEBUG] After parseParams: pn.len={d}, pr.len={d}\n", .{ pn.len, pr.len });
                             var ord = false;
                             var oks: [][]const u8 = &.{};
                             var cols: []const protocol.SchemaCol = &.{};
