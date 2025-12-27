@@ -34,6 +34,7 @@ pub const TokenKind = enum {
     arrow_l, // <-
     double_arrow, // =>
     at, // @ (for field annotations - Geode extension)
+    caret, // ^ (power operator)
 
     // literals & identifiers
     identifier,

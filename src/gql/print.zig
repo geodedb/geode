@@ -262,6 +262,10 @@ fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.Ar
                     try walkExpr(ally_inner, dst, isq.value.*);
                     // Note: subquery walking not implemented yet
                 },
+                .InListExpr => |ile| {
+                    try walkExpr(ally_inner, dst, ile.value.*);
+                    try walkExpr(ally_inner, dst, ile.list_expr.*);
+                },
                 .NotIn => |nin| {
                     try walkExpr(ally_inner, dst, nin.value.*);
                     for (nin.set) |it| try walkExpr(ally_inner, dst, it.*);
@@ -269,6 +273,10 @@ fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.Ar
                 .NotInSubquery => |nisq| {
                     try walkExpr(ally_inner, dst, nisq.value.*);
                     // Note: subquery walking not implemented yet
+                },
+                .NotInListExpr => |nile| {
+                    try walkExpr(ally_inner, dst, nile.value.*);
+                    try walkExpr(ally_inner, dst, nile.list_expr.*);
                 },
                 .IsNull => |nz| try walkExpr(ally_inner, dst, nz.target.*),
                 .Case => |c| {
@@ -284,8 +292,8 @@ fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.Ar
                     try walkExpr(ally_inner, dst, pc.map.*);
                 },
                 .Exists => |ex| {
-                    // Walk through the EXISTS pattern (note: patterns don't contain expressions directly)
-                    _ = ex; // EXISTS pattern doesn't contain sub-expressions to walk
+                    // Walk through the EXISTS where clause if present
+                    if (ex.where) |we| try walkExpr(ally_inner, dst, we.*);
                 },
                 .HasLabel => |hl| {
                     // Label test doesn't contain sub-expressions
@@ -594,6 +602,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
                 .Mul => " * ",
                 .Div => " / ",
                 .Mod => " % ",
+                .Power => " ^ ",
                 .Concat => " || ",
                 .RegexMatch => " =~ ",
                 .RegexNotMatch => " !~ ",
@@ -632,6 +641,11 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try printExprWith(w, isq.value.*, 0, opts);
             try w.print(" IN (subquery)", .{});
         },
+        .InListExpr => |ile| {
+            try printExprWith(w, ile.value.*, 0, opts);
+            try w.print(" IN ", .{});
+            try printExprWith(w, ile.list_expr.*, 0, opts);
+        },
         .NotIn => |nin| {
             try printExprWith(w, nin.value.*, 0, opts);
             try w.print(" NOT IN ", .{});
@@ -645,6 +659,11 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .NotInSubquery => |nisq| {
             try printExprWith(w, nisq.value.*, 0, opts);
             try w.print(" NOT IN (subquery)", .{});
+        },
+        .NotInListExpr => |nile| {
+            try printExprWith(w, nile.value.*, 0, opts);
+            try w.print(" NOT IN ", .{});
+            try printExprWith(w, nile.list_expr.*, 0, opts);
         },
         .IsNull => |nz| {
             try printExprWith(w, nz.target.*, 0, opts);
@@ -678,6 +697,10 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .Exists => |ex| {
             try w.print("EXISTS {{ ", .{});
             try printGraphPattern(w, ex.pattern.*, 0);
+            if (ex.where) |we| {
+                try w.print(" WHERE ", .{});
+                try printExprWith(w, we.*, 0, opts);
+            }
             try w.print(" }}", .{});
         },
         .HasLabel => |hl| try w.print("{s}:{s}", .{ hl.node, hl.label }),

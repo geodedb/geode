@@ -54,8 +54,15 @@ func ensureServer(t *testing.T) string {
 
 func withConn(t *testing.T) *Conn {
 	t.Helper()
-	serverPath := ensureServer(t)
-	db, err := Open("process:" + serverPath + "?page_size=3")
+	var dsn string
+	if addr := os.Getenv("GEODE_SERVER"); addr != "" {
+		dsn = "quic://" + addr + "?page_size=3" + "&insecure=true"
+	} else {
+		serverPath := ensureServer(t)
+		dsn = "process:" + serverPath + "?page_size=3"
+	}
+
+	db, err := Open(dsn)
 	if err != nil {
 		t.Fatalf("Open err: %v", err)
 	}

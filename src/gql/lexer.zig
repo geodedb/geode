@@ -230,6 +230,7 @@ pub const Lexer = struct {
             '>' => .{ .kind = .gt, .lexeme = self.src[self.idx .. self.idx + 1], .loc = loc },
             '=' => .{ .kind = .eq, .lexeme = self.src[self.idx .. self.idx + 1], .loc = loc },
             '@' => .{ .kind = .at, .lexeme = self.src[self.idx .. self.idx + 1], .loc = loc },
+            '^' => .{ .kind = .caret, .lexeme = self.src[self.idx .. self.idx + 1], .loc = loc },
             else => return null,
         };
         self.idx += 1;

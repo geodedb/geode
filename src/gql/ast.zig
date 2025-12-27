@@ -221,6 +221,9 @@ pub const Expr = union(enum) {
     Binary: struct { op: BinOp, left: *Expr, right: *Expr },
     In: struct { value: *Expr, set: []*Expr },
     InSubquery: struct { value: *Expr, subquery: *Query },
+    // CANARY: REQ=REQ-GQL-IN-EXPR-001; FEATURE="InOperator"; ASPECT=ListExpression; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+    // IN with list expression (e.g., 'Person' IN labels(n))
+    InListExpr: struct { value: *Expr, list_expr: *Expr },
     IsNull: struct { target: *Expr, negated: bool },
     IsUnknown: struct { target: *Expr, negated: bool },
     // String predicates
@@ -229,6 +232,9 @@ pub const Expr = union(enum) {
     Contains: struct { value: *Expr, needle: *Expr },
     NotIn: struct { value: *Expr, set: []*Expr },
     NotInSubquery: struct { value: *Expr, subquery: *Query },
+    // CANARY: REQ=REQ-GQL-IN-EXPR-002; FEATURE="NotInOperator"; ASPECT=ListExpression; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+    // NOT IN with list expression
+    NotInListExpr: struct { value: *Expr, list_expr: *Expr },
     // CASE expression
     Case: struct { operand: ?*Expr, whens: []CaseWhen, else_expr: ?*Expr },
     // Parameter reference: $name
@@ -236,7 +242,8 @@ pub const Expr = union(enum) {
     Map: []Property,
     PatternComp: struct { pattern: *GraphPattern, where: ?*Expr, map: *Expr, alias: ?[]const u8 = null },
     // EXISTS predicate with subquery pattern
-    Exists: struct { pattern: *GraphPattern },
+    // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="ExistsSubquery"; ASPECT=WhereClause; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+    Exists: struct { pattern: *GraphPattern, where: ?*Expr = null },
     // Label test: n:Label (checks if node has label)
     HasLabel: struct { node: []const u8, label: []const u8 },
     // Path finding functions and pattern comprehensions
@@ -257,7 +264,7 @@ pub const Expr = union(enum) {
     },
 };
 
-pub const BinOp = enum { And, Or, Xor, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Concat, RegexMatch, RegexNotMatch };
+pub const BinOp = enum { And, Or, Xor, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Mod, Power, Concat, RegexMatch, RegexNotMatch };
 pub const UnaryOp = enum { Not, Neg, Pos };
 
 pub const CaseWhen = struct { when: *Expr, then_expr: *Expr };

@@ -16,9 +16,10 @@ const Env = value_types.Env;
 // Extracted graph algorithm functions from execution.zig for better modularity (M1 Phase 1)
 
 /// Count the number of matches for a given graph pattern
-/// CANARY: REQ=REQ-GQL-PATTERN-COUNT; FEATURE="PatternMatching"; ASPECT=COUNT; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+/// CANARY: REQ=REQ-GQL-PATTERN-COUNT; FEATURE="PatternMatching"; ASPECT=COUNT; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-27
 /// Now accepts env parameter for correlated subqueries (EXISTS with outer variable references)
-pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPattern, env: Env) !i64 {
+/// Also accepts optional WHERE filter for EXISTS { MATCH ... WHERE ... } patterns
+pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, env: Env) !i64 {
     const store = graph_store.getGlobalStore(allocator);
     var count: i64 = 0;
 
@@ -145,14 +146,60 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                             }
                                         }
 
-                                        if (target_matches) count += 1;
+                                        if (target_matches) {
+                                            // CANARY: REQ=REQ-GQL-EXISTS-WHERE-001; FEATURE="ExistsWithWhere"; ASPECT=WhereFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-27
+                                            // Check WHERE filter if present (for nested EXISTS)
+                                            if (where_filter) |wf| {
+                                                // Build environment with target node bound (if pattern has a name)
+                                                var ext_env = env;
+                                                if (target_pattern.name) |target_name| {
+                                                    // Get node pointer for environment binding
+                                                    const target_node_ptr = store.nodes.getPtr(edge.to_id) orelse continue;
+                                                    // Create extended environment with the target node
+                                                    const new_names = allocator.alloc([]const u8, env.names.len + 1) catch continue;
+                                                    const new_values = allocator.alloc(Value, env.values.len + 1) catch continue;
+                                                    @memcpy(new_names[0..env.names.len], env.names);
+                                                    @memcpy(new_values[0..env.values.len], env.values);
+                                                    new_names[env.names.len] = target_name;
+                                                    new_values[env.values.len] = Value{ .Node = target_node_ptr };
+                                                    ext_env = .{
+                                                        .names = new_names,
+                                                        .values = new_values,
+                                                        .allocator = allocator,
+                                                        .param_names = env.param_names,
+                                                        .param_values = env.param_values,
+                                                    };
+                                                }
+                                                // Evaluate WHERE filter
+                                                const where_result = eval.evalExpr(allocator, wf.*, ext_env) catch continue;
+                                                const passes = switch (where_result) {
+                                                    .Bool => |b| b,
+                                                    else => false,
+                                                };
+                                                if (passes) count += 1;
+                                            } else {
+                                                count += 1;
+                                            }
+                                        }
                                     }
                                 }
                                 return count;
                             }
 
                             // No relationship hops - just count if the node matches
-                            if (matches) count = 1;
+                            if (matches) {
+                                // Check WHERE filter if present
+                                if (where_filter) |wf| {
+                                    const where_result = eval.evalExpr(allocator, wf.*, env) catch return 0;
+                                    const passes = switch (where_result) {
+                                        .Bool => |b| b,
+                                        else => false,
+                                    };
+                                    if (passes) count = 1;
+                                } else {
+                                    count = 1;
+                                }
+                            }
                             return count;
                         }
                         break;
@@ -210,7 +257,35 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 }
 
                 if (matches) {
-                    count += 1;
+                    // Check WHERE filter if present
+                    if (where_filter) |wf| {
+                        // Build environment with this node bound (if pattern has a name)
+                        var ext_env = env;
+                        if (node_pattern.name) |pattern_name| {
+                            // Use entry.value_ptr for the node pointer
+                            const new_names = allocator.alloc([]const u8, env.names.len + 1) catch continue;
+                            const new_values = allocator.alloc(Value, env.values.len + 1) catch continue;
+                            @memcpy(new_names[0..env.names.len], env.names);
+                            @memcpy(new_values[0..env.values.len], env.values);
+                            new_names[env.names.len] = pattern_name;
+                            new_values[env.values.len] = Value{ .Node = entry.value_ptr };
+                            ext_env = .{
+                                .names = new_names,
+                                .values = new_values,
+                                .allocator = allocator,
+                                .param_names = env.param_names,
+                                .param_values = env.param_values,
+                            };
+                        }
+                        const where_result = eval.evalExpr(allocator, wf.*, ext_env) catch continue;
+                        const passes = switch (where_result) {
+                            .Bool => |b| b,
+                            else => false,
+                        };
+                        if (passes) count += 1;
+                    } else {
+                        count += 1;
+                    }
                 }
             }
         } else if (chain.hops.len > 0) {
@@ -346,7 +421,17 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 };
 
                 if (matches_direction) {
-                    count += 1;
+                    // Check WHERE filter if present
+                    if (where_filter) |wf| {
+                        const where_result = eval.evalExpr(allocator, wf.*, env) catch continue;
+                        const passes = switch (where_result) {
+                            .Bool => |b| b,
+                            else => false,
+                        };
+                        if (passes) count += 1;
+                    } else {
+                        count += 1;
+                    }
                 }
             }
         }

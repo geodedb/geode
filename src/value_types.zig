@@ -129,7 +129,13 @@ pub const Env = struct {
         // This allows identifiers to reference parameters without the $ prefix
         i = 0;
         while (i < self.param_names.len) : (i += 1) {
-            if (std.mem.eql(u8, self.param_names[i], name)) return self.param_values[i];
+            if (std.mem.eql(u8, self.param_names[i], name)) {
+                if (i >= self.param_values.len) {
+                    std.log.err("Env.get mismatch: param_names.len={d}, param_values.len={d}, i={d}", .{ self.param_names.len, self.param_values.len, i });
+                    return null;
+                }
+                return self.param_values[i];
+            }
         }
 
         return null;

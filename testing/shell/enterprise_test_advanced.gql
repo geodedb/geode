@@ -1,0 +1,952 @@
+-- ============================================================================
+-- GEODE ENTERPRISE ADVANCED TEST FILE
+-- ============================================================================
+-- Advanced edge case and obscure GQL specification testing.
+-- Targets rare patterns, boundary conditions, and specification corner cases.
+-- Run with: ./zig-out/bin/geode shell --insecure
+-- Then: /source ./testing/shell/enterprise_test_advanced.gql
+-- ============================================================================
+--
+-- ISO/IEC 39075:2024 GQL SPECIFICATION COVERAGE:
+-- ============================================================================
+-- This test file focuses on obscure and edge-case behaviors from the GQL spec:
+-- - Three-valued logic (NULL semantics)
+-- - Path pattern edge cases
+-- - Label expression combinations
+-- - Aggregation corner cases
+-- - Numeric precision and overflow
+-- - String and list edge cases
+-- - Subquery scoping
+-- - Set operation semantics
+-- ============================================================================
+
+-- ============================================================================
+-- SECTION 1: SCHEMA SETUP - COMPLEX GRAPH STRUCTURES
+-- ============================================================================
+
+-- 1.1 Create test graph with unusual structures
+CREATE GRAPH IF NOT EXISTS advanced_test;
+USE GRAPH advanced_test;
+MATCH (n) DETACH DELETE n;
+
+-- 1.2 Create nodes with edge-case property values
+-- Empty strings, very long strings, special characters
+CREATE (:Entity {id: 1, name: '', type: 'empty_name'});
+CREATE (:Entity {id: 2, name: 'Normal', type: 'standard'});
+CREATE (:Entity {id: 3, name: 'A', type: 'single_char'});
+CREATE (:Entity {id: 4, name: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', type: 'long_name'});
+CREATE (:Entity {id: 5, name: 'Tab	Here', type: 'with_tab'});
+CREATE (:Entity {id: 6, name: 'Line
+Break', type: 'with_newline'});
+
+-- 1.3 Nodes with numeric edge cases
+CREATE (:NumericTest {id: 1, value: 0, label: 'zero'});
+CREATE (:NumericTest {id: 2, value: -1, label: 'negative_one'});
+CREATE (:NumericTest {id: 3, value: 1, label: 'one'});
+CREATE (:NumericTest {id: 4, value: 2147483647, label: 'max_int32'});
+CREATE (:NumericTest {id: 5, value: -2147483648, label: 'min_int32'});
+CREATE (:NumericTest {id: 6, value: 9223372036854775807, label: 'max_int64'});
+CREATE (:NumericTest {id: 7, value: 999999999999, label: 'large'});
+
+-- 1.4 Nodes with boolean variations
+CREATE (:BoolTest {id: 1, flag: true, name: 'true_flag'});
+CREATE (:BoolTest {id: 2, flag: false, name: 'false_flag'});
+
+-- 1.5 Hierarchical structure for path testing
+CREATE (:TreeNode {id: 'root', level: 0, name: 'Root'});
+CREATE (:TreeNode {id: 'a', level: 1, name: 'A'});
+CREATE (:TreeNode {id: 'b', level: 1, name: 'B'});
+CREATE (:TreeNode {id: 'c', level: 1, name: 'C'});
+CREATE (:TreeNode {id: 'a1', level: 2, name: 'A1'});
+CREATE (:TreeNode {id: 'a2', level: 2, name: 'A2'});
+CREATE (:TreeNode {id: 'b1', level: 2, name: 'B1'});
+CREATE (:TreeNode {id: 'a1x', level: 3, name: 'A1X'});
+CREATE (:TreeNode {id: 'a1y', level: 3, name: 'A1Y'});
+
+-- Tree edges (parent -> child)
+MATCH (p:TreeNode {id: 'root'}), (c:TreeNode {id: 'a'}) CREATE (p)-[:CHILD]->(c);
+MATCH (p:TreeNode {id: 'root'}), (c:TreeNode {id: 'b'}) CREATE (p)-[:CHILD]->(c);
+MATCH (p:TreeNode {id: 'root'}), (c:TreeNode {id: 'c'}) CREATE (p)-[:CHILD]->(c);
+MATCH (p:TreeNode {id: 'a'}), (c:TreeNode {id: 'a1'}) CREATE (p)-[:CHILD]->(c);
+MATCH (p:TreeNode {id: 'a'}), (c:TreeNode {id: 'a2'}) CREATE (p)-[:CHILD]->(c);
+MATCH (p:TreeNode {id: 'b'}), (c:TreeNode {id: 'b1'}) CREATE (p)-[:CHILD]->(c);
+MATCH (p:TreeNode {id: 'a1'}), (c:TreeNode {id: 'a1x'}) CREATE (p)-[:CHILD]->(c);
+MATCH (p:TreeNode {id: 'a1'}), (c:TreeNode {id: 'a1y'}) CREATE (p)-[:CHILD]->(c);
+
+-- 1.6 Multi-label nodes for label expression testing
+CREATE (:Person:Employee:Manager {name: 'CEO', rank: 1});
+CREATE (:Person:Employee {name: 'Worker1', rank: 5});
+CREATE (:Person:Employee {name: 'Worker2', rank: 5});
+CREATE (:Person:Contractor {name: 'Contractor1', rank: 3});
+CREATE (:Person {name: 'Guest', rank: 10});
+CREATE (:Employee:Intern {name: 'Intern1', rank: 8});
+
+-- 1.7 Cyclic relationships for cycle detection
+CREATE (:CycleNode {id: 'c1', name: 'Cycle1'});
+CREATE (:CycleNode {id: 'c2', name: 'Cycle2'});
+CREATE (:CycleNode {id: 'c3', name: 'Cycle3'});
+MATCH (a:CycleNode {id: 'c1'}), (b:CycleNode {id: 'c2'}) CREATE (a)-[:NEXT]->(b);
+MATCH (a:CycleNode {id: 'c2'}), (b:CycleNode {id: 'c3'}) CREATE (a)-[:NEXT]->(b);
+MATCH (a:CycleNode {id: 'c3'}), (b:CycleNode {id: 'c1'}) CREATE (a)-[:NEXT]->(b);
+
+-- 1.8 Isolated nodes (no relationships)
+CREATE (:Isolated {id: 1, name: 'Island1'});
+CREATE (:Isolated {id: 2, name: 'Island2'});
+
+-- 1.9 Self-referential relationships
+CREATE (:SelfRef {id: 1, name: 'SelfLoop'});
+MATCH (n:SelfRef {id: 1}) CREATE (n)-[:LOOPS_TO]->(n);
+
+-- 1.10 Nodes with list properties
+CREATE (:ListNode {id: 1, tags: ['a', 'b', 'c'], scores: [1, 2, 3]});
+CREATE (:ListNode {id: 2, tags: [], scores: []});
+CREATE (:ListNode {id: 3, tags: ['single'], scores: [42]});
+
+-- ============================================================================
+-- SECTION 2: THREE-VALUED LOGIC (NULL SEMANTICS)
+-- ============================================================================
+
+-- 2.1 NULL in boolean AND
+RETURN null AND true AS r1, null AND false AS r2, null AND null AS r3;
+
+-- 2.2 NULL in boolean OR
+RETURN null OR true AS r1, null OR false AS r2, null OR null AS r3;
+
+-- 2.3 NULL in boolean NOT
+RETURN NOT null AS negated_null;
+
+-- 2.4 NULL equality (always unknown/false in WHERE)
+RETURN null = null AS null_eq_null, null <> null AS null_neq_null;
+
+-- 2.5 IS NULL vs = NULL
+MATCH (n:NumericTest)
+WHERE n.nonexistent IS NULL
+RETURN n.label AS has_null_prop
+ORDER BY n.label
+LIMIT 3;
+
+-- 2.6 COALESCE with multiple NULLs
+RETURN coalesce(null, null, null, 'found') AS first_non_null;
+
+-- 2.7 COALESCE all NULLs (should return NULL)
+RETURN coalesce(null, null, null) AS all_nulls;
+
+-- 2.8 NULL in arithmetic operations
+RETURN null + 1 AS null_plus, 5 * null AS null_mult, null / 2 AS null_div;
+
+-- 2.9 NULL in comparisons
+RETURN null > 5 AS gt, null < 5 AS lt, null >= 5 AS gte, null <= 5 AS lte;
+
+-- 2.10 NULL in string operations
+RETURN null || 'suffix' AS null_concat;
+
+-- ============================================================================
+-- SECTION 3: NUMERIC EDGE CASES AND PRECISION
+-- ============================================================================
+
+-- 3.1 Integer boundary operations
+MATCH (n:NumericTest)
+RETURN n.label, n.value, n.value + 1 AS plus_one
+ORDER BY n.value;
+
+-- 3.2 Division behavior
+RETURN 10 / 3 AS int_div, 10.0 / 3 AS float_div;
+
+-- 3.3 Modulo with negative numbers
+RETURN -10 % 3 AS neg_mod, 10 % -3 AS mod_neg, -10 % -3 AS both_neg;
+
+-- 3.4 Sign function edge cases
+RETURN sign(0) AS zero_sign, sign(-0) AS neg_zero_sign, sign(100) AS pos_sign, sign(-100) AS neg_sign;
+
+-- 3.5 Absolute value edge cases
+RETURN abs(0) AS abs_zero, abs(-2147483648) AS abs_min_int;
+
+-- 3.6 Floor and ceil behavior
+RETURN floor(3.7) AS f1, floor(-3.7) AS f2, ceil(3.2) AS c1, ceil(-3.2) AS c2;
+
+-- 3.7 Round behavior
+RETURN round(2.5) AS r1, round(3.5) AS r2, round(-2.5) AS r3;
+
+-- 3.8 Power function
+RETURN 2 ^ 10 AS two_pow_ten, 10 ^ 0 AS any_pow_zero, 0 ^ 5 AS zero_pow;
+
+-- 3.9 Square root
+RETURN sqrt(16) AS sqrt_16, sqrt(2) AS sqrt_2, sqrt(0) AS sqrt_zero;
+
+-- 3.10 Numeric comparison chain
+MATCH (n:NumericTest)
+WHERE n.value >= 0 AND n.value <= 100
+RETURN n.label
+ORDER BY n.value;
+
+-- ============================================================================
+-- SECTION 4: STRING EDGE CASES
+-- ============================================================================
+
+-- 4.1 Empty string operations
+RETURN '' = '' AS empty_eq, size('') AS empty_size, '' + 'x' AS empty_concat;
+
+-- 4.2 Case conversion edge cases
+RETURN upper('') AS upper_empty, lower('') AS lower_empty;
+RETURN upper('abc123!@#') AS upper_mixed, lower('ABC123!@#') AS lower_mixed;
+
+-- 4.3 String contains with edge cases
+RETURN 'hello' CONTAINS '' AS contains_empty;
+RETURN '' CONTAINS 'x' AS empty_contains;
+RETURN '' CONTAINS '' AS empty_contains_empty;
+
+-- 4.4 Starts with / ends with edge cases
+RETURN 'hello' STARTS WITH '' AS starts_empty;
+RETURN 'hello' ENDS WITH '' AS ends_empty;
+RETURN '' STARTS WITH 'x' AS empty_starts;
+RETURN '' ENDS WITH 'x' AS empty_ends;
+
+-- 4.5 Substring edge cases
+RETURN substring('hello', 0, 0) AS zero_len;
+RETURN substring('hello', 5, 10) AS past_end;
+RETURN substring('', 0, 5) AS from_empty;
+
+-- 4.6 Left and right
+RETURN left('hello', 0) AS left_zero, right('hello', 0) AS right_zero;
+RETURN left('hello', 100) AS left_over, right('hello', 100) AS right_over;
+
+-- 4.7 Trim variations
+RETURN trim('  hello  ') AS both_trim;
+RETURN ltrim('  hello  ') AS left_trim;
+RETURN rtrim('  hello  ') AS right_trim;
+RETURN trim('') AS trim_empty;
+
+-- 4.8 Replace edge cases
+RETURN replace('hello', '', 'x') AS replace_empty;
+RETURN replace('hello', 'l', '') AS replace_with_empty;
+RETURN replace('', 'x', 'y') AS replace_in_empty;
+
+-- 4.9 String with special characters in queries
+MATCH (e:Entity)
+WHERE e.name CONTAINS '	'
+RETURN e.type AS with_tab;
+
+-- 4.10 Unicode string handling (if supported)
+RETURN size('hello') AS ascii_size;
+
+-- ============================================================================
+-- SECTION 5: LIST EDGE CASES
+-- ============================================================================
+
+-- 5.1 Empty list operations
+RETURN [] + [] AS empty_concat, [] + [1] AS empty_plus;
+RETURN size([]) AS empty_size;
+
+-- 5.2 List with NULL elements
+RETURN [1, null, 3] AS with_null;
+RETURN head([null, 1, 2]) AS null_head;
+RETURN tail([1, null]) AS with_null_tail;
+
+-- 5.3 Nested lists
+RETURN [[1,2], [3,4]] AS nested;
+RETURN [[]] AS nested_empty;
+RETURN [[[1]]] AS triple_nested;
+
+-- 5.4 List indexing edge cases
+RETURN [1,2,3][-1] AS negative_idx;
+RETURN [1,2,3][10] AS beyond_idx;
+RETURN [][0] AS empty_idx;
+
+-- 5.5 List slicing edge cases
+RETURN [1,2,3,4,5][-1..] AS from_neg;
+RETURN [1,2,3][10..20] AS beyond_range;
+RETURN [1,2,3][2..1] AS reverse_range;
+
+-- 5.6 IN predicate edge cases
+RETURN 1 IN [] AS in_empty;
+RETURN null IN [1, 2] AS null_in_list;
+RETURN 1 IN [null, 2] AS in_list_with_null;
+RETURN null IN [null] AS null_in_null_list;
+
+-- 5.7 List with single element
+RETURN [42] AS single, head([42]) AS single_head, tail([42]) AS single_tail, last([42]) AS single_last;
+
+-- 5.8 List reverse
+RETURN reverse([]) AS rev_empty, reverse([1]) AS rev_single, reverse([1,2,3]) AS rev_multi;
+
+-- 5.9 List in aggregation context
+MATCH (n:ListNode)
+RETURN n.id, size(n.tags) AS tag_count, size(n.scores) AS score_count
+ORDER BY n.id;
+
+-- 5.10 List property access
+MATCH (n:ListNode)
+WHERE size(n.tags) > 0
+RETURN n.id, n.tags[0] AS first_tag
+ORDER BY n.id;
+
+-- ============================================================================
+-- SECTION 6: PATH PATTERN EDGE CASES
+-- ============================================================================
+
+-- 6.1 Zero-length path (just a node)
+MATCH (n:TreeNode {id: 'root'})
+RETURN n.name AS root_only;
+
+-- 6.2 Path with minimum length 0
+MATCH (n:TreeNode {id: 'root'})-[:CHILD*0..2]->(m:TreeNode)
+RETURN n.name AS start, m.name AS reached
+ORDER BY m.level, m.name;
+
+-- 6.3 Path where min > max (should return nothing)
+-- Note: This may be a parse error in some implementations
+-- MATCH (n:TreeNode)-[:CHILD*5..2]->(m:TreeNode) RETURN n.name, m.name;
+
+-- 6.4 Variable-length path from leaf (no outgoing edges)
+MATCH (n:TreeNode {id: 'a1x'})-[:CHILD*1..3]->(m:TreeNode)
+RETURN m.name AS children_of_leaf;
+
+-- 6.5 Find all descendants at exactly level N
+MATCH (root:TreeNode {id: 'root'})-[:CHILD*2]->(descendant:TreeNode)
+RETURN descendant.name AS level_2_descendants
+ORDER BY descendant.name;
+
+-- 6.6 Path from non-existent start
+MATCH (n:TreeNode {id: 'nonexistent'})-[:CHILD*1..3]->(m:TreeNode)
+RETURN m.name AS from_missing;
+
+-- 6.7 Reverse path traversal
+MATCH (leaf:TreeNode {id: 'a1x'})<-[:CHILD*1..5]-(ancestor:TreeNode)
+RETURN ancestor.name AS ancestors
+ORDER BY ancestor.level;
+
+-- 6.8 Undirected variable-length path
+MATCH (a:CycleNode {id: 'c1'})-[:NEXT*1..2]-(b:CycleNode)
+RETURN DISTINCT b.name AS connected
+ORDER BY b.name;
+
+-- 6.9 Self-loop detection
+MATCH (n:SelfRef)-[:LOOPS_TO]->(n)
+RETURN n.name AS self_looping;
+
+-- 6.10 Path to isolated nodes (should return nothing)
+MATCH (n:Isolated)-[:ANY*1..3]->(m)
+RETURN m.name AS from_isolated;
+
+-- ============================================================================
+-- SECTION 7: LABEL EXPRESSION EDGE CASES
+-- ============================================================================
+
+-- 7.1 Single label match
+MATCH (n:Person)
+RETURN n.name AS persons
+ORDER BY n.name;
+
+-- 7.2 Multiple required labels (implicit AND)
+MATCH (n:Person:Employee)
+RETURN n.name AS person_employees
+ORDER BY n.name;
+
+-- 7.3 Three labels required
+MATCH (n:Person:Employee:Manager)
+RETURN n.name AS managers
+ORDER BY n.name;
+
+-- 7.4 Label that doesn't exist on any node
+MATCH (n:NonExistentLabel)
+RETURN n.name AS none_found;
+
+-- 7.5 Using labels() function
+MATCH (n)
+WHERE 'Person' IN labels(n)
+RETURN DISTINCT n.name AS using_labels_func
+ORDER BY n.name
+LIMIT 5;
+
+-- 7.6 Count nodes by label
+MATCH (n:Person)
+RETURN count(*) AS person_count;
+
+MATCH (n:Employee)
+RETURN count(*) AS employee_count;
+
+-- 7.7 Nodes with exactly one label vs multiple
+MATCH (n)
+WHERE size(labels(n)) = 1
+RETURN labels(n) AS single_label_nodes
+LIMIT 5;
+
+-- 7.8 Nodes with most labels
+MATCH (n)
+RETURN n.name, labels(n) AS node_labels, size(labels(n)) AS label_count
+ORDER BY label_count DESC
+LIMIT 3;
+
+-- ============================================================================
+-- SECTION 8: AGGREGATION CORNER CASES
+-- ============================================================================
+
+-- 8.1 Aggregation on empty result set
+MATCH (n:NonExistent)
+RETURN count(*) AS cnt, sum(n.value) AS total, avg(n.value) AS average;
+
+-- 8.2 COUNT(*) vs COUNT(column) with NULLs
+MATCH (n:NumericTest)
+OPTIONAL MATCH (n)-[:FAKE]->(m)
+RETURN count(*) AS count_star, count(m) AS count_col;
+
+-- 8.3 DISTINCT in multiple aggregations
+MATCH (n:NumericTest)
+RETURN count(DISTINCT n.label) AS unique_labels,
+       count(n.label) AS total_labels;
+
+-- 8.4 MIN/MAX on strings
+MATCH (e:Entity)
+WHERE e.name <> ''
+RETURN min(e.name) AS min_name, max(e.name) AS max_name;
+
+-- 8.5 MIN/MAX on empty set
+MATCH (n:NonExistent)
+RETURN min(n.value) AS min_empty, max(n.value) AS max_empty;
+
+-- 8.6 SUM/AVG with zeros
+MATCH (n:NumericTest)
+WHERE n.value = 0
+RETURN sum(n.value) AS sum_zeros, avg(n.value) AS avg_zeros, count(*) AS count_zeros;
+
+-- 8.7 Aggregation with CASE expression
+MATCH (n:NumericTest)
+RETURN sum(CASE WHEN n.value > 0 THEN 1 ELSE 0 END) AS positive_count,
+       sum(CASE WHEN n.value < 0 THEN 1 ELSE 0 END) AS negative_count,
+       sum(CASE WHEN n.value = 0 THEN 1 ELSE 0 END) AS zero_count;
+
+-- 8.8 GROUP BY with NULL keys
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN m.name AS group_key, count(*) AS cnt
+GROUP BY m.name;
+
+-- 8.9 Collect on empty
+MATCH (n:NonExistent)
+RETURN collect(n.name) AS empty_collect;
+
+-- 8.10 Collect with NULLs
+MATCH (n:NumericTest)
+OPTIONAL MATCH (n)-[:FAKE]->(m)
+RETURN collect(m.name) AS collected_nulls;
+
+-- ============================================================================
+-- SECTION 9: SUBQUERY EDGE CASES
+-- ============================================================================
+
+-- 9.1 EXISTS on empty pattern
+MATCH (n:Entity)
+WHERE EXISTS { MATCH (n)-[:NONEXISTENT]->() }
+RETURN n.name AS has_nonexistent;
+
+-- 9.2 NOT EXISTS (find orphans)
+MATCH (n:Isolated)
+WHERE NOT EXISTS { MATCH (n)-[]->() }
+RETURN n.name AS truly_isolated
+ORDER BY n.name;
+
+-- 9.3 COUNT subquery returning 0
+MATCH (n:Entity)
+RETURN n.name, COUNT { MATCH (n)-[:FAKE]->() } AS fake_count
+ORDER BY n.id
+LIMIT 3;
+
+-- 9.4 EXISTS with property filter
+MATCH (n:TreeNode)
+WHERE EXISTS { MATCH (n)-[:CHILD]->(c:TreeNode) WHERE c.level = 2 }
+RETURN n.name AS has_level2_child
+ORDER BY n.name;
+
+-- 9.5 Nested EXISTS (not commonly supported but testing)
+-- MATCH (n:TreeNode)
+-- WHERE EXISTS { MATCH (n)-[:CHILD]->(c) WHERE EXISTS { MATCH (c)-[:CHILD]->() } }
+-- RETURN n.name AS has_grandchildren;
+
+-- 9.6 EXISTS referencing outer variable
+MATCH (p:TreeNode)
+WHERE p.level = 0
+AND EXISTS { MATCH (p)-[:CHILD*1..3]->(d:TreeNode) WHERE d.level = 3 }
+RETURN p.name AS has_depth_3;
+
+-- 9.7 COUNT subquery with filter
+MATCH (p:TreeNode {id: 'root'})
+RETURN p.name, COUNT { MATCH (p)-[:CHILD*1..3]->(d:TreeNode) WHERE d.level = 2 } AS level2_descendants;
+
+-- ============================================================================
+-- SECTION 10: SET OPERATIONS EDGE CASES
+-- ============================================================================
+
+-- 10.1 UNION with both empty
+MATCH (n:NonExistent1) RETURN n.name AS name
+UNION
+MATCH (m:NonExistent2) RETURN m.name AS name;
+
+-- 10.2 UNION ALL duplicates
+MATCH (n:NumericTest) WHERE n.value = 0 RETURN n.label AS label
+UNION ALL
+MATCH (n:NumericTest) WHERE n.value = 0 RETURN n.label AS label;
+
+-- 10.3 INTERSECT with partial overlap
+MATCH (n:NumericTest) WHERE n.value >= 0 RETURN n.label AS label
+INTERSECT
+MATCH (n:NumericTest) WHERE n.value <= 1 RETURN n.label AS label;
+
+-- 10.4 EXCEPT removing all
+MATCH (n:NumericTest) RETURN n.label AS label
+EXCEPT
+MATCH (n:NumericTest) RETURN n.label AS label;
+
+-- 10.5 EXCEPT with no overlap
+MATCH (n:NumericTest) WHERE n.value > 0 RETURN n.label AS label
+EXCEPT
+MATCH (n:NumericTest) WHERE n.value < 0 RETURN n.label AS label;
+
+-- 10.6 Chained set operations
+MATCH (n:NumericTest) WHERE n.value >= 0 RETURN n.label AS label
+UNION
+MATCH (n:NumericTest) WHERE n.value <= 0 RETURN n.label AS label
+EXCEPT
+MATCH (n:NumericTest) WHERE n.value = 0 RETURN n.label AS label;
+
+-- 10.7 UNION with NULL values
+RETURN null AS val
+UNION
+RETURN 1 AS val
+UNION
+RETURN null AS val;
+
+-- ============================================================================
+-- SECTION 11: ORDER BY AND LIMIT EDGE CASES
+-- ============================================================================
+
+-- 11.1 ORDER BY with NULLs
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN n.name, m.name AS missing_link
+ORDER BY m.name NULLS FIRST
+LIMIT 5;
+
+-- 11.2 ORDER BY with NULLs LAST
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN n.name, m.name AS missing_link
+ORDER BY m.name NULLS LAST
+LIMIT 5;
+
+-- 11.3 ORDER BY multiple columns with NULLs
+MATCH (n:NumericTest)
+OPTIONAL MATCH (n)-[:FAKE]->(m)
+RETURN n.label, n.value, m.name AS fake
+ORDER BY m.name NULLS FIRST, n.value DESC;
+
+-- 11.4 LIMIT 0 edge case
+MATCH (n:Entity)
+RETURN n.name
+LIMIT 0;
+
+-- 11.5 SKIP equals result count
+MATCH (n:Entity)
+RETURN n.name
+ORDER BY n.id
+SKIP 6;
+
+-- 11.6 SKIP exceeds result count
+MATCH (n:Entity)
+RETURN n.name
+ORDER BY n.id
+SKIP 100;
+
+-- 11.7 LIMIT exceeds result count
+MATCH (n:Entity)
+RETURN n.name
+ORDER BY n.id
+LIMIT 1000;
+
+-- 11.8 ORDER BY on boolean
+MATCH (n:BoolTest)
+RETURN n.name, n.flag
+ORDER BY n.flag;
+
+-- 11.9 ORDER BY stability test (same values)
+MATCH (n:NumericTest)
+WHERE n.value >= 0 AND n.value <= 1
+RETURN n.label, n.value
+ORDER BY n.value;
+
+-- ============================================================================
+-- SECTION 12: WITH CLAUSE EDGE CASES
+-- ============================================================================
+
+-- 12.1 WITH passing through NULL
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+WITH n, m
+RETURN n.name, m.name AS missing
+ORDER BY n.id
+LIMIT 3;
+
+-- 12.2 WITH aggregation producing empty groups
+MATCH (n:NonExistent)
+WITH n.category AS cat, count(*) AS cnt
+RETURN cat, cnt;
+
+-- 12.3 WITH chained transformations
+MATCH (n:NumericTest)
+WITH n.value AS val
+WITH val * 2 AS doubled
+WITH doubled + 1 AS incremented
+RETURN incremented
+ORDER BY incremented
+LIMIT 3;
+
+-- 12.4 WITH filtering after aggregation
+MATCH (n:NumericTest)
+WITH n.label AS label, n.value AS val
+WHERE val > 0
+RETURN label
+ORDER BY label;
+
+-- 12.5 WITH introducing new computed columns
+MATCH (n:NumericTest)
+WITH n, abs(n.value) AS abs_val, sign(n.value) AS sgn
+RETURN n.label, abs_val, sgn
+ORDER BY abs_val DESC
+LIMIT 5;
+
+-- 12.6 WITH discarding columns
+MATCH (n:NumericTest)
+WITH n.label AS label, n.value AS val, n.id AS id
+WITH label, val  -- Discard id
+RETURN label
+ORDER BY val
+LIMIT 3;
+
+-- ============================================================================
+-- SECTION 13: CASE EXPRESSION EDGE CASES
+-- ============================================================================
+
+-- 13.1 Searched CASE with all NULL conditions
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN n.name,
+       CASE
+           WHEN m.name = 'x' THEN 'found x'
+           WHEN m.name = 'y' THEN 'found y'
+           ELSE 'not found'
+       END AS result
+ORDER BY n.id
+LIMIT 3;
+
+-- 13.2 CASE without ELSE (returns NULL)
+MATCH (n:NumericTest)
+RETURN n.label,
+       CASE
+           WHEN n.value > 1000000 THEN 'huge'
+       END AS size_category
+ORDER BY n.id
+LIMIT 4;
+
+-- 13.3 CASE with multiple matches (first wins)
+MATCH (n:NumericTest)
+RETURN n.label,
+       CASE
+           WHEN n.value >= 0 THEN 'non-negative'
+           WHEN n.value = 0 THEN 'zero'  -- Never reached for 0
+           ELSE 'negative'
+       END AS sign_category
+ORDER BY n.value;
+
+-- 13.4 Nested CASE expressions
+MATCH (n:NumericTest)
+RETURN n.label,
+       CASE
+           WHEN n.value > 0 THEN
+               CASE
+                   WHEN n.value > 1000 THEN 'large positive'
+                   ELSE 'small positive'
+               END
+           WHEN n.value < 0 THEN 'negative'
+           ELSE 'zero'
+       END AS detailed_category
+ORDER BY n.value;
+
+-- 13.5 CASE in aggregation
+MATCH (n:NumericTest)
+RETURN sum(CASE WHEN n.value > 0 THEN n.value ELSE 0 END) AS sum_positive;
+
+-- 13.6 CASE with NULL comparison (tricky!)
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN n.name,
+       CASE
+           WHEN m IS NULL THEN 'no link'
+           WHEN m IS NOT NULL THEN 'has link'
+       END AS link_status
+ORDER BY n.id
+LIMIT 3;
+
+-- ============================================================================
+-- SECTION 14: OPTIONAL MATCH EDGE CASES
+-- ============================================================================
+
+-- 14.1 OPTIONAL MATCH on isolated node
+MATCH (n:Isolated)
+OPTIONAL MATCH (n)-[r]->(m)
+RETURN n.name, type(r) AS rel_type, m.name AS target
+ORDER BY n.name;
+
+-- 14.2 Multiple OPTIONAL MATCH clauses
+MATCH (n:TreeNode {id: 'a'})
+OPTIONAL MATCH (n)-[:CHILD]->(c1)
+OPTIONAL MATCH (n)<-[:CHILD]-(p)
+RETURN n.name, c1.name AS child, p.name AS parent;
+
+-- 14.3 OPTIONAL MATCH with impossible filter
+MATCH (n:TreeNode)
+OPTIONAL MATCH (n)-[:CHILD]->(c:TreeNode {level: 999})
+RETURN n.name, c.name AS impossible_child
+ORDER BY n.name
+LIMIT 5;
+
+-- 14.4 OPTIONAL MATCH followed by required MATCH
+MATCH (n:TreeNode {id: 'root'})
+OPTIONAL MATCH (n)-[:CHILD]->(c:TreeNode)
+MATCH (c)-[:CHILD]->(gc:TreeNode)
+RETURN n.name AS root, c.name AS child, gc.name AS grandchild
+ORDER BY gc.name;
+
+-- 14.5 Chained OPTIONAL MATCH through missing links
+MATCH (n:Isolated)
+OPTIONAL MATCH (n)-[:FAKE]->(m)
+OPTIONAL MATCH (m)-[:FAKE]->(o)
+RETURN n.name, m.name AS middle, o.name AS end
+ORDER BY n.name;
+
+-- 14.6 OPTIONAL MATCH with aggregation on NULL
+MATCH (n:Isolated)
+OPTIONAL MATCH (n)-[r]->()
+RETURN n.name, count(r) AS rel_count
+GROUP BY n.name
+ORDER BY n.name;
+
+-- ============================================================================
+-- SECTION 15: COMPLEX BOOLEAN EXPRESSIONS
+-- ============================================================================
+
+-- 15.1 De Morgan's laws test
+MATCH (n:NumericTest)
+WHERE NOT (n.value > 0 AND n.value < 100)
+RETURN n.label AS by_demorgan
+ORDER BY n.value;
+
+MATCH (n:NumericTest)
+WHERE n.value <= 0 OR n.value >= 100
+RETURN n.label AS explicit_or
+ORDER BY n.value;
+
+-- 15.2 XOR simulation (A AND NOT B) OR (NOT A AND B)
+MATCH (n:BoolTest)
+MATCH (m:BoolTest)
+WHERE n.id < m.id
+AND ((n.flag = true AND m.flag = false) OR (n.flag = false AND m.flag = true))
+RETURN n.name, m.name, 'xor_true' AS result;
+
+-- 15.3 Complex nested boolean
+MATCH (n:NumericTest)
+WHERE (n.value > 0 OR n.value = 0) AND (n.value < 10 OR n.value > 1000000)
+RETURN n.label
+ORDER BY n.value;
+
+-- 15.4 Boolean short-circuit test (division by zero avoidance)
+MATCH (n:NumericTest)
+WHERE n.value <> 0 AND 100 / n.value > 1
+RETURN n.label AS safe_division
+ORDER BY n.value DESC
+LIMIT 3;
+
+-- ============================================================================
+-- SECTION 16: RELATIONSHIP PROPERTY EDGE CASES
+-- ============================================================================
+
+-- 16.1 Create relationships with edge case properties
+MATCH (a:TreeNode {id: 'root'}), (b:TreeNode {id: 'a'})
+CREATE (a)-[:TEST_REL {weight: 0, label: '', active: true}]->(b);
+
+MATCH (a:TreeNode {id: 'root'}), (b:TreeNode {id: 'b'})
+CREATE (a)-[:TEST_REL {weight: -1, label: 'negative', active: false}]->(b);
+
+MATCH (a:TreeNode {id: 'root'}), (b:TreeNode {id: 'c'})
+CREATE (a)-[:TEST_REL {weight: 999999999, label: 'huge', active: true}]->(b);
+
+-- 16.2 Query relationship properties
+MATCH (a:TreeNode)-[r:TEST_REL]->(b:TreeNode)
+RETURN a.name, r.weight, r.label, r.active, b.name
+ORDER BY r.weight;
+
+-- 16.3 Filter by relationship property
+MATCH (a:TreeNode)-[r:TEST_REL]->(b:TreeNode)
+WHERE r.weight > 0
+RETURN a.name AS source, b.name AS target, r.weight
+ORDER BY r.weight DESC;
+
+-- 16.4 Aggregate relationship properties
+MATCH ()-[r:TEST_REL]->()
+RETURN sum(r.weight) AS total_weight, avg(r.weight) AS avg_weight, count(*) AS rel_count;
+
+-- ============================================================================
+-- SECTION 17: DISTINCT EDGE CASES
+-- ============================================================================
+
+-- 17.1 DISTINCT on NULL values
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN DISTINCT m.name AS distinct_missing;
+
+-- 17.2 DISTINCT on multiple columns including NULL
+MATCH (n:NumericTest)
+OPTIONAL MATCH (n)-[:FAKE]->(m)
+RETURN DISTINCT n.value % 2 AS mod_val, m.name AS fake_name
+ORDER BY mod_val;
+
+-- 17.3 COUNT DISTINCT with NULL
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN count(DISTINCT m.name) AS distinct_count, count(m.name) AS total_count;
+
+-- 17.4 DISTINCT in subquery result
+MATCH (n:TreeNode)
+RETURN DISTINCT n.level AS unique_levels
+ORDER BY unique_levels;
+
+-- ============================================================================
+-- SECTION 18: MAP AND PROPERTY ACCESS EDGE CASES
+-- ============================================================================
+
+-- 18.1 Access non-existent property
+MATCH (n:Entity)
+RETURN n.name, n.nonexistent_property AS missing
+ORDER BY n.id
+LIMIT 3;
+
+-- 18.2 Dynamic property access via parameter (if supported)
+-- Note: May not be supported in all implementations
+-- MATCH (n:Entity) WHERE n[$prop_name] = 'value' RETURN n.name;
+
+-- 18.3 Properties function
+MATCH (n:Entity)
+RETURN n.name, properties(n) AS all_props
+ORDER BY n.id
+LIMIT 2;
+
+-- 18.4 Keys function
+MATCH (n:Entity)
+RETURN n.name, keys(n) AS prop_keys
+ORDER BY n.id
+LIMIT 2;
+
+-- ============================================================================
+-- SECTION 19: EXPRESSION PRECEDENCE
+-- ============================================================================
+
+-- 19.1 Arithmetic precedence
+RETURN 2 + 3 * 4 AS mul_first;
+RETURN (2 + 3) * 4 AS add_first;
+RETURN 10 - 3 - 2 AS left_assoc;
+RETURN 10 / 2 / 2 AS div_left_assoc;
+
+-- 19.2 Boolean precedence (AND before OR)
+RETURN true OR false AND false AS and_first;
+RETURN (true OR false) AND false AS or_first;
+
+-- 19.3 Comparison chaining
+RETURN 5 > 3 AND 3 > 1 AS chain_true;
+RETURN 5 > 3 AND 3 > 5 AS chain_false;
+
+-- 19.4 NOT precedence
+RETURN NOT true AND false AS not_first;
+RETURN NOT (true AND false) AS not_last;
+
+-- 19.5 Mixed arithmetic and comparison
+RETURN 2 + 3 > 4 AS mixed;
+RETURN (2 + 3) > (4 + 1) AS equal_sides;
+
+-- ============================================================================
+-- SECTION 20: COMPLEX MULTI-MATCH PATTERNS
+-- ============================================================================
+
+-- 20.1 Self-join with inequality
+MATCH (a:NumericTest), (b:NumericTest)
+WHERE a.value < b.value AND a.value > 0 AND b.value < 100
+RETURN a.label AS smaller, b.label AS larger, b.value - a.value AS diff
+ORDER BY diff DESC
+LIMIT 5;
+
+-- 20.2 Triple self-join
+MATCH (a:TreeNode), (b:TreeNode), (c:TreeNode)
+WHERE a.level < b.level AND b.level < c.level
+RETURN a.name AS l0, b.name AS l1, c.name AS l2
+ORDER BY a.name, b.name, c.name
+LIMIT 10;
+
+-- 20.3 Cartesian product with filter
+MATCH (n:NumericTest), (b:BoolTest)
+WHERE n.value > 0
+RETURN n.label, b.name
+ORDER BY n.label, b.name
+LIMIT 6;
+
+-- 20.4 MATCH with OPTIONAL MATCH cross-product
+MATCH (n:NumericTest)
+OPTIONAL MATCH (b:BoolTest)
+RETURN n.label, b.name
+ORDER BY n.id, b.name
+LIMIT 6;
+
+-- ============================================================================
+-- SECTION 21: TYPE COERCION AND CONVERSION
+-- ============================================================================
+
+-- 21.1 String to number comparisons (should fail or coerce)
+-- Note: Behavior may vary by implementation
+RETURN '10' > '9' AS string_compare;
+RETURN '10' > '2' AS string_compare_2;
+
+-- 21.2 Boolean to integer (if supported)
+RETURN true + 0 AS bool_to_int_true;
+RETURN false + 0 AS bool_to_int_false;
+
+-- 21.3 Integer to float promotion
+RETURN 5 + 2.5 AS int_plus_float;
+RETURN 10 / 4.0 AS int_div_float;
+
+-- 21.4 toString function
+RETURN toString(123) AS num_str, toString(true) AS bool_str, toString(null) AS null_str;
+
+-- 21.5 toInteger function
+RETURN toInteger('123') AS str_int, toInteger(12.7) AS float_int;
+
+-- 21.6 toFloat function
+RETURN toFloat('3.14') AS str_float, toFloat(42) AS int_float;
+
+-- ============================================================================
+-- SECTION 22: CLEANUP
+-- ============================================================================
+
+-- 22.1 Remove test relationships
+MATCH ()-[r:TEST_REL]->() DELETE r;
+
+-- 22.2 Verify graph state
+MATCH (n)
+RETURN labels(n) AS label_set, count(*) AS count
+GROUP BY labels(n)
+ORDER BY count DESC;
+
+-- 22.3 Final cleanup (optional - leave data for inspection)
+-- MATCH (n) DETACH DELETE n;
+
+-- ============================================================================
+-- END OF ADVANCED TESTS
+-- ============================================================================
+-- Expected: All queries execute without errors
+-- Focus: Edge cases, NULL handling, boundary conditions, GQL spec compliance
+-- ============================================================================

@@ -212,7 +212,7 @@ services:
     environment:
       - GEODE_SERVER=node-1:3141
       - GEODE_HOST=node-1
-      - GEODE_PORT=8443
+      - GEODE_PORT=3141
       - TEST_MODE=${TEST_MODE:-standard}
     depends_on:
       migration-runner:

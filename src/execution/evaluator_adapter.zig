@@ -48,8 +48,8 @@ pub const ExecutionCallbacks = struct {
     /// Find shortest path(s) matching a graph pattern
     findShortestPathFn: *const fn (allocator: std.mem.Allocator, pattern: ast.GraphPattern, all: bool, env: Env) anyerror!Value,
 
-    /// Count matches for a graph pattern (with optional environment for correlated subqueries)
-    countPatternMatchesFn: *const fn (allocator: std.mem.Allocator, pattern: ast.GraphPattern, env: Env) anyerror!i64,
+    /// Count matches for a graph pattern (with optional environment for correlated subqueries and WHERE filter)
+    countPatternMatchesFn: *const fn (allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, env: Env) anyerror!i64,
 
     /// Execute a pattern comprehension
     executePatternComprehensionFn: *const fn (allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, map_expr: ast.Expr, env: Env) anyerror!Value,
@@ -70,9 +70,9 @@ pub const ExecutionCallbacks = struct {
         return self.findShortestPathFn(allocator, pattern, all, env);
     }
 
-    /// Convenience wrapper: Count pattern matches (with environment for correlated subqueries)
-    pub fn countPatternMatches(self: ExecutionCallbacks, allocator: std.mem.Allocator, pattern: ast.GraphPattern, env: Env) !i64 {
-        return self.countPatternMatchesFn(allocator, pattern, env);
+    /// Convenience wrapper: Count pattern matches (with environment for correlated subqueries and optional WHERE filter)
+    pub fn countPatternMatches(self: ExecutionCallbacks, allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, env: Env) !i64 {
+        return self.countPatternMatchesFn(allocator, pattern, where_filter, env);
     }
 
     /// Convenience wrapper: Execute pattern comprehension

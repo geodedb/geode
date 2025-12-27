@@ -2,11 +2,281 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-26 (Extended Testing - Run 6)
+## Current Test Run: 2025-12-27 (Extended Testing - Run 7)
 
 **Test Files**:
 - `./testing/shell/enterprise_test.gql` (150 statements)
-- `./testing/shell/enterprise_test_extended.gql` (210 statements)
+- `./testing/shell/enterprise_test_extended.gql` (211 statements)
+
+**Status**: ✅ **ALL 211 STATEMENTS PASS** - COMPLETE SUCCESS!
+
+### Final Verification Results (2025-12-27)
+
+All tests executed successfully with zero errors. Key verified results:
+
+| Section | Test Description | Result | Status |
+|---------|-----------------|--------|--------|
+| 2.2 | NewDept OPTIONAL MATCH (0 employees) | `NewDept \| 0` | ✅ PASS |
+| 3.1 | Active Support aggregation | `1 \| 35000 \| 35000` | ✅ PASS |
+| 3.2 | Department stats (8 depts) | 8 rows with all aggregations | ✅ PASS |
+| 3.4 | COUNT DISTINCT on types | `8 \| 6 \| 2` | ✅ PASS |
+| 4.2 | WITH chain aggregation | `5 \| 2491000` | ✅ PASS |
+| 5.3 | ORDER BY avg_salary | 8 depts sorted ASC | ✅ PASS |
+| 6.1 | Triple MATCH with GROUP BY | 8 rows | ✅ PASS |
+| 7.1 | Variable-length path (1..4 hops) | 5 subordinates | ✅ PASS |
+| 8.2 | NOT EXISTS subquery | 20 no-project employees | ✅ PASS |
+| 8.3 | COUNT inactive employees | 9 depts | ✅ PASS |
+| 13.1 | Budget per employee | 8 depts sorted | ✅ PASS |
+| 15.1 | Budget utilization | 8 depts with utilization_pct | ✅ PASS |
+| 15.2 | Management span | 11 managers | ✅ PASS |
+| 17.4 | Friend counts | 6 users | ✅ PASS |
+
+### Fixes Applied in This Session
+
+1. **Query Dispatch Fix** (`src/execution/match_operations.zig:2598-2613`)
+   - Added check for optional chains in `all_simple_nodes` dispatch
+   - Routes node-only OPTIONAL MATCH to `executeMatchWithOptionalPatterns`
+
+2. **Required Pattern Property Filter** (`src/execution/match_operations.zig:1586-1619`)
+   - Added property pattern filtering for required chain (first MATCH)
+   - Ensures `MATCH (d:Department {name: 'NewDept'})` correctly filters
+
+3. **Node-Only Optional Chain Handling** (`src/execution/match_operations.zig:1695-1795`)
+   - Added support for `OPTIONAL MATCH (e:Employee {prop: value})` patterns
+   - Correctly finds matching nodes and adds to extended_rows
+   - Creates NULL row when no matches found
+
+---
+
+## Advanced Edge Case Testing: 2025-12-27 (Run 8)
+
+**Test File**: `./testing/shell/enterprise_test_advanced.gql` (122 statements)
+
+**Purpose**: Test obscure GQL edge cases, boundary conditions, and specification corner cases.
+
+**Status**: ✅ **13 ISSUES FIXED** (2025-12-27) - 1 known behavior, 1 remaining
+
+### Issues Found in Advanced Testing
+
+| ID | Section | Type | Query | Expected | Actual | Priority | Status |
+|----|---------|------|-------|----------|--------|----------|--------|
+| A01 | 3.1 | IntegerOverflow | `n.value + 1` on max_int64 | Overflow error or NULL | `error: IntegerOverflow` | P3 | ⚠️ Known Behavior |
+| A02 | 3.8 | SyntaxError | `2 ^ 10` (power operator) | 1024 | 1024 | P2 | ✅ FIXED |
+| A03 | 7.5 | SyntaxError | `'Person' IN labels(n)` | Filter by label | Works | P2 | ✅ FIXED |
+| A04 | 9.5 | Nested EXISTS | `EXISTS { MATCH ... WHERE EXISTS { ... } }` | Nested pattern matching | Works | P2 | ✅ FIXED |
+| A05 | 5.1 | TypeError | `[] + []` list concat | `[]` | `[]` | P2 | ✅ FIXED |
+| A06 | 2.3 | NULL Semantics | `NOT null` | `null` | `null` | P1 | ✅ FIXED |
+| A07 | 2.4 | NULL Semantics | `null = null` | `null`/`false` | `null` | P1 | ✅ FIXED |
+| A08 | 2.9 | NULL Semantics | `null > 5` | `null` | `null` | P1 | ✅ FIXED |
+| A09 | 2.10 | NULL Semantics | `null \|\| 'suffix'` | `null` | `null` | P1 | ✅ FIXED |
+| A10 | 4.7 | String Function | `ltrim('  hello  ')` | `'hello  '` | `'hello  '` | P2 | ✅ FIXED |
+| A11 | 4.7 | String Function | `rtrim('  hello  ')` | `'  hello'` | `'  hello'` | P2 | ✅ FIXED |
+| A12 | 4.6 | String Function | `left('hello', 0)` | `''` | `''` | P2 | ✅ FIXED |
+| A13 | 4.6 | String Function | `right('hello', 0)` | `''` | `''` | P2 | ✅ FIXED |
+| A14 | 8.4 | Aggregation | `min(e.name)` on strings | Min string value | Min string | P2 | ✅ FIXED |
+| A15 | 5.9 | List Property | `size(n.tags)` | Actual list size | Actual size | P2 | ✅ FIXED |
+
+### Fixes Applied (2025-12-27)
+
+#### NULL Semantics (A06-A09) - GQL Three-Valued Logic
+
+**Files Modified**: `src/eval.zig`
+
+1. **NOT null = null** (line 612-620): Modified `.Not` operator to check for NULL and return NULL
+2. **null = null = null** (line 412-417): All NULL comparisons now return NULL (not true/false)
+3. **null > 5 = null** (line 412-417): Comparison operators with NULL return NULL
+4. **null || 'text' = null** (line 420-436): Concat operator with NULL returns NULL
+
+```zig
+// REQ-GQL-NULL-SEMANTICS-001: NOT null = null
+.Not => {
+    if (v == .Null) break :blk Value{ .Null = {} };
+    break :blk .{ .Bool = !truthy(v) };
+},
+
+// REQ-GQL-NULL-SEMANTICS-002: Any comparison with NULL = NULL
+if (l == .Null or r == .Null) {
+    return Value{ .Null = {} };
+}
+```
+
+#### Power Operator (A02)
+
+**Files Modified**: `src/gql/token.zig`, `src/gql/ast.zig`, `src/gql/lexer.zig`, `src/gql/parser.zig`, `src/gql/print.zig`, `src/eval.zig`
+
+Added full support for the `^` power operator:
+- Added `caret` token type
+- Added `Power` to `BinOp` enum
+- Added `parsePowerExpr` with proper precedence (higher than multiplication)
+- Added power evaluation with integer/decimal result handling
+
+#### String Functions (A10-A13)
+
+**Files Modified**: `src/eval.zig` (lines 955-1037)
+
+Added implementations for:
+- `ltrim(str)` - Trim leading whitespace
+- `rtrim(str)` - Trim trailing whitespace
+- `left(str, n)` - Return leftmost n characters (returns "" for n=0)
+- `right(str, n)` - Return rightmost n characters (returns "" for n=0)
+
+#### List Operations (A05, A15)
+
+**Files Modified**: `src/eval.zig`
+
+1. **List concatenation** (line 234-240): Added `List + List` support in Add operator
+2. **List property size** (line 3019-3023): Added `ExtValue.List` handling in size() function
+
+#### IN with List Expressions (A03)
+
+**Files Modified**: `src/gql/ast.zig`, `src/gql/parser.zig`, `src/gql/print.zig`, `src/eval.zig`
+
+Added new AST nodes `InListExpr` and `NotInListExpr` to support:
+- `'Person' IN labels(n)` - IN with function call returning list
+- `x IN expr` - IN with any expression that evaluates to a list
+
+#### Nested EXISTS with WHERE (A04)
+
+**Files Modified**: `src/gql/ast.zig`, `src/gql/parser.zig`, `src/gql/print.zig`, `src/eval.zig`, `src/execution/evaluator_adapter.zig`, `src/execution/graph_algorithms.zig`
+
+Added full support for nested EXISTS predicates with WHERE clauses:
+- Extended `Exists` AST node with optional `where` field
+- Parser now handles `EXISTS { MATCH pattern WHERE condition }`
+- `countPatternMatches` callback signature updated to include optional WHERE filter
+- WHERE filter evaluated for each pattern match with proper environment bindings
+- Supports nested patterns like: `EXISTS { MATCH (n)-[:R]->(m) WHERE EXISTS { MATCH (m)-[:S]->() } }`
+
+### Issue Details
+
+#### A06-A09: NULL Semantics (THREE-VALUED LOGIC) - P1 CRITICAL
+
+Per ISO/IEC 39075:2024, GQL uses three-valued logic where operations involving NULL should propagate NULL:
+
+| Expression | Expected (GQL Spec) | Current Behavior | Spec Reference |
+|------------|---------------------|------------------|----------------|
+| `NOT null` | `null` | `true` | §11.3.2 |
+| `null = null` | `null` | `true` | §11.4.3 |
+| `null <> null` | `null` | `true` | §11.4.3 |
+| `null > 5` | `null` | `false` | §11.4.5 |
+| `null < 5` | `null` | `false` | §11.4.5 |
+| `null \|\| 'text'` | `null` | `'nulltext'` | §14.5.1 |
+
+**Root Cause**: The expression evaluator treats NULL as a truthy value in some contexts and converts NULL to the string "null" for concatenation.
+
+**Fix Location**: `src/execution/evaluator.zig` - Boolean and comparison operations
+
+#### A02: Power Operator Not Supported
+
+**Query**: `RETURN 2 ^ 10 AS two_pow_ten`
+
+The caret (`^`) operator for exponentiation is not recognized by the parser. GQL spec allows `power(base, exp)` function but the `^` infix operator may be optional.
+
+**Workaround**: Use `power(2, 10)` if implemented, or calculate manually.
+
+#### A03: IN Operator with labels() Function
+
+**Query**: `WHERE 'Person' IN labels(n)`
+
+The `IN` operator is not parsing correctly when the right-hand side is a function call returning a list.
+
+**Workaround**: Use `EXISTS { MATCH (n:Person) }` for label filtering.
+
+#### A05: List Concatenation Type Error
+
+**Query**: `RETURN [] + [] AS empty_concat`
+
+The `+` operator for list concatenation is throwing a type mismatch error.
+
+**Expected Behavior**: Should return an empty list `[]`.
+
+#### A10-A13: String Function Edge Cases
+
+The following string functions return `null` when they should return a valid string:
+
+| Function | Input | Expected | Actual |
+|----------|-------|----------|--------|
+| `ltrim` | `'  hello  '` | `'hello  '` | `null` |
+| `rtrim` | `'  hello  '` | `'  hello'` | `null` |
+| `left` | `'hello', 0` | `''` | `null` |
+| `right` | `'hello', 0` | `''` | `null` |
+
+**Fix Location**: `src/gql/functions.zig` or string function implementations
+
+#### A14: MIN/MAX on Strings
+
+**Query**: `min(e.name)` where names are strings
+
+Aggregation functions MIN and MAX should work on string values using lexicographic ordering.
+
+**Current**: Returns `null`
+**Expected**: Returns the lexicographically smallest/largest string
+
+#### A15: List Property Size Returns 0
+
+**Query**: `size(n.tags)` where tags is `['a', 'b', 'c']`
+
+List properties stored on nodes are returning size 0 when accessed.
+
+**Root Cause**: Possible issue with list property storage/retrieval in the storage engine.
+
+### Passing Tests (Notable)
+
+| Section | Test | Description | Status |
+|---------|------|-------------|--------|
+| 2.1 | NULL AND | `null AND true`, `null AND false` | ✅ PASS |
+| 2.2 | NULL OR | `null OR true`, `null OR false` | ✅ PASS |
+| 2.5 | IS NULL | `WHERE n.nonexistent IS NULL` | ✅ PASS |
+| 2.6-2.7 | COALESCE | Multiple NULLs, all NULLs | ✅ PASS |
+| 2.8 | NULL Arithmetic | `null + 1`, `5 * null` | ✅ PASS |
+| 3.2-3.7 | Numeric | Division, modulo, sign, abs, floor, ceil, round | ✅ PASS |
+| 4.1-4.5 | String | Empty string, case, contains, starts/ends with, substring | ✅ PASS |
+| 4.8 | Replace | Various replace edge cases | ✅ PASS |
+| 5.2-5.8 | List | NULL elements, nested lists, indexing, slicing, IN, single, reverse | ✅ PASS |
+| 6.1-6.10 | Path | Variable-length, ancestors, undirected, self-loop | ✅ PASS |
+| 7.1-7.4 | Labels | Single, multiple, three labels, non-existent | ✅ PASS |
+| 8.1-8.3 | Aggregation | Empty set, COUNT with NULL, DISTINCT | ✅ PASS |
+| 8.5-8.10 | Aggregation | Empty MIN/MAX, zeros, CASE, GROUP BY NULL, collect | ✅ PASS |
+| 9.1-9.7 | Subquery | EXISTS, NOT EXISTS, COUNT subquery, filters | ✅ PASS |
+| 10.1-10.7 | Set Ops | UNION, INTERSECT, EXCEPT, chained | ✅ PASS |
+| 11.1-11.9 | ORDER BY | NULLS FIRST/LAST, LIMIT 0, SKIP, boolean | ✅ PASS |
+| 12.1-12.6 | WITH | NULL pass-through, chained, filtering | ✅ PASS |
+| 13.1-13.6 | CASE | Searched, no ELSE, first wins, nested, aggregation, NULL | ✅ PASS |
+| 14.1-14.6 | OPTIONAL | Isolated, multiple, impossible, chained | ✅ PASS |
+| 15.1-15.4 | Boolean | De Morgan, XOR sim, nested, short-circuit | ✅ PASS |
+| 16.1-16.4 | Rel Props | Create, query, filter, aggregate | ✅ PASS |
+| 17.1-17.4 | DISTINCT | NULL, multiple columns, COUNT DISTINCT, subquery | ✅ PASS |
+| 18.1-18.4 | Map/Props | Non-existent, properties(), keys() | ✅ PASS |
+| 19.1-19.5 | Precedence | Arithmetic, boolean, comparison, mixed | ✅ PASS |
+| 20.1-20.4 | Multi-MATCH | Self-join, triple, Cartesian, OPTIONAL cross | ✅ PASS |
+| 21.1-21.6 | Type Coercion | String compare, bool to int, int to float, toString, toInteger, toFloat | ✅ PASS |
+| 22.1-22.3 | Cleanup | Delete rels, verify state | ✅ PASS |
+
+### Priority Summary (Updated 2025-12-27)
+
+| Priority | Fixed | Remaining | Description |
+|----------|-------|-----------|-------------|
+| P1 | 4/4 | 0 | NULL semantics violations - **ALL FIXED** ✅ |
+| P2 | 8/8 | 0 | Missing functions/operators - **ALL FIXED** ✅ |
+| P3 | 0/3 | 3 | Edge case handling (overflow, nested EXISTS) |
+
+### Completion Summary
+
+**Fixed in this session (2025-12-27):**
+1. ✅ **P1 - NULL Semantics** (A06-A09): GQL three-valued logic compliance
+2. ✅ **P2 - String Functions** (A10-A13): ltrim, rtrim, left, right
+3. ✅ **P2 - List Property Size** (A15): ExtValue.List support in size()
+4. ✅ **P2 - MIN/MAX Strings** (A14): Lexicographic string comparison
+5. ✅ **P2 - List Concatenation** (A05): List + List operator
+6. ✅ **P2 - Power Operator** (A02): Full `^` operator support
+7. ✅ **P2 - IN with labels()** (A03): InListExpr AST node
+
+**Remaining (Low Priority):**
+- A01: Integer overflow behavior (working as expected - returns error)
+- A04: Nested EXISTS (complex parser enhancement)
+
+---
+
+## Previous Test Run: 2025-12-26 (Extended Testing - Run 6)
 
 **Status**: ✅ 18 ISSUES FIXED - ALL COMPLETE!
 

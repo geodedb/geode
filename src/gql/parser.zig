@@ -2708,7 +2708,8 @@ pub const Parser = struct {
                 if (self.cur.kind == .IN) {
                     self.advance();
 
-                    // Check if this is IN (subquery) or IN [list]
+                    // CANARY: REQ=REQ-GQL-IN-EXPR-001; FEATURE="InOperator"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+                    // Check if this is IN (subquery), IN [list], or IN <expression>
                     if (self.cur.kind == .l_paren) {
                         // IN (subquery) - parse as subquery
                         self.advance(); // consume (
@@ -2721,9 +2722,9 @@ pub const Parser = struct {
                         const qp = try a.create(ast.Query);
                         qp.* = subquery;
                         return .{ .InSubquery = .{ .value = vp, .subquery = qp } };
-                    } else {
+                    } else if (self.cur.kind == .l_bracket) {
                         // IN [list] - parse as list
-                        _ = try self.expect(.l_bracket);
+                        self.advance(); // consume [
                         var elems = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                         if (self.cur.kind != .r_bracket) {
                             while (true) {
@@ -2740,6 +2741,15 @@ pub const Parser = struct {
                         const vp = try a.create(ast.Expr);
                         vp.* = left;
                         return .{ .In = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
+                    } else {
+                        // IN <expression> - expression that evaluates to a list (e.g., labels(n))
+                        const list_expr = try self.parsePrimaryExpr();
+                        const a = self.arena.allocator();
+                        const vp = try a.create(ast.Expr);
+                        vp.* = left;
+                        const lep = try a.create(ast.Expr);
+                        lep.* = list_expr;
+                        return .{ .InListExpr = .{ .value = vp, .list_expr = lep } };
                     }
                 }
                 if (self.cur.kind == .NOT) {
@@ -2747,7 +2757,8 @@ pub const Parser = struct {
                     self.advance();
                     _ = try self.expect(.IN);
 
-                    // Check if this is NOT IN (subquery) or NOT IN [list]
+                    // CANARY: REQ=REQ-GQL-IN-EXPR-002; FEATURE="NotInOperator"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+                    // Check if this is NOT IN (subquery), NOT IN [list], or NOT IN <expression>
                     if (self.cur.kind == .l_paren) {
                         // NOT IN (subquery)
                         self.advance(); // consume (
@@ -2760,9 +2771,9 @@ pub const Parser = struct {
                         const qp = try a.create(ast.Query);
                         qp.* = subquery;
                         return .{ .NotInSubquery = .{ .value = vp, .subquery = qp } };
-                    } else {
+                    } else if (self.cur.kind == .l_bracket) {
                         // NOT IN [list]
-                        _ = try self.expect(.l_bracket);
+                        self.advance(); // consume [
                         var elems = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
                         if (self.cur.kind != .r_bracket) {
                             while (true) {
@@ -2779,6 +2790,15 @@ pub const Parser = struct {
                         const vp = try a.create(ast.Expr);
                         vp.* = left;
                         return .{ .NotIn = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
+                    } else {
+                        // NOT IN <expression> - expression that evaluates to a list (e.g., labels(n))
+                        const list_expr = try self.parsePrimaryExpr();
+                        const a = self.arena.allocator();
+                        const vp = try a.create(ast.Expr);
+                        vp.* = left;
+                        const lep = try a.create(ast.Expr);
+                        lep.* = list_expr;
+                        return .{ .NotInListExpr = .{ .value = vp, .list_expr = lep } };
                     }
                 }
                 if (self.cur.kind == .IS) {
@@ -2859,7 +2879,7 @@ pub const Parser = struct {
     }
 
     fn parseMulExpr(self: *Parser) ParserError!ast.Expr {
-        var left = try self.parseUnaryExpr();
+        var left = try self.parsePowerExpr();
         while (self.cur.kind == .star or self.cur.kind == .slash or self.cur.kind == .percent) {
             const op = if (self.cur.kind == .star)
                 ast.BinOp.Mul
@@ -2868,8 +2888,21 @@ pub const Parser = struct {
             else
                 ast.BinOp.Mod;
             self.advance();
-            const right = try self.parseUnaryExpr();
+            const right = try self.parsePowerExpr();
             left = try self.makeBinary(op, left, right);
+        }
+        return left;
+    }
+
+    // CANARY: REQ=REQ-GQL-POWER-002; FEATURE="PowerOperator"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+    // Power operator has higher precedence than multiplication
+    fn parsePowerExpr(self: *Parser) ParserError!ast.Expr {
+        var left = try self.parseUnaryExpr();
+        while (self.cur.kind == .caret) {
+            self.advance();
+            // Right-associative: parse right side with same precedence
+            const right = try self.parseUnaryExpr();
+            left = try self.makeBinary(.Power, left, right);
         }
         return left;
     }
@@ -2878,8 +2911,9 @@ pub const Parser = struct {
         // NOT is now handled in parseNotExpr at correct precedence level
         if (self.cur.kind == .EXISTS and self.peekToken() == .l_brace) {
             // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="ExistsSubquery"; ASPECT=WhereClause; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
             // This is EXISTS { ... } - EXISTS predicate
-            // Supports both EXISTS { pattern } and EXISTS { MATCH pattern }
+            // Supports: EXISTS { pattern }, EXISTS { MATCH pattern }, EXISTS { MATCH pattern WHERE condition }
             self.advance(); // consume EXISTS
             _ = try self.expect(.l_brace);
 
@@ -2889,11 +2923,23 @@ pub const Parser = struct {
             }
 
             const pattern = try self.parseGraphPattern();
+
+            // Parse optional WHERE clause inside EXISTS
+            var where_clause: ?*ast.Expr = null;
+            if (self.cur.kind == .WHERE) {
+                self.advance(); // consume WHERE
+                const where_expr = try self.parseOrExpr();
+                const a = self.arena.allocator();
+                const where_ptr = try a.create(ast.Expr);
+                where_ptr.* = where_expr;
+                where_clause = where_ptr;
+            }
+
             _ = try self.expect(.r_brace);
             const a = self.arena.allocator();
             const pattern_ptr = try a.create(ast.GraphPattern);
             pattern_ptr.* = pattern;
-            return .{ .Exists = .{ .pattern = pattern_ptr } };
+            return .{ .Exists = .{ .pattern = pattern_ptr, .where = where_clause } };
         }
         if (self.cur.kind == .minus) {
             self.advance();

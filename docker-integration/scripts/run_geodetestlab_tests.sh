@@ -59,6 +59,13 @@ echo ""
 echo "Running GeodeTestLab tests..."
 echo ""
 
+echo "DEBUG: Checking for geode binary..."
+ls -l /usr/local/bin/geode || echo "Binary not found at /usr/local/bin/geode"
+which geode || echo "geode not in PATH"
+echo "PATH is: $PATH"
+
+# Run GeodeTestLab specs using the runner module
+
 TOTAL_SPECS=0
 PASSED_SPECS=0
 FAILED_SPECS=0

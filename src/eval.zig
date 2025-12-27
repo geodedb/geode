@@ -231,6 +231,14 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 @memcpy(result[l.Str.len..], r.Str);
                 break :blk .{ .Str = result };
             }
+            // CANARY: REQ=REQ-GQL-LIST-CONCAT-001; FEATURE="ListOperations"; ASPECT=AddConcatenation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // List concatenation: list + list = combined list
+            if (l == .List and r == .List) {
+                const result = try alloc.alloc(Value, l.List.len + r.List.len);
+                @memcpy(result[0..l.List.len], l.List);
+                @memcpy(result[l.List.len..], r.List);
+                break :blk .{ .List = result };
+            }
             if (l == .Int and r == .Int) {
                 const result_tuple = @addWithOverflow(l.Int, r.Int);
                 if (result_tuple[1] != 0) {
@@ -334,6 +342,36 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             }
             return EvalError.TypeMismatch;
         },
+        .Power => blk_pow: {
+            // CANARY: REQ=REQ-GQL-POWER-003; FEATURE="PowerOperator"; ASPECT=EvalSupport; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // NULL ^ anything = NULL (GQL/SQL semantics)
+            if (l == .Null or r == .Null) break :blk_pow .{ .Null = {} };
+            // Integer exponentiation: x ^ n where n is integer
+            if (l == .Int and r == .Int) {
+                const base: f64 = @floatFromInt(l.Int);
+                const exp: f64 = @floatFromInt(r.Int);
+                const result = std.math.pow(f64, base, exp);
+                // If result is an exact integer, return Int
+                if (@floor(result) == result and result >= @as(f64, @floatFromInt(std.math.minInt(i64))) and result <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
+                    break :blk_pow .{ .Int = @intFromFloat(result) };
+                }
+                // Convert to Decimal for non-integer results (6 decimal places precision)
+                const scaled_result: i128 = @intFromFloat(result * 1_000_000);
+                break :blk_pow .{ .Decimal = .{ .coeff = scaled_result, .scale = 6 } };
+            }
+            // Decimal base with integer exponent
+            if (l == .Decimal and r == .Int) {
+                const base: f64 = @as(f64, @floatFromInt(l.Decimal.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(l.Decimal.scale));
+                const exp: f64 = @floatFromInt(r.Int);
+                const result = std.math.pow(f64, base, exp);
+                if (@floor(result) == result and result >= @as(f64, @floatFromInt(std.math.minInt(i64))) and result <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
+                    break :blk_pow .{ .Int = @intFromFloat(result) };
+                }
+                const scaled_result: i128 = @intFromFloat(result * 1_000_000);
+                break :blk_pow .{ .Decimal = .{ .coeff = scaled_result, .scale = 6 } };
+            }
+            return EvalError.TypeMismatch;
+        },
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => blk5: {
             if (l == .Int and r == .Int) break :blk5 cmpIntsOp(op, l.Int, r.Int);
             // Decimal comparisons (no arithmetic yet)
@@ -409,15 +447,19 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const eq = l.Edge.id == r.Edge.id;
                 return .{ .Bool = if (op == .Eq) eq else !eq };
             }
-            // Comparing NULLs: NULL = NULL true; otherwise NULL compares false
+            // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-002; FEATURE="ThreeValuedLogic"; ASPECT=NullComparison; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // GQL/SQL three-valued logic: Any comparison with NULL returns NULL
+            // null = null => null, null > 5 => null, null < x => null, etc.
             if (l == .Null or r == .Null) {
-                if (op == .Eq) return .{ .Bool = eqVals(l, r) };
-                if (op == .Ne) return .{ .Bool = !eqVals(l, r) };
-                return .{ .Bool = false };
+                return Value{ .Null = {} };
             }
             return EvalError.TypeMismatch;
         },
         .Concat => blk6: {
+            // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-003; FEATURE="ThreeValuedLogic"; ASPECT=NullConcat; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // GQL/SQL three-valued logic: null || anything = null
+            if (l == .Null or r == .Null) break :blk6 Value{ .Null = {} };
+
             // String concatenation with type coercion
             // Convert both operands to strings if needed
             var buf_l: [64]u8 = undefined;
@@ -609,7 +651,12 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .Unary => |u| blk: {
             const v = try evalExpr(allocator, u.expr.*, env);
             switch (u.op) {
-                .Not => break :blk .{ .Bool = !truthy(v) },
+                .Not => {
+                    // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-001; FEATURE="ThreeValuedLogic"; ASPECT=NotNull; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                    // GQL/SQL three-valued logic: NOT null = null
+                    if (v == .Null) break :blk Value{ .Null = {} };
+                    break :blk .{ .Bool = !truthy(v) };
+                },
                 .Neg => switch (v) {
                     .Int => |i| break :blk .{ .Int = -i },
                     .Decimal => |d| break :blk .{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale } },
@@ -922,6 +969,79 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 // Trim leading and trailing whitespace
                 const trimmed = std.mem.trim(u8, str, " \t\n\r");
                 break :blk_call .{ .Str = trimmed };
+            }
+
+            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-001; FEATURE="StringFunctions"; ASPECT=LTrim; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            if (std.mem.eql(u8, function_name, "ltrim")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(allocator, call.args[0].*, env);
+
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                // Trim leading whitespace only
+                const trimmed = std.mem.trimLeft(u8, str, " \t\n\r");
+                break :blk_call .{ .Str = trimmed };
+            }
+
+            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-002; FEATURE="StringFunctions"; ASPECT=RTrim; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            if (std.mem.eql(u8, function_name, "rtrim")) {
+                if (call.args.len != 1) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(allocator, call.args[0].*, env);
+
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                // Trim trailing whitespace only
+                const trimmed = std.mem.trimRight(u8, str, " \t\n\r");
+                break :blk_call .{ .Str = trimmed };
+            }
+
+            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-003; FEATURE="StringFunctions"; ASPECT=Left; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            if (std.mem.eql(u8, function_name, "left")) {
+                if (call.args.len != 2) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(allocator, call.args[0].*, env);
+                const len_arg = try evalExpr(allocator, call.args[1].*, env);
+
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                const count = switch (len_arg) {
+                    .Int => |i| if (i < 0) @as(usize, 0) else @as(usize, @intCast(i)),
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                // Return leftmost 'count' characters (or all if count > length)
+                const result_len = @min(count, str.len);
+                break :blk_call .{ .Str = str[0..result_len] };
+            }
+
+            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-004; FEATURE="StringFunctions"; ASPECT=Right; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            if (std.mem.eql(u8, function_name, "right")) {
+                if (call.args.len != 2) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(allocator, call.args[0].*, env);
+                const len_arg = try evalExpr(allocator, call.args[1].*, env);
+
+                const str = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                const count = switch (len_arg) {
+                    .Int => |i| if (i < 0) @as(usize, 0) else @as(usize, @intCast(i)),
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                // Return rightmost 'count' characters (or all if count > length)
+                const result_len = @min(count, str.len);
+                const start = str.len - result_len;
+                break :blk_call .{ .Str = str[start..] };
             }
 
             if (std.mem.eql(u8, function_name, "upper")) {
@@ -1541,6 +1661,32 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 else => res,
             };
         },
+        // CANARY: REQ=REQ-GQL-IN-EXPR-003; FEATURE="InOperator"; ASPECT=EvalSupport; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+        // value IN list_expr where list_expr evaluates to a list (e.g., 'Person' IN labels(n))
+        .InListExpr => |ile| {
+            const v = try evalExpr(allocator, ile.value.*, env);
+            const list_val = try evalExpr(allocator, ile.list_expr.*, env);
+            // The list expression must evaluate to a List
+            if (list_val != .List) return Value{ .Bool = false };
+            // Check if v is in the list
+            for (list_val.List) |item| {
+                if (eqVals(v, item)) return Value{ .Bool = true };
+            }
+            return Value{ .Bool = false };
+        },
+        // CANARY: REQ=REQ-GQL-IN-EXPR-004; FEATURE="NotInOperator"; ASPECT=EvalSupport; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+        // value NOT IN list_expr
+        .NotInListExpr => |nile| {
+            const v = try evalExpr(allocator, nile.value.*, env);
+            const list_val = try evalExpr(allocator, nile.list_expr.*, env);
+            // The list expression must evaluate to a List
+            if (list_val != .List) return Value{ .Bool = true };
+            // Check if v is NOT in the list
+            for (list_val.List) |item| {
+                if (eqVals(v, item)) return Value{ .Bool = false };
+            }
+            return Value{ .Bool = true };
+        },
         .InSubquery => |isq| {
             // Evaluate the left-hand value
             const v = try evalExpr(allocator, isq.value.*, env);
@@ -2050,16 +2196,18 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .PatternCount => |pc| blk_count: {
             // Pattern comprehension count: size((pattern))
             // Call the execution layer to count pattern matches (pass env for correlated patterns)
-            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.*, env) catch {
+            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.*, null, env) catch {
                 break :blk_count Value{ .Int = 0 };
             };
             break :blk_count Value{ .Int = count };
         },
-        // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=Evaluation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+        // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=Evaluation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+        // CANARY: REQ=REQ-GQL-EXISTS-WHERE-002; FEATURE="ExistsWithWhere"; ASPECT=WherePassthrough; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
         .Exists => |ex| blk_exists: {
             // EXISTS predicate: return true if pattern matches at least once
             // Call the execution layer to count pattern matches (pass env for correlated subqueries)
-            const count = getExecutionCallbacks().countPatternMatches(allocator, ex.pattern.*, env) catch {
+            // Pass the optional WHERE clause for EXISTS { MATCH ... WHERE ... } patterns
+            const count = getExecutionCallbacks().countPatternMatches(allocator, ex.pattern.*, ex.where, env) catch {
                 break :blk_exists Value{ .Bool = false };
             };
             break :blk_exists Value{ .Bool = count > 0 };
@@ -2898,11 +3046,17 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         };
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "size") or std.mem.eql(u8, function_name, "length")) {
+        // CANARY: REQ=REQ-GQL-SIZE-001; FEATURE="SizeFunction"; ASPECT=ListPropertySize; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
         // Size of a list, string, or map
         switch (first_arg) {
             .List => |l| return Value{ .Int = @intCast(l.len) },
             .Str => |s| return Value{ .Int = @intCast(s.len) },
             .Map => |m| return Value{ .Int = @intCast(m.count()) },
+            // Handle ExtValue.List for list properties stored on nodes
+            .ExtValue => |ext| switch (ext) {
+                .List => |l| return Value{ .Int = @intCast(l.len) },
+                else => return Value{ .Int = 0 },
+            },
             else => return Value{ .Int = 0 },
         }
     } else if (std.mem.eql(u8, function_name, "head")) {

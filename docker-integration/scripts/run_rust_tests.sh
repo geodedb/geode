@@ -56,7 +56,9 @@ echo "Running Rust client tests..."
 echo ""
 
 # Run tests with detailed output (skip doctests, only run lib and integration tests)
-cargo test --release --lib -- --nocapture 2>&1 | tee "${LOG_DIR}/rust/test_output.txt"
+# Run tests with detailed output (skip doctests, only run lib and integration tests)
+# Use test_quinn example as the integration test since lib has no tests
+cargo run --release --example test_quinn 2>&1 | tee "${LOG_DIR}/rust/test_output.txt"
 TEST_EXIT_CODE=${PIPESTATUS[0]}
 
 # Parse test results from output
