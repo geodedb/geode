@@ -360,7 +360,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                 env_values[i] = val;
             }
 
-            // Apply each intermediate query's WITH clause and WHERE filter
+            // Apply each intermediate query's WITH clause, MATCH execution, and WHERE filter
             var query_iter: ?*ast.Query = next_query_ptr;
             var passes_filter = true;
             while (query_iter) |q| {
@@ -390,6 +390,86 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                     env_values = new_values;
                 }
 
+                // CANARY: REQ=REQ-GQL-CHAIN-MATCH-001; FEATURE="ChainMatchExecution"; ASPECT=AggregationPath; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-27
+                // If there's a MATCH clause in this query, we need to execute it and collect all matched rows
+                // This is critical for queries like "CREATE ... WITH x MATCH (n:Label) RETURN count(n)"
+                if (q.match.chains.len > 0) {
+                    // Build a modified query that returns the match variables directly (not aggregated)
+                    // We need to return the raw matched nodes so we can aggregate over them later
+                    var modified_query = q.*;
+
+                    // Build RETURN items for each match variable in the query's MATCH pattern
+                    var return_items = std.ArrayList(ast.ReturnItem).initCapacity(allocator, q.match.chains.len) catch unreachable;
+                    for (q.match.chains) |chain| {
+                        if (chain.head) |node_pattern| {
+                            if (node_pattern.name) |var_name| {
+                                try return_items.append(allocator, ast.ReturnItem{
+                                    .expr = ast.Expr{ .Ident = .{ .orig = var_name, .cnf = var_name } },
+                                    .alias = var_name,
+                                });
+                            }
+                        }
+                    }
+
+                    // Only modify if we have match variables to return
+                    if (return_items.items.len > 0) {
+                        modified_query.ret = .{
+                            .items = return_items.items,
+                            .distinct = false,
+                        };
+                    }
+
+                    // Execute the MATCH query with current bindings as parameters
+                    const current_graph = if (context.session_state) |session| session.graph else null;
+                    const match_result = try executeMatchQueryImpl(allocator, modified_query, env_names, env_values, &.{}, current_graph);
+
+                    // Free current bindings
+                    allocator.free(env_names);
+                    allocator.free(env_values);
+
+                    // Add each matched row to all_chain_envs (with WHERE filtering if present)
+                    for (match_result.rows) |match_row| {
+                        // Apply WHERE clause if present
+                        if (q.where_clause) |where_expr| {
+                            const filter_env = Env{
+                                .allocator = allocator,
+                                .names = match_result.columns,
+                                .values = match_row,
+                                .param_names = &.{},
+                                .param_values = &.{},
+                            };
+                            const where_result = eval.evalExpr(allocator, where_expr, filter_env) catch Value{ .Bool = false };
+                            passes_filter = switch (where_result) {
+                                .Bool => |b| b,
+                                else => false,
+                            };
+                            if (!passes_filter) continue;
+                        }
+
+                        // Copy column names and values for this row
+                        var row_names = try allocator.alloc([]const u8, match_result.columns.len);
+                        var row_values = try allocator.alloc(Value, match_result.columns.len);
+                        for (match_result.columns, match_row, 0..) |col, val, idx| {
+                            row_names[idx] = col;
+                            row_values[idx] = val;
+                        }
+                        try all_chain_envs.append(allocator, Env{
+                            .allocator = allocator,
+                            .names = row_names,
+                            .values = row_values,
+                            .param_names = &.{},
+                            .param_values = &.{},
+                        });
+                    }
+
+                    // Clean up return_items (don't deinit - items owned by arena or are local)
+                    return_items.deinit(allocator);
+
+                    // Continue to next query in chain (skip the rest of this iteration)
+                    query_iter = q.next_query;
+                    continue;
+                }
+
                 // Apply WHERE clause if present
                 if (q.where_clause) |where_expr| {
                     const filter_env = Env{
@@ -410,15 +490,35 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                 query_iter = q.next_query;
             }
 
-            if (passes_filter) {
-                try all_chain_envs.append(allocator, Env{
-                    .allocator = allocator,
-                    .names = env_names,
-                    .values = env_values,
-                    .param_names = &.{},
-                    .param_values = &.{},
-                });
-            } else {
+            // Only add the final env if passes_filter and we haven't already processed a MATCH
+            // (MATCH processing adds to all_chain_envs directly)
+            if (passes_filter and query_iter == null) {
+                // Check if we already added to all_chain_envs via MATCH processing
+                // We added items if MATCH was executed - check the loop state
+            }
+            if (passes_filter and env_names.len > 0) {
+                // Only add if we didn't already add via MATCH processing
+                // Check if env_names is still valid (not freed by MATCH processing)
+                var already_added_via_match = false;
+                var check_iter: ?*ast.Query = next_query_ptr;
+                while (check_iter) |check_q| {
+                    if (check_q.match.chains.len > 0) {
+                        already_added_via_match = true;
+                        break;
+                    }
+                    check_iter = check_q.next_query;
+                }
+
+                if (!already_added_via_match) {
+                    try all_chain_envs.append(allocator, Env{
+                        .allocator = allocator,
+                        .names = env_names,
+                        .values = env_values,
+                        .param_names = &.{},
+                        .param_values = &.{},
+                    });
+                }
+            } else if (!passes_filter) {
                 allocator.free(env_names);
                 allocator.free(env_values);
             }

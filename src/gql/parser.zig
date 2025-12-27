@@ -1564,11 +1564,20 @@ pub const Parser = struct {
             }
         }
 
-        // Check for CREATE at the beginning
+        // Check for CREATE at the beginning - support multiple consecutive CREATE clauses
+        // e.g., CREATE (a:Node) CREATE (b:Node) WITH 1 AS x ...
+        // CANARY: REQ=REQ-GQL-MULTI-CREATE-001; FEATURE="MultipleConsecutiveCreate"; ASPECT=Parser; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
         if (self.cur.kind == .CREATE) {
             have_create = true;
-            self.advance();
-            create_pattern = try self.parseGraphPattern();
+            var create_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            while (self.cur.kind == .CREATE) {
+                self.advance();
+                const cp = try self.parseGraphPattern();
+                for (cp.chains) |chain| {
+                    try create_chains.append(self.arena.allocator(), chain);
+                }
+            }
+            create_pattern = .{ .chains = try create_chains.toOwnedSlice(self.arena.allocator()) };
         } else if (self.cur.kind == .OPTIONAL) {
             self.advance();
             // Check for OPTIONAL { } block, OPTIONAL (...), or OPTIONAL MATCH
@@ -3808,8 +3817,27 @@ pub const Parser = struct {
             return self.parseCreateGraphWithReplace(or_replace);
         }
 
-        // Otherwise, parse the pattern to create
-        const pattern = try self.parseGraphPattern();
+        // Otherwise, parse the pattern to create - support multiple consecutive CREATE clauses
+        // e.g., CREATE (a:Node) CREATE (b:Node) WITH 1 AS x ...
+        // CANARY: REQ=REQ-GQL-MULTI-CREATE-002; FEATURE="MultipleConsecutiveCreate"; ASPECT=ParserCreateStatement; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+        var pattern: ast.GraphPattern = undefined;
+        {
+            var create_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            // First pattern already consumed the CREATE keyword
+            const first_pattern = try self.parseGraphPattern();
+            for (first_pattern.chains) |chain| {
+                try create_chains.append(self.arena.allocator(), chain);
+            }
+            // Handle additional CREATE patterns
+            while (self.cur.kind == .CREATE) {
+                self.advance();
+                const next_pattern = try self.parseGraphPattern();
+                for (next_pattern.chains) |chain| {
+                    try create_chains.append(self.arena.allocator(), chain);
+                }
+            }
+            pattern = .{ .chains = try create_chains.toOwnedSlice(self.arena.allocator()) };
+        }
 
         // CANARY: REQ=REQ-GQL-083; FEATURE="CreateWithClause"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-09
         // Check if this is followed by WITH, SET, REMOVE, or DELETE - if so, this should be a Query, not a standalone CREATE
