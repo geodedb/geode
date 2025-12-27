@@ -1583,6 +1583,41 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             if (!has_all_labels) continue;
         }
 
+        // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-PROPS-001; FEATURE="OptionalMatchRequiredProps"; ASPECT=RequiredNodePropertyFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // Filter by property pattern on required chain (e.g., MATCH (d:Department {name: 'NewDept'}))
+        if (required_pattern.props) |req_props| {
+            var matches_props = true;
+            for (req_props) |prop| {
+                if (node.properties.get(prop.key)) |node_prop_val| {
+                    const node_val = switch (node_prop_val) {
+                        .Null => Value{ .Null = {} },
+                        .Bool => |b| Value{ .Bool = b },
+                        .Int => |i| Value{ .Int = i },
+                        .String => |s| Value{ .Str = s },
+                        .Float => Value{ .Null = {} },
+                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                    };
+                    // Evaluate property value with parameters
+                    const env = Env{
+                        .names = &.{},
+                        .values = &.{},
+                        .param_names = param_names,
+                        .param_values = param_values,
+                        .allocator = allocator,
+                    };
+                    const prop_val = eval.evalExpr(allocator, prop.value.*, env) catch Value{ .Null = {} };
+                    if (!valuesEqual(node_val, prop_val)) {
+                        matches_props = false;
+                        break;
+                    }
+                } else {
+                    matches_props = false;
+                    break;
+                }
+            }
+            if (!matches_props) continue;
+        }
+
         // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-001; FEATURE="OptionalMatchWhereFilter"; ASPECT=RequiredNodeFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
         // Apply WHERE clause to filter base nodes before optional matching
         // BUT ONLY if WHERE doesn't reference optional variables
@@ -1652,10 +1687,17 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
     // Add optional chain variables
     for (q.match.chains[1..]) |chain| {
-        if (chain.is_optional and chain.hops.len > 0) {
-            const hop = chain.hops[0];
-            if (hop.rel.name) |v| try all_vars.append(allocator, v);
-            if (hop.right.name) |v| try all_vars.append(allocator, v);
+        if (chain.is_optional) {
+            if (chain.hops.len > 0) {
+                // OPTIONAL MATCH (n)-[r]-(m) - relationship pattern
+                const hop = chain.hops[0];
+                if (hop.rel.name) |v| try all_vars.append(allocator, v);
+                if (hop.right.name) |v| try all_vars.append(allocator, v);
+            } else if (chain.head != null) {
+                // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-001; FEATURE="OptionalMatchNodeOnly"; ASPECT=VariableCollection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // OPTIONAL MATCH (e:Employee) - node-only pattern
+                if (chain.head.?.name) |v| try all_vars.append(allocator, v);
+            }
         }
     }
 
@@ -1683,7 +1725,111 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
         // Try each optional chain
         for (q.match.chains[1..]) |chain| {
-            if (!chain.is_optional or chain.hops.len == 0) continue;
+            if (!chain.is_optional) continue;
+
+            // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-002; FEATURE="OptionalMatchNodeOnly"; ASPECT=NodeMatching; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+            // Handle node-only OPTIONAL MATCH (e.g., OPTIONAL MATCH (e:Employee {prop: value}))
+            if (chain.hops.len == 0 and chain.head != null) {
+                const opt_node_pattern = chain.head.?;
+                const opt_labels = opt_node_pattern.labels;
+                const opt_props = opt_node_pattern.props;
+
+                // Build environment for property pattern evaluation
+                const base_env = if (required_var) |var_name| Env{
+                    .names = &[_][]const u8{var_name},
+                    .values = &[_]Value{Value{ .Node = base_node }},
+                    .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
+                } else Env{
+                    .names = &.{},
+                    .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
+                };
+
+                // Find all matching nodes
+                var opt_node_iter = store.nodes.iterator();
+                while (opt_node_iter.next()) |entry| {
+                    const opt_node = entry.value_ptr;
+
+                    // Filter by graph
+                    if (!std.mem.eql(u8, opt_node.graph_name, filter_graph)) continue;
+
+                    // Filter by labels
+                    if (opt_labels.len > 0) {
+                        var has_all_labels = true;
+                        for (opt_labels) |required_label| {
+                            var found = false;
+                            for (opt_node.labels) |node_label| {
+                                if (std.mem.eql(u8, required_label, node_label)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                has_all_labels = false;
+                                break;
+                            }
+                        }
+                        if (!has_all_labels) continue;
+                    }
+
+                    // Filter by properties (can reference variables from base match)
+                    var matches_props = true;
+                    if (opt_props) |properties| {
+                        for (properties) |prop| {
+                            if (opt_node.properties.get(prop.key)) |node_prop_val| {
+                                const node_val = switch (node_prop_val) {
+                                    .Null => Value{ .Null = {} },
+                                    .Bool => |b| Value{ .Bool = b },
+                                    .Int => |i| Value{ .Int = i },
+                                    .String => |s| Value{ .Str = s },
+                                    .Float => Value{ .Null = {} },
+                                    .ExtValue => |ext| Value{ .ExtValue = ext },
+                                };
+                                // Evaluate property value using base environment
+                                const prop_val = eval.evalExpr(allocator, prop.value.*, base_env) catch Value{ .Null = {} };
+                                if (!valuesEqual(node_val, prop_val)) {
+                                    matches_props = false;
+                                    break;
+                                }
+                            } else {
+                                matches_props = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (matches_props) {
+                        // Build row: base_node, opt_node
+                        var row = try allocator.alloc(Value, all_vars.items.len);
+                        var idx: usize = 0;
+
+                        if (required_var != null) {
+                            row[idx] = Value{ .Node = base_node };
+                            idx += 1;
+                        }
+
+                        if (opt_node_pattern.name != null) {
+                            row[idx] = Value{ .Node = opt_node };
+                            idx += 1;
+                        }
+
+                        // Fill remaining with NULL (for any other variables)
+                        while (idx < all_vars.items.len) {
+                            row[idx] = Value{ .Null = {} };
+                            idx += 1;
+                        }
+
+                        try extended_rows.append(allocator, row);
+                    }
+                }
+                continue; // Done with this node-only chain
+            }
+
+            if (chain.hops.len == 0) continue;
 
             const hop = chain.hops[0];
 
@@ -2485,7 +2631,20 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     }
 
     if (all_simple_nodes and q.match.chains.len > 1) {
-        // Handle multiple independent node patterns
+        // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-003; FEATURE="OptionalMatchNodeOnlyDispatch"; ASPECT=QueryDispatch; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // Check if any chain is optional - if so, use executeMatchWithOptionalPatterns
+        var has_any_optional_node = false;
+        for (q.match.chains) |chain| {
+            if (chain.is_optional) {
+                has_any_optional_node = true;
+                break;
+            }
+        }
+        if (has_any_optional_node) {
+            // Use optional match handler even for simple nodes
+            return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        }
+        // Handle multiple independent node patterns (all required)
         return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     }
 

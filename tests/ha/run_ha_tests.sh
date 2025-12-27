@@ -43,12 +43,17 @@ cleanup() {
 # Trap cleanup on exit
 trap cleanup EXIT
 
-echo -e "${GREEN}Building Geode Base Image (geode:test)...${NC}"
+echo -e "${GREEN}Building Geode locally (for GeodeTestLab volume mount)...${NC}"
+zig build -Doptimize=ReleaseSafe || { echo -e "${RED}Local build failed${NC}"; exit 1; }
+
+echo -e "${GREEN}Building Geode Docker image (geode:test)...${NC}"
 cd "$ROOT_DIR"
 docker build -t geode:test -f Dockerfile .
 
-echo -e "${GREEN}Starting Environment...${NC}"
+echo -e "${GREEN}Starting HA Cluster...${NC}"
 cd "$SCRIPT_DIR"
+docker compose down -v 2>/dev/null || true
+docker compose -f docker-compose.clients.yml down -v 2>/dev/null || true
 docker compose up -d node-1 node-2 node-3
 
 echo "Waiting for cluster to stabilize (30s)..."
