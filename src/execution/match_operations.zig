@@ -31,6 +31,50 @@ const expandVariableLengthPaths = execution.expandVariableLengthPaths;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+// CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-002; FEATURE="PropertyPatternVariableReference"; ASPECT=Detection; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+/// Check if an expression contains a variable reference (e.g., Member like d.name)
+/// This is used to detect property patterns like {department: d.name} that can't be
+/// evaluated until we have the environment from previous chains.
+fn containsVariableReference(expr: ast.Expr) bool {
+    return switch (expr) {
+        .Member => true, // e.g., d.name - target.field
+        .PropertyAccess => true, // e.g., n.name - object.property
+        .Ident => true, // Bare variable reference
+        .Param => false, // $param - resolved from param_values, not from environment
+        .Binary => |bin| containsVariableReference(bin.left.*) or containsVariableReference(bin.right.*),
+        .Unary => |un| containsVariableReference(un.expr.*),
+        .Call => |call| blk: {
+            for (call.args) |arg| {
+                if (containsVariableReference(arg.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Case => |case| blk: {
+            if (case.operand) |op| {
+                if (containsVariableReference(op.*)) break :blk true;
+            }
+            for (case.whens) |wc| {
+                if (containsVariableReference(wc.when.*)) break :blk true;
+                if (containsVariableReference(wc.then_expr.*)) break :blk true;
+            }
+            if (case.else_expr) |ec| {
+                if (containsVariableReference(ec.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .List => |list| blk: {
+            for (list) |item| {
+                if (containsVariableReference(item.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        // Literals - no variable references
+        .Int, .Decimal, .String, .Bool, .Null, .Map => false,
+        // Other cases that might have nested expressions
+        else => false,
+    };
+}
+
 // CANARY: REQ=REQ-GQL-COLNAME-001; FEATURE="UniqueColumnNames"; ASPECT=DEDUP; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
 /// Generate unique column names for RETURN items, using qualified names for duplicates
 /// For example, if both p.name and c.name exist, they become "p.name" and "c.name"
@@ -591,7 +635,11 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
             }
 
-            // Check inline properties
+            // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-001; FEATURE="PropertyPatternVariableReference"; ASPECT=MultiMatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+            // Check inline properties - but only for literal values in the first chain.
+            // Property patterns with variable references (e.g., {department: d.name}) need
+            // to be checked later during Cartesian product generation when we have the
+            // environment from previous chains available.
             if (matches_pattern and node_pattern.props != null) {
                 const props = node_pattern.props.?;
                 const prop_env = Env{
@@ -603,6 +651,14 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 for (props) |prop| {
+                    // Check if this property value contains a variable reference
+                    // If so, skip checking now - will be checked during combination generation
+                    const has_var_ref = containsVariableReference(prop.value.*);
+                    if (has_var_ref) {
+                        // Skip - will be checked later with proper environment
+                        continue;
+                    }
+
                     if (node.properties.get(prop.key)) |node_prop_val| {
                         const node_val = switch (node_prop_val) {
                             .Null => Value{ .Null = {} },
@@ -687,6 +743,36 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .param_values = self.param_values,
                     .allocator = self.allocator,
                 };
+
+                // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-003; FEATURE="PropertyPatternVariableReference"; ASPECT=Verification; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+                // Check property patterns with variable references now that we have the full environment
+                for (self.q.match.chains, current_combo.items) |chain, node| {
+                    if (chain.head) |node_pattern| {
+                        if (node_pattern.props) |props| {
+                            for (props) |prop| {
+                                // Only check properties that have variable references
+                                if (containsVariableReference(prop.value.*)) {
+                                    const expected_val = eval.evalExpr(self.allocator, prop.value.*, env) catch Value{ .Null = {} };
+                                    if (node.properties.get(prop.key)) |node_prop_val| {
+                                        const node_val = switch (node_prop_val) {
+                                            .Null => Value{ .Null = {} },
+                                            .Bool => |b| Value{ .Bool = b },
+                                            .Int => |ii| Value{ .Int = ii },
+                                            .String => |s| Value{ .Str = s },
+                                            .Float => Value{ .Null = {} },
+                                            .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        };
+                                        if (!valuesEqual(node_val, expected_val)) {
+                                            return; // Property doesn't match - skip this combination
+                                        }
+                                    } else {
+                                        return; // Property not found - skip this combination
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Evaluate WHERE clause
                 if (self.q.where_clause) |where_expr| {

@@ -103,6 +103,8 @@ services:
       - ../../geodetestlab:/geodetestlab:ro
     environment:
       - GEODE_SERVER=node-1:3141
+      - GEODE_HOST=node-1
+      - GEODE_PORT=3141
       - TEST_MODE=${TEST_MODE:-standard}
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/geodetestlab
@@ -129,6 +131,8 @@ services:
       - ../../clients/go:/app/clients/go:ro
     environment:
       - GEODE_SERVER=node-1:3141
+      - GEODE_HOST=node-1
+      - GEODE_PORT=3141
       - TEST_MODE=${TEST_MODE:-standard}
     depends_on:
       migration-runner:
@@ -153,6 +157,8 @@ services:
       - ../../clients/python:/app/clients/python:ro
     environment:
       - GEODE_SERVER=node-1:3141
+      - GEODE_HOST=node-1
+      - GEODE_PORT=3141
       - TEST_MODE=${TEST_MODE:-standard}
       - PYTHONUNBUFFERED=1
     depends_on:
@@ -177,6 +183,8 @@ services:
       - integration-results:/results
     environment:
       - GEODE_SERVER=node-1:3141
+      - GEODE_HOST=node-1
+      - GEODE_PORT=3141
       - TEST_MODE=${TEST_MODE:-standard}
       - RUST_LOG=info
     depends_on:
@@ -202,6 +210,8 @@ services:
       - ../../clients/zig:/app/clients/zig:ro
     environment:
       - GEODE_SERVER=node-1:3141
+      - GEODE_HOST=node-1
+      - GEODE_PORT=3141
       - TEST_MODE=${TEST_MODE:-standard}
     depends_on:
       migration-runner:

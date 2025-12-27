@@ -166,7 +166,8 @@ RETURN e.name AS name;
 -- 2.2 Department with no employees (NewDept)
 MATCH (d:Department {name: 'NewDept'})
 OPTIONAL MATCH (e:Employee {department: 'NewDept'})
-RETURN d.name AS dept, count(e) AS emp_count;
+RETURN d.name AS dept, count(e) AS emp_count
+GROUP BY d.name;
 
 -- 2.3 Filter that excludes all results
 MATCH (e:Employee)

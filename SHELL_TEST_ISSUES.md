@@ -24,6 +24,8 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 - E37 ✅ List comprehension: TEST FILE FIX - replaced Cypher syntax with GQL-compatible query
 - NEW ✅ EXISTS subquery with property filter: Now correctly evaluates target node properties
 - NEW ✅ MATCH...WHERE...MATCH parser support: Patterns like `MATCH (d) WHERE d.x > 0 MATCH (e)` now parse correctly
+- NEW ✅ Property pattern variable resolution: `{department: d.name}` now correctly resolves variables in multi-MATCH
+- NEW ✅ Section 2.2: TEST FILE FIX - added missing GROUP BY clause
 
 **Previously Fixed (Runs 1-5):**
 - E21 ✅ Property filter in aggregation now works
@@ -2151,5 +2153,76 @@ if (self.cur.kind == .MATCH) {
 **Verification**:
 - `MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee) RETURN e, d` → Parses correctly ✓
 - Sections 13.1 and 15.1 in enterprise tests now pass ✓
+
+**Status**: FIXED (2025-12-26)
+
+---
+
+## Issue: Property Pattern Variable Resolution in Multi-MATCH (P2) ✅ FIXED
+
+**Section**: 13.1, 15.1 (and other multi-MATCH with property variable references)
+
+**Query Pattern**:
+```gql
+MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN e.name, d.name
+```
+
+**Error Before Fix**: Query returned `(0 rows)` even though matching data existed.
+
+**Root Cause**: In `src/execution/match_operations.zig` `executeMultiNodeMatch`, when collecting matching nodes for each chain, property patterns were evaluated with an **empty environment**:
+
+```zig
+const prop_env = Env{
+    .names = &.{},  // EMPTY - no access to variables from previous chains!
+    .values = &.{},
+    ...
+};
+```
+
+This meant `{department: d.name}` couldn't resolve `d` because the environment was empty during the initial node collection phase.
+
+**Fix Applied** (2025-12-26):
+
+1. **Added `containsVariableReference()` helper** (lines 38-75):
+   - Detects if a property pattern value contains variable references (Member, PropertyAccess, Ident)
+   - Literals like strings/integers return false
+
+2. **Skip variable-referencing properties during initial collection** (lines 609-616):
+   ```zig
+   const has_var_ref = containsVariableReference(prop.value.*);
+   if (has_var_ref) {
+       // Skip - will be checked later with proper environment
+       continue;
+   }
+   ```
+
+3. **Verify property patterns during Cartesian product generation** (lines 746-774):
+   - After building the full environment with all chain bindings
+   - Check each chain's property patterns that have variable references
+   - Filter out combinations where property values don't match
+
+**Verification**:
+```bash
+./zig-out/bin/geode query "MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN e.name, d.name"
+# Before: (0 rows)
+# After:  {"name":"Alice","dept":"Eng"} ✓
+```
+
+**Status**: FIXED (2025-12-26)
+
+---
+
+## Issue: Section 2.2 Missing GROUP BY (Test File) ✅ FIXED
+
+**Query** (line 167-169):
+```gql
+MATCH (d:Department {name: 'NewDept'})
+OPTIONAL MATCH (e:Employee {department: 'NewDept'})
+RETURN d.name AS dept, count(e) AS emp_count;
+```
+
+**Error**: `Error (42000)` - aggregation with non-aggregated columns requires GROUP BY.
+
+**Fix**: Added `GROUP BY d.name` to the query in `testing/shell/enterprise_test_extended.gql`.
 
 **Status**: FIXED (2025-12-26)
