@@ -16,9 +16,7 @@ services:
   # Migration Runner - Runs schema and seed migrations
   # =============================================================================
   migration-runner:
-    build:
-      context: ../../
-      dockerfile: docker-integration/Dockerfile.server
+    image: geode:test
     container_name: ha-migration-runner
     hostname: migration-runner
     networks:

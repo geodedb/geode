@@ -1,5 +1,5 @@
 description: "Test suite focused on currently working features and critical issues"
-binary: geode
+binary: /usr/local/bin/geode
 timeout: 30
 
 cli:

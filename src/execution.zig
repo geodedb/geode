@@ -2037,6 +2037,12 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                 for (with_items, 0..) |item, i| {
                     if (return_and_sorting.isAggregationExpr(item.expr)) {
                         new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns);
+                    } else if (input_result.rows.len == 0) {
+                        // CANARY: REQ=REQ-GQL-EMPTY-MATCH-WITH-001; FEATURE="EmptyMatchWithClause"; ASPECT=NullOnNoRows; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-27
+                        // When there are no input rows, non-aggregation expressions cannot be evaluated
+                        // (e.g., MATCH (n:NonExistent) WITH n.category AS cat, count(*) AS cnt)
+                        // Return NULL for non-aggregation expressions in this case
+                        new_row[i] = Value{ .Null = {} };
                     } else {
                         new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
                     }

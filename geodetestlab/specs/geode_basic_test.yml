@@ -3,7 +3,7 @@ name: "Geode Basic Tests"
 description: "Basic Geode functionality tests without server dependency"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "/usr/local/bin/geode"
   client:
     timeout_ms: 5000
     tls_verify: false

@@ -193,11 +193,16 @@ func startQUIC(t *testing.T) string {
 }
 
 func TestGQL_QUIC_OrderLimit(t *testing.T) {
-	if testing.Short() || os.Getenv("CI") != "" {
-		t.Skip("Skipping QUIC test in CI/short mode")
+	var addr string
+	if envAddr := os.Getenv("GEODE_SERVER"); envAddr != "" {
+		addr = envAddr
+	} else {
+		if testing.Short() || os.Getenv("CI") != "" {
+			t.Skip("Skipping QUIC test in CI/short mode")
+		}
+		addr = startQUIC(t)
 	}
-	addr := startQUIC(t)
-	db, err := Open("quic://" + addr + "?page_size=3")
+	db, err := Open("quic://" + addr + "?page_size=3&insecure=true")
 	if err != nil {
 		t.Fatalf("Open err: %v", err)
 	}

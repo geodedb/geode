@@ -54,7 +54,7 @@ All tests executed successfully with zero errors. Key verified results:
 
 **Purpose**: Test obscure GQL edge cases, boundary conditions, and specification corner cases.
 
-**Status**: ✅ **13 ISSUES FIXED** (2025-12-27) - 1 known behavior, 1 remaining
+**Status**: ✅ **14 ISSUES FIXED** (2025-12-27) - 1 known behavior
 
 ### Issues Found in Advanced Testing
 
@@ -75,6 +75,7 @@ All tests executed successfully with zero errors. Key verified results:
 | A13 | 4.6 | String Function | `right('hello', 0)` | `''` | `''` | P2 | ✅ FIXED |
 | A14 | 8.4 | Aggregation | `min(e.name)` on strings | Min string value | Min string | P2 | ✅ FIXED |
 | A15 | 5.9 | List Property | `size(n.tags)` | Actual list size | Actual size | P2 | ✅ FIXED |
+| A16 | - | Server Crash | Empty MATCH with WITH aggregation | Returns NULL + count | Returns `null \| 0` | P1 | ✅ FIXED |
 
 ### Fixes Applied (2025-12-27)
 
@@ -145,6 +146,29 @@ Added full support for nested EXISTS predicates with WHERE clauses:
 - `countPatternMatches` callback signature updated to include optional WHERE filter
 - WHERE filter evaluated for each pattern match with proper environment bindings
 - Supports nested patterns like: `EXISTS { MATCH (n)-[:R]->(m) WHERE EXISTS { MATCH (m)-[:S]->() } }`
+
+#### Empty MATCH with WITH Aggregation (A16)
+
+**Files Modified**: `src/execution.zig`
+
+Fixed server crash when MATCH returns 0 rows but WITH clause contains both aggregation and non-aggregation expressions.
+
+**Query**: `MATCH (n:NonExistent) WITH n.category AS cat, count(*) AS cnt RETURN cat, cnt;`
+
+**Problem**: When MATCH returns no rows, the environment passed to `eval.evalExpr` is empty. Attempting to evaluate `n.category` crashes with "index out of bounds: index 0, len 0".
+
+**Fix** (line 2040-2045): When `input_result.rows.len == 0`, non-aggregation expressions now return NULL directly instead of trying to evaluate with an empty environment:
+
+```zig
+} else if (input_result.rows.len == 0) {
+    // CANARY: REQ=REQ-GQL-EMPTY-MATCH-WITH-001
+    // When there are no input rows, non-aggregation expressions cannot be evaluated
+    // Return NULL for non-aggregation expressions in this case
+    new_row[i] = Value{ .Null = {} };
+}
+```
+
+**Result**: Query now returns `null | 0` instead of crashing.
 
 ### Issue Details
 
