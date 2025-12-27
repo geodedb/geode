@@ -1354,7 +1354,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=IMPL; OWNER=math; UPDATED=2025-12-27
             if (std.mem.eql(u8, function_name, "degrees")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1366,10 +1366,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = val * (180.0 / std.math.pi);
                 // Check for NaN or infinity before converting
                 if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                // Use @round to properly round instead of truncating for better precision
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(@round(result * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=IMPL; OWNER=math; UPDATED=2025-12-27
             if (std.mem.eql(u8, function_name, "radians")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1381,7 +1382,8 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = val * (std.math.pi / 180.0);
                 // Check for NaN or infinity before converting
                 if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                // Use @round to properly round instead of truncating for better precision
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(@round(result * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             if (std.mem.eql(u8, function_name, "log")) {

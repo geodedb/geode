@@ -56,12 +56,12 @@ tests:
 
   - name: "degrees-function"
     description: "Test DEGREES function"
-    skip: true  # degrees() function not implemented or returns different precision
     args: ["query", "-"]
     stdin: "RETURN degrees(3.14159) AS result"
     expect:
       exit_code: 0
-      stdout_contains: ["180"]
+      # 3.14159 * (180/pi) = ~179.99985, so we expect "179.99" to be in the output
+      stdout_contains: ["179.99"]
     tags: ["math", "trig"]
 
   - name: "radians-function"

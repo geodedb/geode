@@ -337,11 +337,13 @@ pub fn processMessage(
                             // Execute side-effect statements (USE GRAPH, CREATE GRAPH, etc.)
                             switch (earlier_st) {
                                 .UseGraph => |ug| {
-                                    if (state.current_graph) |old| gpa.free(old);
-                                    if (graph_storage_mgr.graphExists(ug.graph_name)) {
-                                        state.current_graph = gpa.dupe(u8, ug.graph_name) catch null;
-                                        std.debug.print("[QUIC] Set current_graph to: {s}\n", .{ug.graph_name});
+                                    // CANARY: REQ=REQ-MULTI-GRAPH-030; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-27
+                                    // Check if graph exists before switching - return error if not
+                                    if (!graph_storage_mgr.graphExists(ug.graph_name)) {
+                                        return protocol.buildErrorLine(gpa, "GraphNotFound", "Graph does not exist", "") catch try gpa.dupe(u8, "");
                                     }
+                                    if (state.current_graph) |old| gpa.free(old);
+                                    state.current_graph = gpa.dupe(u8, ug.graph_name) catch null;
                                 },
                                 .CreateGraph => |cg| {
                                     _ = graph_storage_mgr.createGraphStorage(gpa, cg.name) catch {};

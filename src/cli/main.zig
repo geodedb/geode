@@ -735,7 +735,9 @@ fn processProtocolMessage(
             for (parse_res.program.statements) |stmt| {
                 switch (stmt) {
                     .UseGraph => |ug| {
-                        // Check if graph exists
+                        // CANARY: REQ=REQ-MULTI-GRAPH-031; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphCLI; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-27
+                        // Check if graph exists - note: actual error handling is done by server
+                        // This pre-parse just updates local state for graph context
                         if (graph_storage_mgr.graphExists(ug.graph_name)) {
                             // Free old graph name if exists
                             if (state.current_graph) |old| allocator.free(old);
@@ -743,7 +745,8 @@ fn processProtocolMessage(
                             state.current_graph = allocator.dupe(u8, ug.graph_name) catch null;
                             log.debug("USE GRAPH: switched to '{s}'", .{ug.graph_name});
                         } else {
-                            log.debug("USE GRAPH: graph '{s}' does not exist", .{ug.graph_name});
+                            // Log warning but let server return proper error
+                            log.warn("USE GRAPH: graph '{s}' does not exist", .{ug.graph_name});
                         }
                     },
                     .CreateGraph => |cg| {
