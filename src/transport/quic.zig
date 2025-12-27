@@ -282,6 +282,22 @@ pub const QuicConnection = struct {
         return api.isHandshakeConfirmed(self.inner);
     }
 
+    /// Remove a stream from tracking and destroy it
+    /// CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-001; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=IMPL; OWNER=transport; UPDATED=2025-12-27
+    pub fn destroyStream(self: *QuicConnection, stream: *QuicStream) void {
+        // Remove stream from the tracked list to prevent double-free
+        var idx: usize = 0;
+        while (idx < self.streams.items.len) {
+            if (self.streams.items[idx] == stream) {
+                _ = self.streams.orderedRemove(idx);
+                break;
+            }
+            idx += 1;
+        }
+        // Now destroy the stream
+        self.allocator.destroy(stream);
+    }
+
     pub fn close(self: *QuicConnection) void {
         for (self.streams.items) |stream| {
             stream.close();

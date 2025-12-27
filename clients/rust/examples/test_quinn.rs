@@ -7,7 +7,15 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     println!("[TEST] Creating Quinn-based client...");
-    let client = Client::new("127.0.0.1", 3141)
+
+    let server_addr = std::env::var("GEODE_SERVER").unwrap_or_else(|_| "127.0.0.1:3141".to_string());
+    println!("[TEST] Using server address: {}", server_addr);
+
+    let parts: Vec<&str> = server_addr.split(':').collect();
+    let host = parts.get(0).unwrap_or(&"127.0.0.1");
+    let port: u16 = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(3141);
+
+    let client = Client::new(*host, port)
         .skip_verify(true)
         .client_name("test-quinn")
         .client_version("0.1.0");

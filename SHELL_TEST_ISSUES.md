@@ -48,6 +48,90 @@ All tests executed successfully with zero errors. Key verified results:
 
 ---
 
+## Advanced Edge Case Testing: 2025-12-27 (Run 9)
+
+**Test File**: `./testing/shell/enterprise_test_advanced.gql` (233 statements)
+
+**Purpose**: Test obscure GQL edge cases, boundary conditions, and specification corner cases.
+
+**Status**: ✅ **ALL 233 STATEMENTS PASS** (2025-12-27) - COMPLETE SUCCESS!
+
+### Fixes Applied in Run 9 (2025-12-27)
+
+#### A17: Short-Circuit Evaluation for AND/OR - CRITICAL FIX
+
+**Issue**: Division by zero error in queries like:
+```gql
+WHERE n.value <> 0 AND 100 / n.value > 1
+```
+
+**Root Cause**: The `.Binary` handler in `src/eval.zig` was eagerly evaluating both operands before checking if short-circuit should apply.
+
+**Fix Applied** (`src/eval.zig:695-727`):
+- Added special handling for `.And` and `.Or` operators
+- AND: If left is definitely false, return false without evaluating right
+- OR: If left is definitely true, return true without evaluating right
+- Added CANARY marker: REQ-GQL-SHORT-CIRCUIT-001
+
+**Result**: Queries with `WHERE n.value <> 0 AND expr_with_division` now short-circuit correctly.
+
+#### A18: Bool + Int Type Coercion
+
+**Issue**: Type mismatch error in queries like:
+```gql
+RETURN true + 0 AS bool_to_int_true;
+RETURN false + 0 AS bool_to_int_false;
+```
+
+**Root Cause**: The Add operator in `src/eval.zig` didn't handle Bool + Int coercion.
+
+**Fix Applied** (`src/eval.zig:273-282`):
+- Added Bool + Int and Int + Bool handling in Add operator
+- true coerces to 1, false coerces to 0
+- Added CANARY marker: REQ-GQL-BOOL-INT-COERCE-001
+
+**Result**: `true + 0` returns 1, `false + 0` returns 0.
+
+#### A19: Server Double-Free on Client Disconnect - CRITICAL STABILITY FIX
+
+**Issue**: Server crash with "Double free detected" when client disconnects.
+
+**Root Cause**:
+1. `QuicConnection.acceptStream()` creates a stream and adds it to `self.streams` list
+2. `main.zig` (line 1695) was calling `allocator.destroy(stream)` immediately after getting the stream_id
+3. When connection closes, `close()` iterates over `self.streams` and destroys each stream again
+4. This caused double-free of the same stream allocation
+
+**Fix Applied**:
+1. Added `destroyStream()` method to `QuicConnection` (`src/transport/quic.zig:285-299`)
+   - Removes stream from tracked list before destroying
+   - Prevents double-free when connection closes later
+   - Added CANARY marker: REQ-QUIC-STREAM-CLEANUP-001
+2. Updated `main.zig` to use `destroyStream()` instead of direct `allocator.destroy()`
+   - Added CANARY marker: REQ-QUIC-STREAM-CLEANUP-002
+
+**Result**: Server no longer crashes on client disconnect.
+
+### Verification Results (Run 9)
+
+All 233 statements from `enterprise_test_advanced.gql` executed successfully:
+- **0 errors detected**
+- **No server crashes**
+- **No double-free issues**
+
+Key verified functionality:
+| Test | Query Pattern | Result |
+|------|---------------|--------|
+| Short-circuit AND | `WHERE n.value <> 0 AND 100 / n.value > 1` | ✅ No division by zero |
+| Bool + Int | `RETURN true + 0` | ✅ Returns 1 |
+| Bool + Int | `RETURN false + 0` | ✅ Returns 0 |
+| List operations | `size(n.tags)`, `n.tags[0]` | ✅ Works correctly |
+| MIN/MAX strings | `min(e.name)`, `max(e.name)` | ✅ Lexicographic ordering |
+| NULL semantics | `NOT null`, `null = null` | ✅ Three-valued logic |
+| Server stability | Client disconnect | ✅ No crashes |
+
+---
+
 ## Advanced Edge Case Testing: 2025-12-27 (Run 8)
 
 **Test File**: `./testing/shell/enterprise_test_advanced.gql` (122 statements)

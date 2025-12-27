@@ -28,7 +28,7 @@ services:
     networks:
       - ha-net
     ports:
-      - "3141:3141/udp"
+      - "3200:3141/udp"
     healthcheck:
       test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:3141", "--insecure"]
       interval: 5s

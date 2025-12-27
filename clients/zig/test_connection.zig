@@ -7,7 +7,19 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     std.debug.print("Creating Geode client...\n", .{});
-    var client = GeodeClient.init(allocator, "127.0.0.1", 8443, true);
+    var host: []const u8 = "127.0.0.1";
+    var port: u16 = 3141;
+
+    if (std.process.getEnvVarOwned(allocator, "GEODE_SERVER")) |env_addr| {
+        defer allocator.free(env_addr);
+        if (std.mem.indexOf(u8, env_addr, ":")) |idx| {
+            // We need to duplicate the host part because env_addr will be freed
+            host = try allocator.dupe(u8, env_addr[0..idx]);
+            port = try std.fmt.parseInt(u16, env_addr[idx + 1 ..], 10);
+        }
+    } else |_| {}
+
+    var client = GeodeClient.init(allocator, host, port, true);
     defer client.deinit();
 
     std.debug.print("Attempting to connect...\n", .{});

@@ -1687,12 +1687,10 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
                 };
 
                 const stream_id = stream.stream_id;
-                // We just need the ID, we can free the wrapper as we use the ID for reading
-                // But wait, QuicStream wrapper owns nothing but the pointer.
-                // However, we should clean it up to avoid leaks if it allocates.
-                // transport/quic.zig QuicStream allocates nothing extra usually, but let's check.
-                // Actually QuicConnection.acceptStream allocates the wrapper struct.
-                conn_state.conn.allocator.destroy(stream);
+                // CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-002; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=IMPL; OWNER=cli; UPDATED=2025-12-27
+                // Use destroyStream to properly remove from tracked list before destroying
+                // This prevents double-free when connection closes later
+                conn_state.conn.destroyStream(stream);
 
                 std.debug.print("[QUIC-CLI] Accepted stream {}\n", .{stream_id});
 

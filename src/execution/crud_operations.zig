@@ -31,7 +31,8 @@ fn valueListToExtValueList(allocator: std.mem.Allocator, values: []Value) ![]Ext
             .Null => ExtValue{ .Null = {} },
             .Int => |n| ExtValue{ .Int = n },
             .Bool => |b| ExtValue{ .Bool = b },
-            .Str => |s| ExtValue{ .Str = s },
+            // Duplicate strings to ensure they persist after original Value is freed
+            .Str => |s| ExtValue{ .Str = try allocator.dupe(u8, s) },
             .Decimal => |d| ExtValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
             .ExtValue => |ext| ext,
             .List => |nested| blk: {

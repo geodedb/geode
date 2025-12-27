@@ -46,6 +46,20 @@ fi
 export GEODE_SERVER="${GEODE_HOST}:${GEODE_PORT}"
 export GEODE_INSECURE=true
 
+# Resolve hostname to IP to workaround Zig client/vendor resolver limitations
+# vendor/quic only supports IP addresses or /etc/hosts, but Docker DNS is separate
+if command -v getent >/dev/null; then
+    RESOLVED_IP=$(getent hosts "$GEODE_HOST" | awk '{ print $1 }' | head -n 1)
+    if [ -n "$RESOLVED_IP" ]; then
+        echo "Resolved $GEODE_HOST to $RESOLVED_IP"
+        export GEODE_SERVER="${RESOLVED_IP}:${GEODE_PORT}"
+    else
+        echo "WARNING: Could not resolve $GEODE_HOST via getent"
+    fi
+else
+    echo "WARNING: getent not found, using hostname directly"
+fi
+
 # Run Zig tests
 cd /app/clients/zig
 

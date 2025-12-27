@@ -270,6 +270,16 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 }
                 break :blk .{ .Int = result_tuple[0] };
             }
+            // CANARY: REQ=REQ-GQL-BOOL-INT-COERCE-001; FEATURE="TypeCoercion"; ASPECT=BoolToInt; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // Bool + Int / Int + Bool: Coerce bool to int (true=1, false=0)
+            if (l == .Bool and r == .Int) {
+                const bool_val: i64 = if (l.Bool) 1 else 0;
+                break :blk .{ .Int = bool_val + r.Int };
+            }
+            if (l == .Int and r == .Bool) {
+                const bool_val: i64 = if (r.Bool) 1 else 0;
+                break :blk .{ .Int = l.Int + bool_val };
+            }
             // Decimal + Int / Int + Decimal / Decimal + Decimal
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
@@ -693,9 +703,37 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
         },
         .Binary => |b| blk2: {
-            const l = try evalExpr(allocator, b.left.*, env);
-            const r = try evalExpr(allocator, b.right.*, env);
-            break :blk2 try evalBinary(allocator, b.op, l, r);
+            // CANARY: REQ=REQ-GQL-SHORT-CIRCUIT-001; FEATURE="Short-circuit evaluation"; ASPECT=AND_OR; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // Implement short-circuit evaluation for AND/OR to avoid evaluating RHS when unnecessary
+            // This prevents division-by-zero errors in expressions like: n.value <> 0 AND 100 / n.value > 1
+            switch (b.op) {
+                .And => {
+                    const l = try evalExpr(allocator, b.left.*, env);
+                    // Short-circuit: If left is definitely false, return false without evaluating right
+                    if (l == .Bool and !l.Bool) {
+                        break :blk2 Value{ .Bool = false };
+                    }
+                    // Evaluate right only if left wasn't definitely false
+                    const r = try evalExpr(allocator, b.right.*, env);
+                    break :blk2 and3(l, r);
+                },
+                .Or => {
+                    const l = try evalExpr(allocator, b.left.*, env);
+                    // Short-circuit: If left is definitely true, return true without evaluating right
+                    if (l == .Bool and l.Bool) {
+                        break :blk2 Value{ .Bool = true };
+                    }
+                    // Evaluate right only if left wasn't definitely true
+                    const r = try evalExpr(allocator, b.right.*, env);
+                    break :blk2 or3(l, r);
+                },
+                else => {
+                    // Non-boolean operators: evaluate both sides
+                    const l = try evalExpr(allocator, b.left.*, env);
+                    const r = try evalExpr(allocator, b.right.*, env);
+                    break :blk2 try evalBinary(allocator, b.op, l, r);
+                },
+            }
         },
         .StartsWith => |sp| blk3: {
             const v = try evalExpr(allocator, sp.value.*, env);
@@ -3161,13 +3199,16 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     } else if (std.mem.eql(u8, function_name, "tofloat") or std.mem.eql(u8, function_name, "toFloat") or std.mem.eql(u8, function_name, "todouble") or std.mem.eql(u8, function_name, "toDouble")) {
         // CANARY: REQ=REQ-GQL-086; FEATURE="TypeConversionFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
-        // Convert to float
+        // Convert to float - use scale=6 for 6 decimal places of precision
+        const float_scale: u8 = 6;
+        const float_multiplier: i128 = 1000000; // 10^6
         switch (first_arg) {
-            .Int => |i| return Value{ .Decimal = .{ .coeff = i * 10, .scale = 1 } },
+            .Int => |i| return Value{ .Decimal = .{ .coeff = i * float_multiplier, .scale = float_scale } },
             .Decimal => |d| return Value{ .Decimal = d },
             .Str => |s| {
                 const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
-                return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 10), .scale = 1 } };
+                const scaled: i128 = @intFromFloat(@round(f * @as(f64, @floatFromInt(float_multiplier))));
+                return Value{ .Decimal = .{ .coeff = scaled, .scale = float_scale } };
             },
             else => return Value{ .Null = {} },
         }
