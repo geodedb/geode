@@ -96,6 +96,20 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                     const max_len: usize = if (hop.rel.max_len) |m| @intCast(m) else 10;
                                     const target_pattern = hop.right;
 
+                                    // F02 Fix: Check if the target node is bound in the environment for variable-length paths
+                                    var target_bound_id_varlen: ?u64 = null;
+                                    if (target_pattern.name) |target_name| {
+                                        for (env.names, 0..) |env_name_varlen, j| {
+                                            if (std.mem.eql(u8, env_name_varlen, target_name)) {
+                                                const target_val = env.values[j];
+                                                if (target_val == .Node) {
+                                                    target_bound_id_varlen = target_val.Node.id;
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+
                                     // BFS to find all reachable nodes within depth range
                                     var visited = std.AutoHashMap(u64, usize).init(allocator);
                                     defer visited.deinit();
@@ -138,6 +152,11 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
 
                                             // Check if this node is within valid depth range and matches target pattern
                                             if (next_depth >= min_len and next_depth <= max_len) {
+                                                // F02 Fix: If target is bound, only match that specific node
+                                                if (target_bound_id_varlen) |tid| {
+                                                    if (next_node_id != tid) continue;
+                                                }
+
                                                 if (store.nodes.get(next_node_id)) |target_node| {
                                                     var target_matches = true;
 
@@ -193,6 +212,24 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
 
                                 // Original single-hop handling for non-variable-length patterns
                                 // Count edges from this bound node
+
+                                // CANARY: REQ=REQ-GQL-EXISTS-CORRELATED-002; FEATURE="CorrelatedExists"; ASPECT=TargetNodeBinding; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                                // F02 Fix: Check if the target node (right side) is also bound in the environment
+                                // This handles patterns like EXISTS { (u1)-[:REL]->(u2) } where BOTH u1 AND u2 are from outer scope
+                                var target_bound_id: ?u64 = null;
+                                const target_pattern = hop.right;
+                                if (target_pattern.name) |target_name| {
+                                    for (env.names, 0..) |env_name_target, j| {
+                                        if (std.mem.eql(u8, env_name_target, target_name)) {
+                                            const target_val = env.values[j];
+                                            if (target_val == .Node) {
+                                                target_bound_id = target_val.Node.id;
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+
                                 var edge_iter = store.edges.iterator();
                                 while (edge_iter.next()) |edge_entry| {
                                     const edge = edge_entry.value_ptr.*;
@@ -205,9 +242,13 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                         continue;
                                     }
 
+                                    // F02 Fix: If target node is bound, only match edges to that specific node
+                                    if (target_bound_id) |tid| {
+                                        if (edge.to_id != tid) continue;
+                                    }
+
                                     // Check target node pattern (right side of the hop)
                                     // CANARY: REQ=REQ-GQL-EXISTS-PROPS-001; FEATURE="ExistsTargetNodeProps"; ASPECT=PropertyFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
-                                    const target_pattern = hop.right;
                                     if (store.nodes.get(edge.to_id)) |target_node| {
                                         var target_matches = true;
 

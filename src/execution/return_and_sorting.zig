@@ -308,15 +308,41 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
                     }
                 }
 
-                const cmp = compareValuesWithNullsPolicy(val1, val2, key.nulls);
-                if (cmp == 0) continue; // Equal, check next key
+                // CANARY: REQ=REQ-GQL-ORDERBY-NULLS-001; FEATURE="OrderByNullsPolicy"; ASPECT=NullsIndependentOfDesc; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                // F01 Fix: Handle NULLS ordering independently from DESC/ASC
+                // The NULLS FIRST/LAST policy should determine null position regardless of sort direction
+                const v1_is_null = val1 == .Null;
+                const v2_is_null = val2 == .Null;
 
-                if (key.desc) {
-                    should_swap = cmp < 0;
+                if (v1_is_null and v2_is_null) {
+                    continue; // Both null, check next key
+                } else if (v1_is_null or v2_is_null) {
+                    // One is null - handle NULLS policy independently from DESC
+                    const nulls_first = (key.nulls == .first or key.nulls == .default);
+                    if (v1_is_null) {
+                        // val1 is null, val2 is not
+                        // NULLS FIRST: null should come before non-null → don't swap
+                        // NULLS LAST: null should come after non-null → swap
+                        should_swap = !nulls_first;
+                    } else {
+                        // val2 is null, val1 is not
+                        // NULLS FIRST: null should come before non-null → swap to move val2 before val1
+                        // NULLS LAST: null should come after non-null → don't swap
+                        should_swap = nulls_first;
+                    }
+                    break;
                 } else {
-                    should_swap = cmp > 0;
+                    // Neither is null - compare normally and apply DESC
+                    const cmp = compareValuesWithNullsPolicy(val1, val2, key.nulls);
+                    if (cmp == 0) continue; // Equal, check next key
+
+                    if (key.desc) {
+                        should_swap = cmp < 0;
+                    } else {
+                        should_swap = cmp > 0;
+                    }
+                    break;
                 }
-                break;
             }
 
             if (should_swap) {
@@ -731,4 +757,179 @@ test "D05: findColumnIndexByExpression - returns null for non-matching" {
     // Should not find n.unknown
     const result = findColumnIndexByExpression(order_expr, &return_items);
     try std.testing.expect(result == null);
+}
+
+// ============================================================================
+// Unit Tests for F01 Fix: NULLS LAST with DESC
+// ============================================================================
+
+test "F01: compareValuesWithNullsPolicy - NULLS LAST returns 1 for null" {
+    const null_val = Value{ .Null = {} };
+    const int_val = Value{ .Int = 42 };
+
+    // With NULLS LAST, null should come after non-null (null > non-null)
+    const cmp = compareValuesWithNullsPolicy(null_val, int_val, .last);
+    try std.testing.expectEqual(@as(i8, 1), cmp);
+
+    // Reverse: non-null compared to null
+    const cmp2 = compareValuesWithNullsPolicy(int_val, null_val, .last);
+    try std.testing.expectEqual(@as(i8, -1), cmp2);
+}
+
+test "F01: compareValuesWithNullsPolicy - NULLS FIRST returns -1 for null" {
+    const null_val = Value{ .Null = {} };
+    const int_val = Value{ .Int = 42 };
+
+    // With NULLS FIRST, null should come before non-null (null < non-null)
+    const cmp = compareValuesWithNullsPolicy(null_val, int_val, .first);
+    try std.testing.expectEqual(@as(i8, -1), cmp);
+
+    // Reverse: non-null compared to null
+    const cmp2 = compareValuesWithNullsPolicy(int_val, null_val, .first);
+    try std.testing.expectEqual(@as(i8, 1), cmp2);
+}
+
+test "F01: sortRowsEx - DESC NULLS LAST puts nulls at end" {
+    const allocator = std.testing.allocator;
+
+    // Create rows with mixed null and non-null values
+    var row1 = try allocator.alloc(Value, 1);
+    defer allocator.free(row1);
+    row1[0] = Value{ .Null = {} };
+
+    var row2 = try allocator.alloc(Value, 1);
+    defer allocator.free(row2);
+    row2[0] = Value{ .Int = 100 };
+
+    var row3 = try allocator.alloc(Value, 1);
+    defer allocator.free(row3);
+    row3[0] = Value{ .Int = 50 };
+
+    var row4 = try allocator.alloc(Value, 1);
+    defer allocator.free(row4);
+    row4[0] = Value{ .Null = {} };
+
+    var rows = try allocator.alloc([]Value, 4);
+    defer allocator.free(rows);
+    rows[0] = row1;
+    rows[1] = row2;
+    rows[2] = row3;
+    rows[3] = row4;
+
+    var columns = try allocator.alloc([]const u8, 1);
+    defer allocator.free(columns);
+    columns[0] = "salary";
+
+    var result = ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .row_count = 4,
+    };
+
+    // ORDER BY salary DESC NULLS LAST
+    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
+    var order_keys = try allocator.alloc(ast.OrderBy.Key, 1);
+    defer allocator.free(order_keys);
+    order_keys[0] = .{ .expr = order_expr, .desc = true, .nulls = .last };
+    const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
+
+    try sortRowsEx(allocator, &result, order, null);
+
+    // After sort: should be 100, 50, NULL, NULL (DESC with NULLs at end)
+    try std.testing.expectEqual(@as(i64, 100), result.rows[0][0].Int);
+    try std.testing.expectEqual(@as(i64, 50), result.rows[1][0].Int);
+    try std.testing.expect(result.rows[2][0] == .Null);
+    try std.testing.expect(result.rows[3][0] == .Null);
+}
+
+test "F01: sortRowsEx - ASC NULLS LAST also puts nulls at end" {
+    const allocator = std.testing.allocator;
+
+    var row1 = try allocator.alloc(Value, 1);
+    defer allocator.free(row1);
+    row1[0] = Value{ .Null = {} };
+
+    var row2 = try allocator.alloc(Value, 1);
+    defer allocator.free(row2);
+    row2[0] = Value{ .Int = 100 };
+
+    var row3 = try allocator.alloc(Value, 1);
+    defer allocator.free(row3);
+    row3[0] = Value{ .Int = 50 };
+
+    var rows = try allocator.alloc([]Value, 3);
+    defer allocator.free(rows);
+    rows[0] = row1;
+    rows[1] = row2;
+    rows[2] = row3;
+
+    var columns = try allocator.alloc([]const u8, 1);
+    defer allocator.free(columns);
+    columns[0] = "salary";
+
+    var result = ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .row_count = 3,
+    };
+
+    // ORDER BY salary ASC NULLS LAST
+    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
+    var order_keys = try allocator.alloc(ast.OrderBy.Key, 1);
+    defer allocator.free(order_keys);
+    order_keys[0] = .{ .expr = order_expr, .desc = false, .nulls = .last };
+    const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
+
+    try sortRowsEx(allocator, &result, order, null);
+
+    // After sort: should be 50, 100, NULL (ASC with NULL at end)
+    try std.testing.expectEqual(@as(i64, 50), result.rows[0][0].Int);
+    try std.testing.expectEqual(@as(i64, 100), result.rows[1][0].Int);
+    try std.testing.expect(result.rows[2][0] == .Null);
+}
+
+test "F01: sortRowsEx - DESC NULLS FIRST puts nulls at beginning" {
+    const allocator = std.testing.allocator;
+
+    var row1 = try allocator.alloc(Value, 1);
+    defer allocator.free(row1);
+    row1[0] = Value{ .Int = 100 };
+
+    var row2 = try allocator.alloc(Value, 1);
+    defer allocator.free(row2);
+    row2[0] = Value{ .Null = {} };
+
+    var row3 = try allocator.alloc(Value, 1);
+    defer allocator.free(row3);
+    row3[0] = Value{ .Int = 50 };
+
+    var rows = try allocator.alloc([]Value, 3);
+    defer allocator.free(rows);
+    rows[0] = row1;
+    rows[1] = row2;
+    rows[2] = row3;
+
+    var columns = try allocator.alloc([]const u8, 1);
+    defer allocator.free(columns);
+    columns[0] = "salary";
+
+    var result = ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .row_count = 3,
+    };
+
+    // ORDER BY salary DESC NULLS FIRST
+    const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
+    var order_keys = try allocator.alloc(ast.OrderBy.Key, 1);
+    defer allocator.free(order_keys);
+    order_keys[0] = .{ .expr = order_expr, .desc = true, .nulls = .first };
+    const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
+
+    try sortRowsEx(allocator, &result, order, null);
+
+    // After sort: should be NULL, 100, 50 (DESC with NULL at beginning)
+    try std.testing.expect(result.rows[0][0] == .Null);
+    try std.testing.expectEqual(@as(i64, 100), result.rows[1][0].Int);
+    try std.testing.expectEqual(@as(i64, 50), result.rows[2][0].Int);
 }

@@ -3416,3 +3416,134 @@ RETURN d.name AS dept, count(e) AS emp_count;
 **Fix**: Added `GROUP BY d.name` to the query in `testing/shell/enterprise_test_extended.gql`.
 
 **Status**: FIXED (2025-12-26)
+
+
+---
+
+## Issue F01: NULLS LAST with DESC Incorrectly Puts Nulls First ✅ FIXED
+
+**Section**: 5.4 (enterprise_test_extended.gql)
+
+**Query**:
+```gql
+MATCH (e:Employee)
+OPTIONAL MATCH (e)-[:REPORTS_TO]->(m:Manager)
+RETURN e.name AS employee, m.salary AS manager_salary
+ORDER BY manager_salary DESC NULLS LAST;
+```
+
+**Symptom**: Nulls appeared at the beginning of results instead of the end, despite `NULLS LAST` being specified.
+
+**Expected Behavior**: When `NULLS LAST` is specified, null values should always appear at the end of the result set, regardless of whether the sort is `ASC` or `DESC`.
+
+**Root Cause**: In `src/execution/return_and_sorting.zig`, the sorting comparison logic was:
+```zig
+const cmp = compareValuesWithNullsPolicy(val1, val2, key.nulls);
+if (cmp == 0) continue;
+if (key.desc) {
+    should_swap = cmp < 0;  // BUG: This inverts the NULLS policy!
+} else {
+    should_swap = cmp > 0;
+}
+```
+
+The `compareValuesWithNullsPolicy()` function returned 1 for "null > non-null" when NULLS LAST was specified. But then the DESC logic (`should_swap = cmp < 0`) inverted this, making null appear before non-null.
+
+**Fix Applied** (2025-12-28):
+
+The NULLS ordering is now handled independently from ASC/DESC:
+```zig
+// CANARY: REQ=REQ-GQL-ORDERBY-NULLS-001
+// F01 Fix: Handle NULLS ordering independently from DESC/ASC
+const v1_is_null = val1 == .Null;
+const v2_is_null = val2 == .Null;
+
+if (v1_is_null and v2_is_null) {
+    continue; // Both null, check next key
+} else if (v1_is_null or v2_is_null) {
+    // Handle NULLS policy independently from DESC
+    const nulls_first = (key.nulls == .first or key.nulls == .default);
+    if (v1_is_null) {
+        // NULLS FIRST: don't swap; NULLS LAST: swap
+        should_swap = !nulls_first;
+    } else {
+        // NULLS FIRST: swap; NULLS LAST: don't swap
+        should_swap = nulls_first;
+    }
+    break;
+} else {
+    // Neither is null - compare normally and apply DESC
+    const cmp = compareValuesWithNullsPolicy(val1, val2, key.nulls);
+    if (cmp == 0) continue;
+    if (key.desc) {
+        should_swap = cmp < 0;
+    } else {
+        should_swap = cmp > 0;
+    }
+    break;
+}
+```
+
+**Files Modified**:
+- `src/execution/return_and_sorting.zig` (lines 311-342)
+
+**Status**: FIXED (2025-12-28)
+
+---
+
+## Issue F02: NOT EXISTS in Cross-Join Returns Empty Results ✅ FIXED
+
+**Section**: 17.5 (enterprise_test_extended.gql)
+
+**Query**:
+```gql
+MATCH (u1:User), (u2:User)
+WHERE u1.city = u2.city AND u1.id < u2.id
+  AND NOT EXISTS { (u1)-[:FRIENDS_WITH]->(u2) }
+RETURN u1.name AS user1, u2.name AS user2, u1.city AS city;
+```
+
+**Expected**: `(Alice, Frank, NYC), (Carol, Frank, NYC)`
+**Actual**: `(0 rows)`
+
+**Root Cause**: In `src/execution/graph_algorithms.zig`, the `countPatternMatches()` function only checked if the SOURCE node (u1) was bound from the outer environment. It did NOT check if the TARGET node (u2) was also bound.
+
+When checking `EXISTS { (u1)-[:FRIENDS_WITH]->(u2) }`:
+- u1 was correctly bound from outer scope ✓
+- u2 was ALSO bound from outer scope, BUT the code matched ANY User node instead of the specific u2 ✗
+
+This caused EXISTS to return true for ALL pairs (since there was always SOME FRIENDS_WITH edge), making NOT EXISTS return false for everything.
+
+**Fix Applied** (2025-12-28):
+
+Added target node binding check for both single-hop and variable-length patterns:
+
+```zig
+// CANARY: REQ=REQ-GQL-EXISTS-CORRELATED-002
+// F02 Fix: Check if the target node (right side) is also bound in the environment
+var target_bound_id: ?u64 = null;
+const target_pattern = hop.right;
+if (target_pattern.name) |target_name| {
+    for (env.names, 0..) |env_name_target, j| {
+        if (std.mem.eql(u8, env_name_target, target_name)) {
+            const target_val = env.values[j];
+            if (target_val == .Node) {
+                target_bound_id = target_val.Node.id;
+            }
+            break;
+        }
+    }
+}
+
+// ... later in edge iteration ...
+// F02 Fix: If target node is bound, only match edges to that specific node
+if (target_bound_id) |tid| {
+    if (edge.to_id != tid) continue;
+}
+```
+
+**Files Modified**:
+- `src/execution/graph_algorithms.zig` (lines 99-111, 155-158, 216-231, 245-248)
+
+**Status**: FIXED (2025-12-28)
+
