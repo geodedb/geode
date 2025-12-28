@@ -1208,7 +1208,9 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
-                    // COLLECT aggregation - collect values into a list
+                    // CANARY: REQ=REQ-AGG-COLLECT-003; FEATURE="AggregationFunctions"; ASPECT=COLLECT_NULL_SKIP; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-28
+                    // B02 Fix: COLLECT should skip NULL values and return [] when all values are NULL
+                    // COLLECT aggregation - collect non-NULL values into a list
                     if (call.args.len == 1) {
                         var list = std.ArrayList(Value).initCapacity(allocator, bindings.len) catch unreachable;
                         for (bindings) |binding| {
@@ -1218,7 +1220,10 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .allocator = allocator,
                             };
                             const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
-                            list.append(allocator, val) catch {};
+                            // B02 Fix: Skip NULL values - COLLECT only collects non-NULL values
+                            if (val != .Null) {
+                                list.append(allocator, val) catch {};
+                            }
                         }
                         return Value{ .List = list.toOwnedSlice(allocator) catch &.{} };
                     }

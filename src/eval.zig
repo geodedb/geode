@@ -1138,7 +1138,8 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = result };
             }
 
-            // Handle special case for keys() and values() functions
+            // CANARY: REQ=REQ-GQL-KEYS-002; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+            // B06 Fix: Handle keys() for Map, Node, AND Edge types
             if (std.mem.eql(u8, function_name, "keys")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1146,6 +1147,24 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     .Map => |map| {
                         var keys = try allocator.alloc(Value, map.count());
                         var iter = map.iterator();
+                        var i: usize = 0;
+                        while (iter.next()) |entry| : (i += 1) {
+                            keys[i] = Value{ .Str = entry.key_ptr.* };
+                        }
+                        break :blk_call Value{ .List = keys };
+                    },
+                    .Node => |node| {
+                        var keys = try allocator.alloc(Value, node.properties.count());
+                        var iter = node.properties.iterator();
+                        var i: usize = 0;
+                        while (iter.next()) |entry| : (i += 1) {
+                            keys[i] = Value{ .Str = entry.key_ptr.* };
+                        }
+                        break :blk_call Value{ .List = keys };
+                    },
+                    .Edge => |edge| {
+                        var keys = try allocator.alloc(Value, edge.properties.count());
+                        var iter = edge.properties.iterator();
                         var i: usize = 0;
                         while (iter.next()) |entry| : (i += 1) {
                             keys[i] = Value{ .Str = entry.key_ptr.* };
@@ -3356,7 +3375,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // Handle map functions
+    // CANARY: REQ=REQ-GQL-KEYS-003; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+    // B06 Fix: Handle keys() for Map, Node, AND Edge types
     if (std.mem.eql(u8, function_name, "keys")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
@@ -3364,6 +3384,24 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Map => |map| {
                 var keys = try allocator.alloc(Value, map.count());
                 var iter = map.iterator();
+                var i: usize = 0;
+                while (iter.next()) |entry| : (i += 1) {
+                    keys[i] = Value{ .Str = entry.key_ptr.* };
+                }
+                return Value{ .List = keys };
+            },
+            .Node => |node| {
+                var keys = try allocator.alloc(Value, node.properties.count());
+                var iter = node.properties.iterator();
+                var i: usize = 0;
+                while (iter.next()) |entry| : (i += 1) {
+                    keys[i] = Value{ .Str = entry.key_ptr.* };
+                }
+                return Value{ .List = keys };
+            },
+            .Edge => |edge| {
+                var keys = try allocator.alloc(Value, edge.properties.count());
+                var iter = edge.properties.iterator();
                 var i: usize = 0;
                 while (iter.next()) |entry| : (i += 1) {
                     keys[i] = Value{ .Str = entry.key_ptr.* };

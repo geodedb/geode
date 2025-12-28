@@ -282,21 +282,72 @@ Several queries that should be valid GQL are failing with "Syntax error in query
 | 13.3 | CASE with ORDER BY on computed column | CASE expression with multiple WHEN |
 | 15.1 | De Morgan's laws test | `WHERE NOT (n.value > 0 AND n.value < 100)` |
 
-### Regression Analysis
+### Session 2 Fixes (2025-12-28)
 
-The previous run (2025-12-27, Run 9) reported "ALL 233 STATEMENTS PASS". The current run shows multiple failures. Possible causes:
+After initial fixes in Session 1, a second test run revealed remaining issues:
 
-1. **Code regression** - Recent changes may have broken aggregation logic
-2. **Data state** - Test graph may have pre-existing data affecting results
-3. **Environment** - Different server instance or configuration
+#### B02: COLLECT with NULLs - Additional Fix
 
-### Recommended Investigation
+**Issue**: COLLECT still returning `null` instead of `[]` for NULL values.
 
-1. Check recent changes to `src/execution/` for aggregation handling
-2. Verify OPTIONAL MATCH Cartesian product logic
-3. Review DISTINCT deduplication for NULL values
-4. Check path pattern `*0..N` handling for 0-length paths
-5. Verify `properties()` and `keys()` function implementations
+**Root Cause**: Two separate COLLECT handlers existed:
+1. `computeBindingGroupAggregation` in `aggregation_evaluation.zig` (line 1210)
+2. `computeAggregationForGroup` in `match_operations.zig` (line 1407)
+
+The second handler (used for OPTIONAL MATCH scenarios) was missing COLLECT support.
+
+**Fix Applied** (`src/execution/match_operations.zig:1503-1523`):
+- Added COLLECT handler to `computeAggregationForGroup`
+- Collects only non-NULL values into list
+- Returns empty list `[]` when all values are NULL
+- CANARY marker: REQ-AGG-COLLECT-004
+
+#### B06: keys() Function - Additional Fix
+
+**Issue**: keys(n) still returning NULL for nodes.
+
+**Root Cause**: Multiple handlers for `keys()` existed in `eval.zig` at lines 1142 and 3379. Earlier handlers only supported Map type.
+
+**Fix Applied** (`src/eval.zig:1142-1176, 3378-3412`):
+- Updated both handlers to support Node and Edge types
+- Returns property keys as list
+- CANARY marker: REQ-GQL-KEYS-002
+
+#### B07: Zero-Length Path - Additional Fix
+
+**Issue**: *0..N paths still not including self-match.
+
+**Root Cause**: At line 4979, code skipped paths with no edges using `else continue`.
+
+**Fix Applied** (`src/execution/match_operations.zig:4977-4982`):
+- Changed `else continue` to `else null` for edge lookup
+- Allows 0-length paths to proceed with edge=null
+- CANARY marker: REQ-GQL-ZERO-LEN-PATH-004
+
+#### Section 14.4: Required MATCH After OPTIONAL - New Fix
+
+**Issue**: Required MATCH after OPTIONAL MATCH not filtering out rows where required match fails.
+
+**Query**:
+```gql
+MATCH (n:TreeNode {id: 'root'})
+OPTIONAL MATCH (n)-[:CHILD]->(c:TreeNode)
+MATCH (c)-[:CHILD]->(gc:TreeNode)
+RETURN n.name AS root, c.name AS child, gc.name AS grandchild
+```
+
+**Expected**: Only rows where c has children (filters out c=B which has no children)
+
+**Root Cause**:
+1. Required chains with hops after optional chains weren't detected (only simple node chains were handled)
+2. Chain detection checked `chain.head != null` but for chains with hops, `chain.head` is null (nodes are in `hops[].left/right`)
+
+**Fix Applied** (`src/execution/match_operations.zig:1738-1751, 2065-2172`):
+- Extended detection to include chains with hops (`chain.hops.len > 0`)
+- Added relationship pattern matching for required chains
+- Uses `hops[0].left` for source node, `hops[0].right` for target
+- Filters out rows where required MATCH fails to find matches
+- CANARY markers: REQ-GQL-OPTIONAL-REQUIRED-CHAIN-001, REQ-GQL-OPTIONAL-REQUIRED-CHAIN-002
 
 ---
 

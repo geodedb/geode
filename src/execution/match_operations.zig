@@ -1500,6 +1500,28 @@ fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, grou
         return if (max) |m| Value{ .Int = m } else Value{ .Null = {} };
     }
 
+    // CANARY: REQ=REQ-AGG-COLLECT-004; FEATURE="AggregationFunctions"; ASPECT=COLLECT_GROUP; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+    // B02 Fix: Handle collect(expr) - collect non-NULL values into a list
+    if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
+        if (arg_ptr == null) return Value{ .List = &.{} };
+        var list = std.ArrayList(Value).initCapacity(allocator, group_rows.len) catch return Value{ .List = &.{} };
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            // B02 Fix: Skip NULL values - COLLECT only collects non-NULL values
+            if (val != .Null) {
+                list.append(allocator, val) catch {};
+            }
+        }
+        return Value{ .List = list.toOwnedSlice(allocator) catch &.{} };
+    }
+
     return Value{ .Null = {} };
 }
 
@@ -1701,19 +1723,31 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
     }
 
-    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-001; FEATURE="RequiredChainAfterOptional"; ASPECT=VariableCollection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-001; FEATURE="RequiredChainAfterOptional"; ASPECT=VariableCollection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
     // E27 Fix: Also collect required chains that come AFTER optional chains
     // e.g., MATCH (e:Employee) OPTIONAL MATCH ... MATCH (m:Employee {name: e.manager})
     // The third MATCH is required but comes after optional chains - we need to handle it
+    // Section 14.4 Fix: Also handle required chains WITH hops (relationship patterns)
+    // e.g., MATCH (n) OPTIONAL MATCH (n)-[:CHILD]->(c) MATCH (c)-[:CHILD]->(gc)
     var required_chains_after_optional = std.ArrayList(usize).initCapacity(allocator, 0) catch unreachable;
     defer required_chains_after_optional.deinit(allocator);
     var seen_optional = false;
     for (q.match.chains[1..], 1..) |chain, idx| {
         if (chain.is_optional) {
             seen_optional = true;
-        } else if (seen_optional and chain.head != null and chain.hops.len == 0) {
-            // This is a required simple node chain after an optional chain
-            if (chain.head.?.name) |v| try all_vars.append(allocator, v);
+        } else if (seen_optional) {
+            // This is a required chain after an optional chain
+            // Section 14.4 Fix: Handle both simple node chains AND chains with hops
+            // For chains with hops, chain.head is null - the nodes are in hops[].left and hops[].right
+            if (chain.hops.len == 0 and chain.head != null) {
+                // Simple node chain (no relationship pattern)
+                if (chain.head.?.name) |v| try all_vars.append(allocator, v);
+            } else if (chain.hops.len > 0) {
+                // Chain with hops - add hop right node variables
+                for (chain.hops) |hop| {
+                    if (hop.right.name) |v| try all_vars.append(allocator, v);
+                }
+            }
             try required_chains_after_optional.append(allocator, idx);
         }
     }
@@ -2002,8 +2036,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         current_rows.clearRetainingCapacity();
     }
 
-    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-002; FEATURE="RequiredChainAfterOptional"; ASPECT=PropertyPatternMatch; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-002; FEATURE="RequiredChainAfterOptional"; ASPECT=PropertyPatternMatch; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
     // E27 Fix: Process required chains after optional chains
+    // Section 14.4 Fix: Also handle chains with hops (relationship patterns)
     // For each row, look up nodes matching required chains with property patterns that reference other variables
     if (required_chains_after_optional.items.len > 0) {
         var processed_rows = std.ArrayList([]Value).initCapacity(allocator, rows.items.len) catch unreachable;
@@ -2025,89 +2060,201 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
             for (required_chains_after_optional.items) |chain_idx| {
                 const chain = q.match.chains[chain_idx];
-                const node_pattern = chain.head.?;
-                const target_labels = node_pattern.labels;
-                const target_props = node_pattern.props;
 
-                // Find the position in all_vars for this chain's variable
-                var var_idx: ?usize = null;
-                if (node_pattern.name) |var_name| {
-                    for (all_vars.items, 0..) |v, i| {
-                        if (std.mem.eql(u8, v, var_name)) {
-                            var_idx = i;
-                            break;
-                        }
-                    }
-                }
+                // Section 14.4 Fix: Handle chains with hops (relationship patterns)
+                if (chain.hops.len > 0) {
+                    // This chain has relationship patterns, e.g., MATCH (c)-[:CHILD]->(gc)
+                    // For chains with hops, chain.head is null - the left node is in hops[0].left
+                    const left_pattern = chain.hops[0].left;
+                    const head_var_name = left_pattern.name;
 
-                // Find matching node
-                var matched_node: ?*graph_store.Node = null;
-                var req_node_iter = store.nodes.iterator();
-                while (req_node_iter.next()) |entry| {
-                    const node = entry.value_ptr;
-
-                    // Filter by graph
-                    if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-
-                    // Filter by labels
-                    if (target_labels.len > 0) {
-                        var has_all_labels = true;
-                        for (target_labels) |required_label| {
-                            var found = false;
-                            for (node.labels) |node_label| {
-                                if (std.mem.eql(u8, required_label, node_label)) {
-                                    found = true;
-                                    break;
+                    // Find the source node from current row
+                    var source_node: ?*const graph_store.Node = null;
+                    if (head_var_name) |var_name| {
+                        for (all_vars.items, 0..) |v, i| {
+                            if (std.mem.eql(u8, v, var_name)) {
+                                if (current_row[i] == .Node) {
+                                    source_node = current_row[i].Node;
                                 }
-                            }
-                            if (!found) {
-                                has_all_labels = false;
                                 break;
                             }
                         }
-                        if (!has_all_labels) continue;
                     }
 
-                    // Check property pattern (this can reference variables like e.manager)
-                    var matches_props = true;
-                    if (target_props) |properties| {
-                        for (properties) |prop| {
-                            if (node.properties.get(prop.key)) |node_prop_val| {
-                                const node_val = switch (node_prop_val) {
-                                    .Null => Value{ .Null = {} },
-                                    .Bool => |b| Value{ .Bool = b },
-                                    .Int => |i| Value{ .Int = i },
-                                    .String => |s| Value{ .Str = s },
-                                    .Float => Value{ .Null = {} },
-                                    .ExtValue => |ext| Value{ .ExtValue = ext },
-                                };
-                                // Evaluate property value using current row's bindings (env)
-                                const prop_val = eval.evalExpr(allocator, prop.value.*, env) catch Value{ .Null = {} };
-                                if (!valuesEqual(node_val, prop_val)) {
+                    // If source node is NULL (from optional match), the required match fails
+                    if (source_node == null) {
+                        all_chains_matched = false;
+                        break;
+                    }
+
+                    // Process the hop to find matching edge and target node
+                    const hop = chain.hops[0]; // Handle first hop
+                    const rel_types = hop.rel.types;
+                    const rel_dir = hop.rel.dir;
+                    const target_pattern = hop.right;
+
+                    // Find edges from source_node matching the relationship type and direction
+                    var matched_target: ?*graph_store.Node = null;
+                    var edge_iter = store.edges.iterator();
+                    while (edge_iter.next()) |edge_entry| {
+                        const edge = edge_entry.value_ptr;
+
+                        // Check direction: rel_dir indicates arrow direction in pattern
+                        // .right means (a)-[]->(b), .left means (a)<-[]-(b)
+                        const source_matches = blk: {
+                            if (rel_dir == .left) {
+                                // (c)<-[:REL]-(gc) - edge goes TO source
+                                break :blk edge.to_id == source_node.?.id;
+                            } else if (rel_dir == .right) {
+                                // (c)-[:REL]->(gc) - edge goes FROM source
+                                break :blk edge.from_id == source_node.?.id;
+                            } else {
+                                // undirected
+                                break :blk edge.from_id == source_node.?.id or edge.to_id == source_node.?.id;
+                            }
+                        };
+                        if (!source_matches) continue;
+
+                        // Check relationship type
+                        if (rel_types.len > 0) {
+                            var type_matches = false;
+                            for (rel_types) |rt| {
+                                if (std.mem.eql(u8, edge.label, rt)) {
+                                    type_matches = true;
+                                    break;
+                                }
+                            }
+                            if (!type_matches) continue;
+                        }
+
+                        // Get target node
+                        const target_id = if (rel_dir == .left) edge.from_id else edge.to_id;
+                        const target_node = store.nodes.getPtr(target_id) orelse continue;
+
+                        // Check target labels
+                        if (target_pattern.labels.len > 0) {
+                            var has_all_labels = true;
+                            for (target_pattern.labels) |required_label| {
+                                var found = false;
+                                for (target_node.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        matched_target = target_node;
+                        break;
+                    }
+
+                    // Update row with matched target node
+                    if (target_pattern.name) |target_var| {
+                        for (all_vars.items, 0..) |v, i| {
+                            if (std.mem.eql(u8, v, target_var)) {
+                                if (matched_target) |tn| {
+                                    current_row[i] = Value{ .Node = tn };
+                                } else {
+                                    // Required chain didn't match - filter out this row
+                                    all_chains_matched = false;
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!all_chains_matched) break;
+                } else if (chain.head) |node_pattern| {
+                    // Original handling for simple node chains (no hops)
+                    const target_labels = node_pattern.labels;
+                    const target_props = node_pattern.props;
+
+                    // Find the position in all_vars for this chain's variable
+                    var var_idx: ?usize = null;
+                    if (node_pattern.name) |var_name| {
+                        for (all_vars.items, 0..) |v, i| {
+                            if (std.mem.eql(u8, v, var_name)) {
+                                var_idx = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Find matching node
+                    var matched_node: ?*graph_store.Node = null;
+                    var req_node_iter = store.nodes.iterator();
+                    while (req_node_iter.next()) |entry| {
+                        const node = entry.value_ptr;
+
+                        // Filter by graph
+                        if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+
+                        // Filter by labels
+                        if (target_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (target_labels) |required_label| {
+                                var found = false;
+                                for (node.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        // Check property pattern (this can reference variables like e.manager)
+                        var matches_props = true;
+                        if (target_props) |properties| {
+                            for (properties) |prop| {
+                                if (node.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => Value{ .Null = {} },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    };
+                                    // Evaluate property value using current row's bindings (env)
+                                    const prop_val = eval.evalExpr(allocator, prop.value.*, env) catch Value{ .Null = {} };
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        matches_props = false;
+                                        break;
+                                    }
+                                } else {
                                     matches_props = false;
                                     break;
                                 }
-                            } else {
-                                matches_props = false;
-                                break;
                             }
+                        }
+
+                        if (matches_props) {
+                            matched_node = node;
+                            break;
                         }
                     }
 
-                    if (matches_props) {
-                        matched_node = node;
-                        break;
-                    }
-                }
-
-                // Update row with matched node (or mark as not matching)
-                if (var_idx) |idx| {
-                    if (matched_node) |node| {
-                        current_row[idx] = Value{ .Node = node };
-                    } else {
-                        // Required chain didn't match - this row should be filtered out
-                        all_chains_matched = false;
-                        break;
+                    // Update row with matched node (or mark as not matching)
+                    if (var_idx) |idx| {
+                        if (matched_node) |node| {
+                            current_row[idx] = Value{ .Node = node };
+                        } else {
+                            // Required chain didn't match - this row should be filtered out
+                            all_chains_matched = false;
+                            break;
+                        }
                     }
                 }
             }
@@ -4975,9 +5122,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // CANARY: REQ=REQ-GQL-167; FEATURE="Variable-Length Path Binding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
+                        // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-004; FEATURE="ZeroLengthPaths"; ASPECT=EdgeBinding; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+                        // B07 Fix: For 0-length paths (single node, no edges), edge is null but path is still valid
                         // For variable-length paths, bind the entire path or the last edge
-                        const last_edge_id = if (path.edges.items.len > 0) path.edges.items[path.edges.items.len - 1] else continue;
-                        const edge_ptr = store.edges.getPtr(last_edge_id);
+                        const last_edge_id: ?u64 = if (path.edges.items.len > 0) path.edges.items[path.edges.items.len - 1] else null;
+                        const edge_ptr: ?*graph_store.Edge = if (last_edge_id) |eid| store.edges.getPtr(eid) else null;
 
                         // Create environment with all matched elements (including path variable if present)
                         var env_count: usize = 0;
