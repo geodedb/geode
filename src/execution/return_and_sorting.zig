@@ -83,8 +83,65 @@ fn evalOrderByExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env) !Valu
     }
 }
 
+// CANARY: REQ=REQ-GQL-ORDERBY-EXPR-MATCH-001; FEATURE="OrderByExpressionMatch"; ASPECT=ExpressionEquality; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+// D05 Fix: Compare two AST expressions for semantic equivalence
+// Used to match ORDER BY expressions against RETURN expressions when columns are aliased
+fn exprsEqual(a: ast.Expr, b: ast.Expr) bool {
+    // Check if the active union tags match
+    if (@intFromEnum(a) != @intFromEnum(b)) return false;
+
+    switch (a) {
+        .Ident => |a_id| {
+            const b_id = b.Ident;
+            return std.mem.eql(u8, a_id.orig, b_id.orig);
+        },
+        .Member => |a_mem| {
+            const b_mem = b.Member;
+            if (!std.mem.eql(u8, a_mem.field, b_mem.field)) return false;
+            return exprsEqual(a_mem.target.*, b_mem.target.*);
+        },
+        .Int => |a_int| return a_int == b.Int,
+        .String => |a_str| return std.mem.eql(u8, a_str, b.String),
+        .Bool => |a_bool| return a_bool == b.Bool,
+        .Binary => |a_bin| {
+            const b_bin = b.Binary;
+            if (a_bin.op != b_bin.op) return false;
+            return exprsEqual(a_bin.left.*, b_bin.left.*) and exprsEqual(a_bin.right.*, b_bin.right.*);
+        },
+        .Unary => |a_un| {
+            const b_un = b.Unary;
+            if (a_un.op != b_un.op) return false;
+            return exprsEqual(a_un.expr.*, b_un.expr.*);
+        },
+        .Call => |a_call| {
+            const b_call = b.Call;
+            // Compare callee expressions (typically Ident for function name)
+            if (!exprsEqual(a_call.callee.*, b_call.callee.*)) return false;
+            if (a_call.args.len != b_call.args.len) return false;
+            for (a_call.args, b_call.args) |a_arg, b_arg| {
+                if (!exprsEqual(a_arg.*, b_arg.*)) return false;
+            }
+            return true;
+        },
+        else => return false, // Complex expressions - conservative non-match
+    }
+}
+
+// CANARY: REQ=REQ-GQL-ORDERBY-RETURN-MATCH-001; FEATURE="OrderByReturnMatch"; ASPECT=ColumnIndexLookup; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+// D05 Fix: Find the column index for an ORDER BY expression by matching against RETURN expressions
+// Returns the column index if the ORDER BY expression matches a RETURN item expression
+fn findColumnIndexByExpression(order_expr: ast.Expr, return_items: []const ast.ReturnItem) ?usize {
+    for (return_items, 0..) |item, idx| {
+        if (exprsEqual(order_expr, item.expr)) {
+            return idx;
+        }
+    }
+    return null;
+}
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-009; FEATURE="FileModularization"; ASPECT=ReturnAndSorting; STATUS=IMPL; OWNER=refactoring; UPDATED=2025-10-17
-pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.OrderBy) !void {
+// D05 Fix: Extended sortRows that accepts optional RETURN items for expression matching
+pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.OrderBy, return_items: ?[]const ast.ReturnItem) !void {
     // Check if we're using ordinals (need to add flag) - do this before early return
     var uses_ordinal = false;
     for (order.keys) |key| {
@@ -136,6 +193,10 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
                             break;
                         }
                     }
+                    // D05 Fix: Try matching against RETURN expressions if not found by name
+                    if (col_idx_opt == null and return_items != null) {
+                        col_idx_opt = findColumnIndexByExpression(key.expr, return_items.?);
+                    }
                     if (col_idx_opt) |col_idx| {
                         val1 = result.rows[i][col_idx];
                         val2 = result.rows[i + 1][col_idx];
@@ -178,6 +239,14 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
                         }
                     }
 
+                    // CANARY: REQ=REQ-GQL-ORDERBY-ALIAS-001; FEATURE="OrderByAliasedColumn"; ASPECT=ExpressionMatch; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                    // D05 Fix: Third try - match ORDER BY expression against RETURN expressions
+                    // This handles cases like: RETURN n.name AS persons ORDER BY n.name
+                    // where the column is aliased but ORDER BY uses the original expression
+                    if (col_idx_opt == null and return_items != null) {
+                        col_idx_opt = findColumnIndexByExpression(key.expr, return_items.?);
+                    }
+
                     if (col_idx_opt) |col_idx| {
                         val1 = result.rows[i][col_idx];
                         val2 = result.rows[i + 1][col_idx];
@@ -199,22 +268,44 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
                     }
                 } else {
                     // Complex expression - need to evaluate it for each row
-                    // Create environment from row values
-                    const env1 = Env{
-                        .names = result.columns,
-                        .values = result.rows[i],
-                        .allocator = allocator,
-                    };
-                    const env2 = Env{
-                        .names = result.columns,
-                        .values = result.rows[i + 1],
-                        .allocator = allocator,
-                    };
+                    // D05 Fix: Try expression matching first for fast column lookup
+                    if (return_items) |items| {
+                        if (findColumnIndexByExpression(key.expr, items)) |col_idx| {
+                            val1 = result.rows[i][col_idx];
+                            val2 = result.rows[i + 1][col_idx];
+                        } else {
+                            // Fall back to expression evaluation
+                            const env1 = Env{
+                                .names = result.columns,
+                                .values = result.rows[i],
+                                .allocator = allocator,
+                            };
+                            const env2 = Env{
+                                .names = result.columns,
+                                .values = result.rows[i + 1],
+                                .allocator = allocator,
+                            };
+                            val1 = evalOrderByExpr(allocator, key.expr, env1) catch .{ .Null = {} };
+                            val2 = evalOrderByExpr(allocator, key.expr, env2) catch .{ .Null = {} };
+                        }
+                    } else {
+                        // Create environment from row values
+                        const env1 = Env{
+                            .names = result.columns,
+                            .values = result.rows[i],
+                            .allocator = allocator,
+                        };
+                        const env2 = Env{
+                            .names = result.columns,
+                            .values = result.rows[i + 1],
+                            .allocator = allocator,
+                        };
 
-                    // CANARY: REQ=REQ-GQL-ORDERBY-EXPR-001; FEATURE="OrderByExpressionEval"; ASPECT=ComplexExpr; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
-                    // Use evalOrderByExpr to handle member expressions like i.price in ORDER BY
-                    val1 = evalOrderByExpr(allocator, key.expr, env1) catch .{ .Null = {} };
-                    val2 = evalOrderByExpr(allocator, key.expr, env2) catch .{ .Null = {} };
+                        // CANARY: REQ=REQ-GQL-ORDERBY-EXPR-001; FEATURE="OrderByExpressionEval"; ASPECT=ComplexExpr; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                        // Use evalOrderByExpr to handle member expressions like i.price in ORDER BY
+                        val1 = evalOrderByExpr(allocator, key.expr, env1) catch .{ .Null = {} };
+                        val2 = evalOrderByExpr(allocator, key.expr, env2) catch .{ .Null = {} };
+                    }
                 }
 
                 const cmp = compareValuesWithNullsPolicy(val1, val2, key.nulls);
@@ -236,6 +327,12 @@ pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: a
             }
         }
     }
+}
+
+// CANARY: REQ=REQ-GQL-ORDERBY-WRAPPER-001; FEATURE="OrderBySortRowsWrapper"; ASPECT=BackwardsCompatibility; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+// D05 Fix: Wrapper function for backwards compatibility - calls sortRowsEx with null return items
+pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.OrderBy) !void {
+    return sortRowsEx(allocator, result, order, null);
 }
 
 fn compareValues(a: Value, b: Value) i8 {
@@ -523,4 +620,115 @@ fn executeSessionSet(allocator: std.mem.Allocator, ss: ast.SessionSetStatement) 
         .rows = try allocator.alloc([]Value, 0),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
+}
+
+// ============================================================================
+// Unit Tests for D05 Fix: ORDER BY Expression Matching
+// ============================================================================
+
+test "D05: exprsEqual - Ident expressions" {
+    const id1 = ast.Expr{ .Ident = .{ .orig = "name", .lower = "name" } };
+    const id2 = ast.Expr{ .Ident = .{ .orig = "name", .lower = "name" } };
+    const id3 = ast.Expr{ .Ident = .{ .orig = "other", .lower = "other" } };
+
+    try std.testing.expect(exprsEqual(id1, id2));
+    try std.testing.expect(!exprsEqual(id1, id3));
+}
+
+test "D05: exprsEqual - Member expressions" {
+    const allocator = std.testing.allocator;
+
+    // Create n.name Member expression
+    const target1 = try allocator.create(ast.Expr);
+    target1.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    defer allocator.destroy(target1);
+
+    const member1 = ast.Expr{ .Member = .{ .target = target1, .field = "name" } };
+
+    // Create identical n.name
+    const target2 = try allocator.create(ast.Expr);
+    target2.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    defer allocator.destroy(target2);
+
+    const member2 = ast.Expr{ .Member = .{ .target = target2, .field = "name" } };
+
+    // Create different n.age
+    const target3 = try allocator.create(ast.Expr);
+    target3.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    defer allocator.destroy(target3);
+
+    const member3 = ast.Expr{ .Member = .{ .target = target3, .field = "age" } };
+
+    try std.testing.expect(exprsEqual(member1, member2));
+    try std.testing.expect(!exprsEqual(member1, member3));
+}
+
+test "D05: exprsEqual - Int expressions" {
+    const int1 = ast.Expr{ .Int = 42 };
+    const int2 = ast.Expr{ .Int = 42 };
+    const int3 = ast.Expr{ .Int = 100 };
+
+    try std.testing.expect(exprsEqual(int1, int2));
+    try std.testing.expect(!exprsEqual(int1, int3));
+}
+
+test "D05: exprsEqual - different types" {
+    const int_expr = ast.Expr{ .Int = 42 };
+    const id_expr = ast.Expr{ .Ident = .{ .orig = "x", .lower = "x" } };
+
+    try std.testing.expect(!exprsEqual(int_expr, id_expr));
+}
+
+test "D05: findColumnIndexByExpression - finds matching expression" {
+    const allocator = std.testing.allocator;
+
+    // Create ORDER BY expression: n.name
+    const order_target = try allocator.create(ast.Expr);
+    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    defer allocator.destroy(order_target);
+
+    const order_expr = ast.Expr{ .Member = .{ .target = order_target, .field = "name" } };
+
+    // Create RETURN items: [n.name AS persons, n.age AS age]
+    const return_target1 = try allocator.create(ast.Expr);
+    return_target1.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    defer allocator.destroy(return_target1);
+
+    const return_target2 = try allocator.create(ast.Expr);
+    return_target2.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    defer allocator.destroy(return_target2);
+
+    const return_items = [_]ast.ReturnItem{
+        .{ .expr = ast.Expr{ .Member = .{ .target = return_target1, .field = "name" } }, .alias = "persons" },
+        .{ .expr = ast.Expr{ .Member = .{ .target = return_target2, .field = "age" } }, .alias = "age" },
+    };
+
+    // Find n.name in RETURN items - should be index 0
+    const result = findColumnIndexByExpression(order_expr, &return_items);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(usize, 0), result.?);
+}
+
+test "D05: findColumnIndexByExpression - returns null for non-matching" {
+    const allocator = std.testing.allocator;
+
+    // Create ORDER BY expression: n.unknown
+    const order_target = try allocator.create(ast.Expr);
+    order_target.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    defer allocator.destroy(order_target);
+
+    const order_expr = ast.Expr{ .Member = .{ .target = order_target, .field = "unknown" } };
+
+    // Create RETURN items: [n.name AS persons]
+    const return_target = try allocator.create(ast.Expr);
+    return_target.* = ast.Expr{ .Ident = .{ .orig = "n", .lower = "n" } };
+    defer allocator.destroy(return_target);
+
+    const return_items = [_]ast.ReturnItem{
+        .{ .expr = ast.Expr{ .Member = .{ .target = return_target, .field = "name" } }, .alias = "persons" },
+    };
+
+    // Should not find n.unknown
+    const result = findColumnIndexByExpression(order_expr, &return_items);
+    try std.testing.expect(result == null);
 }

@@ -131,6 +131,7 @@ pub const evaluateAggregation = aggregation_evaluation.evaluateAggregation;
 
 // Re-export return and sorting functions for backward compatibility (M1 Phase 9 extraction)
 pub const sortRows = return_and_sorting.sortRows;
+pub const sortRowsEx = return_and_sorting.sortRowsEx; // D05 Fix: Extended sortRows with RETURN items
 pub const isAggregationExpr = return_and_sorting.isAggregationExpr;
 pub const isNonConstantExpr = return_and_sorting.isNonConstantExpr;
 pub const executeReturnClauseWithEnv = return_and_sorting.executeReturnClauseWithEnv;

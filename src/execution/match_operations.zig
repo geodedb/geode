@@ -19,6 +19,7 @@ const findShortestPath = execution.findShortestPath;
 const isAggregationExpr = execution.isAggregationExpr;
 const isNonConstantExpr = execution.isNonConstantExpr;
 const sortRows = execution.sortRows;
+const sortRowsEx = execution.sortRowsEx; // D05 Fix: Extended sortRows with RETURN items
 const evaluateNodeExpression = execution.evaluateNodeExpression;
 const evaluateGroupAggregation = execution.evaluateGroupAggregation;
 const computeBindingGroupAggregation = execution.computeBindingGroupAggregation;
@@ -2823,8 +2824,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
     // CANARY: REQ=REQ-GQL-ORDER-BY-OPTIONAL-001; FEATURE="OrderByOptionalMatch"; ASPECT=Sorting; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
     // D04 Fix: Apply ORDER BY for optional match results - was missing, causing unsorted output
+    // D05 Fix: Use sortRowsEx with RETURN items to enable expression matching for aliased columns
     if (q.order_by) |order| {
-        try sortRows(allocator, &final_result, order);
+        try sortRowsEx(allocator, &final_result, order, q.ret.items);
     }
 
     // CANARY: REQ=REQ-GQL-OFFSET-OPTIONAL-001; FEATURE="OffsetOptionalMatch"; ASPECT=Pagination; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
@@ -6153,9 +6155,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         }
 
         // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-001; FEATURE="OrderByPostWith"; ASPECT=FinalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
-        // Apply ORDER BY AFTER WITH clause transformation to sort final projected results
+        // CANARY: REQ=REQ-GQL-ORDERBY-ALIAS-002; FEATURE="OrderByAliasedColumn"; ASPECT=SimpleMatchPath; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+        // D05 Fix: Apply ORDER BY with RETURN items to enable expression matching for aliased columns
+        // This allows ORDER BY n.name to work when RETURN clause uses n.name AS alias
         if (q.order_by) |order| {
-            try sortRows(allocator, &result, order);
+            try sortRowsEx(allocator, &result, order, q.ret.items);
         }
 
         // Apply DISTINCT deduplication if requested

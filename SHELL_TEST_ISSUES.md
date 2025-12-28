@@ -2,20 +2,30 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-28 (Advanced Testing - Run 12) ⚠️ IN PROGRESS
+## Current Test Run: 2025-12-28 (Advanced Testing - Run 13) ✅ COMPLETE
 
 **Test File**: `./testing/shell/enterprise_test_advanced.gql` (233 statements)
 
-**Status**: ⚠️ **4 NEW ISSUES FOUND** - C01-C05 fixed, D01-D04 discovered
+**Status**: ✅ **ALL ISSUES RESOLVED** - D01-D05 complete
 
-### New Issues Found (2025-12-28 Run 12)
+### Run 13 Results Summary
+
+- **Statements Executed**: 233/233 ✅
+- **Expected Errors**: 4 (2x IntegerOverflow for boundary tests, 2x Syntax error for D02 inline comments)
+- **D03 Fix Verified**: Section 14.3 correctly returns NULL for impossible property filter ✅
+- **C04 Fix Verified**: Section 14.4 correctly returns 3 grandchildren ✅
+- **D04 Fix Verified**: OPTIONAL MATCH ORDER BY now working ✅
+- **D05 Fixed**: ORDER BY on aliased columns in simple MATCH now working ✅
+
+### Issues Summary (2025-12-28)
 
 | ID | Section | Type | Severity | Description | Status |
 |----|---------|------|----------|-------------|--------|
 | D01 | 12.6 | WITH Clause | P2 | Chained WITH discarding columns causes syntax error | ✅ NOT A BUG (D02's inline comment caused error) |
 | D02 | 13.3, 12.6 | Comments | P3 | Inline SQL comments (--) cause syntax error | ✅ BY DESIGN (GB02 conformance) |
 | D03 | 14.3 | OPTIONAL MATCH | P1 | Property filter on target node not applied - returns unfiltered children | ✅ FIXED |
-| D04 | 7.1, 9.2, 14.3 | ORDER BY | P2 | ORDER BY on string columns inconsistent across queries | ✅ FIXED |
+| D04 | 14.3, 14.4 | ORDER BY | P2 | ORDER BY not applied in OPTIONAL MATCH code path | ✅ FIXED |
+| D05 | 7.1 | ORDER BY | P2 | ORDER BY on aliased columns in simple MATCH fails to sort | ✅ FIXED |
 
 ### Previously Fixed Issues (2025-12-28 Run 11)
 
@@ -174,6 +184,77 @@ if (q.offset) |skip_count| { ... }
 // D04 Fix: Apply LIMIT for optional match results
 if (q.limit) |limit_count| { ... }
 ```
+
+#### D05: ORDER BY on Aliased Columns in Simple MATCH (P2 NEW)
+
+**Section**: 7.1
+
+**Query**:
+```gql
+MATCH (n:Person)
+RETURN n.name AS persons
+ORDER BY n.name;
+```
+
+**Expected** (alphabetical): CEO, Contractor1, Guest, Worker1, Worker2
+
+**Actual**: Guest, CEO, Worker1, Worker2, Contractor1 (insertion order, not sorted)
+
+**Root Cause Analysis**:
+
+The `sortRows` function in `src/execution/return_and_sorting.zig` cannot correctly resolve ORDER BY expressions that reference MATCH variables when the RETURN clause uses a different alias.
+
+Flow for `MATCH (n:Person) RETURN n.name AS persons ORDER BY n.name`:
+1. Result columns are `["persons"]` (the alias from RETURN)
+2. ORDER BY expression is `n.name` (Member expression with target=`n`, field=`name`)
+3. `sortRows` at line 147-199 handles Member expressions:
+   - Line 156-162: Looks for column named `name` → NOT FOUND
+   - Line 165-179: Looks for column named `n.name` → NOT FOUND
+   - Line 186-199: Falls back to `evalOrderByExpr`
+4. `evalOrderByExpr` at line 56 calls `eval.evalExpr(expr, env)`
+5. The env only has `names = ["persons"]`, not `n`
+6. Expression `n.name` tries to resolve `n` → NOT FOUND → Returns NULL
+7. Sorting compares NULLs which are all equal → No sorting occurs
+
+**Note**: This is a DIFFERENT code path from D04. D04 fixed ORDER BY in `executeMatchWithOptionalPatterns` (for OPTIONAL MATCH), but this affects the simple MATCH path in `executeMatchQueryImpl` at line 6157.
+
+**Proposed Fix**:
+
+The `sortRows` function needs to resolve ORDER BY expressions against RETURN expressions, not just column names. When ORDER BY `n.name` matches RETURN `n.name AS persons`, it should use the `persons` column index.
+
+Option 1: Pass RETURN items to sortRows and match expressions
+Option 2: Store expression→column mappings in ExecutionResult
+Option 3: Include match variable bindings in the environment during ORDER BY evaluation
+
+**Fix Applied** (`src/execution/return_and_sorting.zig`):
+
+1. Added `exprsEqual` function (lines 89-127) to compare AST expressions for semantic equivalence
+2. Added `findColumnIndexByExpression` function (lines 132-139) to find column index by matching ORDER BY expressions against RETURN expressions
+3. Created `sortRowsEx` function that accepts optional RETURN items for expression matching
+4. Updated `sortRows` to be a wrapper calling `sortRowsEx` with null
+5. Updated key call sites in `match_operations.zig` to use `sortRowsEx` with `q.ret.items`
+
+```zig
+// D05 Fix: Compare two AST expressions for semantic equivalence
+fn exprsEqual(a: ast.Expr, b: ast.Expr) bool {
+    if (@intFromEnum(a) != @intFromEnum(b)) return false;
+    switch (a) {
+        .Ident => |a_id| return std.mem.eql(u8, a_id.orig, b.Ident.orig),
+        .Member => |a_mem| {
+            if (!std.mem.eql(u8, a_mem.field, b.Member.field)) return false;
+            return exprsEqual(a_mem.target.*, b.Member.target.*);
+        },
+        // ... other cases
+    }
+}
+
+// D05 Fix: Third try - match ORDER BY expression against RETURN expressions
+if (col_idx_opt == null and return_items != null) {
+    col_idx_opt = findColumnIndexByExpression(key.expr, return_items.?);
+}
+```
+
+**Status**: ✅ FIXED
 
 ### Fixes Applied (2025-12-28 Run 11)
 
