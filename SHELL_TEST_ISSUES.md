@@ -2,7 +2,137 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-28 (Advanced Testing - Run 10) ✅ FIXED
+## Current Test Run: 2025-12-28 (Advanced Testing - Run 11) ⚠️ IN PROGRESS
+
+**Test File**: `./testing/shell/enterprise_test_advanced.gql` (233 statements)
+
+**Status**: ⚠️ **2 ISSUES REMAINING** - B01-B10 regressions fixed, C03+C04+C05 fixed
+
+### New Issues Found (2025-12-28 Run 11)
+
+| ID | Section | Type | Severity | Description | Status |
+|----|---------|------|----------|-------------|--------|
+| C01 | 9.6 | EXISTS Subquery | P2 | EXISTS with outer variable reference returns 0 rows | ⚠️ OPEN |
+| C02 | 9.7 | COUNT Subquery | P2 | Syntax error on COUNT { MATCH ... WHERE } | ⚠️ OPEN |
+| C03 | 13.3 | CASE Expression | P2 | Syntax error on CASE with ORDER BY | ✅ FIXED (B10) |
+| C04 | 14.4 | Required MATCH | P1 | Missing grandchild A2 (2 rows instead of 3) | ✅ FIXED |
+| C05 | 17.3 | COUNT DISTINCT | P2 | COUNT(DISTINCT m.name) returns null instead of 0 | ✅ FIXED |
+
+### Fixes Applied (2025-12-28 Run 11)
+
+#### C04: Required MATCH After OPTIONAL Missing Multiple Expansions - CRITICAL FIX
+
+**Root Cause**: When a required MATCH clause follows an OPTIONAL MATCH and expands to multiple targets (e.g., child A has two grandchildren A2 and A3), the code at `match_operations.zig:2153` was using `break` after finding the first matching target, instead of collecting ALL matching targets.
+
+**Fix Applied** (`src/execution/match_operations.zig:2098-2192`):
+- Changed from finding single `matched_target` with early `break` to using `ArrayList` to collect all matching targets
+- After collecting all matches, first target updates current row, additional targets create new expanded rows
+- Each expanded row is a copy of current_row with the target variable replaced
+- CANARY marker: REQ-GQL-OPTIONAL-REQUIRED-EXPAND-001
+
+```zig
+// C04 Fix: Collect ALL matching targets into a list, not just the first
+var matched_targets = std.ArrayList(*graph_store.Node).initCapacity(allocator, 4) catch continue;
+defer matched_targets.deinit(allocator);
+// ... iterate edges, no break after finding match ...
+matched_targets.append(allocator, target_node) catch continue;
+// ... after loop, expand to multiple rows if multiple targets found ...
+```
+
+#### C05: COUNT(DISTINCT) Returns NULL Instead of 0 - FIX
+
+**Root Cause**: The `computeAggregationForGroup` function in `match_operations.zig` and `computeBindingGroupAggregation` function in `aggregation_evaluation.zig` handled `count`, `sum`, `min`, `max`, and `collect` but did NOT handle `countDistinct`. When COUNT(DISTINCT expr) was called, it fell through to the default case which returned `Value{ .Null = {} }`.
+
+**Fix Applied**:
+1. `src/execution/match_operations.zig:1437-1472` - Added `countDistinct` handler in `computeAggregationForGroup`
+2. `src/execution/aggregation_evaluation.zig:1056-1090` - Added `countDistinct` handler in `computeBindingGroupAggregation`
+
+Both handlers:
+- Use `AutoHashMap` for integers and `StringHashMap` for strings to track unique values
+- Track boolean values separately (has_true, has_false flags)
+- Skip null values (don't count them)
+- Return 0 when no non-null values exist
+- CANARY markers: REQ-COUNT-DISTINCT-GROUP-001, REQ-COUNT-DISTINCT-BINDING-001
+
+### Issue Details
+
+#### C01: EXISTS Subquery with Outer Variable Returns 0 Rows
+
+**Section**: 9.6
+
+**Query**:
+```gql
+MATCH (p:TreeNode) WHERE p.level = 0
+AND EXISTS { MATCH (p)-[:CHILD*1..3]->(d:TreeNode) WHERE d.level = 3 }
+RETURN p.name AS has_depth_3;
+```
+
+**Expected**: `Root` (path Root→A→A1→A1X reaches level 3)
+
+**Actual**: `(0 rows)`
+
+**Root Cause**: EXISTS subquery variable binding for outer variable `p` not working with variable-length paths.
+
+#### C02: COUNT Subquery Syntax Error
+
+**Section**: 9.7
+
+**Query**:
+```gql
+MATCH (p:TreeNode {id: 'root'})
+RETURN p.name, COUNT { MATCH (p)-[:CHILD*1..3]->(d:TreeNode) WHERE d.level = 2 } AS level2_descendants;
+```
+
+**Actual**: `Error: Syntax error in query`
+
+#### C03: CASE Expression Syntax Error
+
+**Section**: 13.3
+
+**Query**:
+```gql
+MATCH (n:NumericTest) RETURN n.label,
+  CASE WHEN n.value >= 0 THEN 'non-negative' ... END AS sign_category
+ORDER BY n.value;
+```
+
+**Actual**: `Error: Syntax error in query`
+
+#### C04: Required MATCH After OPTIONAL Missing Multiple Expansions (P1 CRITICAL)
+
+**Section**: 14.4
+
+**Query**:
+```gql
+MATCH (n:TreeNode {id: 'root'})
+OPTIONAL MATCH (n)-[:CHILD]->(c:TreeNode)
+MATCH (c)-[:CHILD]->(gc:TreeNode)
+RETURN n.name AS root, c.name AS child, gc.name AS grandchild;
+```
+
+**Expected**: 3 rows (A/A1, A/A2, B/B1)
+
+**Actual**: 2 rows (A/A1, B/B1) - A2 is missing
+
+**Root Cause**: When required MATCH after OPTIONAL expands to multiple targets (e.g., A→A1 and A→A2), only the first target is returned. Code at `match_operations.zig:2153` breaks after finding first match instead of expanding to all matches.
+
+#### C05: COUNT DISTINCT Returns NULL Instead of 0
+
+**Section**: 17.3
+
+**Query**:
+```gql
+MATCH (n:Entity) OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN count(DISTINCT m.name) AS distinct_count, count(m.name) AS total_count;
+```
+
+**Expected**: `0 | 0`
+
+**Actual**: `null | 0`
+
+---
+
+## Previous Test Run: 2025-12-28 (Advanced Testing - Run 10) ✅ FIXED
 
 **Test File**: `./testing/shell/enterprise_test_advanced.gql` (233 statements)
 

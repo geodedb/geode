@@ -1434,6 +1434,43 @@ fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, grou
         return Value{ .Int = count };
     }
 
+    // CANARY: REQ=REQ-COUNT-DISTINCT-GROUP-001; FEATURE="CountDistinctGroupAggregation"; ASPECT=GroupAggregation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+    // C05 Fix: Handle countDistinct(expr) - COUNT(DISTINCT expr) for groups
+    if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
+        if (arg_ptr == null) return Value{ .Int = 0 };
+        var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
+        defer unique_int_values.deinit();
+        var unique_str_values = std.StringHashMap(void).init(allocator);
+        defer unique_str_values.deinit();
+        var has_true = false;
+        var has_false = false;
+
+        for (group_rows) |row| {
+            const env = Env{
+                .names = columns,
+                .values = row,
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            switch (val) {
+                .Int => |i| {
+                    unique_int_values.put(i, {}) catch {};
+                },
+                .Str => |s| {
+                    unique_str_values.put(s, {}) catch {};
+                },
+                .Bool => |b| {
+                    if (b) has_true = true else has_false = true;
+                },
+                else => {}, // Skip nulls and other types
+            }
+        }
+        const bool_count: usize = (if (has_true) @as(usize, 1) else 0) + (if (has_false) @as(usize, 1) else 0);
+        return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count() + bool_count) };
+    }
+
     // Handle sum(expr)
     if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
         if (arg_ptr == null) return Value{ .Null = {} };
@@ -2061,7 +2098,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             for (required_chains_after_optional.items) |chain_idx| {
                 const chain = q.match.chains[chain_idx];
 
-                // Section 14.4 Fix: Handle chains with hops (relationship patterns)
+                // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-EXPAND-001; FEATURE="RequiredChainExpansion"; ASPECT=MultiTargetExpand; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                // Section 14.4 Fix (C04): Handle chains with hops (relationship patterns)
+                // Must expand to ALL matching targets, not just the first one
                 if (chain.hops.len > 0) {
                     // This chain has relationship patterns, e.g., MATCH (c)-[:CHILD]->(gc)
                     // For chains with hops, chain.head is null - the left node is in hops[0].left
@@ -2087,14 +2126,16 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         break;
                     }
 
-                    // Process the hop to find matching edge and target node
+                    // Process the hop to find ALL matching edges and target nodes
                     const hop = chain.hops[0]; // Handle first hop
                     const rel_types = hop.rel.types;
                     const rel_dir = hop.rel.dir;
                     const target_pattern = hop.right;
 
-                    // Find edges from source_node matching the relationship type and direction
-                    var matched_target: ?*graph_store.Node = null;
+                    // C04 Fix: Collect ALL matching targets into a list, not just the first
+                    var matched_targets = std.ArrayList(*graph_store.Node).initCapacity(allocator, 4) catch continue;
+                    defer matched_targets.deinit(allocator);
+
                     var edge_iter = store.edges.iterator();
                     while (edge_iter.next()) |edge_entry| {
                         const edge = edge_entry.value_ptr;
@@ -2150,26 +2191,44 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                             if (!has_all_labels) continue;
                         }
 
-                        matched_target = target_node;
+                        // C04 Fix: Add to list instead of breaking after first match
+                        matched_targets.append(allocator, target_node) catch continue;
+                    }
+
+                    // If no matches found, filter out this row
+                    if (matched_targets.items.len == 0) {
+                        all_chains_matched = false;
                         break;
                     }
 
-                    // Update row with matched target node
+                    // C04 Fix: Find the target variable index
+                    var target_var_idx: ?usize = null;
                     if (target_pattern.name) |target_var| {
                         for (all_vars.items, 0..) |v, i| {
                             if (std.mem.eql(u8, v, target_var)) {
-                                if (matched_target) |tn| {
-                                    current_row[i] = Value{ .Node = tn };
-                                } else {
-                                    // Required chain didn't match - filter out this row
-                                    all_chains_matched = false;
-                                }
+                                target_var_idx = i;
                                 break;
                             }
                         }
                     }
 
-                    if (!all_chains_matched) break;
+                    // C04 Fix: Expand to multiple rows if multiple targets found
+                    if (target_var_idx) |idx| {
+                        // First target updates current_row (will be added at end of loop)
+                        current_row[idx] = Value{ .Node = matched_targets.items[0] };
+
+                        // Additional targets create new rows added directly to processed_rows
+                        if (matched_targets.items.len > 1) {
+                            for (matched_targets.items[1..]) |extra_target| {
+                                const expanded_row = allocator.alloc(Value, current_row.len) catch continue;
+                                @memcpy(expanded_row, current_row);
+                                expanded_row[idx] = Value{ .Node = extra_target };
+                                processed_rows.append(allocator, expanded_row) catch {};
+                            }
+                        }
+                    }
+
+                    // Continue to next chain (don't break - we've handled this chain)
                 } else if (chain.head) |node_pattern| {
                     // Original handling for simple node chains (no hops)
                     const target_labels = node_pattern.labels;

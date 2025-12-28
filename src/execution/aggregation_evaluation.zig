@@ -1053,6 +1053,41 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                         return Value{ .Int = count };
                     }
                     return Value{ .Int = @intCast(bindings.len) };
+                } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
+                    // CANARY: REQ=REQ-COUNT-DISTINCT-BINDING-001; FEATURE="CountDistinctBindings"; ASPECT=BindingAggregation; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-28
+                    // C05 Fix: COUNT(DISTINCT expr) - count unique non-null values across bindings
+                    if (call.args.len == 1) {
+                        var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
+                        defer unique_int_values.deinit();
+                        var unique_str_values = std.StringHashMap(void).init(allocator);
+                        defer unique_str_values.deinit();
+                        var has_true = false;
+                        var has_false = false;
+
+                        for (bindings) |binding| {
+                            const env = Env{
+                                .names = binding.env_names,
+                                .values = binding.env_values,
+                                .allocator = allocator,
+                            };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            switch (val) {
+                                .Int => |i| {
+                                    unique_int_values.put(i, {}) catch {};
+                                },
+                                .Str => |s| {
+                                    unique_str_values.put(s, {}) catch {};
+                                },
+                                .Bool => |b| {
+                                    if (b) has_true = true else has_false = true;
+                                },
+                                else => {}, // Skip nulls and other types
+                            }
+                        }
+                        const bool_count: usize = (if (has_true) @as(usize, 1) else 0) + (if (has_false) @as(usize, 1) else 0);
+                        return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count() + bool_count) };
+                    }
+                    return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation over bindings
                     if (call.args.len == 1) {
