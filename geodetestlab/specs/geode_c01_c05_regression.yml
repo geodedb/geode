@@ -197,3 +197,79 @@ tests:
       row_count: 1
       contains:
         - knows_count: 2
+
+  # D03: OPTIONAL MATCH property filter on target node must be applied
+  # Bug was: {level: 999} filter was ignored, returning all children
+  - name: "D03: OPTIONAL MATCH with impossible property filter returns null"
+    query: |
+      MATCH (n:TreeNode)
+      OPTIONAL MATCH (n)-[:CHILD]->(c:TreeNode {level: 999})
+      RETURN n.name, c.name AS impossible_child
+      ORDER BY n.name
+      LIMIT 5
+    expect:
+      row_count: 5
+      ordered:
+        - name: "A"
+          impossible_child: null
+        - name: "A1"
+          impossible_child: null
+        - name: "A2"
+          impossible_child: null
+        - name: "B"
+          impossible_child: null
+        - name: "B1"
+          impossible_child: null
+
+  - name: "D03: OPTIONAL MATCH with matching property filter returns values"
+    query: |
+      MATCH (n:TreeNode {id: 'root'})
+      OPTIONAL MATCH (n)-[:CHILD]->(c:TreeNode {level: 1})
+      RETURN n.name, c.name AS child
+      ORDER BY c.name
+    expect:
+      row_count: 2
+      ordered:
+        - name: "Root"
+          child: "A"
+        - name: "Root"
+          child: "B"
+
+  # D04: ORDER BY must be applied in OPTIONAL MATCH code path
+  # Bug was: executeMatchWithOptionalPatterns didn't call sortRows
+  - name: "D04: ORDER BY on string columns in OPTIONAL MATCH"
+    query: |
+      MATCH (n:Person)
+      OPTIONAL MATCH (n)-[:KNOWS]->(f:Person)
+      RETURN n.name AS person, f.name AS friend
+      ORDER BY n.name, f.name
+    expect:
+      row_count: 5
+      ordered:
+        - person: "Alice"
+          friend: "Bob"
+        - person: "Alice"
+          friend: "Charlie"
+        - person: "Bob"
+          friend: "Dave"
+        - person: "Charlie"
+          friend: null
+        - person: "Dave"
+          friend: null
+
+  - name: "D04: LIMIT with ORDER BY in OPTIONAL MATCH"
+    query: |
+      MATCH (n:TreeNode)
+      OPTIONAL MATCH (n)-[:CHILD]->(c:TreeNode)
+      RETURN n.name AS parent, c.name AS child
+      ORDER BY n.name
+      LIMIT 3
+    expect:
+      row_count: 3
+      ordered:
+        - parent: "A"
+          child: "A1"
+        - parent: "A"
+          child: "A2"
+        - parent: "A1"
+          child: null

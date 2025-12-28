@@ -1960,6 +1960,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(base_node.id) else &[_]graph_store.Edge{};
 
                     // Process outgoing edges
+                    const right_props = hop.right.props;
                     for (outgoing_edges) |edge| {
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
@@ -1983,6 +1984,40 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                                 }
                             }
                             if (!has_all_labels) continue;
+                        }
+
+                        // CANARY: REQ=REQ-GQL-OPTIONAL-TARGET-PROPS-001; FEATURE="OptionalMatchTargetNodeProps"; ASPECT=PropertyFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                        // D03 Fix: Filter by property pattern on target node (e.g., {level: 999})
+                        if (right_props) |properties| {
+                            var matches_props = true;
+                            const base_env = Env{
+                                .names = all_vars.items,
+                                .values = existing_row,
+                                .param_names = param_names,
+                                .param_values = param_values,
+                                .allocator = allocator,
+                            };
+                            for (properties) |prop| {
+                                if (right_node.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => Value{ .Null = {} },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    };
+                                    const prop_val = eval.evalExpr(allocator, prop.value.*, base_env) catch Value{ .Null = {} };
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        matches_props = false;
+                                        break;
+                                    }
+                                } else {
+                                    matches_props = false;
+                                    break;
+                                }
+                            }
+                            if (!matches_props) continue;
                         }
 
                         // Clone existing row and fill in this chain's variables at correct positions
@@ -2024,6 +2059,40 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                                 }
                             }
                             if (!has_all_labels) continue;
+                        }
+
+                        // CANARY: REQ=REQ-GQL-OPTIONAL-TARGET-PROPS-002; FEATURE="OptionalMatchTargetNodeProps"; ASPECT=IncomingEdgeFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                        // D03 Fix: Filter by property pattern on target node (incoming edge case)
+                        if (right_props) |properties| {
+                            var matches_props = true;
+                            const base_env = Env{
+                                .names = all_vars.items,
+                                .values = existing_row,
+                                .param_names = param_names,
+                                .param_values = param_values,
+                                .allocator = allocator,
+                            };
+                            for (properties) |prop| {
+                                if (right_node.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => Value{ .Null = {} },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    };
+                                    const prop_val = eval.evalExpr(allocator, prop.value.*, base_env) catch Value{ .Null = {} };
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        matches_props = false;
+                                        break;
+                                    }
+                                } else {
+                                    matches_props = false;
+                                    break;
+                                }
+                            }
+                            if (!matches_props) continue;
                         }
 
                         // Clone existing row and fill in this chain's variables at correct positions
@@ -2750,6 +2819,41 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     // B03 Fix: Apply DISTINCT deduplication if requested - this properly deduplicates NULL values
     if (q.ret.distinct) {
         try applyDistinct(allocator, &final_result);
+    }
+
+    // CANARY: REQ=REQ-GQL-ORDER-BY-OPTIONAL-001; FEATURE="OrderByOptionalMatch"; ASPECT=Sorting; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // D04 Fix: Apply ORDER BY for optional match results - was missing, causing unsorted output
+    if (q.order_by) |order| {
+        try sortRows(allocator, &final_result, order);
+    }
+
+    // CANARY: REQ=REQ-GQL-OFFSET-OPTIONAL-001; FEATURE="OffsetOptionalMatch"; ASPECT=Pagination; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // D04 Fix: Apply OFFSET for optional match results - was missing
+    if (q.offset) |skip_count| {
+        if (skip_count < final_result.rows.len) {
+            const new_rows = try allocator.alloc([]Value, final_result.rows.len - skip_count);
+            for (final_result.rows[skip_count..], 0..) |row, i| {
+                new_rows[i] = row;
+            }
+            allocator.free(final_result.rows);
+            final_result.rows = new_rows;
+        } else {
+            allocator.free(final_result.rows);
+            final_result.rows = try allocator.alloc([]Value, 0);
+        }
+    }
+
+    // CANARY: REQ=REQ-GQL-LIMIT-OPTIONAL-001; FEATURE="LimitOptionalMatch"; ASPECT=Pagination; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // D04 Fix: Apply LIMIT for optional match results - was missing
+    if (q.limit) |limit_count| {
+        if (limit_count < final_result.rows.len) {
+            const new_rows = try allocator.alloc([]Value, limit_count);
+            for (final_result.rows[0..limit_count], 0..) |row, i| {
+                new_rows[i] = row;
+            }
+            allocator.free(final_result.rows);
+            final_result.rows = new_rows;
+        }
     }
 
     return final_result;

@@ -2,13 +2,22 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-28 (Advanced Testing - Run 11) ✅ COMPLETE
+## Current Test Run: 2025-12-28 (Advanced Testing - Run 12) ⚠️ IN PROGRESS
 
 **Test File**: `./testing/shell/enterprise_test_advanced.gql` (233 statements)
 
-**Status**: ✅ **ALL ISSUES FIXED** - B01-B10 regressions fixed, C01-C05 all fixed
+**Status**: ⚠️ **4 NEW ISSUES FOUND** - C01-C05 fixed, D01-D04 discovered
 
-### New Issues Found (2025-12-28 Run 11)
+### New Issues Found (2025-12-28 Run 12)
+
+| ID | Section | Type | Severity | Description | Status |
+|----|---------|------|----------|-------------|--------|
+| D01 | 12.6 | WITH Clause | P2 | Chained WITH discarding columns causes syntax error | ✅ NOT A BUG (D02's inline comment caused error) |
+| D02 | 13.3, 12.6 | Comments | P3 | Inline SQL comments (--) cause syntax error | ✅ BY DESIGN (GB02 conformance) |
+| D03 | 14.3 | OPTIONAL MATCH | P1 | Property filter on target node not applied - returns unfiltered children | ✅ FIXED |
+| D04 | 7.1, 9.2, 14.3 | ORDER BY | P2 | ORDER BY on string columns inconsistent across queries | ✅ FIXED |
+
+### Previously Fixed Issues (2025-12-28 Run 11)
 
 | ID | Section | Type | Severity | Description | Status |
 |----|---------|------|----------|-------------|--------|
@@ -17,6 +26,154 @@ Issues discovered during comprehensive shell testing (`./testing/shell/comprehen
 | C03 | 13.3 | CASE Expression | P2 | Syntax error on CASE with ORDER BY | ✅ FIXED (B10) |
 | C04 | 14.4 | Required MATCH | P1 | Missing grandchild A2 (2 rows instead of 3) | ✅ FIXED |
 | C05 | 17.3 | COUNT DISTINCT | P2 | COUNT(DISTINCT m.name) returns null instead of 0 | ✅ FIXED |
+
+### Issue Details (Run 12)
+
+#### D01: Chained WITH Discarding Columns - NOT A BUG
+
+**Section**: 12.6
+
+**Query**:
+```gql
+MATCH (n:NumericTest)
+WITH n.label AS label, n.value AS val, n.id AS id
+WITH label, val  -- Discard id
+RETURN label
+ORDER BY val
+LIMIT 3;
+```
+
+**Actual**: `Error: Syntax error in query`
+
+**Resolution**: The syntax error is caused by the inline comment `-- Discard id` (see D02). Without the comment, the query parses and executes correctly:
+```gql
+MATCH (n:NumericTest) WITH n.label AS label, n.value AS val, n.id AS id WITH label, val RETURN label ORDER BY val LIMIT 3
+-- Returns: [negative, zero, positive] correctly ordered by val
+```
+
+**Note**: There's a separate ORDER BY limitation when referencing columns not in RETURN, but chained WITH clauses work correctly.
+
+#### D02: Inline SQL Comments Disabled - BY DESIGN (GB02)
+
+**Section**: 13.3, 12.6
+
+**Query**:
+```gql
+MATCH (n:NumericTest)
+RETURN n.label,
+       CASE
+           WHEN n.value >= 0 THEN 'non-negative'
+           WHEN n.value = 0 THEN 'zero'  -- Never reached for 0
+           ELSE 'negative'
+       END AS sign_category
+ORDER BY n.value;
+```
+
+**Actual**: `Error: Syntax error in query`
+
+**Resolution**: This is **intentional behavior** per GQL conformance feature GB02.
+
+Double-hyphen (`--`) comments are disabled in Geode's GQL implementation for conformance reasons:
+- The lexer correctly recognizes and skips `--` comment text
+- However, the `has_double_dash_comment` flag is set
+- Query execution rejects queries that used double-dash comments
+- Reference: `src/conformance.zig:25` - `comment_double_dash: bool = true, // GB02`
+- Reference: `src/test_harness.zig:60-62` - explicit GB02 check
+
+**Workaround**: Use `/* multi-line */` comments or `//` single-line comments instead:
+```gql
+MATCH (n:NumericTest)
+RETURN n.label,
+       CASE
+           WHEN n.value >= 0 THEN 'non-negative'
+           WHEN n.value = 0 THEN 'zero'  /* Never reached for 0 */
+           ELSE 'negative'
+       END AS sign_category
+ORDER BY n.value;
+```
+
+#### D03: OPTIONAL MATCH Property Filter Not Applied (P1 CRITICAL)
+
+**Section**: 14.3
+
+**Query**:
+```gql
+MATCH (n:TreeNode)
+OPTIONAL MATCH (n)-[:CHILD]->(c:TreeNode {level: 999})
+RETURN n.name, c.name AS impossible_child
+ORDER BY n.name
+LIMIT 5;
+```
+
+**Expected**: ALL `impossible_child` values should be NULL (no node has level 999)
+
+**Actual**:
+```
+| name | impossible_child |
+|------|------------------|
+| A1X  | null             |
+| B1   | null             |
+| B    | B1               |  ← BUG: B1 has level 2, not 999!
+| A1   | A1X              |  ← BUG: A1X has level 3, not 999!
+| A1   | A1Y              |  ← BUG: A1Y has level 3, not 999!
+```
+
+**Root Cause**: The property filter `{level: 999}` on the target node in OPTIONAL MATCH is being completely ignored. The engine returns ALL children regardless of the filter.
+
+**Fix Applied** (`src/execution/match_operations.zig:1989-2021, 2064-2096`):
+- Added property filtering for `hop.right.props` on target nodes in OPTIONAL MATCH relationship patterns
+- Applied to both outgoing edges (lines 1989-2021) and incoming edges (lines 2064-2096)
+- Evaluates property patterns using the same logic as node-only OPTIONAL MATCH
+- CANARY markers: REQ-GQL-OPTIONAL-TARGET-PROPS-001, REQ-GQL-OPTIONAL-TARGET-PROPS-002
+
+```zig
+// D03 Fix: Filter by property pattern on target node (e.g., {level: 999})
+if (right_props) |properties| {
+    var matches_props = true;
+    for (properties) |prop| {
+        if (right_node.properties.get(prop.key)) |node_prop_val| {
+            // Compare property values...
+        }
+    }
+    if (!matches_props) continue;
+}
+```
+
+#### D04: ORDER BY on String Columns Inconsistent
+
+**Section**: 7.1, 9.2, 14.3
+
+**Query (7.1)**:
+```gql
+MATCH (n:Person)
+RETURN n.name AS persons
+ORDER BY n.name;
+```
+
+**Expected** (alphabetical): CEO, Contractor1, Guest, Worker1, Worker2
+
+**Actual**: Guest, CEO, Worker1, Worker2, Contractor1 (not alphabetical)
+
+**Root Cause**: The `executeMatchWithOptionalPatterns` function in `match_operations.zig` was missing ORDER BY, OFFSET, and LIMIT handling. While `applyDistinct` was called when needed, the function never called `sortRows` for ORDER BY, and lacked OFFSET/LIMIT pagination.
+
+**Fix Applied** (`src/execution/match_operations.zig:2824-2857`):
+- Added ORDER BY handling via `sortRows` call at line 2826-2828
+- Added OFFSET handling for pagination at lines 2830-2844
+- Added LIMIT handling for result truncation at lines 2846-2857
+- CANARY markers: REQ-GQL-ORDER-BY-OPTIONAL-001, REQ-GQL-OFFSET-OPTIONAL-001, REQ-GQL-LIMIT-OPTIONAL-001
+
+```zig
+// D04 Fix: Apply ORDER BY for optional match results
+if (q.order_by) |order| {
+    try sortRows(allocator, &final_result, order);
+}
+
+// D04 Fix: Apply OFFSET for optional match results
+if (q.offset) |skip_count| { ... }
+
+// D04 Fix: Apply LIMIT for optional match results
+if (q.limit) |limit_count| { ... }
+```
 
 ### Fixes Applied (2025-12-28 Run 11)
 
