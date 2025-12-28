@@ -1,7 +1,9 @@
-# Ignore build artifacts
-zig-out/
+# Ignore build cache (but keep zig-out for CI Docker builds)
 zig-cache/
 .zig-cache/
+# Keep zig-out/bin for Docker builds
+!zig-out/
+!zig-out/bin/
 
 # Ignore local data
 data/
