@@ -1,17 +1,37 @@
 # Geode Documentation Index
 
-**Comprehensive documentation for the Geode graph database - October 2025**
+**Comprehensive documentation for the Geode graph database - December 2025**
 
 ## 📚 Documentation Overview
 
 This directory contains complete technical documentation for Geode, an enterprise-ready graph database with 98.6% ISO/IEC 39075:2024 GQL compliance and industry-leading performance.
+
+## 📁 Directory Structure
+
+```
+docs/
+├── architecture/     # System architecture and design decisions
+├── archive/          # Historical documentation and completed phases
+├── clients/          # Client library documentation (Go, Rust, Python, Zig)
+├── completion_reports/  # Phase completion reports
+├── deployment/       # Deployment guides and operations
+├── development/      # Development tools and IDE integration
+├── docker/           # Docker deployment guides
+├── examples/         # Code examples and tutorials
+├── gql/              # GQL language specification and compliance
+├── kb/               # Knowledge base and research
+├── refactoring/      # Refactoring guides and plans
+├── status/           # Status reports and metrics
+├── testing/          # Testing documentation and guides
+└── v0.18.0/          # Version-specific documentation
+```
 
 ## 🎯 Quick Navigation
 
 ### **Getting Started**
 - **[Features Overview](FEATURES_OVERVIEW.md)** - Comprehensive feature catalog and capabilities
 - **[Quick Reference](QUICK_REFERENCE.md)** - Essential commands and syntax guide
-- **[Implementation Status](IMPLEMENTATION_STATUS_OCTOBER_2025.md)** - Complete feature status with evidence
+- **[Usage Guide](USAGE.md)** - How to use Geode
 
 ### **Technical Reference**
 - **[API Reference](API_REFERENCE.md)** - Complete API documentation
@@ -30,6 +50,26 @@ This directory contains complete technical documentation for Geode, an enterpris
 - **[Materialized Views](MATERIALIZED_VIEWS.md)** - Enterprise view management
 - **[Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md)** - Advanced MVCC
 - **[Distributed Query Coordination](DISTRIBUTED_QUERY_COORDINATION.md)** - Federation-aware optimization
+
+### **Deployment & Operations**
+- **[Docker Quickstart](docker/QUICKSTART_DOCKER.md)** - Getting started with Docker
+- **[Docker Development](docker/DOCKER_DEV.md)** - Development environment setup
+- **[Deployment Guide](deployment/DEPLOYMENT.md)** - Production deployment
+
+### **Client Libraries**
+- **[Client Overview](clients/)** - Multi-language client documentation
+- **[Go Client Development](clients/GO_RUST_CLIENT_DEVELOPMENT_PLAN.md)** - Go client roadmap
+- **[QUIC Compatibility](clients/QUIC_COMPATIBILITY_INVESTIGATION.md)** - QUIC transport details
+
+### **Development**
+- **[IDE Integration](development/IDE_INTEGRATION.md)** - Editor setup and tooling
+- **[AI CLI Tools](development/AI_CLI_TOOLS.md)** - AI-assisted development
+- **[REPL Features](development/REPL_ADVANCED_FEATURES.md)** - Interactive shell features
+
+### **Testing**
+- **[Testing Guide](TESTING.md)** - Test execution and coverage
+- **[Test Fixes](testing/COMPREHENSIVE_TEST_FIXES.md)** - Recent test improvements
+- **[Known Issues](KNOWN_TEST_ISSUES.md)** - Current test limitations
 
 ## 📋 Documentation Categories
 
@@ -161,5 +201,5 @@ Based on the completion of all major features, future documentation will focus o
 
 **For the most current information, always refer to the specific feature documentation linked above.**
 
-*Last Updated: October 2025*  
+*Last Updated: December 2025*
 *Status: COMPREHENSIVE - All major features documented*

@@ -1,7 +1,7 @@
 # Geode Documentation Index
 
-**Version**: v0.18.0  
-**Last Updated**: 2025-09-29
+**Version**: v0.18.0
+**Last Updated**: 2025-12-28
 
 ## 📚 Primary Documentation
 
@@ -124,17 +124,52 @@ Every feature must have evidence:
 3. Update relevant `.md` files
 4. Verify with `make governance-check`
 
+## 🐳 Docker & Deployment
+
+### Docker
+- **[Docker Quickstart](docker/QUICKSTART_DOCKER.md)** - Getting started with Docker
+- **[Docker Development](docker/DOCKER_DEV.md)** - Development environment
+- **[Docker Deployment](docker/DOCKER_DEPLOY.md)** - Production deployment
+- **[Docker Integration Tests](docker/DOCKER_INTEGRATION_TESTS.md)** - Container testing
+
+### Deployment
+- **[Deployment Guide](deployment/DEPLOYMENT.md)** - Production deployment guide
+- **[NIX Deployment](NIX_DEPLOYMENT.md)** - NixOS deployment
+
+## 🔌 Client Libraries
+
+### Client Documentation
+- **[Client Overview](clients/)** - Multi-language client documentation
+- **[Go/Rust Development Plan](clients/GO_RUST_CLIENT_DEVELOPMENT_PLAN.md)** - Client roadmap
+- **[QUIC Compatibility](clients/QUIC_COMPATIBILITY_INVESTIGATION.md)** - Transport layer
+- **[MSQUIC Upgrade Guide](clients/MSQUIC_UPGRADE_GUIDE.md)** - QUIC library upgrade
+
+## 🧪 Testing
+
+### Testing Documentation
+- **[Testing Guide](TESTING.md)** - Test execution and coverage
+- **[Comprehensive Test Fixes](testing/COMPREHENSIVE_TEST_FIXES.md)** - Recent improvements
+- **[Known Test Issues](KNOWN_TEST_ISSUES.md)** - Current limitations
+- **[GeodetestLab Fixes](testing/GEODETESTLAB_FIXES.md)** - Test framework fixes
+
+## 💻 Development
+
+### Development Tools
+- **[IDE Integration](development/IDE_INTEGRATION.md)** - Editor setup
+- **[AI CLI Tools](development/AI_CLI_TOOLS.md)** - AI-assisted development
+- **[REPL Features](development/REPL_ADVANCED_FEATURES.md)** - Interactive shell
+- **[Work Tracker](development/WORK_TRACKER.md)** - Development tracking
+
 ## 🆘 Support
 
 ### Getting Help
 - Check [Quick Reference](QUICK_REFERENCE.md)
 - Review [FAQ & Glossary](v0.18.0/faq_glossary.md)
-- Search [Ground Truth](GROUND_TRUTH.md)
 
 ### Reporting Issues
-- GitHub Issues: [spyderorg/geode](https://github.com/spyderorg/geode)
+- GitLab Issues: [devnw/geode/geode](https://gitlab.com/devnw/geode/geode)
 - Include version, query, error message
 
 ---
 
-*This index provides navigation to all Geode documentation. Start with [Quick Reference](QUICK_REFERENCE.md) for common tasks or [Ground Truth](GROUND_TRUTH.md) for comprehensive information.*
+*This index provides navigation to all Geode documentation. Start with [Quick Reference](QUICK_REFERENCE.md) for common tasks.*
