@@ -16,6 +16,7 @@ stages:
   - lint
   - build
   - test
+  - docker
   - release
 
 variables:
@@ -118,6 +119,103 @@ test-zig-unit:
   allow_failure: true  # Tests may have known issues
 
 # =============================================================================
+# Docker Stage - Build and Push Container Images
+# =============================================================================
+
+.docker-build-template:
+  stage: docker
+  image: docker:latest
+  services:
+    - docker:dind
+  needs:
+    - job: build-zig
+      artifacts: true
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+
+# Debian-based image (default)
+docker-debian:
+  extends: .docker-build-template
+  script:
+    - |
+      echo "Building Debian-based Docker image..."
+      ls -la zig-out/bin/ || true
+
+      # Determine image tags based on context
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        # Tagged release - use version tags
+        VERSION="${CI_COMMIT_TAG#v}"
+        MAJOR=$(echo "$VERSION" | cut -d. -f1)
+        MINOR=$(echo "$VERSION" | cut -d. -f2)
+        TAGS="-t $CI_REGISTRY_IMAGE:$VERSION \
+              -t $CI_REGISTRY_IMAGE:$MAJOR.$MINOR \
+              -t $CI_REGISTRY_IMAGE:$MAJOR \
+              -t $CI_REGISTRY_IMAGE:latest"
+      else
+        # Snapshot build - use commit-based tags
+        TAGS="-t $CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA} \
+              -t $CI_REGISTRY_IMAGE:${CI_COMMIT_BRANCH}-${CI_COMMIT_SHORT_SHA} \
+              -t $CI_REGISTRY_IMAGE:snapshot"
+      fi
+
+      docker build $TAGS \
+        --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" \
+        --label "org.opencontainers.image.version=${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}" \
+        --label "org.opencontainers.image.source=$CI_PROJECT_URL" \
+        --label "org.opencontainers.image.title=geode" \
+        --label "org.opencontainers.image.description=Geode Graph Database - GQL-compliant property-graph database" \
+        -f Dockerfile.ci .
+
+      docker push --all-tags $CI_REGISTRY_IMAGE || docker push $CI_REGISTRY_IMAGE --all-tags 2>/dev/null || {
+        # Push individual tags if --all-tags not supported
+        for tag in $CI_REGISTRY_IMAGE:*; do
+          docker push "$tag" 2>/dev/null || true
+        done
+      }
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+/'
+
+# Alpine-based image (smaller)
+docker-alpine:
+  extends: .docker-build-template
+  script:
+    - |
+      echo "Building Alpine-based Docker image..."
+      ls -la zig-out/bin/ || true
+
+      # Determine image tags based on context
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+        TAGS="-t $CI_REGISTRY_IMAGE:$VERSION-alpine \
+              -t $CI_REGISTRY_IMAGE:alpine"
+      else
+        TAGS="-t $CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}-alpine \
+              -t $CI_REGISTRY_IMAGE:snapshot-alpine"
+      fi
+
+      docker build $TAGS \
+        --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" \
+        --label "org.opencontainers.image.version=${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}" \
+        --label "org.opencontainers.image.source=$CI_PROJECT_URL" \
+        --label "org.opencontainers.image.title=geode" \
+        --label "org.opencontainers.image.description=Geode Graph Database (Alpine) - GQL-compliant property-graph database" \
+        -f Dockerfile.ci.alpine .
+
+      docker push --all-tags $CI_REGISTRY_IMAGE || docker push $CI_REGISTRY_IMAGE --all-tags 2>/dev/null || {
+        for tag in $CI_REGISTRY_IMAGE:*; do
+          docker push "$tag" 2>/dev/null || true
+        done
+      }
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+/'
+
+# =============================================================================
 # Release Stage - GoReleaser
 # =============================================================================
 
@@ -129,6 +227,10 @@ release:
   needs:
     - job: build-zig
       artifacts: true
+    - job: docker-debian
+      artifacts: false
+    - job: docker-alpine
+      artifacts: false
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
     GIT_DEPTH: 0
@@ -185,6 +287,10 @@ snapshot:
   needs:
     - job: build-zig
       artifacts: true
+    - job: docker-debian
+      artifacts: false
+    - job: docker-alpine
+      artifacts: false
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
     GIT_DEPTH: 0
