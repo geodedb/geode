@@ -2407,7 +2407,53 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return Value{ .Null = {} };
     }
 
-    // Handle keys() function for maps
+    // CANARY: REQ=REQ-GQL-PROPERTIES-001; FEATURE="PropertiesFunction"; ASPECT=NodeProperties; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+    // B05 Fix: Handle properties() function - returns property map of a node or edge
+    if (std.mem.eql(u8, function_name, "properties")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(allocator, args[0].*, env);
+        switch (arg) {
+            .Node => |node| {
+                // Convert node properties to a Map
+                var prop_map = std.StringHashMap(Value).init(allocator);
+                var prop_iter = node.properties.iterator();
+                while (prop_iter.next()) |entry| {
+                    const prop_val: Value = switch (entry.value_ptr.*) {
+                        .Null => Value{ .Null = {} },
+                        .Bool => |b| Value{ .Bool = b },
+                        .Int => |i| Value{ .Int = i },
+                        .String => |s| Value{ .Str = s },
+                        .Float => Value{ .Null = {} }, // TODO: Handle Float properly
+                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                    };
+                    prop_map.put(entry.key_ptr.*, prop_val) catch continue;
+                }
+                return Value{ .Map = prop_map };
+            },
+            .Edge => |edge| {
+                // Convert edge properties to a Map
+                var prop_map = std.StringHashMap(Value).init(allocator);
+                var prop_iter = edge.properties.iterator();
+                while (prop_iter.next()) |entry| {
+                    const prop_val: Value = switch (entry.value_ptr.*) {
+                        .Null => Value{ .Null = {} },
+                        .Bool => |b| Value{ .Bool = b },
+                        .Int => |i| Value{ .Int = i },
+                        .String => |s| Value{ .Str = s },
+                        .Float => Value{ .Null = {} },
+                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                    };
+                    prop_map.put(entry.key_ptr.*, prop_val) catch continue;
+                }
+                return Value{ .Map = prop_map };
+            },
+            .Map => |map| return Value{ .Map = map }, // Already a map
+            else => return Value{ .Null = {} },
+        }
+    }
+
+    // CANARY: REQ=REQ-GQL-KEYS-001; FEATURE="KeysFunction"; ASPECT=NodePropertyKeys; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+    // B06 Fix: Handle keys() function for maps AND nodes
     if (std.mem.eql(u8, function_name, "keys")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
@@ -2415,6 +2461,26 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Map => |map| {
                 var keys = try allocator.alloc(Value, map.count());
                 var iter = map.iterator();
+                var i: usize = 0;
+                while (iter.next()) |entry| : (i += 1) {
+                    keys[i] = Value{ .Str = entry.key_ptr.* };
+                }
+                return Value{ .List = keys };
+            },
+            .Node => |node| {
+                // Return property keys from node
+                var keys = try allocator.alloc(Value, node.properties.count());
+                var iter = node.properties.iterator();
+                var i: usize = 0;
+                while (iter.next()) |entry| : (i += 1) {
+                    keys[i] = Value{ .Str = entry.key_ptr.* };
+                }
+                return Value{ .List = keys };
+            },
+            .Edge => |edge| {
+                // Return property keys from edge
+                var keys = try allocator.alloc(Value, edge.properties.count());
+                var iter = edge.properties.iterator();
                 var i: usize = 0;
                 while (iter.next()) |entry| : (i += 1) {
                     keys[i] = Value{ .Str = entry.key_ptr.* };

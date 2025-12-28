@@ -1394,6 +1394,17 @@ pub fn expandVariableLengthPaths(
     // Initialize with start node
     var initial_path = VariableLengthPath.init(allocator);
     try initial_path.nodes.append(allocator, start_node_id);
+
+    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-001; FEATURE="ZeroLengthPaths"; ASPECT=SelfMatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+    // B07 Fix: When min_len=0, the start node itself is a valid 0-length path (self-match)
+    // Per GQL spec, *0..N should include the start node as matching itself with path length 0
+    if (min_len == 0) {
+        // Clone the initial path for the result (we'll still use original for BFS expansion)
+        var zero_path = VariableLengthPath.init(allocator);
+        try zero_path.nodes.append(allocator, start_node_id);
+        try result_paths.append(allocator, zero_path);
+    }
+
     try queue.append(allocator, .{ .path = initial_path, .depth = 0 });
 
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=SafetyGuard; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-15

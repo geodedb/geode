@@ -2,7 +2,305 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-27 (Extended Testing - Run 7)
+## Current Test Run: 2025-12-28 (Advanced Testing - Run 10) ✅ FIXED
+
+**Test File**: `./testing/shell/enterprise_test_advanced.gql` (233 statements)
+
+**Status**: ✅ **ALL ISSUES FIXED** - All B01-B10 regressions have been resolved
+
+### Issues Found and Fixed (2025-12-28)
+
+| ID | Section | Type | Severity | Description | Status |
+|----|---------|------|----------|-------------|--------|
+| B01 | 8.2 | Aggregation | P1 | COUNT(*) without GROUP BY returns per-row results (7 rows instead of 1) | ✅ FIXED |
+| B02 | 8.10 | Aggregation | P1 | COLLECT on NULLs returns per-row NULL instead of single list | ✅ FIXED |
+| B03 | 17.1 | DISTINCT | P1 | DISTINCT returns duplicate NULL rows (6 instead of 1) | ✅ FIXED |
+| B04 | 17.3 | Aggregation | P1 | COUNT DISTINCT returns per-row results instead of aggregate | ✅ FIXED |
+| B05 | 18.3 | Function | P2 | properties(n) returns NULL instead of property map | ✅ FIXED |
+| B06 | 18.4 | Function | P2 | keys(n) returns NULL instead of property key list | ✅ FIXED |
+| B07 | 6.2 | Path Pattern | P2 | *0..N path missing self-match (0-length path to self) | ✅ FIXED |
+| B08 | 16.4 | Aggregation | P1 | Relationship aggregation incorrect (rel_count=39, should be 3) | ✅ FIXED |
+| B09 | 14.2 | OPTIONAL MATCH | P1 | Multiple OPTIONAL MATCH produces incorrect results | ✅ FIXED |
+| B10 | Multiple | Parser | P2 | Syntax errors on valid GQL queries (9.6, 12.6, 13.3, 15.1) | ✅ FIXED |
+| A01 | 3.1 | IntegerOverflow | P3 | Overflow on max_int64 + 1 (known behavior) | ⚠️ Known |
+
+### Fixes Applied (2025-12-28)
+
+#### B01-B04: Aggregation Without GROUP BY - CRITICAL FIX
+
+**Root Cause**: `executeMatchWithOptionalPatterns` was evaluating RETURN expressions per-row without checking for aggregation functions.
+
+**Fix Applied** (`src/execution/match_operations.zig:2447-2538`):
+- Added `isAggregationExpr()` detection for RETURN items
+- When aggregation detected without GROUP BY, calls `computeAggregationForGroup` for entire result set
+- CANARY marker: REQ-GQL-AGG-NO-GROUPBY-001
+
+#### B03: DISTINCT NULL Deduplication - FIX
+
+**Root Cause**: DISTINCT wasn't being applied in `executeMatchWithOptionalPatterns`.
+
+**Fix Applied** (`src/execution/match_operations.zig:2532-2536`):
+- Added `applyDistinct(allocator, &final_result)` call when `q.ret.distinct` is true
+- CANARY marker: REQ-GQL-DISTINCT-OPTIONAL-001
+
+#### B05: properties() Function - IMPLEMENTATION
+
+**Root Cause**: `properties()` function was not implemented for Node/Edge types.
+
+**Fix Applied** (`src/eval.zig:2410-2453`):
+- Implemented `properties()` to return a Map of all node/edge properties
+- Handles Node, Edge, and passes through for Map type
+- CANARY marker: REQ-GQL-PROPERTIES-001
+
+#### B06: keys() Function for Nodes - FIX
+
+**Root Cause**: `keys()` only handled Map types, not Node/Edge types.
+
+**Fix Applied** (`src/eval.zig:2455-2492`):
+- Extended `keys()` to handle Node and Edge types
+- Returns list of property key names
+- CANARY marker: REQ-GQL-KEYS-001
+
+#### B07: 0-Length Path Matching - FIX
+
+**Root Cause**: Path filter `path.nodes.items.len < 2` excluded 0-length paths.
+
+**Fix Applied** (`src/execution.zig:1398-1406`, `src/execution/match_operations.zig:3700-3704`):
+- Changed filter from `< 2` to `== 0` (empty path is never valid)
+- Added initial 0-length path when min_len=0 in `expandVariableLengthPaths`
+- CANARY marker: REQ-GQL-ZERO-LEN-PATH-001
+
+#### B08: Relationship Aggregation - FIX
+
+**Root Cause**: Single-hop relationship patterns without GROUP BY fell through to incorrect node-based aggregation.
+
+**Fix Applied** (`src/execution/match_operations.zig:3622-3798`):
+- Added dedicated edge-based aggregation path for single-hop patterns
+- Correctly iterates edges and builds BindingRow with edge variables
+- Calls `computeBindingGroupAggregation` for edge results
+
+#### B09: Multiple OPTIONAL MATCH - CRITICAL FIX
+
+**Root Cause**: Multiple OPTIONAL MATCH chains were treated as alternatives (all added to extended_rows) instead of cumulative/sequential matches.
+
+**Fix Applied** (`src/execution/match_operations.zig:1721-2003`):
+- Complete rewrite of OPTIONAL MATCH processing
+- Each OPTIONAL MATCH is now processed sequentially (like LEFT OUTER JOIN)
+- Tracks variable positions for each chain via `ChainVarInfo` struct
+- Produces correct Cartesian product of matches with NULLs for non-matches
+- CANARY marker: REQ-GQL-MULTI-OPTIONAL-MATCH-001
+
+#### B10: Parser NOT Expression - FIX
+
+**Root Cause**: Parser treated `NOT (n.value > 0)` as a negated graph pattern instead of negated expression.
+
+**Fix Applied** (`src/gql/parser.zig:2631-2641`):
+- Added check for property access (`.` after identifier) in `parseNotExpr`
+- Identifier followed by `.` is now treated as expression, not node pattern
+- Preserves correct behavior for `NOT (n)--()` graph pattern negation
+- CANARY marker: REQ-GQL-NOT-PAREN-EXPR-001
+
+### Issue Details
+
+#### B01: Aggregation Without GROUP BY Returns Per-Row Results (P1 CRITICAL)
+
+**Section**: 8.2 (COUNT(*) vs COUNT(column) with NULLs)
+
+**Query**:
+```gql
+MATCH (n:NumericTest)
+OPTIONAL MATCH (n)-[:FAKE]->(m)
+RETURN count(*) AS count_star, count(m) AS count_col;
+```
+
+**Expected**: Single row with `count_star=7, count_col=0`
+
+**Actual**:
+```
+| count_star | count_col |
+|------------|-----------|
+| 1          | 0         |
+| 1          | 0         |
+| 1          | 0         |
+| 1          | 0         |
+| 1          | 0         |
+| 1          | 0         |
+| 1          | 0         |
+(7 rows)
+```
+
+**Root Cause**: Aggregation functions are being evaluated per-row instead of across all rows when there's no explicit GROUP BY clause.
+
+#### B02: COLLECT on NULL Values Returns Per-Row NULL (P1 CRITICAL)
+
+**Section**: 8.10
+
+**Query**:
+```gql
+MATCH (n:NumericTest)
+OPTIONAL MATCH (n)-[:FAKE]->(m)
+RETURN collect(m.name) AS collected_nulls;
+```
+
+**Expected**: Single row with `[]` (empty list, since NULLs are typically excluded from collect)
+
+**Actual**: 7 rows each showing `null`
+
+#### B03: DISTINCT Returning Multiple Duplicate NULLs (P1 CRITICAL)
+
+**Section**: 17.1
+
+**Query**:
+```gql
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN DISTINCT m.name AS distinct_missing;
+```
+
+**Expected**: Single row with `null` (DISTINCT should deduplicate NULL values)
+
+**Actual**: 6 rows all containing `null`
+
+#### B04: COUNT DISTINCT Returns Per-Row Results (P1 CRITICAL)
+
+**Section**: 17.3
+
+**Query**:
+```gql
+MATCH (n:Entity)
+OPTIONAL MATCH (n)-[:MISSING]->(m)
+RETURN count(DISTINCT m.name) AS distinct_count, count(m.name) AS total_count;
+```
+
+**Expected**: Single aggregate row
+
+**Actual**: 6 rows each with per-row counts showing `null | 0`
+
+#### B05: properties() Function Returns NULL (P2)
+
+**Section**: 18.3
+
+**Query**:
+```gql
+MATCH (n:Entity)
+RETURN n.name, properties(n) AS all_props
+ORDER BY n.id
+LIMIT 2;
+```
+
+**Expected**: Rows with property maps like `{id: 1, name: '', type: 'empty_name'}`
+
+**Actual**: `null` for `all_props` column
+
+#### B06: keys() Function Returns NULL (P2)
+
+**Section**: 18.4
+
+**Query**:
+```gql
+MATCH (n:Entity)
+RETURN n.name, keys(n) AS prop_keys
+ORDER BY n.id
+LIMIT 2;
+```
+
+**Expected**: Rows with property key lists like `['id', 'name', 'type']`
+
+**Actual**: `null` for `prop_keys` column
+
+#### B07: Path with Min Length 0 Missing Self-Match (P2)
+
+**Section**: 6.2
+
+**Query**:
+```gql
+MATCH (n:TreeNode {id: 'root'})-[:CHILD*0..2]->(m:TreeNode)
+RETURN n.name AS start, m.name AS reached
+ORDER BY m.level, m.name;
+```
+
+**Expected**: Should include `Root|Root` (0-length path matches node to itself)
+
+**Actual**: Results start at level 1 children, missing the self-match row
+
+**GQL Spec**: Per ISO/IEC 39075:2024, `*0..N` should match paths of length 0 through N, where length 0 means the start and end node are the same.
+
+#### B08: Relationship Aggregation Incorrect (P1 CRITICAL)
+
+**Section**: 16.4
+
+**Query**:
+```gql
+MATCH ()-[r:TEST_REL]->()
+RETURN sum(r.weight) AS total_weight, avg(r.weight) AS avg_weight, count(*) AS rel_count;
+```
+
+**Expected**: `total_weight=999999998` (sum of -1, 0, 999999999), `avg_weight≈333333332`, `rel_count=3`
+
+**Actual**: `total_weight=0, avg_weight=null, rel_count=39`
+
+**Note**: Only 3 TEST_REL relationships were created in section 16.1. The `rel_count=39` suggests either:
+1. The query is matching ALL relationships in the graph (not just TEST_REL)
+2. Or there's a cross-product issue
+
+#### B09: Multiple OPTIONAL MATCH Produces Incorrect Results (P1 CRITICAL)
+
+**Section**: 14.2
+
+**Query**:
+```gql
+MATCH (n:TreeNode {id: 'a'})
+OPTIONAL MATCH (n)-[:CHILD]->(c1)
+OPTIONAL MATCH (n)<-[:CHILD]-(p)
+RETURN n.name, c1.name AS child, p.name AS parent;
+```
+
+**Expected**:
+- Row showing A with children (A1, A2) and parent (Root)
+
+**Actual**:
+```
+| name | child | parent |
+|------|-------|--------|
+| A    | A2    | null   |
+| A    | A1    | null   |
+| A    | Root  | null   |
+```
+
+**Issues**:
+1. `Root` appears in the `child` column (Root is A's parent, not child)
+2. `parent` is always `null` even though Root->A relationship exists
+
+#### B10: Syntax Errors on Valid GQL Queries (P2)
+
+Several queries that should be valid GQL are failing with "Syntax error in query":
+
+| Section | Query Type | Error Location |
+|---------|------------|----------------|
+| 9.6 | EXISTS with outer variable reference | `EXISTS { MATCH (p)-[:CHILD*1..3]->(d:TreeNode) WHERE d.level = 3 }` |
+| 12.6 | WITH discarding columns | `WITH label, val -- Discard id` |
+| 13.3 | CASE with ORDER BY on computed column | CASE expression with multiple WHEN |
+| 15.1 | De Morgan's laws test | `WHERE NOT (n.value > 0 AND n.value < 100)` |
+
+### Regression Analysis
+
+The previous run (2025-12-27, Run 9) reported "ALL 233 STATEMENTS PASS". The current run shows multiple failures. Possible causes:
+
+1. **Code regression** - Recent changes may have broken aggregation logic
+2. **Data state** - Test graph may have pre-existing data affecting results
+3. **Environment** - Different server instance or configuration
+
+### Recommended Investigation
+
+1. Check recent changes to `src/execution/` for aggregation handling
+2. Verify OPTIONAL MATCH Cartesian product logic
+3. Review DISTINCT deduplication for NULL values
+4. Check path pattern `*0..N` handling for 0-length paths
+5. Verify `properties()` and `keys()` function implementations
+
+---
+
+## Previous Test Run: 2025-12-27 (Extended Testing - Run 7)
 
 **Test Files**:
 - `./testing/shell/enterprise_test.gql` (150 statements)

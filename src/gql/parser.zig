@@ -2628,8 +2628,17 @@ pub const Parser = struct {
                 self.advance(); // consume NOT
                 self.advance(); // consume (
 
-                // Check if this looks like a node pattern: (identifier), (:Label), or ()
-                const looks_like_pattern = self.cur.kind == .identifier or self.cur.kind == .colon or self.cur.kind == .r_paren;
+                // CANARY: REQ=REQ-GQL-NOT-PAREN-EXPR-001; FEATURE="NotParenExpr"; ASPECT=ParserFix; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-28
+                // B10 Fix: Distinguish between NOT (n:Label...) graph pattern and NOT (n.value > 0) expression
+                // If we see an identifier followed by a dot, it's a property access expression, not a node pattern
+                // Node pattern indicators after identifier: :, ), {, -, <, [
+                // Expression indicators after identifier: . (property access)
+                const looks_like_pattern = if (self.cur.kind == .identifier)
+                    // Identifier followed by . is property access (expression), not node pattern
+                    self.peekToken() != .dot
+                else
+                    // :Label or () patterns
+                    (self.cur.kind == .colon or self.cur.kind == .r_paren);
 
                 // Restore position
                 self.lx.* = saved_lx;

@@ -1718,277 +1718,288 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
     }
 
-    for (base_nodes.items) |base_node| {
-        // Track if any optional chain matched
-        var extended_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
-        defer extended_rows.deinit(allocator);
+    // CANARY: REQ=REQ-GQL-MULTI-OPTIONAL-MATCH-001; FEATURE="MultipleOptionalMatch"; ASPECT=CumulativeMatching; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // B09 Fix: Multiple OPTIONAL MATCHes must be processed CUMULATIVELY (like LEFT OUTER JOINs)
+    // not as alternatives. Each OPTIONAL MATCH extends the current rows with its matches.
 
-        // Try each optional chain
+    // Build a list of chain variable positions for correct placement
+    const ChainVarInfo = struct {
+        chain_idx: usize,
+        rel_var_pos: ?usize, // position in all_vars for relationship variable
+        right_var_pos: ?usize, // position in all_vars for right node variable
+        node_var_pos: ?usize, // position for node-only patterns
+    };
+    var chain_var_info = std.ArrayList(ChainVarInfo).initCapacity(allocator, 0) catch unreachable;
+    defer chain_var_info.deinit(allocator);
+
+    // Calculate positions for each optional chain's variables
+    var current_pos: usize = if (required_var != null) 1 else 0;
+    for (q.match.chains[1..], 1..) |chain, chain_idx| {
+        if (!chain.is_optional) continue;
+
+        var info = ChainVarInfo{
+            .chain_idx = chain_idx,
+            .rel_var_pos = null,
+            .right_var_pos = null,
+            .node_var_pos = null,
+        };
+
+        if (chain.hops.len > 0) {
+            const hop = chain.hops[0];
+            if (hop.rel.name != null) {
+                info.rel_var_pos = current_pos;
+                current_pos += 1;
+            }
+            if (hop.right.name != null) {
+                info.right_var_pos = current_pos;
+                current_pos += 1;
+            }
+        } else if (chain.head != null and chain.head.?.name != null) {
+            info.node_var_pos = current_pos;
+            current_pos += 1;
+        }
+
+        try chain_var_info.append(allocator, info);
+    }
+
+    for (base_nodes.items) |base_node| {
+        // Start with a single row containing just the base node and NULLs
+        var current_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+        defer current_rows.deinit(allocator);
+
+        // Initialize with base row
+        var base_row = try allocator.alloc(Value, all_vars.items.len);
+        if (required_var != null) {
+            base_row[0] = Value{ .Node = base_node };
+        }
+        // Initialize all optional variables to NULL
+        for (base_row[if (required_var != null) @as(usize, 1) else 0..]) |*v| {
+            v.* = Value{ .Null = {} };
+        }
+        try current_rows.append(allocator, base_row);
+
+        // Process each optional chain SEQUENTIALLY, extending current_rows
+        var chain_info_idx: usize = 0;
         for (q.match.chains[1..]) |chain| {
             if (!chain.is_optional) continue;
+            if (chain_info_idx >= chain_var_info.items.len) break;
 
-            // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-002; FEATURE="OptionalMatchNodeOnly"; ASPECT=NodeMatching; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
-            // Handle node-only OPTIONAL MATCH (e.g., OPTIONAL MATCH (e:Employee {prop: value}))
-            if (chain.hops.len == 0 and chain.head != null) {
-                const opt_node_pattern = chain.head.?;
-                const opt_labels = opt_node_pattern.labels;
-                const opt_props = opt_node_pattern.props;
+            const var_info = chain_var_info.items[chain_info_idx];
+            chain_info_idx += 1;
 
-                // Build environment for property pattern evaluation
-                const base_env = if (required_var) |var_name| Env{
-                    .names = &[_][]const u8{var_name},
-                    .values = &[_]Value{Value{ .Node = base_node }},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                } else Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
+            var new_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+            defer new_rows.deinit(allocator);
 
-                // Find all matching nodes
-                var opt_node_iter = store.nodes.iterator();
-                while (opt_node_iter.next()) |entry| {
-                    const opt_node = entry.value_ptr;
+            // For each existing row, try to extend with this optional chain
+            for (current_rows.items) |existing_row| {
+                var matches_found = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                defer matches_found.deinit(allocator);
 
-                    // Filter by graph
-                    if (!std.mem.eql(u8, opt_node.graph_name, filter_graph)) continue;
+                // Handle node-only OPTIONAL MATCH (e.g., OPTIONAL MATCH (e:Employee {prop: value}))
+                if (chain.hops.len == 0 and chain.head != null) {
+                    const opt_node_pattern = chain.head.?;
+                    const opt_labels = opt_node_pattern.labels;
+                    const opt_props = opt_node_pattern.props;
 
-                    // Filter by labels
-                    if (opt_labels.len > 0) {
-                        var has_all_labels = true;
-                        for (opt_labels) |required_label| {
-                            var found = false;
-                            for (opt_node.labels) |node_label| {
-                                if (std.mem.eql(u8, required_label, node_label)) {
-                                    found = true;
+                    // Build environment for property pattern evaluation
+                    const base_env = Env{
+                        .names = all_vars.items,
+                        .values = existing_row,
+                        .param_names = param_names,
+                        .param_values = param_values,
+                        .allocator = allocator,
+                    };
+
+                    var opt_node_iter = store.nodes.iterator();
+                    while (opt_node_iter.next()) |entry| {
+                        const opt_node = entry.value_ptr;
+                        if (!std.mem.eql(u8, opt_node.graph_name, filter_graph)) continue;
+
+                        // Filter by labels
+                        if (opt_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (opt_labels) |required_label| {
+                                var found = false;
+                                for (opt_node.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
                                     break;
                                 }
                             }
-                            if (!found) {
-                                has_all_labels = false;
-                                break;
-                            }
+                            if (!has_all_labels) continue;
                         }
-                        if (!has_all_labels) continue;
-                    }
 
-                    // Filter by properties (can reference variables from base match)
-                    var matches_props = true;
-                    if (opt_props) |properties| {
-                        for (properties) |prop| {
-                            if (opt_node.properties.get(prop.key)) |node_prop_val| {
-                                const node_val = switch (node_prop_val) {
-                                    .Null => Value{ .Null = {} },
-                                    .Bool => |b| Value{ .Bool = b },
-                                    .Int => |i| Value{ .Int = i },
-                                    .String => |s| Value{ .Str = s },
-                                    .Float => Value{ .Null = {} },
-                                    .ExtValue => |ext| Value{ .ExtValue = ext },
-                                };
-                                // Evaluate property value using base environment
-                                const prop_val = eval.evalExpr(allocator, prop.value.*, base_env) catch Value{ .Null = {} };
-                                if (!valuesEqual(node_val, prop_val)) {
+                        // Filter by properties
+                        var matches_props = true;
+                        if (opt_props) |properties| {
+                            for (properties) |prop| {
+                                if (opt_node.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => Value{ .Null = {} },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    };
+                                    const prop_val = eval.evalExpr(allocator, prop.value.*, base_env) catch Value{ .Null = {} };
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        matches_props = false;
+                                        break;
+                                    }
+                                } else {
                                     matches_props = false;
                                     break;
                                 }
-                            } else {
-                                matches_props = false;
-                                break;
                             }
                         }
-                    }
 
-                    if (matches_props) {
-                        // Build row: base_node, opt_node
-                        var row = try allocator.alloc(Value, all_vars.items.len);
-                        var idx: usize = 0;
-
-                        if (required_var != null) {
-                            row[idx] = Value{ .Node = base_node };
-                            idx += 1;
-                        }
-
-                        if (opt_node_pattern.name != null) {
-                            row[idx] = Value{ .Node = opt_node };
-                            idx += 1;
-                        }
-
-                        // Fill remaining with NULL (for any other variables)
-                        while (idx < all_vars.items.len) {
-                            row[idx] = Value{ .Null = {} };
-                            idx += 1;
-                        }
-
-                        try extended_rows.append(allocator, row);
-                    }
-                }
-                continue; // Done with this node-only chain
-            }
-
-            if (chain.hops.len == 0) continue;
-
-            const hop = chain.hops[0];
-
-            // Check if this optional chain references the base variable
-            const left_var = hop.left.name;
-            if (left_var == null or (required_var != null and !std.mem.eql(u8, left_var.?, required_var.?))) {
-                continue;
-            }
-
-            // Get relationship type filter
-            const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
-            const right_labels = hop.right.labels;
-
-            // CANARY: REQ=REQ-GQL-OPTIONAL-UNDIRECTED-001; FEATURE="UndirectedOptionalMatch"; ASPECT=EdgeDirection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
-            // Get edges based on relationship direction pattern:
-            // - .right (->): outgoing edges only
-            // - .left (<-): incoming edges only
-            // - .undirected (-): both outgoing and incoming edges
-            const rel_direction = hop.rel.dir;
-            const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(base_node.id) else &[_]graph_store.Edge{};
-            const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(base_node.id) else &[_]graph_store.Edge{};
-
-            // Helper function to process edges - inline as a loop to avoid function pointer overhead
-            // Process outgoing edges (base_node -> other)
-            for (outgoing_edges) |edge| {
-                // Filter by relationship type
-                if (rel_type) |rt| {
-                    if (!std.mem.eql(u8, edge.label, rt)) continue;
-                }
-
-                // Get target node
-                const right_node = store.nodes.getPtr(edge.to_id) orelse continue;
-
-                // Filter by right node labels
-                if (right_labels.len > 0) {
-                    var has_all_labels = true;
-                    for (right_labels) |required_label| {
-                        var found = false;
-                        for (right_node.labels) |node_label| {
-                            if (std.mem.eql(u8, required_label, node_label)) {
-                                found = true;
-                                break;
+                        if (matches_props) {
+                            // Clone the existing row and set the matched node at correct position
+                            var new_row = try allocator.alloc(Value, all_vars.items.len);
+                            @memcpy(new_row, existing_row);
+                            if (var_info.node_var_pos) |pos| {
+                                new_row[pos] = Value{ .Node = opt_node };
                             }
-                        }
-                        if (!found) {
-                            has_all_labels = false;
-                            break;
+                            try matches_found.append(allocator, new_row);
                         }
                     }
-                    if (!has_all_labels) continue;
-                }
+                } else if (chain.hops.len > 0) {
+                    const hop = chain.hops[0];
 
-                // Build row with all bindings: base_node, edge, right_node
-                var row = try allocator.alloc(Value, all_vars.items.len);
-                var idx: usize = 0;
+                    // Check if this optional chain references the base variable
+                    const left_var = hop.left.name;
+                    if (left_var == null or (required_var != null and !std.mem.eql(u8, left_var.?, required_var.?))) {
+                        // No match possible, keep existing row
+                        const new_row = try allocator.alloc(Value, all_vars.items.len);
+                        @memcpy(new_row, existing_row);
+                        try new_rows.append(allocator, new_row);
+                        continue;
+                    }
 
-                // Base variable
-                if (required_var != null) {
-                    row[idx] = Value{ .Node = base_node };
-                    idx += 1;
-                }
+                    const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+                    const right_labels = hop.right.labels;
+                    const rel_direction = hop.rel.dir;
+                    const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(base_node.id) else &[_]graph_store.Edge{};
+                    const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(base_node.id) else &[_]graph_store.Edge{};
 
-                // Edge variable (if named)
-                if (hop.rel.name != null) {
-                    // Get edge pointer from store
-                    const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
-                    row[idx] = Value{ .Edge = edge_ptr };
-                    idx += 1;
-                }
+                    // Process outgoing edges
+                    for (outgoing_edges) |edge| {
+                        if (rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+                        const right_node = store.nodes.getPtr(edge.to_id) orelse continue;
 
-                // Right node variable (if named)
-                if (hop.right.name != null) {
-                    row[idx] = Value{ .Node = right_node };
-                    idx += 1;
-                }
-
-                try extended_rows.append(allocator, row);
-            }
-
-            // Process incoming edges (other -> base_node) for undirected/left patterns
-            for (incoming_edges) |edge| {
-                // Filter by relationship type
-                if (rel_type) |rt| {
-                    if (!std.mem.eql(u8, edge.label, rt)) continue;
-                }
-
-                // For incoming edges, the "right" node is the source (from_id)
-                const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
-
-                // Filter by right node labels
-                if (right_labels.len > 0) {
-                    var has_all_labels = true;
-                    for (right_labels) |required_label| {
-                        var found = false;
-                        for (right_node.labels) |node_label| {
-                            if (std.mem.eql(u8, required_label, node_label)) {
-                                found = true;
-                                break;
+                        // Filter by labels
+                        if (right_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (right_node.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
                             }
+                            if (!has_all_labels) continue;
                         }
-                        if (!found) {
-                            has_all_labels = false;
-                            break;
+
+                        // Clone existing row and fill in this chain's variables at correct positions
+                        var new_row = try allocator.alloc(Value, all_vars.items.len);
+                        @memcpy(new_row, existing_row);
+
+                        if (var_info.rel_var_pos) |pos| {
+                            const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                            new_row[pos] = Value{ .Edge = edge_ptr };
                         }
+                        if (var_info.right_var_pos) |pos| {
+                            new_row[pos] = Value{ .Node = right_node };
+                        }
+
+                        try matches_found.append(allocator, new_row);
                     }
-                    if (!has_all_labels) continue;
+
+                    // Process incoming edges
+                    for (incoming_edges) |edge| {
+                        if (rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+                        const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
+
+                        // Filter by labels
+                        if (right_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (right_node.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        // Clone existing row and fill in this chain's variables at correct positions
+                        var new_row = try allocator.alloc(Value, all_vars.items.len);
+                        @memcpy(new_row, existing_row);
+
+                        if (var_info.rel_var_pos) |pos| {
+                            const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                            new_row[pos] = Value{ .Edge = edge_ptr };
+                        }
+                        if (var_info.right_var_pos) |pos| {
+                            new_row[pos] = Value{ .Node = right_node };
+                        }
+
+                        try matches_found.append(allocator, new_row);
+                    }
                 }
 
-                // Build row with all bindings: base_node, edge, right_node
-                var row = try allocator.alloc(Value, all_vars.items.len);
-                var idx: usize = 0;
-
-                // Base variable
-                if (required_var != null) {
-                    row[idx] = Value{ .Node = base_node };
-                    idx += 1;
+                // If matches were found, add them; otherwise keep existing row (with NULLs)
+                if (matches_found.items.len > 0) {
+                    for (matches_found.items) |match_row| {
+                        try new_rows.append(allocator, match_row);
+                    }
+                } else {
+                    // No matches for this chain - keep existing row with NULLs for this chain's vars
+                    const new_row = try allocator.alloc(Value, all_vars.items.len);
+                    @memcpy(new_row, existing_row);
+                    try new_rows.append(allocator, new_row);
                 }
-
-                // Edge variable (if named)
-                if (hop.rel.name != null) {
-                    const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
-                    row[idx] = Value{ .Edge = edge_ptr };
-                    idx += 1;
-                }
-
-                // Right node variable (if named)
-                if (hop.right.name != null) {
-                    row[idx] = Value{ .Node = right_node };
-                    idx += 1;
-                }
-
-                try extended_rows.append(allocator, row);
             }
+
+            // Free old rows and replace with new extended rows
+            for (current_rows.items) |row| {
+                allocator.free(row);
+            }
+            current_rows.clearRetainingCapacity();
+            for (new_rows.items) |row| {
+                try current_rows.append(allocator, row);
+            }
+            new_rows.clearRetainingCapacity();
         }
 
-        if (extended_rows.items.len > 0) {
-            // Add all extended rows
-            for (extended_rows.items) |row| {
-                try rows.append(allocator, row);
-            }
-        } else {
-            // No optional matches - add row with NULLs for optional variables
-            var row = try allocator.alloc(Value, all_vars.items.len);
-            var idx: usize = 0;
-
-            // Base variable
-            if (required_var != null) {
-                row[idx] = Value{ .Node = base_node };
-                idx += 1;
-            }
-
-            // NULL for optional variables
-            while (idx < all_vars.items.len) {
-                row[idx] = Value{ .Null = {} };
-                idx += 1;
-            }
-
+        // Add all final rows for this base node
+        for (current_rows.items) |row| {
             try rows.append(allocator, row);
         }
+        current_rows.clearRetainingCapacity();
     }
 
     // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-002; FEATURE="RequiredChainAfterOptional"; ASPECT=PropertyPatternMatch; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
@@ -2444,27 +2455,70 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         };
     }
 
-    // Evaluate RETURN expressions using matched/WITH variables as environment
-    const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
-    var return_rows = try allocator.alloc([]Value, intermediate_result.rows.len);
+    // CANARY: REQ=REQ-GQL-AGG-NO-GROUPBY-001; FEATURE="AggregationWithoutGroupBy"; ASPECT=OptionalMatchAgg; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // B01-B04 Fix: Check if RETURN has aggregation functions - if so, aggregate ALL rows into single result
+    // This is the GQL standard behavior: aggregation without GROUP BY should produce a single row
+    var has_return_aggregation = false;
+    for (q.ret.items) |item| {
+        if (isAggregationExpr(item.expr)) {
+            has_return_aggregation = true;
+            break;
+        }
+    }
 
-    for (intermediate_result.rows, 0..) |result_row, row_idx| {
+    const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
+    var return_rows: [][]Value = undefined;
+
+    if (has_return_aggregation) {
+        // CANARY: REQ=REQ-GQL-AGG-NO-GROUPBY-002; FEATURE="AggregationWithoutGroupBy"; ASPECT=SingleRowResult; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+        // Aggregation present without GROUP BY - produce single aggregated row
         var return_row = try allocator.alloc(Value, q.ret.items.len);
 
-        // Create environment from matched/WITH variables
-        const env = Env{
-            .allocator = allocator,
-            .names = intermediate_result.columns,
-            .values = result_row,
-            .param_names = param_names,
-            .param_values = param_values,
-        };
-
         for (q.ret.items, 0..) |item, i| {
-            return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+            if (isAggregationExpr(item.expr)) {
+                // Compute aggregation over ALL rows
+                return_row[i] = try computeAggregationForGroup(allocator, item.expr, intermediate_result.rows, intermediate_result.columns, param_names, param_values);
+            } else {
+                // Non-aggregation expression - use first row if available
+                if (intermediate_result.rows.len > 0) {
+                    const env = Env{
+                        .allocator = allocator,
+                        .names = intermediate_result.columns,
+                        .values = intermediate_result.rows[0],
+                        .param_names = param_names,
+                        .param_values = param_values,
+                    };
+                    return_row[i] = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+                } else {
+                    return_row[i] = Value{ .Null = {} };
+                }
+            }
         }
 
-        return_rows[row_idx] = return_row;
+        return_rows = try allocator.alloc([]Value, 1);
+        return_rows[0] = return_row;
+    } else {
+        // No aggregation - evaluate RETURN expressions per row
+        return_rows = try allocator.alloc([]Value, intermediate_result.rows.len);
+
+        for (intermediate_result.rows, 0..) |result_row, row_idx| {
+            var return_row = try allocator.alloc(Value, q.ret.items.len);
+
+            // Create environment from matched/WITH variables
+            const env = Env{
+                .allocator = allocator,
+                .names = intermediate_result.columns,
+                .values = result_row,
+                .param_names = param_names,
+                .param_values = param_values,
+            };
+
+            for (q.ret.items, 0..) |item, i| {
+                return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+            }
+
+            return_rows[row_idx] = return_row;
+        }
     }
 
     // Clean up intermediate result
@@ -2477,11 +2531,22 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     }
     allocator.free(intermediate_result.rows);
 
-    return ExecutionResult{
+    var final_result = ExecutionResult{
         .columns = return_columns,
         .rows = return_rows,
-        .flags = intermediate_result.flags,
+        .flags = blk: {
+            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            break :blk list;
+        },
     };
+
+    // CANARY: REQ=REQ-GQL-DISTINCT-OPTIONAL-001; FEATURE="DistinctOptionalMatch"; ASPECT=NullDedup; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // B03 Fix: Apply DISTINCT deduplication if requested - this properly deduplicates NULL values
+    if (q.ret.distinct) {
+        try applyDistinct(allocator, &final_result);
+    }
+
+    return final_result;
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
@@ -3565,6 +3630,184 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var matched_nodes = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
             defer matched_nodes.deinit(allocator);
 
+            // CANARY: REQ=REQ-GQL-REL-AGG-NO-GROUPBY-001; FEATURE="RelationshipAggregationNoGroupBy"; ASPECT=EdgeCollection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+            // B08 Fix: Handle single-hop relationship patterns with aggregation but no GROUP BY
+            // For queries like: MATCH ()-[r:TEST_REL]->() RETURN sum(r.weight), count(*)
+            // We need to collect matching EDGES (not nodes) and aggregate over them
+            if (has_relationship and var_len_min == null and var_len_max == null) {
+                const BindingRow = struct {
+                    env_names: [][]const u8,
+                    env_values: []Value,
+                };
+
+                var bindings = std.ArrayList(BindingRow).initCapacity(allocator, 0) catch unreachable;
+                defer {
+                    for (bindings.items) |binding| {
+                        allocator.free(binding.env_names);
+                        allocator.free(binding.env_values);
+                    }
+                    bindings.deinit(allocator);
+                }
+
+                // Iterate over nodes and edges to collect all matching relationship bindings
+                var left_iter = store.nodes.iterator();
+                while (left_iter.next()) |left_entry| {
+                    const left_node = left_entry.value_ptr;
+
+                    // Filter by graph
+                    if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+
+                    // Filter left node by labels if specified
+                    if (match_labels.len > 0) {
+                        var has_all_labels = true;
+                        for (match_labels) |required_label| {
+                            var found = false;
+                            for (left_node.labels) |node_label| {
+                                if (std.mem.eql(u8, required_label, node_label)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                has_all_labels = false;
+                                break;
+                            }
+                        }
+                        if (!has_all_labels) continue;
+                    }
+
+                    // Get edges based on direction
+                    const edges = if (rel_direction == 'l')
+                        store.getEdgesTo(left_node.id)
+                    else
+                        store.getEdgesFrom(left_node.id);
+
+                    for (edges) |edge| {
+                        // Filter by relationship type
+                        if (rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+
+                        // Get the target node based on direction
+                        const right_node_id = if (rel_direction == 'l') edge.from_id else edge.to_id;
+                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+
+                        // Filter right node by labels
+                        if (right_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (right_node_ptr.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        // Build environment with matched elements
+                        var env_count: usize = 0;
+                        if (left_node_var != null) env_count += 1;
+                        if (right_node_var != null) env_count += 1;
+                        if (rel_var != null) env_count += 1;
+
+                        const env_names = try allocator.alloc([]const u8, env_count);
+                        const env_values = try allocator.alloc(Value, env_count);
+
+                        var env_idx: usize = 0;
+                        if (left_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = left_node };
+                            env_idx += 1;
+                        }
+                        if (right_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
+                            env_idx += 1;
+                        }
+                        if (rel_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            const edge_ptr = store.edges.getPtr(edge.id) orelse {
+                                env_values[env_idx] = Value{ .Null = {} };
+                                env_idx += 1;
+                                continue;
+                            };
+                            env_values[env_idx] = Value{ .Edge = edge_ptr };
+                            env_idx += 1;
+                        }
+
+                        const env = Env{
+                            .names = env_names,
+                            .values = env_values,
+                            .param_names = param_names,
+                            .param_values = param_values,
+                            .allocator = allocator,
+                        };
+
+                        // Evaluate WHERE clause
+                        if (q.where_clause) |where_expr| {
+                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
+                            const passes_where = switch (where_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                .Int => |i| i != 0,
+                                else => false,
+                            };
+                            if (!passes_where) {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                continue;
+                            }
+                        }
+
+                        try bindings.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
+                    }
+                }
+
+                // Aggregate all bindings into single result row
+                var row = try allocator.alloc(Value, items.len);
+
+                for (items, 0..) |item, i| {
+                    if (isAggregationExpr(item.expr)) {
+                        // Compute aggregation over all bindings
+                        row[i] = try computeBindingGroupAggregation(allocator, item.expr, bindings.items);
+                    } else {
+                        // Non-aggregation: evaluate with first binding
+                        if (bindings.items.len > 0) {
+                            const first_binding = bindings.items[0];
+                            const base_env = Env{
+                                .names = first_binding.env_names,
+                                .values = first_binding.env_values,
+                                .param_names = param_names,
+                                .param_values = param_values,
+                                .allocator = allocator,
+                            };
+                            row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                        } else {
+                            row[i] = Value{ .Null = {} };
+                        }
+                    }
+                }
+
+                var rows_slice = try allocator.alloc([]Value, 1);
+                rows_slice[0] = row;
+
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = rows_slice,
+                    .flags = blk: {
+                        const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                        break :blk list;
+                    },
+                };
+            }
+
             // CANARY: REQ=REQ-GQL-VARLEN-AGG; FEATURE="VariableLengthPathAggregation"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-01
             // Handle aggregation with variable-length paths: collect target nodes from paths instead of all nodes
             if (has_relationship and (var_len_min != null or var_len_max != null)) {
@@ -3643,8 +3886,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // Collect all target nodes from paths (deduplicated by node ID)
                     // CANARY: REQ=REQ-GQL-VARLEN-ENDNODE-001; FEATURE="VariableLengthPathEndNodeFilter"; ASPECT=AggregationFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-002; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+                    // B07 Fix: Allow single-node paths when min_len=0 (self-match / 0-length path)
+                    // A path with N nodes has N-1 edges. min_len specifies minimum edges.
                     for (paths.items) |path| {
-                        if (path.nodes.items.len < 2) continue;
+                        if (path.nodes.items.len == 0) continue; // Empty path is never valid
 
                         const target_node_id = path.nodes.items[path.nodes.items.len - 1];
                         const target_node_ptr = store.nodes.getPtr(target_node_id) orelse continue;
@@ -4664,8 +4910,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Process each path found
+                    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-003; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+                    // B07 Fix: Allow single-node paths when min_len=0 (self-match / 0-length path)
                     for (paths.items) |path| {
-                        if (path.nodes.items.len < 2) continue;
+                        if (path.nodes.items.len == 0) continue; // Empty path is never valid
 
                         // Get the last node in the path as the right node
                         const right_node_id = path.nodes.items[path.nodes.items.len - 1];
