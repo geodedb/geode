@@ -3,7 +3,7 @@
 **Enterprise-ready graph database with industry-leading compliance and performance**
 
 [![GQL Compliance](https://img.shields.io/badge/GQL%20Compliance-98.6%25-green)](docs/GQL_COMPLIANCE.md)
-[![Test Coverage](https://img.shields.io/badge/Test%20Coverage-93.9%25-green)](docs/IMPLEMENTATION_STATUS_OCTOBER_2025.md)
+[![Test Coverage](https://img.shields.io/badge/Test%20Coverage-94.7%25-green)](docs/KNOWN_TEST_ISSUES.md)
 [![CANARY Tracking](https://img.shields.io/badge/CANARY%20Markers-1016-blue)](docs/TODO.md)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)](docs/FEATURES_OVERVIEW.md)
 
@@ -266,7 +266,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 ```
 
 ### **Test Coverage**
-- **93.9% Test Coverage** (1166/1242 geodetestlab tests)
+- **94.7% Test Coverage** (1199/1266 non-skipped tests)
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
 - **CANARY Governance** - 1016 governance markers tracking implementation
 - **Cross-Platform** - Linux, macOS, Windows compatibility
@@ -282,20 +282,20 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 ### **Essential Guides**
 - **[Features Overview](docs/FEATURES_OVERVIEW.md)** - Comprehensive feature catalog
-- **[Implementation Status](docs/IMPLEMENTATION_STATUS_OCTOBER_2025.md)** - Complete feature status
+- **[TODO & Status](docs/TODO.md)** - Development status (all phases complete)
 - **[GQL Compliance](docs/GQL_COMPLIANCE.md)** - ISO/IEC 39075:2024 conformance
 - **[Quick Reference](docs/QUICK_REFERENCE.md)** - Commands and syntax guide
 
 ### **Technical Documentation**
 - **[API Reference](docs/API_REFERENCE.md)** - Complete API documentation
 - **[Types & Functions](docs/TYPES_AND_FUNCTIONS.md)** - Data type specifications
-- **[Performance Analysis](docs/PERFORMANCE_ANALYSIS_REPORT.md)** - Benchmarks and optimization
+- **[Architecture](docs/CURRENT_ARCHITECTURE.md)** - System architecture overview
 
 ### **Advanced Features**
-- **[Vector Operations](docs/VECTOR_OPERATIONS.md)** - Machine learning and similarity search
-- **[Security Features](docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md)** - Enhanced RLS and compliance
+- **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
+- **[Security Progress](docs/SECURITY_PROGRESS.md)** - Enhanced RLS and compliance
 - **[Real-time Analytics](docs/REAL_TIME_ANALYTICS.md)** - Streaming and pattern detection
-- **[October 2025 Features](docs/OCTOBER_2025_FEATURE_IMPLEMENTATIONS.md)** - FILTER, variable-length paths, sessions, transactions
+- **[Graph Algorithms](docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md)** - Algorithm usage and performance
 
 ## 🌐 Use Cases
 
