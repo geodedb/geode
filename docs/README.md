@@ -1,205 +1,121 @@
-# Geode Documentation Index
+# Geode Documentation
 
-**Comprehensive documentation for the Geode graph database - December 2025**
+**Technical documentation for the Geode graph database - December 2025**
 
-## 📚 Documentation Overview
+## Overview
 
-This directory contains complete technical documentation for Geode, an enterprise-ready graph database with 98.6% ISO/IEC 39075:2024 GQL compliance and industry-leading performance.
+Geode is an enterprise-ready graph database with 98.6% ISO/IEC 39075:2024 GQL compliance.
 
-## 📁 Directory Structure
+## Directory Structure
 
 ```
 docs/
-├── architecture/     # System architecture and design decisions
-├── archive/          # Historical documentation and completed phases
-├── clients/          # Client library documentation (Go, Rust, Python, Zig)
-├── completion_reports/  # Phase completion reports
-├── deployment/       # Deployment guides and operations
-├── development/      # Development tools and IDE integration
-├── docker/           # Docker deployment guides
-├── examples/         # Code examples and tutorials
-├── gql/              # GQL language specification and compliance
-├── kb/               # Knowledge base and research
-├── refactoring/      # Refactoring guides and plans
-├── status/           # Status reports and metrics
-├── testing/          # Testing documentation and guides
-└── v0.18.0/          # Version-specific documentation
+├── architecture/       # System architecture and design
+├── clients/            # Client library documentation (Go, Rust, Python, Zig)
+├── completion_reports/ # Phase completion summaries
+├── deployment/         # Deployment guides
+├── development/        # Development tools and IDE integration
+├── docker/             # Docker deployment guides
+├── examples/           # Code examples and tutorials
+├── gql/                # GQL conformance profiles
+├── kb/                 # Knowledge base (GQL spec, algorithms, QUIC)
+├── testing/            # Testing documentation
+└── *.md                # Core feature documentation
 ```
 
-## 🎯 Quick Navigation
+## Quick Start
 
-### **Getting Started**
-- **[Features Overview](FEATURES_OVERVIEW.md)** - Comprehensive feature catalog and capabilities
-- **[Quick Reference](QUICK_REFERENCE.md)** - Essential commands and syntax guide
+### Getting Started
+- **[Features Overview](FEATURES_OVERVIEW.md)** - Feature catalog
+- **[Quick Reference](QUICK_REFERENCE.md)** - Commands and syntax
 - **[Usage Guide](USAGE.md)** - How to use Geode
 
-### **Technical Reference**
-- **[API Reference](API_REFERENCE.md)** - Complete API documentation
-- **[Types & Functions](TYPES_AND_FUNCTIONS.md)** - 50+ specialized data types
-- **[GQL Compliance](GQL_COMPLIANCE.md)** - ISO/IEC 39075:2024 conformance details
+### Technical Reference
+- **[API Reference](API_REFERENCE.md)** - API documentation
+- **[Types & Functions](TYPES_AND_FUNCTIONS.md)** - 50+ data types
+- **[GQL Compliance](GQL_COMPLIANCE.md)** - ISO/IEC 39075:2024 conformance
 
-### **Enterprise & Security**
-- **[Advanced Security Features](ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md)** - Enhanced RLS implementation
-- **[KMS Provider System](KMS_PROVIDER_SYSTEM.md)** - Enterprise key management
-- **[User Authentication](USER_AUTH.md)** - RBAC/ABAC with MFA support
-- **[Audit Logging](AUDIT_LOGGING.md)** - Multi-platform audit capabilities
+### Enterprise Features
+- **[KMS Provider System](KMS_PROVIDER_SYSTEM.md)** - Key management
+- **[User Authentication](USER_AUTH.md)** - RBAC/ABAC with MFA
+- **[Audit Logging](AUDIT_LOGGING.md)** - Audit capabilities
 
-### **Advanced Features**
+### Advanced Features
 - **[ML Graph Embeddings](ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
-- **[Real-time Analytics](REAL_TIME_ANALYTICS.md)** - Streaming analytics with ML integration
-- **[Materialized Views](MATERIALIZED_VIEWS.md)** - Enterprise view management
-- **[Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md)** - Advanced MVCC
-- **[Distributed Query Coordination](DISTRIBUTED_QUERY_COORDINATION.md)** - Federation-aware optimization
+- **[Real-time Analytics](REAL_TIME_ANALYTICS.md)** - Streaming analytics
+- **[Materialized Views](MATERIALIZED_VIEWS.md)** - View management
+- **[Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md)** - MVCC
+- **[Distributed Query Coordination](DISTRIBUTED_QUERY_COORDINATION.md)** - Federation
 
-### **Deployment & Operations**
-- **[Docker Quickstart](docker/QUICKSTART_DOCKER.md)** - Getting started with Docker
-- **[Docker Development](docker/DOCKER_DEV.md)** - Development environment setup
+### Deployment
+- **[Docker Quickstart](docker/QUICKSTART_DOCKER.md)** - Docker setup
 - **[Deployment Guide](deployment/DEPLOYMENT.md)** - Production deployment
+- **[NixOS Deployment](NIX_DEPLOYMENT.md)** - NixOS configuration
 
-### **Client Libraries**
-- **[Client Overview](clients/)** - Multi-language client documentation
-- **[Go Client Development](clients/GO_RUST_CLIENT_DEVELOPMENT_PLAN.md)** - Go client roadmap
-- **[QUIC Compatibility](clients/QUIC_COMPATIBILITY_INVESTIGATION.md)** - QUIC transport details
+### Client Libraries
+- **[Client Documentation](clients/)** - Multi-language clients
+- **[Go/Rust Client Plan](clients/GO_RUST_CLIENT_DEVELOPMENT_PLAN.md)** - Client roadmap
 
-### **Development**
-- **[IDE Integration](development/IDE_INTEGRATION.md)** - Editor setup and tooling
-- **[AI CLI Tools](development/AI_CLI_TOOLS.md)** - AI-assisted development
-- **[REPL Features](development/REPL_ADVANCED_FEATURES.md)** - Interactive shell features
+### Testing
+- **[Testing Guide](TESTING.md)** - Test execution
+- **[Known Issues](KNOWN_TEST_ISSUES.md)** - Current limitations
 
-### **Testing**
-- **[Testing Guide](TESTING.md)** - Test execution and coverage
-- **[Test Fixes](testing/COMPREHENSIVE_TEST_FIXES.md)** - Recent test improvements
-- **[Known Issues](KNOWN_TEST_ISSUES.md)** - Current test limitations
+## Implementation Status
 
-## 📋 Documentation Categories
+### Completed Features
+1. **S3 Cloud Backup** - Digital Ocean Spaces integration
+2. **REPL QUIC Integration** - Interactive shell
+3. **Vector Operations** - HNSW indexing with SIMD
+4. **ML Graph Embeddings** - Node2Vec, GraphSAGE, DeepWalk
+5. **Real-time Analytics** - Streaming with pattern detection
+6. **Enhanced Transaction Isolation** - MVCC with SSI
+7. **Distributed Query Coordination** - Federation-aware optimization
+8. **Materialized Views** - Refresh strategies with dependency tracking
+9. **CLI Subprocess Elimination** - Unified binary architecture
+10. **Advanced Security** - Enhanced RLS with policy evaluation
 
-### **Core Technical Documentation**
+### Quality Metrics
+- **94.7% Test Pass Rate** (1199/1266 non-skipped tests)
+- **98.6% GQL Compliance** (69/70 ISO tests)
+- **1016 CANARY Markers** tracking governance
 
-#### **Language & Standards**
-| Document | Description | Status |
-|----------|-------------|--------|
-| [GQL Compliance](GQL_COMPLIANCE.md) | ISO/IEC 39075:2024 conformance (98.6%) | ✅ Complete |
-| [API Reference](API_REFERENCE.md) | Complete API documentation | ✅ Complete |
-| [Types & Functions](TYPES_AND_FUNCTIONS.md) | 50+ specialized data types | ✅ Complete |
+### Known Issues
+See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test limitations:
+- Setup data persistence (34 tests affected)
+- WITH + aggregation + WHERE (server hang)
+- CASE expressions in MATCH context
+- 67 remaining test failures
 
-#### **Architecture & Performance**
-| Document | Description | Status |
-|----------|-------------|--------|
-| [Performance Analysis](PERFORMANCE_ANALYSIS_REPORT.md) | Benchmarks and optimization | ✅ Complete |
-| [Implementation Status](IMPLEMENTATION_STATUS_OCTOBER_2025.md) | Feature status with evidence | ✅ Current |
-| [Features Overview](FEATURES_OVERVIEW.md) | Comprehensive feature catalog | ✅ Current |
+## Reference Documents
 
-### **Enterprise Features**
+### Core
+| Document | Description |
+|----------|-------------|
+| [TODO.md](TODO.md) | Development status (all phases complete) |
+| [GOVERNANCE.md](GOVERNANCE.md) | Governance and compliance |
+| [CURRENT_ARCHITECTURE.md](CURRENT_ARCHITECTURE.md) | System architecture |
 
-#### **Security & Compliance**
-| Document | Description | Status |
-|----------|-------------|--------|
-| [Advanced Security Features](ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md) | Enhanced RLS with policy evaluation | ✅ Oct 2025 |
-| [KMS Provider System](KMS_PROVIDER_SYSTEM.md) | HashiCorp Vault integration | ✅ Complete |
-| [User Authentication](USER_AUTH.md) | RBAC/ABAC with MFA | ✅ Complete |
-| [Audit Logging](AUDIT_LOGGING.md) | Multi-platform audit capabilities | ✅ Complete |
-| [TDE & KMS Design](DESIGN_TDE_KMS.md) | Transparent data encryption | ✅ Complete |
-| [Security Progress](SECURITY_PROGRESS.md) | Security implementation status | ✅ Complete |
+### Language
+| Document | Description |
+|----------|-------------|
+| [EXPRESSION_OPERATORS.md](EXPRESSION_OPERATORS.md) | Expression operators |
+| [TYPE_SYSTEM_EXTENSIONS.md](TYPE_SYSTEM_EXTENSIONS.md) | Type system |
+| [TYPE_QUICK_REFERENCE.md](TYPE_QUICK_REFERENCE.md) | Type reference |
 
-#### **Advanced Analytics**
-| Document | Description | Status |
-|----------|-------------|--------|
-| [ML Graph Embeddings](ML_GRAPH_EMBEDDINGS.md) | Node2Vec, GraphSAGE, DeepWalk | ✅ Complete |
-| [Real-time Analytics](REAL_TIME_ANALYTICS.md) | Streaming with ML integration | ✅ Complete |
-| [Real-time Analytics Compilation Fixes](REAL_TIME_ANALYTICS_COMPILATION_FIXES.md) | Compilation fixes | ✅ Oct 2025 |
+### Operations
+| Document | Description |
+|----------|-------------|
+| [TRANSACTION_MANAGEMENT.md](TRANSACTION_MANAGEMENT.md) | Transaction handling |
+| [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md) | Session handling |
+| [EXPLAIN_PROFILE.md](EXPLAIN_PROFILE.md) | Query profiling |
 
-#### **Database Engine**
-| Document | Description | Status |
-|----------|-------------|--------|
-| [Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md) | Advanced MVCC with SSI | ✅ Complete |
-| [Materialized Views](MATERIALIZED_VIEWS.md) | Enterprise view management | ✅ Complete |
-| [Distributed Query Coordination](DISTRIBUTED_QUERY_COORDINATION.md) | Federation-aware optimization | ✅ Complete |
-
-### **Development & Operations**
-
-#### **Development Process**
-| Document | Description | Status |
-|----------|-------------|--------|
-| [Development TODO](TODO.md) | Current priorities (ALL COMPLETED) | ✅ Current |
-| [Completion Reports](completion_reports/) | Detailed phase completion reports | ✅ Oct 2025 |
-| [Quick Reference](QUICK_REFERENCE.md) | Commands and syntax | ✅ Complete |
-| [Compilation Fixes](COMPILATION_FIXES_OCTOBER_2025.md) | Graph algorithm fixes | ✅ Oct 2025 |
-
-#### **Specialized Features**
-| Document | Description | Status |
-|----------|-------------|--------|
-| [CLI Subprocess Elimination](CLI_SUBPROCESS_ELIMINATION.md) | Unified binary architecture | ✅ Complete |
-| [QUIC Implementation Fixes](QUIC_IMPLEMENTATION_FIXES.md) | Critical QUIC transport fixes and testing | ✅ Complete |
-
-## 🏆 Implementation Status Summary
-
-### **Major Features Completed (October 2025)**
-1. **S3 Cloud Backup** - Production-ready with Digital Ocean Spaces integration
-2. **REPL QUIC Integration** - Real-time interactive shell with comprehensive features
-3. **Vector Operations** - HNSW indexing with 6 distance metrics and SIMD acceleration
-4. **Performance Optimization** - 13.18x I/O improvement, memory-mapped operations
-5. **IndexOptimizer** - Cost-based query planning with statistics integration
-6. **ML Graph Embeddings** - Complete Node2Vec, GraphSAGE, DeepWalk implementation
-7. **Real-time Analytics** - Streaming analytics with pattern detection and anomaly detection
-8. **Enhanced Transaction Isolation** - Advanced MVCC with SSI and phantom read prevention
-9. **Distributed Query Coordination** - Federation-aware optimization with load balancing
-10. **Materialized View Refresh** - Complete refresh strategies with dependency tracking
-11. **CLI Subprocess Elimination** - Unified binary architecture eliminating subprocess spawning
-12. **Advanced Security Features** - Enhanced RLS with policy evaluation, expression compilation, and optimization
-
-### **Quality Metrics**
-- **✅ 93.9% Test Coverage** (1166/1242 geodetestlab tests)
-- **✅ 98.6% GQL Compliance** (69/70 ISO/IEC 39075:2024 tests)
-- **✅ 1016 CANARY Markers** tracking governance compliance
-- **✅ Production Ready** - All major features implemented and tested
-
-## 🔧 Documentation Standards
-
-### **Documentation Guidelines**
-- **Evidence-Based**: All features documented with implementation proof
-- **Test Coverage**: Documentation aligned with test scenarios
-- **CANARY Compliance**: Governance tracking for all implementations
-- **Current Status**: Regular updates reflecting actual implementation
-
-### **Maintenance Process**
-- **Continuous Updates**: Documentation updated with each feature implementation
-- **Quality Gates**: Documentation review required for feature completion
-- **Cross-References**: Consistent linking between related documents
-- **Version Control**: Timestamped updates with clear change tracking
-
-## 📈 Usage Statistics
-
-### **Documentation Coverage**
-- **Core Features**: 100% documented with comprehensive technical details
-- **Enterprise Features**: 100% documented with security and compliance focus
-- **Advanced Features**: 100% documented with performance benchmarks
-- **Development Process**: 100% documented with evidence-based tracking
-
-### **Documentation Quality**
-- **Technical Accuracy**: All examples tested and verified
-- **Implementation Alignment**: Documentation synchronized with actual code
-- **Comprehensive Coverage**: No feature gaps in documentation
-- **User-Focused**: Clear examples and practical guidance
-
-## 🎯 Next Steps
-
-### **Documentation Evolution**
-Based on the completion of all major features, future documentation will focus on:
-
-1. **Advanced Use Cases** - Industry-specific implementation guides
-2. **Performance Optimization** - Advanced tuning and scaling guides
-3. **Integration Patterns** - Best practices for enterprise integration
-4. **Migration Guides** - Transition paths from other graph databases
-
-### **Community Documentation**
-- **Tutorial Series** - Step-by-step learning guides
-- **Video Documentation** - Visual walkthroughs of key features
-- **Community Examples** - User-contributed use cases and patterns
-- **Best Practices** - Production deployment recommendations
+### Security
+| Document | Description |
+|----------|-------------|
+| [ARGON2ID_IMPLEMENTATION.md](ARGON2ID_IMPLEMENTATION.md) | Password hashing |
+| [FIELD_LEVEL_ENCRYPTION.md](FIELD_LEVEL_ENCRYPTION.md) | Field encryption |
+| [DESIGN_TDE_KMS.md](DESIGN_TDE_KMS.md) | TDE design |
 
 ---
 
-**For the most current information, always refer to the specific feature documentation linked above.**
-
 *Last Updated: December 2025*
-*Status: COMPREHENSIVE - All major features documented*
