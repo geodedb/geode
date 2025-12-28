@@ -2,20 +2,71 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-28 (Advanced Testing - Run 13) ✅ COMPLETE
+## Current Test Run: 2025-12-28 (Enterprise Test - Run 1) ✅ QUERIES PASSING
+
+**Test File**: `./testing/shell/enterprise_test.gql` (150 statements)
+
+**Status**: ✅ **ALL QUERIES CORRECT** - All 150 statements executed, results verified
+
+### Run 1 Results Summary
+
+- **Statements Executed**: 150/150 ✅
+- **Query Results**: All correct ✅
+- **Set Operations**: UNION, INTERSECT, EXCEPT all working ✅
+- **Aggregations**: COUNT, SUM, AVG, MIN, MAX, GROUP BY, HAVING ✅
+- **Pattern Matching**: Multi-hop patterns, variable-length paths ✅
+- **Subqueries**: EXISTS, NOT EXISTS, COUNT subquery ✅
+- **Graph Isolation**: Cross-graph verification passed ✅
+
+### ⚠️ Server Panic on Client Disconnect - FIXED
+
+| ID | Type | Severity | Description | Status |
+|----|------|----------|-------------|--------|
+| E01 | Server Stability | **P0** | Server panic when client closes connection | ✅ FIXED |
+
+**Root Cause Analysis**:
+1. `ConnectionState.deinit()` only called `conn.close()` but NOT `transport.destroyConnection()`
+   - This left the connection in the transport's list after being closed
+   - Memory was not properly freed
+   - Could cause use-after-free or double-free issues
+
+2. Stream operations on drained connections caused panics
+   - `readStream()` was called on connections that became drained between `isDrained()` check and actual read
+   - No re-check of connection state during stream polling loop
+
+**Fix Applied** (2025-12-28):
+
+1. **ConnectionState stores transport reference** (`src/cli/main.zig:436-460`)
+   - Added `transport: *quic.QuicTransport` field to ConnectionState
+   - `deinit()` now calls `transport.destroyConnection(conn)` instead of just `conn.close()`
+   - CANARY: REQ-QUIC-CONN-CLEANUP-004
+
+2. **Multiple isDrained() checks in stream loop** (`src/cli/main.zig:1715-1755`)
+   - Check before starting stream iteration
+   - Check before each stream read
+   - Check inside the read loop
+   - Log specific errors for disconnect debugging
+   - CANARY: REQ-QUIC-CONN-CLEANUP-005
+
+**Files Modified**:
+- `src/cli/main.zig` - ConnectionState struct and server main loop
+
+---
+
+## Previous Test Run: 2025-12-28 (Advanced Testing - Run 14) ✅ COMPLETE
 
 **Test File**: `./testing/shell/enterprise_test_advanced.gql` (233 statements)
 
-**Status**: ✅ **ALL ISSUES RESOLVED** - D01-D05 complete
+**Status**: ✅ **ALL ISSUES RESOLVED** - D01-D05 complete, all fixes verified
 
-### Run 13 Results Summary
+### Run 14 Results Summary
 
 - **Statements Executed**: 233/233 ✅
 - **Expected Errors**: 4 (2x IntegerOverflow for boundary tests, 2x Syntax error for D02 inline comments)
 - **D03 Fix Verified**: Section 14.3 correctly returns NULL for impossible property filter ✅
-- **C04 Fix Verified**: Section 14.4 correctly returns 3 grandchildren ✅
+- **C04 Fix Verified**: Section 14.4 correctly returns 3 grandchildren (A1, A2, B1) ✅
 - **D04 Fix Verified**: OPTIONAL MATCH ORDER BY now working ✅
-- **D05 Fixed**: ORDER BY on aliased columns in simple MATCH now working ✅
+- **D05 Fix Verified**: Section 7.1 now shows alphabetical order (CEO, Contractor1, Guest, Worker1, Worker2) ✅
 
 ### Issues Summary (2025-12-28)
 

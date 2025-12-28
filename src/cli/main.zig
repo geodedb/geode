@@ -435,22 +435,27 @@ const StreamState = struct {
 
 const ConnectionState = struct {
     conn: *quic.QuicConnection,
+    transport: *quic.QuicTransport,
     streams: std.AutoHashMap(u64, StreamState),
 
-    fn init(allocator: std.mem.Allocator, conn: *quic.QuicConnection) ConnectionState {
+    fn init(allocator: std.mem.Allocator, conn: *quic.QuicConnection, transport: *quic.QuicTransport) ConnectionState {
         return ConnectionState{
             .conn = conn,
+            .transport = transport,
             .streams = std.AutoHashMap(u64, StreamState).init(allocator),
         };
     }
 
+    // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-004; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=IMPL; OWNER=cli; UPDATED=2025-12-28
+    // E01 Fix: Use destroyConnection to properly close, remove from list, and free connection
     fn deinit(self: *ConnectionState, allocator: std.mem.Allocator) void {
         var it = self.streams.valueIterator();
         while (it.next()) |state| {
             state.deinit(allocator);
         }
         self.streams.deinit();
-        self.conn.close();
+        // Use destroyConnection instead of close() to properly cleanup and free memory
+        self.transport.destroyConnection(self.conn);
     }
 };
 
@@ -1649,7 +1654,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         while (quic_server.tryAccept()) |conn| {
             std.debug.print("[QUIC-CLI] Accepted new connection\n", .{});
             connection_count += 1;
-            var conn_state = ConnectionState.init(allocator, conn);
+            var conn_state = ConnectionState.init(allocator, conn, &quic_server);
             active_connections.append(allocator, conn_state) catch {
                 conn_state.deinit(allocator);
                 continue;
@@ -1707,13 +1712,35 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
                 }
             }
 
-            // Poll active streams
+            // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-005; FEATURE="ConnectionMemoryManagement"; ASPECT=GracefulDisconnect; STATUS=IMPL; OWNER=cli; UPDATED=2025-12-28
+            // E01 Fix: Check for drained connection before stream operations to prevent panic
+            // Poll active streams - but first check if connection is still valid
+            if (conn_state.conn.isDrained()) {
+                // Connection became drained during iteration - skip stream polling
+                i += 1;
+                continue;
+            }
+
             var stream_iter = conn_state.streams.keyIterator();
             while (stream_iter.next()) |stream_id_ptr| {
                 const stream_id = stream_id_ptr.*;
+
+                // E01 Fix: Re-check connection state before each stream read
+                // Client disconnect can happen between iterations
+                if (conn_state.conn.isDrained()) break;
+
                 while (true) {
+                    // E01 Fix: Check drained state inside the read loop as well
+                    if (conn_state.conn.isDrained()) break;
+
                     var buf: [MAX_LINE_SIZE]u8 = undefined;
-                    const n = conn_state.conn.inner.readStream(stream_id, buf[0..]) catch break;
+                    const n = conn_state.conn.inner.readStream(stream_id, buf[0..]) catch |err| {
+                        // E01 Fix: Log specific error for debugging disconnect issues
+                        if (err != error.WouldBlock) {
+                            std.debug.print("[QUIC-CLI] readStream error on stream {}: {}\n", .{ stream_id, err });
+                        }
+                        break;
+                    };
 
                     if (n == 0) break;
 
