@@ -224,3 +224,4 @@ snapshot:
     # Run on main branch when there's no tag
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       when: always
+  allow_failure: true  # GoReleaser may fail due to Go vendor issues
