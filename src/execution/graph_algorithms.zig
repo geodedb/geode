@@ -88,6 +88,110 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                 const hop = chain.hops[0];
                                 const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
 
+                                // CANARY: REQ=REQ-GQL-VAR-LEN-SUBQUERY-001; FEATURE="VariableLengthSubquery"; ASPECT=CountMatches; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                                // C01/C02 Fix: Handle variable-length paths (*1..3)
+                                const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
+                                if (is_var_length) {
+                                    const min_len: usize = if (hop.rel.min_len) |m| @intCast(m) else 1;
+                                    const max_len: usize = if (hop.rel.max_len) |m| @intCast(m) else 10;
+                                    const target_pattern = hop.right;
+
+                                    // BFS to find all reachable nodes within depth range
+                                    var visited = std.AutoHashMap(u64, usize).init(allocator);
+                                    defer visited.deinit();
+                                    const QueueItem = struct { node_id: u64, depth: usize };
+                                    var queue = std.ArrayList(QueueItem).initCapacity(allocator, 16) catch continue;
+                                    defer queue.deinit(allocator);
+
+                                    // Start from bound node at depth 0
+                                    queue.append(allocator, QueueItem{ .node_id = bound_node.id, .depth = 0 }) catch continue;
+                                    visited.put(bound_node.id, 0) catch continue;
+
+                                    while (queue.items.len > 0) {
+                                        const current = queue.orderedRemove(0);
+                                        if (current.depth >= max_len) continue;
+
+                                        // Find all edges from current node
+                                        var edge_iter = store.edges.iterator();
+                                        while (edge_iter.next()) |edge_entry| {
+                                            const edge = edge_entry.value_ptr.*;
+                                            if (edge.from_id != current.node_id) continue;
+
+                                            // Filter by relationship type if specified
+                                            if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) {
+                                                continue;
+                                            }
+
+                                            const next_depth = current.depth + 1;
+                                            const next_node_id = edge.to_id;
+
+                                            // Skip if already visited at same or lower depth
+                                            if (visited.get(next_node_id)) |prev_depth| {
+                                                if (prev_depth <= next_depth) continue;
+                                            }
+                                            visited.put(next_node_id, next_depth) catch continue;
+
+                                            // Add to queue for further exploration
+                                            if (next_depth < max_len) {
+                                                queue.append(allocator, QueueItem{ .node_id = next_node_id, .depth = next_depth }) catch {};
+                                            }
+
+                                            // Check if this node is within valid depth range and matches target pattern
+                                            if (next_depth >= min_len and next_depth <= max_len) {
+                                                if (store.nodes.get(next_node_id)) |target_node| {
+                                                    var target_matches = true;
+
+                                                    // Check label constraints on target
+                                                    for (target_pattern.labels) |required_label| {
+                                                        var has_label = false;
+                                                        for (target_node.labels) |node_label| {
+                                                            if (std.mem.eql(u8, required_label, node_label)) {
+                                                                has_label = true;
+                                                                break;
+                                                            }
+                                                        }
+                                                        if (!has_label) {
+                                                            target_matches = false;
+                                                            break;
+                                                        }
+                                                    }
+
+                                                    // Check WHERE filter if present
+                                                    if (target_matches and where_filter != null) {
+                                                        var ext_env = env;
+                                                        if (target_pattern.name) |target_name| {
+                                                            const target_node_ptr = store.nodes.getPtr(next_node_id) orelse continue;
+                                                            const new_names = allocator.alloc([]const u8, env.names.len + 1) catch continue;
+                                                            const new_values = allocator.alloc(Value, env.values.len + 1) catch continue;
+                                                            @memcpy(new_names[0..env.names.len], env.names);
+                                                            @memcpy(new_values[0..env.values.len], env.values);
+                                                            new_names[env.names.len] = target_name;
+                                                            new_values[env.values.len] = Value{ .Node = target_node_ptr };
+                                                            ext_env = .{
+                                                                .names = new_names,
+                                                                .values = new_values,
+                                                                .allocator = allocator,
+                                                                .param_names = env.param_names,
+                                                                .param_values = env.param_values,
+                                                            };
+                                                        }
+                                                        const where_result = eval.evalExpr(allocator, where_filter.?.*, ext_env) catch continue;
+                                                        const passes = switch (where_result) {
+                                                            .Bool => |b| b,
+                                                            else => false,
+                                                        };
+                                                        if (passes) count += 1;
+                                                    } else if (target_matches) {
+                                                        count += 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    return count;
+                                }
+
+                                // Original single-hop handling for non-variable-length patterns
                                 // Count edges from this bound node
                                 var edge_iter = store.edges.iterator();
                                 while (edge_iter.next()) |edge_entry| {

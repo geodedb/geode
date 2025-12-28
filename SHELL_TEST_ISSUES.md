@@ -2,18 +2,18 @@
 
 Issues discovered during comprehensive shell testing (`./testing/shell/comprehensive_test.gql`, `./testing/shell/enterprise_test.gql`, and `./testing/shell/enterprise_test_extended.gql`).
 
-## Current Test Run: 2025-12-28 (Advanced Testing - Run 11) ⚠️ IN PROGRESS
+## Current Test Run: 2025-12-28 (Advanced Testing - Run 11) ✅ COMPLETE
 
 **Test File**: `./testing/shell/enterprise_test_advanced.gql` (233 statements)
 
-**Status**: ⚠️ **2 ISSUES REMAINING** - B01-B10 regressions fixed, C03+C04+C05 fixed
+**Status**: ✅ **ALL ISSUES FIXED** - B01-B10 regressions fixed, C01-C05 all fixed
 
 ### New Issues Found (2025-12-28 Run 11)
 
 | ID | Section | Type | Severity | Description | Status |
 |----|---------|------|----------|-------------|--------|
-| C01 | 9.6 | EXISTS Subquery | P2 | EXISTS with outer variable reference returns 0 rows | ⚠️ OPEN |
-| C02 | 9.7 | COUNT Subquery | P2 | Syntax error on COUNT { MATCH ... WHERE } | ⚠️ OPEN |
+| C01 | 9.6 | EXISTS Subquery | P2 | EXISTS with outer variable reference returns 0 rows | ✅ FIXED |
+| C02 | 9.7 | COUNT Subquery | P2 | Syntax error on COUNT { MATCH ... WHERE } | ✅ FIXED |
 | C03 | 13.3 | CASE Expression | P2 | Syntax error on CASE with ORDER BY | ✅ FIXED (B10) |
 | C04 | 14.4 | Required MATCH | P1 | Missing grandchild A2 (2 rows instead of 3) | ✅ FIXED |
 | C05 | 17.3 | COUNT DISTINCT | P2 | COUNT(DISTINCT m.name) returns null instead of 0 | ✅ FIXED |
@@ -56,7 +56,7 @@ Both handlers:
 
 ### Issue Details
 
-#### C01: EXISTS Subquery with Outer Variable Returns 0 Rows
+#### C01: EXISTS Subquery with Outer Variable Returns 0 Rows - FIXED
 
 **Section**: 9.6
 
@@ -69,11 +69,31 @@ RETURN p.name AS has_depth_3;
 
 **Expected**: `Root` (path Root→A→A1→A1X reaches level 3)
 
-**Actual**: `(0 rows)`
+**Actual Before Fix**: `(0 rows)`
 
-**Root Cause**: EXISTS subquery variable binding for outer variable `p` not working with variable-length paths.
+**Root Cause**: The `countPatternMatches` function in `graph_algorithms.zig` didn't support variable-length paths (`*1..3`). It only handled single-hop patterns.
 
-#### C02: COUNT Subquery Syntax Error
+**Fix Applied** (`src/execution/graph_algorithms.zig:91-191`):
+- Added BFS-based traversal for variable-length paths
+- Detects when pattern has `min_len` or `max_len` (variable-length indicator)
+- Uses queue-based BFS to explore all paths within depth range
+- Tracks visited nodes to avoid cycles
+- Applies target pattern and WHERE filter to matching nodes
+- CANARY marker: REQ-GQL-VAR-LEN-SUBQUERY-001
+
+```zig
+// C01/C02 Fix: Handle variable-length paths (*1..3)
+const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
+if (is_var_length) {
+    // BFS to find all reachable nodes within depth range
+    var visited = std.AutoHashMap(u64, usize).init(allocator);
+    const QueueItem = struct { node_id: u64, depth: usize };
+    var queue = std.ArrayList(QueueItem).initCapacity(allocator, 16) catch continue;
+    // ... BFS traversal with depth tracking ...
+}
+```
+
+#### C02: COUNT Subquery Syntax Error - FIXED
 
 **Section**: 9.7
 
@@ -83,7 +103,22 @@ MATCH (p:TreeNode {id: 'root'})
 RETURN p.name, COUNT { MATCH (p)-[:CHILD*1..3]->(d:TreeNode) WHERE d.level = 2 } AS level2_descendants;
 ```
 
-**Actual**: `Error: Syntax error in query`
+**Actual Before Fix**: `Error: Syntax error in query`
+
+**Root Cause**: Two issues:
+1. Parser didn't support WHERE clause inside COUNT subquery
+2. PatternCount in eval.zig didn't pass the WHERE filter to countPatternMatches
+
+**Fix Applied**:
+1. `src/gql/ast.zig:251-252` - Changed PatternCount to struct with optional WHERE:
+   ```zig
+   PatternCount: struct { pattern: *GraphPattern, where: ?*Expr = null },
+   ```
+2. `src/gql/parser.zig:3001-3027` - Parse WHERE inside COUNT subquery
+3. `src/gql/print.zig:741-749` - Print WHERE clause in PatternCount
+4. `src/eval.zig:2295-2303` - Pass WHERE to countPatternMatches
+5. `src/execution/graph_algorithms.zig:91-191` - BFS with WHERE filter evaluation
+- CANARY markers: REQ-GQL-COUNT-SUBQUERY-001, REQ-GQL-COUNT-SUBQUERY-002
 
 #### C03: CASE Expression Syntax Error
 

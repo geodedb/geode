@@ -2998,8 +2998,8 @@ pub const Parser = struct {
                 base = .{ .Member = .{ .target = bp, .field = field.lexeme } };
                 continue;
             }
-            // CANARY: REQ=REQ-GQL-COUNT-001; FEATURE="CountSubquery"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
-            // Check for COUNT { MATCH pattern } subquery syntax
+            // CANARY: REQ=REQ-GQL-COUNT-001; FEATURE="CountSubquery"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-28
+            // C02 Fix: Check for COUNT { MATCH pattern WHERE expr } subquery syntax
             if (self.cur.kind == .l_brace and base == .Ident and std.ascii.eqlIgnoreCase(base.Ident.orig, "count")) {
                 self.advance(); // consume '{'
                 // Check if this is COUNT { MATCH pattern } or COUNT { pattern }
@@ -3007,11 +3007,22 @@ pub const Parser = struct {
                     self.advance(); // consume MATCH
                 }
                 const pattern = try self.parseGraphPattern();
-                _ = try self.expect(.r_brace);
                 const a = self.arena.allocator();
                 const pat_ptr = try a.create(ast.GraphPattern);
                 pat_ptr.* = pattern;
-                base = .{ .PatternCount = pat_ptr };
+
+                // C02 Fix: Parse optional WHERE clause inside COUNT subquery
+                var where_expr: ?*ast.Expr = null;
+                if (self.cur.kind == .WHERE) {
+                    self.advance(); // consume WHERE
+                    const where_e = try self.parseOrExpr();
+                    const we_ptr = try a.create(ast.Expr);
+                    we_ptr.* = where_e;
+                    where_expr = we_ptr;
+                }
+
+                _ = try self.expect(.r_brace);
+                base = .{ .PatternCount = .{ .pattern = pat_ptr, .where = where_expr } };
                 continue;
             }
             if (self.cur.kind == .l_paren) {
@@ -3040,7 +3051,7 @@ pub const Parser = struct {
                             const a = self.arena.allocator();
                             const pat_ptr = try a.create(ast.GraphPattern);
                             pat_ptr.* = pattern;
-                            base = .{ .PatternCount = pat_ptr };
+                            base = .{ .PatternCount = .{ .pattern = pat_ptr, .where = null } };
                             continue;
                         }
                         // Otherwise fall through to regular function call handling

@@ -2293,9 +2293,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             break :blk_shortest path_value;
         },
         .PatternCount => |pc| blk_count: {
-            // Pattern comprehension count: size((pattern))
+            // CANARY: REQ=REQ-GQL-COUNT-SUBQUERY-002; FEATURE="CountSubquery"; ASPECT=Evaluation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+            // C02 Fix: Pattern comprehension count with optional WHERE clause
             // Call the execution layer to count pattern matches (pass env for correlated patterns)
-            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.*, null, env) catch {
+            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.pattern.*, pc.where, env) catch {
                 break :blk_count Value{ .Int = 0 };
             };
             break :blk_count Value{ .Int = count };

@@ -739,9 +739,13 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             try w.print(")", .{});
         },
         .PatternCount => |pc| {
-            try w.print("size(", .{});
-            try printGraphPattern(w, pc.*, 0);
-            try w.print(")", .{});
+            try w.print("COUNT {{ ", .{});
+            try printGraphPattern(w, pc.pattern.*, 0);
+            if (pc.where) |where_expr| {
+                try w.print(" WHERE ", .{});
+                try printExprWith(w, where_expr.*, 0, opts);
+            }
+            try w.print(" }}", .{});
         },
         .MapProjection => |mp| {
             try printExprWith(w, mp.source.*, 0, opts);

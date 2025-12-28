@@ -33,6 +33,18 @@ setup:
     CREATE (:NumericTest {id: 2, label: 'negative', value: -10});
     CREATE (:NumericTest {id: 3, label: 'zero', value: 0});
 
+  # Person network for C01/C02 tests (EXISTS and COUNT subquery with variable-length paths)
+  - |
+    CREATE (:Person {name: 'Alice', age: 30});
+    CREATE (:Person {name: 'Bob', age: 25});
+    CREATE (:Person {name: 'Charlie', age: 35});
+    CREATE (:Person {name: 'Dave', age: 28});
+
+  - |
+    MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b);
+    MATCH (a:Person {name: 'Alice'}), (c:Person {name: 'Charlie'}) CREATE (a)-[:KNOWS]->(c);
+    MATCH (b:Person {name: 'Bob'}), (d:Person {name: 'Dave'}) CREATE (b)-[:KNOWS]->(d);
+
 tests:
   # C04: Required MATCH after OPTIONAL MATCH must expand to all matches
   # Bug was: only returning first match, missing A2
@@ -124,3 +136,64 @@ tests:
           sign: "negative"
         - label: "zero"
           sign: "zero"
+
+  # C01: EXISTS with outer variable and variable-length paths
+  # Bug was: EXISTS { (a)-[:KNOWS*1..2]->(:Person) } returned 0 rows
+  - name: "C01: EXISTS with variable-length path works"
+    query: |
+      MATCH (a:Person)
+      WHERE EXISTS { (a)-[:KNOWS*1..2]->(:Person) }
+      RETURN a.name
+      ORDER BY a.name
+    expect:
+      row_count: 2
+      ordered:
+        - name: "Alice"
+        - name: "Bob"
+
+  - name: "C01: EXISTS with single-hop path still works"
+    query: |
+      MATCH (a:Person)
+      WHERE EXISTS { (a)-[:KNOWS]->(:Person) }
+      RETURN a.name
+      ORDER BY a.name
+    expect:
+      row_count: 2
+      ordered:
+        - name: "Alice"
+        - name: "Bob"
+
+  # C02: COUNT subquery with WHERE clause inside
+  # Bug was: COUNT { MATCH pattern WHERE expr } was syntax error
+  - name: "C02: COUNT subquery filters correctly"
+    query: |
+      MATCH (a:Person)
+      WHERE COUNT { (a)-[:KNOWS]->(:Person) } > 0
+      RETURN a.name
+      ORDER BY a.name
+    expect:
+      row_count: 2
+      ordered:
+        - name: "Alice"
+        - name: "Bob"
+
+  - name: "C02: COUNT subquery with WHERE inside"
+    query: |
+      MATCH (a:Person)
+      WHERE COUNT { (a)-[:KNOWS]->(b:Person) WHERE b.age > 25 } > 0
+      RETURN a.name
+      ORDER BY a.name
+    expect:
+      row_count: 2
+      ordered:
+        - name: "Alice"
+        - name: "Bob"
+
+  - name: "C02: COUNT returns exact number of matches"
+    query: |
+      MATCH (a:Person {name: 'Alice'})
+      RETURN COUNT { (a)-[:KNOWS]->(:Person) } AS knows_count
+    expect:
+      row_count: 1
+      contains:
+        - knows_count: 2

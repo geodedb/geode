@@ -248,7 +248,8 @@ pub const Expr = union(enum) {
     HasLabel: struct { node: []const u8, label: []const u8 },
     // Path finding functions and pattern comprehensions
     ShortestPath: struct { pattern: *GraphPattern, all: bool },
-    PatternCount: *GraphPattern,
+    // CANARY: REQ=REQ-GQL-COUNT-SUBQUERY-001; FEATURE="CountSubquery"; ASPECT=WhereClause; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-28
+    PatternCount: struct { pattern: *GraphPattern, where: ?*Expr = null },
     // Map projection: n {.name, .age} - projects specified properties from an object
     MapProjection: struct { source: *Expr, fields: [][]const u8 },
     // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=AST; STATUS=IMPLEMENTED; OWNER=parser; UPDATED=2025-12-23
