@@ -22,9 +22,13 @@ variables:
   DOCKER_BUILDKIT: 1
   ZIG_VERSION: "0.15.2"
   GORELEASER_VERSION: "latest"
-  GIT_CONFIG_COUNT: 1
-  GIT_CONFIG_KEY_0: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_FQDN}.insteadOf"
-  GIT_CONFIG_VALUE_0: "https://gitlab.com"
+  # Git config to rewrite URLs for CI authentication
+  GIT_CONFIG_COUNT: 2
+  GIT_CONFIG_KEY_0: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_FQDN}/.insteadOf"
+  GIT_CONFIG_VALUE_0: "https://gitlab.com/"
+  # Rewrite SSH URLs to HTTPS for submodule compatibility
+  GIT_CONFIG_KEY_1: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf"
+  GIT_CONFIG_VALUE_1: "git@gitlab.com:"
 
 # =============================================================================
 # Build Stage
