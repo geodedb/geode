@@ -817,10 +817,15 @@ class ParallelTestRunner:
 
                 server_env = os.environ.copy()
                 server_env.update({k: str(v) for k, v in server_env_overrides.items()})
+                # CRITICAL FIX: Use DEVNULL for server stdout/stderr to prevent blocking
+                # When using PIPE, the server can block if it writes more output than the
+                # pipe buffer can hold (typically 64KB on Linux). With many connections,
+                # debug output accumulates and causes the server to hang.
+                # Since we use --log-level error, minimal output is expected anyway.
                 server_process = subprocess.Popen(
                     server_args,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     env=server_env
                 )
                 self._register_child(server_process)
@@ -841,8 +846,8 @@ class ParallelTestRunner:
                 while (time.time() - start_time) < max_wait:
                     # Check if server process is still alive
                     if server_process.poll() is not None:
-                        stdout, stderr = server_process.communicate()
-                        self.log_progress(f"Server process for {spec_label} died: {stderr.decode()[:200]}")
+                        exit_code = server_process.returncode
+                        self.log_progress(f"Server process for {spec_label} died with exit code {exit_code}")
                         break
 
                     # Check if UDP port is bound (QUIC uses UDP)

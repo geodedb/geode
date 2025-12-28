@@ -68,7 +68,9 @@ pub fn handleQuicConnection(
 ) !void {
     _ = env_wal_compact_interval;
     _ = _force_serialization_failure_unused;
-    defer conn.close();
+    // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=IMPL; OWNER=server; UPDATED=2025-12-27
+    // Use destroyConnection to properly remove from transport list, close, and free resources
+    defer transport.destroyConnection(conn);
     std.debug.print("[QUIC-HANDLER] Entering handleQuicConnection\n", .{});
 
     // Poll the endpoint to process incoming STREAM frames before accepting
