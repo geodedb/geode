@@ -191,20 +191,20 @@ go-vendor-sync:
 		cd "$(GQL_CLIENT_DIR)" && \
 		$(GO) mod tidy && $(GO) mod vendor && $(GO) mod verify; \
 	else \
-		echo "Go client directory '$(GQL_CLIENT_DIR)' not found"; exit 1; \
+		echo "Go client moved to separate repository (geode-client-go)"; \
 	fi
 
 go-vendor-check:
-	@echo "-> verifying vendor is used (GOFLAGS=$(GOFLAGS))"
-	@cd "$(GQL_CLIENT_DIR)" && $(GO) list -mod=vendor -m all 2>/dev/null || echo "(note) 'go list -m all' may not resolve under vendor; proceeding with vendor-only builds"
+	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
+		echo "-> verifying vendor is used (GOFLAGS=$(GOFLAGS))"; \
+		cd "$(GQL_CLIENT_DIR)" && $(GO) list -mod=vendor -m all 2>/dev/null || echo "(note) 'go list -m all' may not resolve under vendor; proceeding with vendor-only builds"; \
+	fi
 
 build:
 	$(ZIG) build $(ZIG_FLAGS)
-	$(MAKE) go-build
 
 release:
 	$(ZIG) build $(ZIG_RELEASE_FLAGS)
-	$(MAKE) go-build
 
 # GoReleaser targets
 GORELEASER ?= goreleaser
@@ -313,6 +313,7 @@ client-test-zig: build
 	fi
 
 # Build Go client library (strict vendor)
+# Note: Go client moved to separate repository (geode-client-go)
 go-build: go-prep
 	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
 		echo "Building Go client library..."; \
@@ -323,16 +324,17 @@ go-build: go-prep
 			cd "$(GQL_CLIENT_DIR)/example" && $(GO) build $(GO_BUILD_FLAGS) -o ../../../../zig-out/bin/gql-example .; \
 		fi; \
 	else \
-		echo "Go client directory not found"; exit 1; \
+		echo "Go client moved to separate repository (geode-client-go)"; \
 	fi
 
 # Run Go client tests (strict vendor)
+# Note: Go client moved to separate repository (geode-client-go)
 go-test: go-prep
 	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
 		echo "Running Go client tests..."; \
 		cd "$(GQL_CLIENT_DIR)" && CI=$${CI:-true} $(GO) test $(GO_TEST_FLAGS) ./...; \
 	else \
-		echo "Go client directory not found"; exit 1; \
+		echo "Go client moved to separate repository (geode-client-go)"; \
 	fi
 
 # Clean Go client artifacts
