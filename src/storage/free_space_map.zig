@@ -18,7 +18,7 @@ pub const FreeSpaceMap = struct {
 
     pub fn init(allocator: std.mem.Allocator, min_bytes: u16) FreeSpaceMap {
         var bins: [6]Bin = undefined;
-        for (0..6) |i| bins[i] = Bin.init(allocator);
+        for (0..6) |i| bins[i] = .{};
         return .{
             .allocator = allocator,
             .page_free = std.AutoHashMap(u32, u16).init(allocator),
@@ -29,7 +29,7 @@ pub const FreeSpaceMap = struct {
 
     pub fn deinit(self: *FreeSpaceMap) void {
         self.page_free.deinit();
-        for (0..6) |i| self.bins[i].deinit();
+        for (0..6) |i| self.bins[i].deinit(self.allocator);
     }
 
     fn getBinIndex(size: u16) usize {
@@ -65,14 +65,14 @@ pub const FreeSpaceMap = struct {
                     }
                 }
                 // Add to new bin
-                try self.bins[new_bin].append(page_id);
+                try self.bins[new_bin].append(self.allocator, page_id);
             }
             // Update stored exact value
             entry.value_ptr.* = free_contig;
         } else {
             // New tracking
             entry.value_ptr.* = free_contig;
-            try self.bins[getBinIndex(free_contig)].append(page_id);
+            try self.bins[getBinIndex(free_contig)].append(self.allocator, page_id);
         }
     }
 

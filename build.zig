@@ -624,24 +624,8 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .windows) {
         quic_tls_tests.linkLibC();
     }
-    const zig_client_quic_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_zig_client_quic.zig"), .target = target, .optimize = optimize }) });
-    if (target.result.os.tag == .windows) {
-        zig_client_quic_test.linkLibC();
-    }
-    // Provide clients/zig client file as a module import path
-    const zig_client_mod = b.createModule(.{ .root_source_file = b.path("clients/zig/client.zig"), .target = target, .optimize = optimize });
-    zig_client_quic_test.root_module.addImport("clients/zig/client.zig", zig_client_mod);
-    // Vendor QUIC for zig client test - using vendor_setup.zig modules
-    const transport_quic_mod_for_test = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
-    transport_quic_mod_for_test.addImport("vendor_quic", quic_modules.quic_api);
 
-    // Provide transport/quic dependency directly to the zig client module so its @import resolves
-    zig_client_mod.addImport("transport/quic", transport_quic_mod_for_test);
-    zig_client_mod.addImport("vendor_quic", quic_modules.quic_api);
-
-    // Expose to the test root as well
-    zig_client_quic_test.root_module.addImport("transport/quic", transport_quic_mod_for_test);
-    zig_client_quic_test.root_module.addImport("vendor_quic", quic_modules.quic_api);
+    // Note: Zig client tests moved to separate geode-client-zig repository
 
     // MVCC Advanced tests (expanded)
     const mvcc_adv_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/transactions/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
@@ -741,7 +725,6 @@ pub fn build(b: *std.Build) void {
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_step.dependOn(&run_quic_tls_tests.step);
-    test_step.dependOn(&zig_client_quic_test.step);
 
     // Note: geoded server binary was removed to avoid module conflicts.
     // The CLI binary (geode) now handles 'serve' by directly invoking server functions

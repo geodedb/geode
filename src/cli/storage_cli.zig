@@ -8,6 +8,13 @@ fn getStdOut() std.fs.File {
         return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     }
 }
+
+fn printTo(file: std.fs.File, comptime fmt: []const u8, args: anytype) !void {
+    var buf: [4096]u8 = undefined;
+    const slice = try std.fmt.bufPrint(&buf, fmt, args);
+    try file.writeAll(slice);
+}
+
 const fs_fsync = @import("fs_fsync");
 const fsm = @import("fsm");
 const page_vacuum = @import("page_vacuum");
@@ -129,7 +136,7 @@ fn cmdStorageVerify(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 }
 
 fn runCheck(allocator: std.mem.Allocator, check_name: []const u8, json_output: bool) !void {
-    const stdout = getStdOut().writer();
+    const stdout = getStdOut();
 
     if (std.mem.eql(u8, check_name, "dir")) {
         var rec = fs_fsync.Recorder{};
@@ -145,7 +152,7 @@ fn runCheck(allocator: std.mem.Allocator, check_name: []const u8, json_output: b
         cwd.deleteFile("sanity_test_b") catch {};
 
         if (json_output) {
-            try stdout.print("{{\"dir_fsync_on_rename\":{}}}\n", .{rec.dir_sync_calls > 0});
+            try printTo(stdout, "{{\"dir_fsync_on_rename\":{}}}\n", .{rec.dir_sync_calls > 0});
         } else {
             if (rec.dir_sync_calls > 0) std.debug.print("PASS\n", .{}) else std.debug.print("FAIL (no sync)\n", .{});
         }
@@ -154,7 +161,7 @@ fn runCheck(allocator: std.mem.Allocator, check_name: []const u8, json_output: b
 
     if (std.mem.eql(u8, check_name, "order")) {
         if (json_output) {
-            try stdout.print("{{\"wal_before_data\":true}}\n", .{});
+            try printTo(stdout, "{{\"wal_before_data\":true}}\n", .{});
         } else {
             std.debug.print("PASS (Static Analysis)\n", .{});
         }
@@ -168,9 +175,9 @@ fn runCheck(allocator: std.mem.Allocator, check_name: []const u8, json_output: b
         const p = map.findPageFor(3000);
 
         if (json_output) {
-            try stdout.print("{{\"pages_used\":{}}}\n", .{if (p == 1) @as(u32, 1) else @as(u32, 0)});
+            try printTo(stdout, "{{\"pages_used\":{}}}\n", .{if (p == 1) @as(u32, 1) else @as(u32, 0)});
         } else {
-            if (p == 1) std.debug.print("PASS\n", .{}) else std.debug.print("FAIL (found page {})\n", .{p});
+            if (p == 1) std.debug.print("PASS\n", .{}) else std.debug.print("FAIL (found page {?})\n", .{p});
         }
         return;
     }
@@ -182,7 +189,7 @@ fn runCheck(allocator: std.mem.Allocator, check_name: []const u8, json_output: b
             .free_end_after = 2048,
         };
         if (json_output) {
-            try stdout.print("{{\"vacuum_compacted\":{},\"free_end_after\":{}}}\n", .{ res.compacted, res.free_end_after });
+            try printTo(stdout, "{{\"vacuum_compacted\":{},\"free_end_after\":{}}}\n", .{ res.compacted, res.free_end_after });
         } else {
             std.debug.print("PASS\n", .{});
         }
