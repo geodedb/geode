@@ -6,6 +6,12 @@ const cryptographic = @import("../types/cryptographic.zig");
 const hnsw = @import("hnsw.zig");
 const rtree = @import("rtree.zig");
 const patricia = @import("patricia.zig");
+const interval_tree = @import("interval_tree.zig");
+const interval_persist = @import("interval_persist.zig");
+const jsonb_inverted = @import("jsonb_inverted.zig");
+const jsonb_persist = @import("jsonb_inverted_persist.zig");
+const domain_trie = @import("domain_trie.zig");
+const domain_persist = @import("domain_trie_persist.zig");
 
 // CANARY: REQ=REQ-GQL-ADVANCED-INDEX-INTEGRATION; FEATURE="Advanced Types Index Integration"; ASPECT=Index; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_ADVANCED_INDEX_INTEGRATION_All; OWNER=index; UPDATED=2025-01-03
 
@@ -134,6 +140,9 @@ pub const AdvancedIndexManager = struct {
     spatial_indexes: std.StringHashMap(*SpatialIndexWrapper),
     network_indexes: std.StringHashMap(*NetworkIndexWrapper),
     signature_indexes: std.StringHashMap(*SignatureIndexWrapper),
+    interval_indexes: std.StringHashMap(*IntervalIndexWrapper),
+    jsonb_indexes: std.StringHashMap(*jsonb_inverted.JsonbInvertedIndex),
+    domain_indexes: std.StringHashMap(*domain_trie.DomainTrie),
 
     pub fn init(allocator: std.mem.Allocator) AdvancedIndexManager {
         return AdvancedIndexManager{
@@ -142,6 +151,9 @@ pub const AdvancedIndexManager = struct {
             .spatial_indexes = std.StringHashMap(*SpatialIndexWrapper).init(allocator),
             .network_indexes = std.StringHashMap(*NetworkIndexWrapper).init(allocator),
             .signature_indexes = std.StringHashMap(*SignatureIndexWrapper).init(allocator),
+            .interval_indexes = std.StringHashMap(*IntervalIndexWrapper).init(allocator),
+            .jsonb_indexes = std.StringHashMap(*jsonb_inverted.JsonbInvertedIndex).init(allocator),
+            .domain_indexes = std.StringHashMap(*domain_trie.DomainTrie).init(allocator),
         };
     }
 
@@ -177,6 +189,30 @@ pub const AdvancedIndexManager = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.signature_indexes.deinit();
+
+        // Clean up interval indexes
+        var interval_iter = self.interval_indexes.iterator();
+        while (interval_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.interval_indexes.deinit();
+
+        // Clean up jsonb indexes
+        var jsonb_iter = self.jsonb_indexes.iterator();
+        while (jsonb_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.jsonb_indexes.deinit();
+
+        // Clean up domain indexes
+        var domain_iter = self.domain_indexes.iterator();
+        while (domain_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.domain_indexes.deinit();
     }
 
     /// Create a vector index for similarity search
@@ -213,6 +249,98 @@ pub const AdvancedIndexManager = struct {
 
         const name_copy = try self.allocator.dupe(u8, name);
         try self.signature_indexes.put(name_copy, index);
+    }
+
+    /// Create an interval index for range queries
+    pub fn createIntervalIndex(self: *AdvancedIndexManager, name: []const u8) !void {
+        const index = try self.allocator.create(IntervalIndexWrapper);
+        index.* = IntervalIndexWrapper.init(self.allocator);
+
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.interval_indexes.put(name_copy, index);
+    }
+
+    /// Create a JSONB inverted index for document path queries
+    pub fn createJsonbIndex(self: *AdvancedIndexManager, name: []const u8) !void {
+        const index = try self.allocator.create(jsonb_inverted.JsonbInvertedIndex);
+        index.* = jsonb_inverted.JsonbInvertedIndex.init(self.allocator);
+
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.jsonb_indexes.put(name_copy, index);
+    }
+
+    /// Create a domain trie index for domain queries
+    pub fn createDomainIndex(self: *AdvancedIndexManager, name: []const u8) !void {
+        const index = try self.allocator.create(domain_trie.DomainTrie);
+        index.* = domain_trie.DomainTrie.init(self.allocator);
+
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.domain_indexes.put(name_copy, index);
+    }
+
+    // Persistence
+    pub fn persistAll(self: *AdvancedIndexManager, dir_path: []const u8) !void {
+        // Create directory if not exists? Assuming exists or caller ensures.
+        // Interval
+        var interval_iter = self.interval_indexes.iterator();
+        while (interval_iter.next()) |entry| {
+            const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.gdir", .{ dir_path, entry.key_ptr.* });
+            defer self.allocator.free(path);
+            try interval_persist.persistSnapshot(i64, &entry.value_ptr.*.tree, path);
+        }
+        // Jsonb
+        var jsonb_iter = self.jsonb_indexes.iterator();
+        while (jsonb_iter.next()) |entry| {
+            const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.gdjb", .{ dir_path, entry.key_ptr.* });
+            defer self.allocator.free(path);
+            try jsonb_persist.persistSnapshot(entry.value_ptr.*, path);
+        }
+        // Domain
+        var domain_iter = self.domain_indexes.iterator();
+        while (domain_iter.next()) |entry| {
+            const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.gddn", .{ dir_path, entry.key_ptr.* });
+            defer self.allocator.free(path);
+            try domain_persist.persistSnapshot(entry.value_ptr.*, path);
+        }
+    }
+
+    pub fn loadAll(self: *AdvancedIndexManager, dir_path: []const u8) !void {
+        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+        defer dir.close();
+
+        var iter = dir.iterate();
+        while (try iter.next()) |entry| {
+            if (entry.kind != .file) continue;
+
+            if (std.mem.endsWith(u8, entry.name, ".gdir")) {
+                const name = entry.name[0 .. entry.name.len - 5];
+                const full_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir_path, entry.name });
+                defer self.allocator.free(full_path);
+
+                const tree = try interval_persist.loadSnapshot(i64, self.allocator, full_path);
+                const wrapper = try self.allocator.create(IntervalIndexWrapper);
+                wrapper.* = IntervalIndexWrapper{ .tree = tree, .allocator = self.allocator };
+                try self.interval_indexes.put(try self.allocator.dupe(u8, name), wrapper);
+            } else if (std.mem.endsWith(u8, entry.name, ".gdjb")) {
+                const name = entry.name[0 .. entry.name.len - 5];
+                const full_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir_path, entry.name });
+                defer self.allocator.free(full_path);
+
+                const index = try jsonb_persist.loadSnapshot(self.allocator, full_path);
+                const idx_ptr = try self.allocator.create(jsonb_inverted.JsonbInvertedIndex);
+                idx_ptr.* = index;
+                try self.jsonb_indexes.put(try self.allocator.dupe(u8, name), idx_ptr);
+            } else if (std.mem.endsWith(u8, entry.name, ".gddn")) {
+                const name = entry.name[0 .. entry.name.len - 5];
+                const full_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir_path, entry.name });
+                defer self.allocator.free(full_path);
+
+                const trie = try domain_persist.loadSnapshot(self.allocator, full_path);
+                const trie_ptr = try self.allocator.create(domain_trie.DomainTrie);
+                trie_ptr.* = trie;
+                try self.domain_indexes.put(try self.allocator.dupe(u8, name), trie_ptr);
+            }
+        }
     }
 
     /// Insert vector into index with comprehensive validation
@@ -284,10 +412,37 @@ pub const AdvancedIndexManager = struct {
         }
     }
 
-    /// Search for network addresses in subnet
     pub fn searchInSubnet(self: *AdvancedIndexManager, index_name: []const u8, subnet: heap.Subnet, allocator: std.mem.Allocator) ![]NetworkSearchResult {
         if (self.network_indexes.get(index_name)) |index| {
             return index.searchInSubnet(subnet, allocator);
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+
+    // Interval index usage
+    pub fn insertInterval(self: *AdvancedIndexManager, index_name: []const u8, low: i64, high: i64, node_id: usize) !void {
+        if (self.interval_indexes.get(index_name)) |index| {
+            const r = try @import("../types/range.zig").IntRange.init(low, high, .inclusive_exclusive); // Default bounds?
+            try index.tree.insert(r, node_id);
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+
+    // Jsonb index usage
+    pub fn insertJsonb(self: *AdvancedIndexManager, index_name: []const u8, doc_id: usize, document: @import("../types/jsonb.zig").JsonbDocument) !void {
+        if (self.jsonb_indexes.get(index_name)) |index| {
+            try index.indexDocument(doc_id, document);
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+
+    // Domain index usage
+    pub fn insertDomain(self: *AdvancedIndexManager, index_name: []const u8, domain: @import("../types/url.zig").Domain, data: usize) !void {
+        if (self.domain_indexes.get(index_name)) |index| {
+            try index.insert(domain, data);
         } else {
             return error.IndexNotFound;
         }
@@ -591,6 +746,23 @@ pub const SignatureIndexWrapper = struct {
             @memcpy(bytes[0..signature.len], signature);
             return std.mem.readInt(u64, &bytes, .little);
         }
+    }
+};
+
+/// Wrapper for Interval tree (i64 for now)
+pub const IntervalIndexWrapper = struct {
+    tree: interval_tree.IntIntervalTree,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) IntervalIndexWrapper {
+        return IntervalIndexWrapper{
+            .tree = interval_tree.IntIntervalTree.init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *IntervalIndexWrapper) void {
+        self.tree.deinit();
     }
 };
 

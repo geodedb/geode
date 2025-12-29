@@ -55,6 +55,10 @@ const _gql_compliance_regression = @import("gql_compliance_regression_test.zig")
 const _network_types_regression = @import("network_types_regression_test.zig");
 const _advanced_types_regression = @import("advanced_types_regression_test.zig");
 const _canary_freshness_guard = @import("canary_freshness_guard.zig");
+const _runtime_advanced_types = @import("runtime_advanced_types.zig");
+const _index_integration = @import("index_integration_persistence.zig");
+const _advanced_types_operators = @import("advanced_types_operators.zig");
+
 // v0.18 feature tests
 const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");
 const _e2e_s3_backup_restore = @import("e2e_s3_backup_restore.zig");
@@ -154,6 +158,7 @@ const _e2e_sort_spill_placeholder = @import("e2e_protocol_sort_spill.zig");
 
 test "aggregate: geode module loads" {
     // Basic sanity check: parse trivial query
+    std.testing.refAllDecls(_advanced_types_operators);
     var res = try geode.parseGql("RETURN 1", std.testing.allocator);
     defer res.deinit();
     try std.testing.expect(res.program.statements.len == 1);

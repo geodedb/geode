@@ -12,6 +12,15 @@
 //! - Enables incremental circular dependency resolution
 
 const std = @import("std");
+const datetime = @import("types/datetime.zig");
+const decimal128 = @import("types/decimal128.zig");
+const jsonb = @import("types/jsonb.zig");
+const xml = @import("types/xml.zig");
+const url = @import("types/url.zig");
+const uuid = @import("types/uuid.zig");
+const arrays = @import("types/arrays.zig");
+const bitstring = @import("types/bitstring.zig");
+const range = @import("types/range.zig");
 
 // CANARY: REQ=REQ-M5.2-VALUE-TYPES-002; FEATURE="Error Handling"; ASPECT=EvalError; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
 /// Evaluation errors that can occur during expression evaluation and query execution
@@ -84,6 +93,31 @@ pub const Value = union(enum) {
         nodes: []const *const @import("graph_store.zig").Node,
         edges: []const *const @import("graph_store.zig").Edge,
     },
+    // Advanced types
+    SmallInt: i16,
+    BigInt: i64,
+    Real: f32,
+    Double: f64,
+    Char: struct { data: []const u8, n: u16 },
+    Varchar: struct { data: []const u8, n: u16 },
+    Text: []const u8,
+    Date: datetime.Date,
+    Time: datetime.Time,
+    TimeTZ: datetime.TimeTZ,
+    Timestamp: datetime.Timestamp,
+    TimestampTZ: datetime.TimestampTZ,
+    Interval: datetime.Interval,
+    Bytea: []const u8,
+    Json: []const u8,
+    Jsonb: jsonb.JsonbDocument,
+    Xml: xml.XmlDocument,
+    Url: url.Url,
+    Domain: url.Domain,
+    UUID: uuid.UUID,
+    Enum: struct { type_id: u32, value_ordinal: u32 },
+    BitString: bitstring.BitString,
+    VarBit: bitstring.BitString,
+    IntRange: range.IntRange,
 };
 
 // CANARY: REQ=REQ-M5.2-VALUE-TYPES-004; FEATURE="Decimal Helper"; ASPECT=DecimalType; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
@@ -257,6 +291,54 @@ pub fn eqVals(a: Value, b: Value) bool {
             }
             break :blk true;
         },
+        .SmallInt => |ai| b == .SmallInt and ai == b.SmallInt,
+        .BigInt => |ai| b == .BigInt and ai == b.BigInt,
+        .Real => |af| b == .Real and af == b.Real,
+        .Double => |ad| b == .Double and ad == b.Double,
+        .Char => |ac| b == .Char and std.mem.eql(u8, ac.data, b.Char.data) and ac.n == b.Char.n,
+        .Varchar => |av| b == .Varchar and std.mem.eql(u8, av.data, b.Varchar.data) and av.n == b.Varchar.n,
+        .Text => |at| b == .Text and std.mem.eql(u8, at, b.Text),
+        .Date => |ad| b == .Date and ad.days_since_epoch == b.Date.days_since_epoch,
+        .Time => |at| b == .Time and at.micros_since_midnight == b.Time.micros_since_midnight,
+        .TimeTZ => |at| b == .TimeTZ and at.time.micros_since_midnight == b.TimeTZ.time.micros_since_midnight and at.offset_seconds == b.TimeTZ.offset_seconds,
+        .Timestamp => |at| b == .Timestamp and at.micros_since_epoch == b.Timestamp.micros_since_epoch,
+        .TimestampTZ => |at| b == .TimestampTZ and at.micros_since_epoch_utc == b.TimestampTZ.micros_since_epoch_utc,
+        .Interval => |ai| b == .Interval and ai.months == b.Interval.months and ai.days == b.Interval.days and ai.micros == b.Interval.micros,
+        .Bytea => |ab| b == .Bytea and std.mem.eql(u8, ab, b.Bytea),
+        .Json => |aj| b == .Json and std.mem.eql(u8, aj, b.Json),
+        .Jsonb => |aj| b == .Jsonb and std.mem.eql(u8, aj.data, b.Jsonb.data), // Compare canonical data
+        .Xml => |ax| b == .Xml and std.mem.eql(u8, ax.data, b.Xml.data),
+        .Url => |au| blk: {
+            if (b != .Url) break :blk false;
+            const bu = b.Url;
+            if (!std.mem.eql(u8, au.scheme, bu.scheme)) break :blk false;
+            if (!std.mem.eql(u8, au.host, bu.host)) break :blk false;
+            if (au.port != bu.port) break :blk false;
+            if (!std.mem.eql(u8, au.path, bu.path)) break :blk false;
+            if (!std.mem.eql(u8, if (au.query) |q| q else "", if (bu.query) |q| q else "")) break :blk false;
+            if (!std.mem.eql(u8, if (au.fragment) |f| f else "", if (bu.fragment) |f| f else "")) break :blk false;
+            break :blk true;
+        },
+        // Wait, Url struct in src/types/url.zig? I need to check.
+        // It has `toString`. `Url` might be complex. Checking heap.zig... `Url` has `string`.
+        // Let's assume equality is checkable or use deeply.
+        // Actually src/types/url.zig likely has `equal`. I should check or rely on fields.
+        // For now, I'll use strict equality if they are structs.
+        // Url in heap is `url.Url`.
+        .Domain => |ad| blk: {
+            if (b != .Domain) break :blk false;
+            const bd = b.Domain;
+            if (ad.labels.len != bd.labels.len) break :blk false;
+            for (ad.labels, bd.labels) |l1, l2| {
+                if (!std.mem.eql(u8, l1, l2)) break :blk false;
+            }
+            break :blk true;
+        },
+        .UUID => |au| b == .UUID and std.mem.eql(u8, &au.bytes, &b.UUID.bytes),
+        .Enum => |ae| b == .Enum and ae.type_id == b.Enum.type_id and ae.value_ordinal == b.Enum.value_ordinal,
+        .BitString => |ab| b == .BitString and ab.bit_length == b.BitString.bit_length and std.mem.eql(u8, ab.bytes, b.BitString.bytes),
+        .VarBit => |ab| b == .VarBit and ab.bit_length == b.VarBit.bit_length and std.mem.eql(u8, ab.bytes, b.VarBit.bytes),
+        .IntRange => |ar| b == .IntRange and ar.bounds == b.IntRange.bounds and ar.lower == b.IntRange.lower and ar.upper == b.IntRange.upper,
     };
 }
 
@@ -316,6 +398,34 @@ pub fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
                 std.fmt.bufPrint(buf[0..], "{s}.{s}", .{ w, fb }) catch return EvalError.Unsupported;
             break :blk2 s;
         },
+        // Extended types stringify
+        .SmallInt => |n| std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported,
+        .BigInt => |n| std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported,
+        .Real => |n| std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported,
+        .Double => |n| std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported,
+        .Char => |c| c.data,
+        .Varchar => |vc| vc.data,
+        .Text => |t| t,
+        .Date => |_| "date", // Todo: implement formatting
+        .Time => |_| "time",
+        .TimeTZ => |_| "timetz",
+        .Timestamp => |_| "timestamp",
+        .TimestampTZ => |_| "timestamptz",
+        .Interval => |_| "interval",
+        .Bytea => |_| "bytea",
+        .Json => |j| j,
+        .Jsonb => |j| j.data,
+        .Xml => |x| x.data,
+        .Url => |_| "url", // Todo: call toString
+        .Domain => |_| "domain",
+        .UUID => |u| blk3: {
+            const s = std.fmt.bufPrint(buf[0..], "{x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ u.bytes[0], u.bytes[1], u.bytes[2], u.bytes[3], u.bytes[4], u.bytes[5], u.bytes[6], u.bytes[7], u.bytes[8], u.bytes[9], u.bytes[10], u.bytes[11], u.bytes[12], u.bytes[13], u.bytes[14], u.bytes[15] }) catch return EvalError.Unsupported;
+            break :blk3 s;
+        },
+        .Enum => |_| "enum",
+        .BitString => |_| "bitstring",
+        .VarBit => |_| "varbit",
+        .IntRange => |_| "range",
         else => return EvalError.TypeMismatch,
     };
 }

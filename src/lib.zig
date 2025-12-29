@@ -77,6 +77,8 @@ pub const temporal = @import("temporal.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
+// Re-export type promotion utilities for advanced types roundtrip tests
+pub const type_promotion = @import("eval/type_promotion.zig");
 // Re-export unicode utilities (normalization, case folding, UTF-16/WTF-8 helpers)
 pub const unicode = @import("unicode/geode_unicode.zig");
 pub const unicode_tables = @import("unicode/unicode_tables.zig");

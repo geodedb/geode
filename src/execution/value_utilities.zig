@@ -452,5 +452,217 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
             }
             try writer.writeAll("]}");
         },
+        // Advanced numeric types
+        .SmallInt => |n| try writer.print("{d}", .{n}),
+        .BigInt => |n| try writer.print("{d}", .{n}),
+        .Real => |f| try writer.print("{d}", .{f}),
+        .Double => |f| try writer.print("{d}", .{f}),
+        // String types
+        .Char => |c| {
+            try writer.writeByte('"');
+            try writer.writeAll(c.data);
+            try writer.writeByte('"');
+        },
+        .Varchar => |v| {
+            try writer.writeByte('"');
+            try writer.writeAll(v.data);
+            try writer.writeByte('"');
+        },
+        .Text => |t| {
+            try writer.writeByte('"');
+            try writer.writeAll(t);
+            try writer.writeByte('"');
+        },
+        // Date/time types
+        .Date => |date| {
+            // Format date as YYYY-MM-DD
+            const z: i64 = @as(i64, date.days_since_epoch) + 719468;
+            const era: i64 = if (z >= 0) @divFloor(z, 146097) else @divFloor(z - 146096, 146097);
+            const doe: u32 = @intCast(z - era * 146097);
+            const yoe: u32 = @intCast(@divFloor(doe - doe / 1460 + doe / 36524 - doe / 146096, 365));
+            const y_tmp: i64 = @as(i64, yoe) + era * 400;
+            const doy: u32 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            const mp: u32 = @intCast(@divFloor(5 * doy + 2, 153));
+            const d: u32 = doy - @divFloor(153 * mp + 2, 5) + 1;
+            const m: u32 = if (mp < 10) mp + 3 else mp - 9;
+            const y: i64 = y_tmp + @as(i64, if (m <= 2) @as(u32, 1) else @as(u32, 0));
+            try writer.print("\"{:0>4}-{:0>2}-{:0>2}\"", .{ @abs(y), m, d });
+        },
+        .Time => |time| {
+            const micros = time.micros_since_midnight;
+            const hours: u32 = @intCast(@divFloor(micros, 3600 * 1_000_000));
+            const remaining_after_hours = micros - @as(i64, hours) * 3600 * 1_000_000;
+            const minutes: u32 = @intCast(@divFloor(remaining_after_hours, 60 * 1_000_000));
+            const remaining_after_mins = remaining_after_hours - @as(i64, minutes) * 60 * 1_000_000;
+            const seconds: u32 = @intCast(@divFloor(remaining_after_mins, 1_000_000));
+            const microseconds: u32 = @intCast(remaining_after_mins - @as(i64, seconds) * 1_000_000);
+            try writer.print("\"{:0>2}:{:0>2}:{:0>2}.{:0>6}\"", .{ hours, minutes, seconds, microseconds });
+        },
+        .TimeTZ => |t| {
+            const micros = t.time.micros_since_midnight;
+            const hours: u32 = @intCast(@divFloor(micros, 3600 * 1_000_000));
+            const remaining_after_hours = micros - @as(i64, hours) * 3600 * 1_000_000;
+            const minutes: u32 = @intCast(@divFloor(remaining_after_hours, 60 * 1_000_000));
+            const remaining_after_mins = remaining_after_hours - @as(i64, minutes) * 60 * 1_000_000;
+            const seconds: u32 = @intCast(@divFloor(remaining_after_mins, 1_000_000));
+            // offset_seconds is in seconds, convert to hours:minutes
+            const offset_hours = @divTrunc(@abs(t.offset_seconds), 3600);
+            const offset_mins = @divTrunc(@rem(@abs(t.offset_seconds), 3600), 60);
+            if (t.offset_seconds >= 0) {
+                try writer.print("\"{:0>2}:{:0>2}:{:0>2}+{:0>2}:{:0>2}\"", .{ hours, minutes, seconds, offset_hours, offset_mins });
+            } else {
+                try writer.print("\"{:0>2}:{:0>2}:{:0>2}-{:0>2}:{:0>2}\"", .{ hours, minutes, seconds, offset_hours, offset_mins });
+            }
+        },
+        .Timestamp => |ts| {
+            const micros = ts.micros_since_epoch;
+            const seconds_since_epoch = @divFloor(micros, 1_000_000);
+            const days_since_epoch: i64 = @divFloor(seconds_since_epoch, 86400);
+            var time_of_day_micros = @mod(micros, 86400 * 1_000_000);
+            if (time_of_day_micros < 0) time_of_day_micros += 86400 * 1_000_000;
+            const z: i64 = days_since_epoch + 719468;
+            const era: i64 = if (z >= 0) @divFloor(z, 146097) else @divFloor(z - 146096, 146097);
+            const doe: u32 = @intCast(z - era * 146097);
+            const yoe: u32 = @intCast(@divFloor(doe - doe / 1460 + doe / 36524 - doe / 146096, 365));
+            const y_tmp: i64 = @as(i64, yoe) + era * 400;
+            const doy: u32 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            const mp: u32 = @intCast(@divFloor(5 * doy + 2, 153));
+            const day: u32 = doy - @divFloor(153 * mp + 2, 5) + 1;
+            const month: u32 = if (mp < 10) mp + 3 else mp - 9;
+            const year: i64 = y_tmp + @as(i64, if (month <= 2) @as(u32, 1) else @as(u32, 0));
+            const hours: u32 = @intCast(@divFloor(time_of_day_micros, 3600 * 1_000_000));
+            const rem_after_hours = time_of_day_micros - @as(i64, hours) * 3600 * 1_000_000;
+            const mins: u32 = @intCast(@divFloor(rem_after_hours, 60 * 1_000_000));
+            const rem_after_mins = rem_after_hours - @as(i64, mins) * 60 * 1_000_000;
+            const secs: u32 = @intCast(@divFloor(rem_after_mins, 1_000_000));
+            const microseconds: u32 = @intCast(rem_after_mins - @as(i64, secs) * 1_000_000);
+            try writer.print("\"{:0>4}-{:0>2}-{:0>2}T{:0>2}:{:0>2}:{:0>2}.{:0>6}\"", .{ @abs(year), month, day, hours, mins, secs, microseconds });
+        },
+        .TimestampTZ => |ts| {
+            const micros = ts.micros_since_epoch_utc;
+            const seconds_since_epoch = @divFloor(micros, 1_000_000);
+            const days_since_epoch: i64 = @divFloor(seconds_since_epoch, 86400);
+            var time_of_day_micros = @mod(micros, 86400 * 1_000_000);
+            if (time_of_day_micros < 0) time_of_day_micros += 86400 * 1_000_000;
+            const z: i64 = days_since_epoch + 719468;
+            const era: i64 = if (z >= 0) @divFloor(z, 146097) else @divFloor(z - 146096, 146097);
+            const doe: u32 = @intCast(z - era * 146097);
+            const yoe: u32 = @intCast(@divFloor(doe - doe / 1460 + doe / 36524 - doe / 146096, 365));
+            const y_tmp: i64 = @as(i64, yoe) + era * 400;
+            const doy: u32 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            const mp: u32 = @intCast(@divFloor(5 * doy + 2, 153));
+            const day: u32 = doy - @divFloor(153 * mp + 2, 5) + 1;
+            const month: u32 = if (mp < 10) mp + 3 else mp - 9;
+            const year: i64 = y_tmp + @as(i64, if (month <= 2) @as(u32, 1) else @as(u32, 0));
+            const hours: u32 = @intCast(@divFloor(time_of_day_micros, 3600 * 1_000_000));
+            const rem_after_hours = time_of_day_micros - @as(i64, hours) * 3600 * 1_000_000;
+            const mins: u32 = @intCast(@divFloor(rem_after_hours, 60 * 1_000_000));
+            const rem_after_mins = rem_after_hours - @as(i64, mins) * 60 * 1_000_000;
+            const secs: u32 = @intCast(@divFloor(rem_after_mins, 1_000_000));
+            const microseconds: u32 = @intCast(rem_after_mins - @as(i64, secs) * 1_000_000);
+            try writer.print("\"{:0>4}-{:0>2}-{:0>2}T{:0>2}:{:0>2}:{:0>2}.{:0>6}Z\"", .{ @abs(year), month, day, hours, mins, secs, microseconds });
+        },
+        .Interval => |i| {
+            try writer.print("\"P{d}M{d}DT{d}S\"", .{ i.months, i.days, @divFloor(i.micros, 1_000_000) });
+        },
+        // Binary and document types
+        .Bytea => |b| {
+            try writer.writeAll("\"\\\\x");
+            for (b) |byte| {
+                try writer.print("{x:0>2}", .{byte});
+            }
+            try writer.writeByte('"');
+        },
+        .Json => |j| {
+            // JSON is already valid JSON, write directly
+            try writer.writeAll(j);
+        },
+        .Jsonb => |j| {
+            // Jsonb stores binary data, output as placeholder
+            try writer.print("\"[jsonb:{d}bytes]\"", .{j.data.len});
+        },
+        .Xml => |x| {
+            try writer.writeByte('"');
+            try writer.writeAll(x.data);
+            try writer.writeByte('"');
+        },
+        // Network and identifier types
+        .Url => |u| {
+            try writer.writeByte('"');
+            try writer.writeAll(u.scheme);
+            try writer.writeAll("://");
+            try writer.writeAll(u.host);
+            if (u.port) |port| {
+                try writer.print(":{d}", .{port});
+            }
+            try writer.writeAll(u.path);
+            if (u.query) |query| {
+                try writer.writeByte('?');
+                try writer.writeAll(query);
+            }
+            if (u.fragment) |fragment| {
+                try writer.writeByte('#');
+                try writer.writeAll(fragment);
+            }
+            try writer.writeByte('"');
+        },
+        .Domain => |d| {
+            try writer.writeByte('"');
+            for (d.labels, 0..) |label, i| {
+                if (i > 0) try writer.writeByte('.');
+                try writer.writeAll(label);
+            }
+            try writer.writeByte('"');
+        },
+        .UUID => |u| {
+            try writer.print("\"{x:0>8}-{x:0>4}-{x:0>4}-{x:0>4}-{x:0>12}\"", .{
+                std.mem.readInt(u32, u.bytes[0..4], .big),
+                std.mem.readInt(u16, u.bytes[4..6], .big),
+                std.mem.readInt(u16, u.bytes[6..8], .big),
+                std.mem.readInt(u16, u.bytes[8..10], .big),
+                std.mem.readInt(u48, u.bytes[10..16], .big),
+            });
+        },
+        // Other types
+        .Enum => |e| {
+            try writer.print("\"enum({d}:{d})\"", .{ e.type_id, e.value_ordinal });
+        },
+        .BitString => |b| {
+            try writer.writeAll("\"B'");
+            for (0..b.bit_length) |i| {
+                const byte_idx = i / 8;
+                const bit_idx: u3 = @intCast(7 - (i % 8));
+                const bit = (b.bytes[byte_idx] >> bit_idx) & 1;
+                try writer.writeByte(if (bit == 1) '1' else '0');
+            }
+            try writer.writeAll("'\"");
+        },
+        .VarBit => |b| {
+            try writer.writeAll("\"B'");
+            for (0..b.bit_length) |i| {
+                const byte_idx = i / 8;
+                const bit_idx: u3 = @intCast(7 - (i % 8));
+                const bit = (b.bytes[byte_idx] >> bit_idx) & 1;
+                try writer.writeByte(if (bit == 1) '1' else '0');
+            }
+            try writer.writeAll("'\"");
+        },
+        .IntRange => |r| {
+            // Output range with proper bounds notation
+            const bounds_str = r.bounds.toString();
+            const lower_str = if (r.lower) |l| l else null;
+            const upper_str = if (r.upper) |u| u else null;
+            try writer.writeByte('"');
+            try writer.writeByte(bounds_str[0]);
+            if (lower_str) |l| {
+                try writer.print("{d}", .{l});
+            }
+            try writer.writeByte(',');
+            if (upper_str) |u| {
+                try writer.print("{d}", .{u});
+            }
+            try writer.writeByte(bounds_str[1]);
+            try writer.writeByte('"');
+        },
     }
 }

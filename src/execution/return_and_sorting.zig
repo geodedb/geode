@@ -493,6 +493,7 @@ fn getTypeOrder(v: Value) u8 {
         .Map => 8,
         .ExtValue => 9,
         .Path => 10,
+        else => 11,
     };
 }
 

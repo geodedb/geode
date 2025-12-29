@@ -281,6 +281,12 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const sum = lc + rc; // overflow ignored for now (would return Unsupported if needed)
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
+            // Date + Interval
+            if (l == .Date and r == .Interval) {
+                // TODO: Implement Date + Interval
+                // Return Unsupported for now to allow future impl without crash
+                return EvalError.Unsupported;
+            }
             return EvalError.TypeMismatch;
         },
         .Sub => blk2: {
@@ -452,6 +458,65 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const rs = try stringify(r, &bufR);
                 const eq = std.mem.eql(u8, ls, rs);
                 return .{ .Bool = if (op == .Eq) eq else !eq };
+            }
+
+            // Advanced Types Ordering
+            // Date
+            if (l == .Date and r == .Date) {
+                const ord = std.math.order(l.Date.days_since_epoch, r.Date.days_since_epoch);
+                return .{ .Bool = cmpToBool(op, switch (ord) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                }) };
+            }
+            // Time
+            if (l == .Time and r == .Time) {
+                const ord = std.math.order(l.Time.micros_since_midnight, r.Time.micros_since_midnight);
+                return .{ .Bool = cmpToBool(op, switch (ord) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                }) };
+            }
+            // Timestamp
+            if (l == .Timestamp and r == .Timestamp) {
+                const ord = std.math.order(l.Timestamp.micros_since_epoch, r.Timestamp.micros_since_epoch);
+                return .{ .Bool = cmpToBool(op, switch (ord) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                }) };
+            }
+            // UUID
+            if (l == .UUID and r == .UUID) {
+                const ord = std.mem.order(u8, &l.UUID.bytes, &r.UUID.bytes);
+                return .{ .Bool = cmpToBool(op, switch (ord) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                }) };
+            }
+            // Interval
+            if (l == .Interval and r == .Interval) {
+                // Compare total microseconds? Roughly.
+                // This is simplistic (ignores month/day length variance), but consistent for ordering.
+                // Convert to rough micros: months*30*24*3600*1e6 + days*24*3600*1e6 + micros
+                // Just implementation detail for now.
+                const l_micros = @as(i128, l.Interval.months) * 30 * 86400 * 1000000 + @as(i128, l.Interval.days) * 86400 * 1000000 + l.Interval.micros;
+                const r_micros = @as(i128, r.Interval.months) * 30 * 86400 * 1000000 + @as(i128, r.Interval.days) * 86400 * 1000000 + r.Interval.micros;
+                const ord = std.math.order(l_micros, r_micros);
+                return .{ .Bool = cmpToBool(op, switch (ord) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                }) };
+            }
+
+            // Generic equality for same types (UUID=UUID, Date=Date, etc.)
+            if ((op == .Eq or op == .Ne) and std.meta.activeTag(l) == std.meta.activeTag(r)) {
+                const isEqual = eqVals(l, r);
+                break :blk5 .{ .Bool = if (op == .Eq) isEqual else !isEqual };
             }
             // Boolean comparisons: only equality/inequality supported
             if (l == .Bool and r == .Bool) {
@@ -3615,6 +3680,36 @@ fn getTypeName(value: Value) []const u8 {
         .Edge => "RELATIONSHIP",
         .Path => "PATH",
         .ExtValue => |ext| getExtTypeName(ext),
+        // Advanced numeric types
+        .SmallInt => "SMALLINT",
+        .BigInt => "BIGINT",
+        .Real => "REAL",
+        .Double => "DOUBLE",
+        // String types
+        .Char => "CHAR",
+        .Varchar => "VARCHAR",
+        .Text => "TEXT",
+        // Date/time types
+        .Date => "DATE",
+        .Time => "TIME",
+        .TimeTZ => "TIMETZ",
+        .Timestamp => "TIMESTAMP",
+        .TimestampTZ => "TIMESTAMPTZ",
+        .Interval => "INTERVAL",
+        // Binary and document types
+        .Bytea => "BYTEA",
+        .Json => "JSON",
+        .Jsonb => "JSONB",
+        .Xml => "XML",
+        // Network and identifier types
+        .Url => "URL",
+        .Domain => "DOMAIN",
+        .UUID => "UUID",
+        // Other types
+        .Enum => "ENUM",
+        .BitString => "BIT",
+        .VarBit => "VARBIT",
+        .IntRange => "INT4RANGE",
     };
 }
 
@@ -3643,6 +3738,19 @@ fn getExtTypeName(ext: @import("eval_extended.zig").ExtValue) []const u8 {
         .Temperature => "TEMPERATURE",
         .Pressure => "PRESSURE",
         .List => "LIST",
+        // Advanced types
+        .Interval => "INTERVAL",
+        .UUID => "UUID",
+        .Url => "URL",
+        .Domain => "DOMAIN",
+        .Bytea => "BYTEA",
+        .Json => "JSON",
+        .Jsonb => "JSONB",
+        .Xml => "XML",
+        .BitString => "BIT",
+        .VarBit => "VARBIT",
+        .IntRange => "INT4RANGE",
+        .Enum => "ENUM",
     };
 }
 

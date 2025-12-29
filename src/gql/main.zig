@@ -517,6 +517,7 @@ pub fn main() !void {
                                     .Map => |_| try w.print("<map>", .{}),
                                     .ExtValue => |_| try w.print("<extvalue>", .{}),
                                     .Path => |_| try w.print("<path>", .{}),
+                                    else => try w.print("<unknown>", .{}),
                                 }
                             }
                             try w.print("\n", .{});

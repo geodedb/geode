@@ -207,6 +207,7 @@ fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
                 .Map => writer.writeAll("Map") catch {},
                 .Path => writer.writeAll("Path") catch {},
                 .ExtValue => writer.writeAll("ExtValue") catch {},
+                else => writer.writeAll("Other") catch {},
             }
         }
 

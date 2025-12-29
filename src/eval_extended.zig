@@ -6,6 +6,13 @@ const rtree = @import("index/rtree.zig");
 const hnsw = @import("index/hnsw.zig");
 const extf = @import("types/extended_functions.zig");
 const network = @import("types/network.zig");
+const datetime = @import("types/datetime.zig");
+const uuid = @import("types/uuid.zig");
+const url = @import("types/url.zig");
+const jsonb = @import("types/jsonb.zig");
+const xml = @import("types/xml.zig");
+const bitstring = @import("types/bitstring.zig");
+const range = @import("types/range.zig");
 
 // CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ADAPTER_CACHE; STATUS=IMPL; TEST=tests/canary_extended_builtins.zig; OWNER=engine; UPDATED=2025-09-26
 
@@ -82,9 +89,21 @@ pub const ExtValue = union(enum) {
     Pressure: heap.Pressure,
     VectorF32: heap.VectorF32,
     VectorI32: heap.VectorI32,
-    Date: @import("types/datetime.zig").Date,
-    Time: @import("types/datetime.zig").Time,
-    TimestampTZ: @import("types/datetime.zig").TimestampTZ,
+    Date: datetime.Date,
+    Time: datetime.Time,
+    TimestampTZ: datetime.TimestampTZ,
+    Interval: datetime.Interval,
+    UUID: uuid.UUID,
+    Url: url.Url,
+    Domain: url.Domain,
+    Bytea: []const u8,
+    Json: []const u8,
+    Jsonb: jsonb.JsonbDocument,
+    Xml: xml.XmlDocument,
+    BitString: bitstring.BitString,
+    VarBit: bitstring.BitString,
+    IntRange: range.IntRange,
+    Enum: struct { type_id: u32, value_ordinal: u32 },
     List: []ExtValue,
 };
 
@@ -1223,10 +1242,10 @@ fn langMatch(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const tag = args[1].LanguageTag;
 
     // Basic language matching
-    for (ranges) |range| {
-        if (range != .Str) continue;
+    for (ranges) |r| {
+        if (r != .Str) continue;
 
-        const range_str = range.Str;
+        const range_str = r.Str;
 
         // Exact match
         if (std.mem.eql(u8, range_str, tag.tag)) return .{ .Bool = true };

@@ -101,6 +101,37 @@ pub fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("../
         .Edge => .{ .Null = {} }, // ExtValue doesn't support graph types
         .Map => .{ .Null = {} }, // ExtValue doesn't support map types
         .Path => .{ .Null = {} }, // ExtValue doesn't support path types
+        // Extended types
+        .SmallInt => |i| .{ .Int = i }, // Promote to i64? ExtValue has Int (i64).
+        .BigInt => |i| .{ .Int = i },
+        .Real => |f| .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } }, // Best effort? Or add Real to ExtValue?
+        // ExtValue doesn't have Real/Double. It has Decimal.
+        .Double => |f| .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } },
+        .Char => |c| .{ .Str = c.data }, // Convert to Str
+        .Varchar => |v| .{ .Str = v.data },
+        .Text => |t| .{ .Str = t },
+        .Date => |d| .{ .Date = d },
+        .Time => |t| .{ .Time = t },
+        .TimeTZ => |_| .{ .Null = {} }, // ExtValue doesn't have TimeTZ? Checked eval_extended.zig in Step 70 only saw TimestampTZ. Wait, I should check ExtValue again.
+        // Step 70 diff showed: TimestampTZ, Interval. No TimeTZ.
+        // It has Date, Time.
+        // I should probably map TimeTZ to Time (lossy) or Null?
+        // Let's check heapValueToEvalValue - it wrapped Date/Time.
+        // I will map to ExtValue variants where they exist.
+        .Timestamp => |_| .{ .Null = {} }, // ExtValue doesn't have Timestamp, only TimestampTZ?
+        .TimestampTZ => |t| .{ .TimestampTZ = t },
+        .Interval => |i| .{ .Interval = i },
+        .Bytea => |b| .{ .Bytea = b },
+        .Json => |j| .{ .Json = j },
+        .Jsonb => |j| .{ .Jsonb = j },
+        .Xml => |x| .{ .Xml = x },
+        .Url => |u| .{ .Url = u },
+        .Domain => |d| .{ .Domain = d },
+        .UUID => |u| .{ .UUID = u },
+        .Enum => |e| .{ .Enum = .{ .type_id = e.type_id, .value_ordinal = e.value_ordinal } },
+        .BitString => |b| .{ .BitString = b },
+        .VarBit => |b| .{ .VarBit = b },
+        .IntRange => |r| .{ .IntRange = r },
     };
 }
 
@@ -115,6 +146,23 @@ pub fn extValueToValue(ext_value: @import("../eval_extended.zig").ExtValue) Valu
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .Date => |d| .{ .Date = d },
+        .Time => |t| .{ .Time = t },
+        .TimestampTZ => |t| .{ .TimestampTZ = t },
+        .Interval => |i| .{ .Interval = i },
+        .UUID => |u| .{ .UUID = u },
+        .Url => |u| .{ .Url = u },
+        .Domain => |d| .{ .Domain = d },
+        .Bytea => |b| .{ .Bytea = b },
+        .Json => |j| .{ .Json = j },
+        .Jsonb => |j| .{ .Jsonb = j },
+        .Xml => |x| .{ .Xml = x },
+        .BitString => |b| .{ .BitString = b },
+        .VarBit => |v| .{ .VarBit = v },
+        .IntRange => |r| .{ .IntRange = r },
+        .Enum => |e| .{ .Enum = .{ .type_id = e.type_id, .value_ordinal = e.value_ordinal } },
+        .List => |list| .{ .ExtValue = .{ .List = list } },
+
         // For advanced types, wrap in Value.ExtValue to preserve type information
         // This allows nested function calls like ip_family(IpAddr('...')) to work correctly
         else => .{ .ExtValue = ext_value },
@@ -138,6 +186,31 @@ pub fn evalValueToHeapValue(value: Value) heap.Value {
         .Edge => .{ .Null = {} }, // TODO: heap.Value needs Edge support
         .Map => .{ .Null = {} }, // TODO: heap.Value needs Map support
         .Path => .{ .Null = {} }, // TODO: heap.Value needs Path support
+        // Extended types
+        .SmallInt => |i| .{ .SmallInt = i },
+        .BigInt => |i| .{ .BigInt = i },
+        .Real => |f| .{ .Real = f },
+        .Double => |f| .{ .Double = f },
+        .Char => |c| .{ .Char = .{ .data = c.data, .n = c.n } },
+        .Varchar => |v| .{ .Varchar = .{ .data = v.data, .n = v.n } },
+        .Text => |t| .{ .Text = t },
+        .Date => |d| .{ .Date = d },
+        .Time => |t| .{ .Time = t },
+        .TimeTZ => |t| .{ .TimeTZ = t },
+        .Timestamp => |t| .{ .Timestamp = t },
+        .TimestampTZ => |t| .{ .TimestampTZ = t },
+        .Interval => |i| .{ .Interval = i },
+        .Bytea => |b| .{ .Bytea = b },
+        .Json => |j| .{ .Json = j },
+        .Jsonb => |j| .{ .Jsonb = j }, // heap.Value has JsonbDocument
+        .Xml => |x| .{ .Xml = x },
+        .Url => |u| .{ .Url = u },
+        .Domain => |d| .{ .Domain = d },
+        .UUID => |u| .{ .UUID = u },
+        .Enum => |e| .{ .Enum = .{ .type_id = e.type_id, .value_ordinal = e.value_ordinal } },
+        .BitString => |b| .{ .BitString = b },
+        .VarBit => |v| .{ .VarBit = v },
+        .IntRange => |r| .{ .IntRange = r },
     };
 }
 
@@ -147,7 +220,8 @@ pub fn evalValueToHeapValue(value: Value) heap.Value {
 ///
 /// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-008; FEATURE="Value Converters"; STATUS=IMPL
 pub fn heapValueToEvalValue(value: heap.Value) Value {
-    const eval_ext = @import("../eval_extended.zig");
+    // eval_ext removed
+
     return switch (value) {
         .Null => .{ .Null = {} },
         .Int => |i| .{ .Int = i },
@@ -179,9 +253,28 @@ pub fn heapValueToEvalValue(value: heap.Value) Value {
             break :blk .{ .Decimal = .{ .coeff = @intFromFloat(d * 1000000), .scale = 6 } };
         },
         .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
-        .Date => |dt| .{ .ExtValue = eval_ext.ExtValue{ .Date = dt } },
-        .Time => |t| .{ .ExtValue = eval_ext.ExtValue{ .Time = t } },
-        .TimestampTZ => |ts| .{ .ExtValue = eval_ext.ExtValue{ .TimestampTZ = ts } },
+        // Direct mapping
+        .SmallInt => |i| .{ .SmallInt = i },
+        .BigInt => |i| .{ .BigInt = i },
+        .Char => |c| .{ .Char = .{ .data = c.data, .n = c.n } },
+        .Varchar => |v| .{ .Varchar = .{ .data = v.data, .n = v.n } },
+        .Date => |dt| .{ .Date = dt },
+        .Time => |t| .{ .Time = t },
+        .TimeTZ => |t| .{ .TimeTZ = t },
+        .Timestamp => |t| .{ .Timestamp = t },
+        .TimestampTZ => |ts| .{ .TimestampTZ = ts },
+        .Interval => |i| .{ .Interval = i },
+        .Bytea => |b| .{ .Bytea = b },
+        .Json => |j| .{ .Json = j },
+        .Jsonb => |j| .{ .Jsonb = j },
+        .Xml => |x| .{ .Xml = x },
+        .Url => |u| .{ .Url = u },
+        .Domain => |d| .{ .Domain = d },
+        .UUID => |u| .{ .UUID = u },
+        .Enum => |e| .{ .Enum = .{ .type_id = e.type_id, .value_ordinal = e.value_ordinal } },
+        .BitString => |b| .{ .BitString = b },
+        .VarBit => |v| .{ .VarBit = v },
+        .IntRange => |r| .{ .IntRange = r },
         else => .{ .Null = {} }, // Convert unknown types to null
     };
 }

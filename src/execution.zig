@@ -215,7 +215,7 @@ pub fn getCatalog(_: std.mem.Allocator, context: ExecutionContext) *catalog_mod.
 /// Initialize evaluator with execution callbacks
 /// This must be called once during module initialization to provide eval.zig
 /// with callback functions for executing queries, finding paths, etc.
-/// 
+///
 /// This breaks the circular dependency by using dependency injection:
 /// Instead of eval.zig importing execution.zig, it receives function pointers at runtime.
 pub fn initEvaluator() void {
@@ -226,7 +226,7 @@ pub fn initEvaluator() void {
         .countPatternMatchesFn = graph_algorithms.countPatternMatches,
         .executePatternComprehensionFn = graph_algorithms.executePatternComprehension,
     };
-    
+
     eval.setExecutionCallbacks(callbacks);
 }
 pub fn getDefaultContext(allocator: std.mem.Allocator) !ExecutionContext {
@@ -352,9 +352,9 @@ pub const ExecutionContext = struct {
     session_state: ?*SessionState = null,
     // Transaction state for START TRANSACTION/COMMIT/ROLLBACK
     transaction_state: TransactionState = .None,
-	// Input parameter bindings provided by client (query-level parameters)
-	query_param_names: []const []const u8 = &.{},
-	query_param_values: []const value_types.Value = &.{},
+    // Input parameter bindings provided by client (query-level parameters)
+    query_param_names: []const []const u8 = &.{},
+    query_param_values: []const value_types.Value = &.{},
 };
 
 pub const ExecutionError = error{
@@ -2251,38 +2251,64 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
 }
 
 pub fn valuesEqual(a: Value, b: Value) bool {
-    return switch (a) {
-        .Int => |i| b == .Int and b.Int == i,
-        .Str => |s| b == .Str and std.mem.eql(u8, b.Str, s),
-        .Bool => |bool_val| b == .Bool and b.Bool == bool_val,
-        .Null => b == .Null,
-        .Decimal => |d| b == .Decimal and b.Decimal.coeff == d.coeff and b.Decimal.scale == d.scale,
-        .List => |list_a| blk: {
-            if (b != .List) break :blk false;
-            const list_b = b.List;
-            if (list_a.len != list_b.len) break :blk false;
-            for (list_a, list_b) |item_a, item_b| {
-                if (!valuesEqual(item_a, item_b)) break :blk false;
-            }
-            break :blk true;
-        },
-        .Node => |node_a| b == .Node and b.Node.id == node_a.id,
-        .Edge => |edge_a| b == .Edge and b.Edge.id == edge_a.id,
-        .Map => false, // Map comparison not implemented yet
-        .ExtValue => false, // ExtValue comparison not implemented yet
-        .Path => |path_a| blk: {
-            if (b != .Path) break :blk false;
-            const path_b = b.Path;
-            if (path_a.nodes.len != path_b.nodes.len or path_a.edges.len != path_b.edges.len) break :blk false;
-            for (path_a.nodes, path_b.nodes) |na, nb| {
-                if (na.id != nb.id) break :blk false;
-            }
-            for (path_a.edges, path_b.edges) |ea, eb| {
-                if (ea.id != eb.id) break :blk false;
-            }
-            break :blk true;
-        },
-    };
+    // Handle nulls
+    if (a == .Null and b == .Null) return true;
+    if (a == .Null or b == .Null) return false;
+
+    // Compare same types
+    if (a == .Int and b == .Int) return a.Int == b.Int;
+    if (a == .Bool and b == .Bool) return a.Bool == b.Bool;
+    if (a == .Str and b == .Str) return std.mem.eql(u8, a.Str, b.Str);
+
+    // Decimal comparison
+    if (a == .Decimal and b == .Decimal) {
+        const a_dec = a.Decimal;
+        const b_dec = b.Decimal;
+        if (a_dec.scale == b_dec.scale) {
+            return a_dec.coeff == b_dec.coeff;
+        }
+        // Normalize scales for comparison
+        if (a_dec.scale < b_dec.scale) {
+            const scale_diff = b_dec.scale - a_dec.scale;
+            var multiplier: i128 = 1;
+            for (0..scale_diff) |_| multiplier *= 10;
+            return a_dec.coeff * multiplier == b_dec.coeff;
+        } else {
+            const scale_diff = a_dec.scale - b_dec.scale;
+            var multiplier: i128 = 1;
+            for (0..scale_diff) |_| multiplier *= 10;
+            return a_dec.coeff == b_dec.coeff * multiplier;
+        }
+    }
+
+    // Node and Edge comparison by pointer
+    if (a == .Node and b == .Node) return a.Node == b.Node;
+    if (a == .Edge and b == .Edge) return a.Edge == b.Edge;
+
+    // List comparison (element by element)
+    if (a == .List and b == .List) {
+        if (a.List.len != b.List.len) return false;
+        for (a.List, b.List) |av, bv| {
+            if (!valuesEqual(av, bv)) return false;
+        }
+        return true;
+    }
+
+    // Advanced numeric types
+    if (a == .SmallInt and b == .SmallInt) return a.SmallInt == b.SmallInt;
+    if (a == .BigInt and b == .BigInt) return a.BigInt == b.BigInt;
+    if (a == .Real and b == .Real) return a.Real == b.Real;
+    if (a == .Double and b == .Double) return a.Double == b.Double;
+
+    // String types
+    if (a == .Char and b == .Char) return std.mem.eql(u8, a.Char.data, b.Char.data);
+    if (a == .Varchar and b == .Varchar) return std.mem.eql(u8, a.Varchar.data, b.Varchar.data);
+    if (a == .Text and b == .Text) return std.mem.eql(u8, a.Text, b.Text);
+    if (a == .Bytea and b == .Bytea) return std.mem.eql(u8, a.Bytea, b.Bytea);
+    if (a == .Json and b == .Json) return std.mem.eql(u8, a.Json, b.Json);
+
+    // For other types, default to false (different types or unsupported comparison)
+    return false;
 }
 
 pub fn executeQueryNoLimit(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {

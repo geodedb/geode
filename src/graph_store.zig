@@ -694,6 +694,18 @@ pub const GraphStore = struct {
                             .TimestampTZ => 19,
                             .List => 20,
                             .VectorI32 => 21,
+                            .Interval => 22,
+                            .UUID => 23,
+                            .Url => 24,
+                            .Domain => 25,
+                            .Bytea => 26,
+                            .Json => 27,
+                            .Jsonb => 28,
+                            .Xml => 29,
+                            .BitString => 30,
+                            .VarBit => 31,
+                            .IntRange => 32,
+                            .Enum => 33,
                         };
                         _ = try file.write(&[1]u8{sub_type});
 
@@ -1107,7 +1119,182 @@ pub const GraphStore = struct {
 
                                 break :blk2 ext_eval.ExtValue{ .VectorF32 = .{ .dim = dim, .data = data } };
                             },
-                            else => ext_eval.ExtValue{ .Null = {} }, // TODO: Implement remaining types
+                            22 => blk2: { // Interval
+                                var buf: [16]u8 = undefined;
+                                if ((try file.read(&buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const months = std.mem.readInt(i32, buf[0..4], .little);
+                                const days = std.mem.readInt(i32, buf[4..8], .little);
+                                const micros = std.mem.readInt(i64, buf[8..16], .little);
+                                break :blk2 ext_eval.ExtValue{ .Interval = .{ .months = months, .days = days, .micros = micros } };
+                            },
+                            23 => blk2: { // UUID
+                                var buf: [16]u8 = undefined;
+                                if ((try file.read(&buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .UUID = .{ .bytes = buf } };
+                            },
+                            24 => blk2: { // Url
+                                // Scheme
+                                var len_buf: [4]u8 = undefined;
+                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const s_len = std.mem.readInt(u32, &len_buf, .little);
+                                const scheme = try self.allocator.alloc(u8, s_len);
+                                if ((try file.read(scheme)) < s_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+
+                                // Host
+                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const h_len = std.mem.readInt(u32, &len_buf, .little);
+                                const host = try self.allocator.alloc(u8, h_len);
+                                if ((try file.read(host)) < h_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+
+                                // Port
+                                var flag_buf: [1]u8 = undefined;
+                                if ((try file.read(&flag_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                var port: ?u16 = null;
+                                if (flag_buf[0] == 1) {
+                                    var p_buf: [2]u8 = undefined;
+                                    if ((try file.read(&p_buf)) < 2) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    port = std.mem.readInt(u16, &p_buf, .little);
+                                }
+
+                                // Path
+                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const p_len = std.mem.readInt(u32, &len_buf, .little);
+                                const path = try self.allocator.alloc(u8, p_len);
+                                if ((try file.read(path)) < p_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+
+                                // Query
+                                if ((try file.read(&flag_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                var query: ?[]const u8 = null;
+                                if (flag_buf[0] == 1) {
+                                    if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    const q_len = std.mem.readInt(u32, &len_buf, .little);
+                                    const q_data = try self.allocator.alloc(u8, q_len);
+                                    if ((try file.read(q_data)) < q_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    query = q_data;
+                                }
+
+                                // Fragment
+                                if ((try file.read(&flag_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                var fragment: ?[]const u8 = null;
+                                if (flag_buf[0] == 1) {
+                                    if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    const f_len = std.mem.readInt(u32, &len_buf, .little);
+                                    const f_data = try self.allocator.alloc(u8, f_len);
+                                    if ((try file.read(f_data)) < f_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    fragment = f_data;
+                                }
+
+                                // Need to import Url type
+                                const url_mod = @import("types/url.zig");
+                                break :blk2 ext_eval.ExtValue{ .Url = url_mod.Url{ .scheme = scheme, .host = host, .port = port, .path = path, .query = query, .fragment = fragment } };
+                            },
+                            25 => blk2: { // Domain
+                                var count_buf: [4]u8 = undefined;
+                                if ((try file.read(&count_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const count = std.mem.readInt(u32, &count_buf, .little);
+                                const domain_labels = try self.allocator.alloc([]const u8, count);
+                                for (0..count) |i| {
+                                    var len_buf: [4]u8 = undefined;
+                                    if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    const len = std.mem.readInt(u32, &len_buf, .little);
+                                    const label = try self.allocator.alloc(u8, len);
+                                    if ((try file.read(label)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    domain_labels[i] = label;
+                                }
+                                const url_mod = @import("types/url.zig");
+                                break :blk2 ext_eval.ExtValue{ .Domain = url_mod.Domain{ .labels = domain_labels } };
+                            },
+                            26 => blk2: { // Bytea
+                                var len_buf: [4]u8 = undefined;
+                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const len = std.mem.readInt(u32, &len_buf, .little);
+                                const data = try self.allocator.alloc(u8, len);
+                                if ((try file.read(data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .Bytea = data };
+                            },
+                            27 => blk2: { // Json
+                                var len_buf: [4]u8 = undefined;
+                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const len = std.mem.readInt(u32, &len_buf, .little);
+                                const data = try self.allocator.alloc(u8, len);
+                                if ((try file.read(data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .Json = data };
+                            },
+                            28 => blk2: { // Jsonb
+                                var len_buf: [4]u8 = undefined;
+                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const len = std.mem.readInt(u32, &len_buf, .little);
+                                const data = try self.allocator.alloc(u8, len);
+                                if ((try file.read(data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const jsonb_mod = @import("types/jsonb.zig");
+                                break :blk2 ext_eval.ExtValue{ .Jsonb = jsonb_mod.JsonbDocument{ .data = data, .allocator = self.allocator } };
+                            },
+                            29 => blk2: { // Xml
+                                // Similar to Jsonb
+                                var len_buf: [4]u8 = undefined;
+                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const len = std.mem.readInt(u32, &len_buf, .little);
+                                const data = try self.allocator.alloc(u8, len);
+                                if ((try file.read(data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const xml_mod = @import("types/xml.zig");
+                                break :blk2 ext_eval.ExtValue{ .Xml = xml_mod.XmlDocument{ .data = data } };
+                            },
+                            30 => blk2: { // BitString
+                                var bit_len_buf: [8]u8 = undefined;
+                                if ((try file.read(&bit_len_buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const bit_len = std.mem.readInt(u64, &bit_len_buf, .little);
+                                var byte_len_buf: [4]u8 = undefined;
+                                if ((try file.read(&byte_len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const byte_len = std.mem.readInt(u32, &byte_len_buf, .little);
+                                const bytes = try self.allocator.alloc(u8, byte_len);
+                                if ((try file.read(bytes)) < byte_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const bitstring_mod = @import("types/bitstring.zig");
+                                break :blk2 ext_eval.ExtValue{ .BitString = bitstring_mod.BitString{ .bytes = bytes, .bit_length = @intCast(bit_len) } };
+                            },
+                            31 => blk2: { // VarBit
+                                var bit_len_buf: [8]u8 = undefined;
+                                if ((try file.read(&bit_len_buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const bit_len = std.mem.readInt(u64, &bit_len_buf, .little);
+                                var byte_len_buf: [4]u8 = undefined;
+                                if ((try file.read(&byte_len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const byte_len = std.mem.readInt(u32, &byte_len_buf, .little);
+                                const bytes = try self.allocator.alloc(u8, byte_len);
+                                if ((try file.read(bytes)) < byte_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const bitstring_mod = @import("types/bitstring.zig");
+                                break :blk2 ext_eval.ExtValue{ .VarBit = bitstring_mod.BitString{ .bytes = bytes, .bit_length = @intCast(bit_len) } };
+                            },
+                            32 => blk2: { // IntRange
+                                var buf: [17]u8 = undefined;
+                                if ((try file.read(&buf)) < 17) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const lower_val = std.mem.readInt(i64, buf[0..8], .little);
+                                const upper_val = std.mem.readInt(i64, buf[8..16], .little);
+                                const flags = buf[16];
+                                const lower_inclusive = (flags & 1) != 0;
+                                const upper_inclusive = (flags & 2) != 0;
+                                const infinite_lower = (flags & 4) != 0;
+                                const infinite_upper = (flags & 8) != 0;
+                                const range_mod = @import("types/range.zig");
+                                // Convert flags to Bounds enum
+                                const bounds: range_mod.IntRange.Bounds = if (lower_inclusive and upper_inclusive)
+                                    .inclusive_inclusive
+                                else if (lower_inclusive and !upper_inclusive)
+                                    .inclusive_exclusive
+                                else if (!lower_inclusive and upper_inclusive)
+                                    .exclusive_inclusive
+                                else
+                                    .exclusive_exclusive;
+                                const lower: ?i32 = if (infinite_lower) null else @intCast(lower_val);
+                                const upper: ?i32 = if (infinite_upper) null else @intCast(upper_val);
+                                break :blk2 ext_eval.ExtValue{ .IntRange = range_mod.IntRange{ .lower = lower, .upper = upper, .bounds = bounds } };
+                            },
+                            33 => blk2: { // Enum
+                                var buf: [8]u8 = undefined;
+                                if ((try file.read(&buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const type_id = std.mem.readInt(u32, buf[0..4], .little);
+                                const value_ordinal = std.mem.readInt(u32, buf[4..8], .little);
+                                break :blk2 ext_eval.ExtValue{ .Enum = .{ .type_id = type_id, .value_ordinal = value_ordinal } };
+                            },
+                            else => ext_eval.ExtValue{ .Null = {} },
                         };
 
                         break :blk PropertyValue{ .ExtValue = ext_value };
