@@ -350,4 +350,4 @@ For test-related issues:
 - Check [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 - Review test output carefully for specific errors
 - Use `--verbose` or debug flags for detailed output
-- Report issues at https://github.com/spyderorg/geode/issues
+- Report issues at https://gitlab.com/devnw/geode/geode/issues

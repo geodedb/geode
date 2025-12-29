@@ -150,6 +150,11 @@ pub const storage = struct {
     pub const csr = @import("storage/csr_adjacency.zig");
     pub const heap = @import("storage/heap.zig");
     // pub const constraints = @import("storage/constraints.zig");
+
+    // Core storage components for CLI/tools
+    // Note: These must be imported as modules injected by build.zig to avoid file-in-multiple-modules errors
+    pub const wal = @import("wal");
+    pub const page_manager = @import("storage_page_manager");
 };
 
 // Re-export index modules for specialized data types

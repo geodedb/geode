@@ -1,1 +1,0 @@
-../../vendor/quic/vendor_setup.zig

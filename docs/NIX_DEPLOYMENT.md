@@ -48,7 +48,7 @@ Nix Configuration Structure
 
 ```bash
 # Clone the repository
-git clone https://github.com/spyderorg/geode.git
+git clone https://gitlab.com/devnw/geode/geode.git
 cd geode
 
 # Build default package
@@ -155,7 +155,7 @@ Add to your `configuration.nix`:
   # Import the Geode module
   imports = [ 
     (fetchGit {
-      url = "https://github.com/spyderorg/geode";
+      url = "https://gitlab.com/devnw/geode/geode";
       ref = "main";
     } + "/nix/modules/geode-daemon.nix")
   ];

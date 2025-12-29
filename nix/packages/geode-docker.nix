@@ -204,8 +204,8 @@ dockerTools.buildImage {
       "org.opencontainers.image.description" = "Open-source ACID-compliant graph database implementing ISO/IEC 39075:2024 GQL";
       "org.opencontainers.image.vendor" = "Spyder Organization";
       "org.opencontainers.image.version" = geode.version or "latest";
-      "org.opencontainers.image.source" = "https://github.com/spyderorg/geode";
-      "org.opencontainers.image.documentation" = "https://github.com/spyderorg/geode/docs";
+      "org.opencontainers.image.source" = "https://gitlab.com/devnw/geode/geode";
+      "org.opencontainers.image.documentation" = "https://gitlab.com/devnw/geode/geode/docs";
       "org.opencontainers.image.licenses" = "MIT";
       
       # Geode-specific labels
@@ -226,7 +226,7 @@ dockerTools.buildImage {
   
   meta = with lib; {
     description = "Docker image for Geode graph database";
-    homepage = "https://github.com/spyderorg/geode";
+    homepage = "https://gitlab.com/devnw/geode/geode";
     license = licenses.mit;
     platforms = platforms.linux;
   };

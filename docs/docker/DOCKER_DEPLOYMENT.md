@@ -429,5 +429,5 @@ docker run -d \
 For issues or questions:
 
 - Check logs: `docker-compose logs -f`
-- GitHub Issues: https://github.com/yourusername/geode/issues
+- GitHub Issues: https://gitlab.com/devnw/geode/geode/issues
 - Documentation: /docs/README.md

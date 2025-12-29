@@ -35,7 +35,7 @@ EOF
   
   meta = with lib; {
     description = "Legacy compatibility wrapper for Geode (formerly zcap)";
-    homepage = "https://github.com/spyderorg/geode";
+    homepage = "https://gitlab.com/devnw/geode/geode";
     license = licenses.mit;
     platforms = platforms.unix;
     mainProgram = "zcap";

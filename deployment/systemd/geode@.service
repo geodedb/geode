@@ -1,6 +1,6 @@
 [Unit]
 Description=Geode Graph Database Server (instance %i)
-Documentation=https://github.com/spyderorg/geode
+Documentation=https://gitlab.com/devnw/geode/geode
 After=network.target
 
 [Service]

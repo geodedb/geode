@@ -1,30 +1,23 @@
-# Geode Client Libraries - v0.16.0
+# Geode Client Libraries
 
-Official client libraries for Geode graph database in **Go**, **Python**, and **Rust** with full GQL (ISO/IEC 39075:2024) support.
+Official client libraries for Geode graph database in **Go**, **Python**, **Rust**, and **Zig** with full GQL (ISO/IEC 39075:2024) support.
 
-**v0.16.0 Breaking Changes:**
-- TCP transport removed - QUIC+TLS is now mandatory for network connections
-- Default port changed from 7567 to 3141
-- All network connections use TLS 1.3
+## Client Repositories
 
-## Available Clients
+All client libraries are maintained in separate repositories:
 
-| Client | Status | Best For |
-|--------|--------|----------|
-| **🐹 [Go](./go/)** | ✅ Production | High-performance servers, CLI tools |
-| **🐍 [Python](./python/)** | 🆕 Beta | Data science, web apps, scripting |
-| **🦀 [Rust](./rust/)** | 🆕 Alpha | Maximum performance, systems programming |
-
-### Quick Links
-- [Python Client →](./python/README.md) - Async Python client with type hints
-- [Rust Client →](./rust/README.md) - Type-safe Rust client with tokio
-- [Go Examples](./go/example/) - Production-ready Go examples
+| Client | Repository | Status | Best For |
+|--------|------------|--------|----------|
+| **Go** | [geode-client-go](https://gitlab.com/devnw/geode/geode-client-go) | Production | High-performance servers, CLI tools |
+| **Python** | [geode-client-python](https://gitlab.com/devnw/geode/geode-client-python) | Beta | Data science, web apps, scripting |
+| **Rust** | [geode-client-rust](https://gitlab.com/devnw/geode/geode-client-rust) | Alpha | Maximum performance, systems programming |
+| **Zig** | [geode-client-zig](https://gitlab.com/devnw/geode/geode-client-zig) | Alpha | Native integration, systems programming |
 
 ## Features Supported
 
 ### Core Database Features
 
-- **QUIC Transport**: High-performance QUIC protocol with TLS 1.3 (mandatory in v0.16.0)
+- **QUIC Transport**: High-performance QUIC protocol with TLS 1.3 (mandatory)
 - **Transactions**: BEGIN, COMMIT, ROLLBACK with full ACID support
 - **Paged Results**: Efficient streaming of large result sets
 - **Query Profiling**: PROFILE and EXPLAIN for query optimization
@@ -70,112 +63,24 @@ Official client libraries for Geode graph database in **Go**, **Python**, and **
 
 ## Client Feature Matrix
 
-| Feature | Go | Python | Rust |
-|---------|----|---------| -----|
-| **QUIC + TLS** | ✅ Full | ⚠️ Optional | 🔜 Planned |
-| **Process Mode** | ✅ | ✅ | ✅ |
-| **Async/Await** | ❌ (goroutines) | ✅ | ✅ |
-| **Query Builders** | ✅ | ✅ | ✅ |
-| **Auth/RBAC** | ✅ | ✅ | 🔜 Planned |
-| **Connection Pool** | ✅ | ✅ | ✅ Basic |
-| **Type System** | ✅ Full | ✅ Full | ✅ Full |
-| **Production Ready** | ✅ | ⚠️ Beta | ⚠️ Alpha |
+| Feature | Go | Python | Rust | Zig |
+|---------|----|---------| -----|-----|
+| **QUIC + TLS** | Full | Optional | Planned | Full |
+| **Process Mode** | Yes | Yes | Yes | Yes |
+| **Async/Await** | goroutines | Yes | Yes | No |
+| **Query Builders** | Yes | Yes | Yes | Yes |
+| **Auth/RBAC** | Yes | Yes | Planned | Yes |
+| **Connection Pool** | Yes | Yes | Basic | Basic |
+| **Type System** | Full | Full | Full | Full |
+| **Production Ready** | Yes | Beta | Alpha | Alpha |
 
-## Python Client (New)
+## Quick Start
 
-The Python client provides an async/await API with full type hints and modern Python best practices.
-
-### Installation
+### Go Client
 
 ```bash
-cd clients/python
-pip install .
-
-# With QUIC support
-pip install .[quic]
+go get gitlab.com/devnw/geode/geode-client-go
 ```
-
-### Quick Start
-
-```python
-import asyncio
-from geode_client import open_database
-
-async def main():
-    client = open_database("process:./zig-out/bin/geode")
-
-    async with client.connection() as conn:
-        # Simple query
-        page, _ = await conn.query("RETURN 1 AS x")
-        print(f"Result: {page.rows[0]['x'].as_int}")
-
-        # Query with parameters
-        page, _ = await conn.query(
-            "MATCH (p:Person {name: $name}) RETURN p",
-            {"name": "Alice"}
-        )
-
-        # Transaction
-        await conn.begin()
-        await conn.query("CREATE (p:Person {name: $name})", {"name": "Bob"})
-        await conn.commit()
-
-asyncio.run(main())
-```
-
-[Full Python Documentation →](./python/README.md)
-
-## Rust Client (New)
-
-The Rust client provides a type-safe, high-performance async API using tokio.
-
-### Installation
-
-Add to `Cargo.toml`:
-```toml
-[dependencies]
-geode-client = { path = "../clients/rust" }
-tokio = { version = "1", features = ["full"] }
-```
-
-### Quick Start
-
-```rust
-use geode_client::{Client, Result};
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let client = Client::new("process:./zig-out/bin/geode")?;
-    let mut conn = client.connect().await?;
-
-    // Simple query
-    let page = conn.query("RETURN 1 AS x", None).await?;
-    println!("Result: {}", page.rows[0].get("x").unwrap().as_int()?);
-
-    // Transaction
-    conn.begin().await?;
-    let mut params = std::collections::HashMap::new();
-    params.insert("name".to_string(), serde_json::json!("Bob"));
-    conn.query("CREATE (p:Person {name: $name})", Some(params)).await?;
-    conn.commit().await?;
-
-    Ok(())
-}
-```
-
-[Full Rust Documentation →](./rust/README.md)
-
-## Go Client
-
-### Installation
-
-```bash
-cd clients/go/gql
-go mod init myapp
-go get .
-```
-
-### Quick Start
 
 ```go
 package main
@@ -183,11 +88,10 @@ package main
 import (
     "context"
     "log"
-    "geode/clients/go/gql"
+    gql "gitlab.com/devnw/geode/geode-client-go"
 )
 
 func main() {
-    // Connect with QUIC (v0.16.0: default port 3141)
     db, err := gql.Open("quic://127.0.0.1:3141")
     if err != nil {
         log.Fatal(err)
@@ -200,64 +104,84 @@ func main() {
     }
     defer conn.Close()
 
-    // Authenticate
-    auth := conn.Auth()
-    session, err := auth.Login(ctx, "admin", "password")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer auth.Logout(ctx, session.Token)
-
-    // Execute query
-    page, pager, err := conn.Query(ctx,
-        "MATCH (n:Person) RETURN n.name ORDER BY n.name LIMIT 10",
+    page, _, err := conn.Query(ctx,
+        "MATCH (n:Person) RETURN n.name LIMIT 10",
         nil, 100)
     if err != nil {
         log.Fatal(err)
     }
 
-    // Process results
     for _, row := range page.Rows {
-        name := row["n.name"].Str
-        log.Printf("Person: %s", name)
+        log.Printf("Person: %s", row["n.name"].Str)
     }
 }
 ```
 
-### Advanced Features
+### Python Client
 
-See `clients/go/example/full_features.go` for comprehensive examples including:
+```bash
+pip install geode-client
+# Or with QUIC support
+pip install geode-client[quic]
+```
 
-- User and role management
-- RLS policy creation
-- Transaction handling
-- Graph operations (nodes, edges)
-- Pattern matching
-- Aggregations and GROUP BY
-- Set operations
+```python
+import asyncio
+from geode_client import open_database
 
-## Zig Client
+async def main():
+    client = open_database("process:./zig-out/bin/geode")
 
-### Installation
+    async with client.connection() as conn:
+        page, _ = await conn.query("RETURN 1 AS x")
+        print(f"Result: {page.rows[0]['x'].as_int}")
 
-The Zig client is a standalone library that can be imported directly.
+asyncio.run(main())
+```
 
-### Quick Start
+### Rust Client
+
+Add to `Cargo.toml`:
+```toml
+[dependencies]
+geode-client = { git = "https://gitlab.com/devnw/geode/geode-client-rust" }
+tokio = { version = "1", features = ["full"] }
+```
+
+```rust
+use geode_client::{Client, Result};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let client = Client::new("process:./zig-out/bin/geode")?;
+    let mut conn = client.connect().await?;
+
+    let page = conn.query("RETURN 1 AS x", None).await?;
+    println!("Result: {}", page.rows[0].get("x").unwrap().as_int()?);
+
+    Ok(())
+}
+```
+
+### Zig Client
+
+```bash
+git clone https://gitlab.com/devnw/geode/geode-client-zig
+```
 
 ```zig
 const std = @import("std");
-const client = @import("client.zig");
+const client = @import("geode_client");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Configure and connect
     const config = client.Config{
         .host = "127.0.0.1",
-        .port = 3141,  // v0.16.0: Default QUIC port
-        .use_quic = true,  // v0.16.0: Only network transport
+        .port = 3141,
+        .use_quic = true,
     };
 
     var geode = client.Client.init(allocator, config);
@@ -266,18 +190,12 @@ pub fn main() !void {
     try geode.connect();
     defer geode.disconnect();
 
-    // Authenticate
-    try geode.login("admin", "password");
-    defer geode.logout() catch {};
-
-    // Execute query
     var iter = try geode.query(
-        "MATCH (n:Person) RETURN n.name ORDER BY n.name LIMIT 10",
+        "MATCH (n:Person) RETURN n.name LIMIT 10",
         null,
     );
     defer iter.close();
 
-    // Process results
     while (try iter.next()) |row| {
         if (row.get("n.name")) |name| {
             std.debug.print("Person: {s}\n", .{name.string});
@@ -286,242 +204,29 @@ pub fn main() !void {
 }
 ```
 
-### Advanced Features
-
-See `clients/zig/example.zig` for comprehensive examples including:
-
-- User creation and management
-- RLS policy configuration
-- Transaction management
-- Graph operations
-- Pattern matching
-- Aggregations
-- Set operations
-
 ## Connection Strings
 
-### QUIC (v0.18.0: Only Network Transport + mTLS)
+### QUIC (Only Network Transport + mTLS)
 
 ```
 quic://hostname:3141?page_size=100&hello_name=myapp&ca_cert=/path/ca.crt&client_cert=/path/client.crt&client_key=/path/client.key
 ```
 
-- ca_cert: PEM trust root to verify server (sets verify on)
-- client_cert/client_key: present client certificate for mTLS when server requires it
-- skip_verify=1 can be used in dev to skip server verification (not recommended)
+- `ca_cert`: PEM trust root to verify server (sets verify on)
+- `client_cert`/`client_key`: present client certificate for mTLS when server requires it
+- `skip_verify=1`: can be used in dev to skip server verification (not recommended)
 
 Default port is 3141. Server auto-generates self-signed certificates if missing.
 
 ### Process Mode (Local Development)
 
 ```
-process:/path/to/geoded
+process:/path/to/geode
 ```
 
-**v0.16.0 Note**: TCP transport has been completely removed. Use QUIC for all network connections.
+## Test Harness
 
-## API Reference
-
-### Authentication
-
-#### Go
-
-```go
-auth := conn.Auth()
-session, err := auth.Login(ctx, username, password)
-err := auth.Logout(ctx, token)
-user, err := auth.CreateUser(ctx, username, email, password, roles, metadata)
-err := auth.DeleteUser(ctx, userID)
-role, err := auth.CreateRole(ctx, name, description, permissions)
-err := auth.GrantPermission(ctx, roleID, permissionID)
-allowed, err := auth.CheckPermission(ctx, userID, resource, action)
-```
-
-#### Zig
-
-```zig
-try client.login(username, password);
-try client.logout();
-try client.createUser(username, email, password, roles);
-```
-
-### Row-Level Security
-
-#### Go
-
-```go
-policy := &gql.RLSPolicy{
-    Name: "policy_name",
-    Table: "table_name",
-    Graph: "graph_name",
-    Operation: "select",
-    UsingExpression: "owner_id = current_user_id()",
-    CheckExpression: "status = 'active'",
-    Roles: []int64{1, 2},
-    Enabled: true,
-}
-err := auth.CreateRLSPolicy(ctx, policy)
-err := auth.EnableRLSPolicy(ctx, policyID, enabled)
-```
-
-#### Zig
-
-```zig
-try client.createRLSPolicy(
-    name, table, graph, operation,
-    using_expr, check_expr, roles
-);
-```
-
-### Extended Type Operations
-
-#### Go
-
-```go
-// Network types
-result, err := conn.Query(ctx, 
-    `RETURN IpAddr("192.168.1.1") AS ip, 
-            Subnet("10.0.0.0/8") AS subnet,
-            Mac("aa:bb:cc:dd:ee:ff") AS mac`,
-    nil, 100)
-
-// Geographic types  
-result, err := conn.Query(ctx,
-    `RETURN LatLon(51.5074, -0.1278) AS london,
-            distance_haversine($p1, $p2) AS dist`,
-    map[string]interface{}{
-        "p1": gql.LatLon{Lat: 0, Lon: 0},
-        "p2": gql.LatLon{Lat: 0, Lon: 1},
-    }, 100)
-
-// Vector similarity search
-result, err := conn.Query(ctx,
-    `MATCH (n:Document) 
-     WHERE vector_knn(n.embedding, $query, 10, "cosine")[0].score > 0.8
-     RETURN n`,
-    map[string]interface{}{
-        "query": []float32{0.1, 0.2, 0.3},
-    }, 100)
-```
-
-#### Zig
-
-```zig
-// Network types
-var iter = try client.query(
-    \\RETURN IpAddr("2001:db8::1") AS ipv6,
-    \\       ip_contains(Subnet("192.168.0.0/16"), IpAddr("192.168.1.1")) AS contains
-, null);
-
-// Geographic types
-const params = .{
-    .p1 = LatLon{ .lat = 51.5, .lon = -0.1 },
-};
-var iter = try client.query(
-    "RETURN distance_haversine($p1, LatLon(48.8566, 2.3522)) AS dist",
-    params);
-
-// Vector operations
-const embedding = [_]f32{0.1, 0.2, 0.3};
-var iter = try client.query(
-    "MATCH (n) WHERE vector_dot(n.embedding, $vec) > 0.5 RETURN n",
-    .{ .vec = embedding });
-```
-
-### Graph Operations
-
-#### Go
-
-```go
-graph := conn.Graph()
-
-// Create node
-node, err := graph.CreateNode(ctx, labels, properties)
-
-// Create edge
-edge, err := graph.CreateEdge(ctx, sourceID, targetID, label, properties)
-
-// Pattern matching
-pattern := &gql.GraphPattern{
-    Nodes: []gql.NodePattern{{Variable: "n", Labels: []string{"Person"}}},
-    Edges: []gql.EdgePattern{{Source: "n", Target: "m", Label: "KNOWS"}},
-    Where: "n.age > 21",
-}
-iter, err := graph.Match(ctx, pattern)
-
-// Shortest path
-path, err := graph.ShortestPath(ctx, sourceID, targetID, maxHops)
-```
-
-#### Zig
-
-```zig
-// Create node
-const node = try client.createNode(labels, properties);
-
-// Create edge
-const edge = try client.createEdge(source_id, target_id, label, properties);
-
-// Pattern matching
-var iter = try client.match(pattern, where_clause);
-
-// Shortest path
-const path = try client.shortestPath(source_id, target_id, max_hops);
-```
-
-### Transactions
-
-#### Go
-
-```go
-err := conn.Begin(ctx)
-// ... perform operations ...
-err := conn.Commit(ctx)
-// or
-err := conn.Rollback(ctx)
-```
-
-#### Zig
-
-```zig
-try client.beginTransaction();
-// ... perform operations ...
-try client.commit();
-// or
-try client.rollback();
-```
-
-## Error Handling
-
-Both clients provide detailed error information including:
-
-- ISO SQL/GQL status codes
-- Diagnostic messages with line/column anchors
-- Additional status information for complex errors
-
-## Performance Considerations
-
-1. **Use QUIC when possible** for better performance and multiplexing
-2. **Set appropriate page sizes** based on expected result sizes
-3. **Use transactions** for multiple related operations
-4. **Profile queries** to optimize performance
-5. **Use prepared statements** (when available) for repeated queries
-
-## Testing
-
-### Go Client Tests
-
-```bash
-cd clients/go/gql
-go test -v
-```
-
-### Zig Client Tests
-
-```bash
-cd clients/zig
-zig test client.zig
-```
+The test harness for client library integration testing remains in this repository under `clients/test-harness/`.
 
 ## License
 

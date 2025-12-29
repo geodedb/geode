@@ -166,7 +166,7 @@ If not using a package manager:
 
 ```bash
 # Download and install
-wget https://github.com/spyderorg/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.deb
+wget https://gitlab.com/devnw/geode/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.deb
 sudo dpkg -i geode_0.x.x_Linux_x86_64.deb
 
 # Start service
@@ -177,7 +177,7 @@ sudo systemctl start geode
 
 ```bash
 # Download and install
-wget https://github.com/spyderorg/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.rpm
+wget https://gitlab.com/devnw/geode/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.rpm
 sudo rpm -i geode_0.x.x_Linux_x86_64.rpm
 
 # Start service
@@ -188,7 +188,7 @@ sudo systemctl start geode
 
 ```bash
 # Download and install
-wget https://github.com/spyderorg/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.apk
+wget https://gitlab.com/devnw/geode/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.apk
 sudo apk add --allow-untrusted geode_0.x.x_Linux_x86_64.apk
 
 # Start service (using OpenRC)
@@ -429,6 +429,6 @@ sudo groupdel geode
 
 ## Support
 
-- Documentation: https://github.com/spyderorg/geode/tree/main/docs
-- Issues: https://github.com/spyderorg/geode/issues
-- Discussions: https://github.com/spyderorg/geode/discussions
+- Documentation: https://gitlab.com/devnw/geode/geode/tree/main/docs
+- Issues: https://gitlab.com/devnw/geode/geode/issues
+- Discussions: https://gitlab.com/devnw/geode/geode/discussions

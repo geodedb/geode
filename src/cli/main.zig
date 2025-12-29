@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const audit_cli = @import("audit_cli");
 const geode = @import("geode");
 const Value = geode.value_types.Value;
@@ -56,7 +57,7 @@ const net = std.net;
 const quic = @import("transport/quic");
 const vendor_quic = @import("vendor_quic");
 
-const VERSION = "0.18.0";
+const VERSION = build_options.version;
 
 // CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=IMPL; TEST=test_quic_transport; OWNER=repl; UPDATED=2025-11-17
 const repl_dispatch = geode.repl.repl_dispatch;
@@ -2239,7 +2240,7 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
         if (std.mem.eql(u8, msg_type.string, "HELLO")) {
             // Respond to HELLO (handshake) with server info
-            const hello_resp = "{\"result\":{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_version\":\"0.16.0\"}}\n";
+            const hello_resp = "{\"result\":{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_version\":\"" ++ VERSION ++ "\"}}\n";
             _ = try stdout_fd.writeAll(hello_resp);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "RUN_GQL")) {
@@ -2622,7 +2623,7 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     std.debug.print("Starting Geode server...\n", .{});
-    std.debug.print(">>> BUILD VERSION: 2025-12-21-MULTIGRAPH-DEBUG <<<\n", .{});
+    std.debug.print("Version: " ++ VERSION ++ "\n", .{});
     if (config.listen_quic) |addr| {
         std.debug.print("Listening on: {s}\n", .{addr});
     }

@@ -1,7 +1,7 @@
 # Geode Graph Database SystemD Service
 [Unit]
 Description=Geode Graph Database Daemon
-Documentation=https://github.com/spyderorg/geode
+Documentation=https://gitlab.com/devnw/geode/geode
 After=network.target
 Wants=network-online.target
 

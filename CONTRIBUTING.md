@@ -203,7 +203,7 @@ Report security vulnerabilities privately to the maintainers.
    ```bash
    # Install Zig 0.15.1
    # Clone repository
-   git clone https://github.com/your-org/geode.git
+   git clone https://gitlab.com/devnw/geode/geode.git
    cd geode
 
    # Build

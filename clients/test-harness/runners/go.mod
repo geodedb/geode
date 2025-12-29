@@ -1,9 +1,9 @@
-module github.com/spyderorg/geode/clients/test-harness/runners
+module gitlab.com/devnw/geode/geode/clients/test-harness/runners
 
 go 1.24.0
 
 require (
-	github.com/spyderorg/geode/clients/go/geode v0.0.0
+	gitlab.com/devnw/geode/geode/clients/go/geode v0.0.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -17,4 +17,4 @@ require (
 	golang.org/x/tools v0.37.0 // indirect
 )
 
-replace github.com/spyderorg/geode/clients/go/geode => ../../go/geode
+replace gitlab.com/devnw/geode/geode/clients/go/geode => ../../go/geode

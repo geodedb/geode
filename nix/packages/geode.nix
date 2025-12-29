@@ -7,20 +7,23 @@
 , openssl
 , zlib
 , libuv
+, git
 , quic ? null
 , enableQuic ? true
 , enableOptimization ? true
 , enableSentinel ? false
 , enableTests ? true
 , enableFuzzing ? false
+# Version can be overridden; defaults to dev version (actual version detected by build.zig from git)
+, versionOverride ? null
 }:
 
 let
   # Use the same Zig version as specified in dev-env
   zigVersion = "0.15.1";
-  
+
   optimize = if enableOptimization then "ReleaseSafe" else "Debug";
-  
+
   buildInputs = [
     openssl
     zlib
@@ -29,13 +32,16 @@ let
 
 in stdenv.mkDerivation rec {
   pname = "geode";
-  version = "0.18.0";
+  # Version from git tags - build.zig handles detection at compile time
+  # Nix uses explicit version override or fallback for package metadata
+  version = if versionOverride != null then versionOverride else "0.1.0-dev";
 
   src = ./../..;
 
   nativeBuildInputs = [
     zig
     pkg-config
+    git  # Required for build.zig to detect version from git tags
   ];
 
   inherit buildInputs;
@@ -142,7 +148,7 @@ in stdenv.mkDerivation rec {
       - Comprehensive type system with 50+ data types
       - Advanced indexing: Patricia trie, R-tree, HNSW with persistence
     '';
-    homepage = "https://github.com/spyderorg/geode";
+    homepage = "https://gitlab.com/devnw/geode/geode";
     license = licenses.mit;
     maintainers = with maintainers; [ ]; # Add maintainers here
     platforms = platforms.unix;

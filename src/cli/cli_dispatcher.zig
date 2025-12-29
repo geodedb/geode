@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const audit_cli = @import("audit_cli");
 const geode = @import("geode");
 const log = std.log.scoped(.cli);
@@ -11,6 +12,7 @@ const log = std.log.scoped(.cli);
 const user_mgmt_cli = @import("user_mgmt_cli.zig");
 const auth_cli_mod = @import("auth_cli.zig");
 const backup_cli = @import("backup_cli.zig");
+const storage_cli = @import("storage_cli.zig");
 
 // Re-export command handlers for main to use
 pub const cmdUser = user_mgmt_cli.cmdUser;
@@ -21,6 +23,7 @@ pub const cmdRevoke = auth_cli_mod.cmdRevoke;
 pub const cmdBackup = backup_cli.cmdBackup;
 pub const cmdRestore = backup_cli.cmdRestore;
 pub const cmdMigrate = backup_cli.cmdMigrate;
+pub const cmdStorage = storage_cli.cmdStorage;
 
 // Forward declare command handlers that remain in main.zig
 // These will be passed in when calling dispatch()
@@ -111,6 +114,7 @@ pub fn dispatch(
         .{ .name = "revoke", .handler = cmdRevoke, .description = "Revoke permissions" },
         .{ .name = "auth", .handler = cmdAuth, .description = "Authentication commands" },
         .{ .name = "fle", .handler = cmdFLE, .description = "Field-Level Encryption management" },
+        .{ .name = "storage", .handler = cmdStorage, .description = "Storage engine management and verification" },
     };
 
     // Parse audit configuration from environment variables
@@ -168,7 +172,7 @@ pub fn dispatch(
             printMainUsage();
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--version")) {
-            std.debug.print("geode v0.18.0\n", .{});
+            std.debug.print("geode " ++ build_options.version ++ "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--verbose") or std.mem.eql(u8, argv[i], "-v")) {
             // Set global verbose flag (would be used throughout the application)

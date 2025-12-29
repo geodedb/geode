@@ -1,6 +1,6 @@
 [Unit]
 Description=Geode Authentication Management Service
-Documentation=https://github.com/spyderorg/geode
+Documentation=https://gitlab.com/devnw/geode/geode
 After=geode.service
 Requires=geode.service
 

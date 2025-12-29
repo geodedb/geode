@@ -86,19 +86,61 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.linkSystemLibrary("vulkan");
 }
 
+/// Get version string from git tags.
+/// Returns git tag if on a tag, or tag+offset+hash if ahead of tag.
+/// Falls back to commit hash or "unknown" if git is unavailable.
+fn getGitVersion(b: *std.Build) []const u8 {
+    var exit_code: u8 = 0;
+    const result = b.runAllowFail(&.{ "git", "describe", "--tags", "--always" }, &exit_code, .Inherit) catch {
+        return "unknown";
+    };
+    if (exit_code != 0) return "unknown";
+    const trimmed = std.mem.trim(u8, result, " \t\n\r");
+    if (trimmed.len == 0) return "unknown";
+    return b.dupe(trimmed);
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
     const enable_llvm_fuzzer = b.option(bool, "enable-llvm-fuzzer", "Enable LLVM libFuzzer fallback for fuzz tests") orelse false;
 
-    // Setup vendor/quic modules using vendor_setup.zig helper
+    // Get version from git tags
+    const version = getGitVersion(b);
+
+    // Modules - Level 0 (No dependencies on other internal modules)
+    const fs_fsync_mod = b.createModule(.{ .root_source_file = b.path("src/storage/fs_fsync.zig") });
+    const fsm_mod = b.createModule(.{ .root_source_file = b.path("src/storage/free_space_map.zig") });
+    const commit_coord_mod = b.createModule(.{ .root_source_file = b.path("src/transactions/commit_coordinator.zig") });
+    const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
+    const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
+    const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
+
+    // Modules - Level 1 (Depends on Level 0)
+
+    // WAL Mod
+    const wal_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
+    wal_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
+    wal_mod.addImport("storage_page_manager", storage_page_manager_shared);
+    wal_mod.addImport("key_provider", key_provider_mod);
+    wal_mod.addImport("fs_fsync", fs_fsync_mod);
+    wal_mod.addImport("commit_coordinator", commit_coord_mod);
+
+    // Modules - Level 2 (Depends on Level 1)
+
+    // Vacuum mod depends on WAL
+    const vacuum_mod = b.createModule(.{ .root_source_file = b.path("src/storage/page_vacuum.zig") });
+    vacuum_mod.addImport("wal", wal_mod);
+
+    // Setup vendor/quic modules
     const quic_vendor_setup = @import("vendor/quic/vendor_setup.zig");
     const quic_modules = quic_vendor_setup.setupModules(b, "vendor/quic", target, optimize);
 
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
     build_opts.addOption(bool, "enable_llvm_fuzzer", enable_llvm_fuzzer);
+    build_opts.addOption([]const u8, "version", version);
 
     const lib = b.addLibrary(.{
         .name = "wire",
@@ -113,6 +155,8 @@ pub fn build(b: *std.Build) void {
 
     // Create root module early so it can be used by executables
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+    root_mod.addImport("wal", wal_mod);
+    root_mod.addImport("storage_page_manager", storage_page_manager_shared);
 
     // Main unified CLI binary with server and client capabilities
     const geode_exe = b.addExecutable(.{
@@ -121,6 +165,10 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addOptions("build_options", build_opts);
     geode_exe.root_module.addImport("geode", root_mod);
+    geode_exe.root_module.addImport("fs_fsync", fs_fsync_mod);
+    geode_exe.root_module.addImport("fsm", fsm_mod);
+    geode_exe.root_module.addImport("page_vacuum", vacuum_mod);
+    geode_exe.root_module.addImport("commit_coord", commit_coord_mod);
 
     // Link with OpenSSL for vendor/quic crypto operations
     geode_exe.linkLibC();
@@ -140,6 +188,23 @@ pub fn build(b: *std.Build) void {
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
     geode_exe.root_module.addImport("storage/backup", storage_backup_mod);
 
+    // M12: Add storage/stress_test module for CLI
+    const storage_stress_mod = b.createModule(.{ .root_source_file = b.path("src/storage/stress_test.zig"), .target = target, .optimize = optimize });
+    storage_stress_mod.addImport("geode", root_mod);
+    // root_mod (src/lib.zig) already exports storage sub-modules (wal, page_manager), so stress test uses them via 'geode' import.
+    // However, fsm, page_vacuum, commit_coord are top-level in build.zig but not all exposed via lib.zig as public modules (only fields).
+    // Let's check src/lib.zig again... it doesn't expose commit_coord or vacuum as sub-structs usually, only wal/page_manager.
+    // Wait, src/storage/stress_test.zig uses:
+    // const fsm = @import("fsm");
+    // const page_vacuum = @import("page_vacuum");
+    // const commit_coord = @import("commit_coord");
+    // So we must direct-link these.
+    storage_stress_mod.addImport("fsm", fsm_mod);
+    storage_stress_mod.addImport("page_vacuum", vacuum_mod);
+    storage_stress_mod.addImport("commit_coord", commit_coord_mod);
+
+    geode_exe.root_module.addImport("storage_stress_test", storage_stress_mod);
+
     if (target.result.os.tag == .windows) {
         geode_exe.linkLibC();
     }
@@ -157,13 +222,10 @@ pub fn build(b: *std.Build) void {
     // CANARY: REQ=REQ-GQL-UNICODE-006; FEATURE="UnicodeBuildIntegration"; ASPECT=BuildStep; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables; OWNER=unicode; UPDATED=2025-09-27
     // Use plain 'zig' from PATH for generator (0.15 Build struct no longer exposes zig_exe field directly)
     const unicode_gen_cmd = b.addSystemCommand(&.{ "zig", "run", "tools/gen_unicode_tables.zig", "third_party/unicode/ucd/UnicodeData.txt", "src/unicode/generated" });
-    // We don't gate root module import on success yet; future promotion to TESTED will add dependency wiring.
+    // We don't gate root module import on success yet; future promotion to enforced step will add dependency wiring.
     // The geode root can @import("unicode/geode_unicode.zig") directly; generated tables live alongside.
     // We currently do not wire the command as a dependency (non-fatal); future promotion to enforced step will add dependency.
     _ = unicode_gen_cmd; // silence unused warning until enforced
-
-    const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
-    root_mod.addImport("storage_page_manager", storage_page_manager_shared);
 
     // Field-Level Encryption modules
     // CANARY: REQ=REQ-FLE-BUILD-001; FEATURE="FieldLevelEncryption"; ASPECT=BUILD; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
@@ -340,18 +402,15 @@ pub fn build(b: *std.Build) void {
     const logging_mod = b.createModule(.{ .root_source_file = b.path("src/log/logger.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("log/logger.zig", logging_mod);
     // Provide WAL module for recovery optimization benchmarks
-    const wal_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
+    // Use the global wal_mod defined earlier
+
     // Provide supporting modules required by wal for tests
-    const tde_hierarchy_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
-    const key_provider_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
-    const fs_fsync_mod = b.createModule(.{ .root_source_file = b.path("src/storage/fs_fsync.zig"), .target = target, .optimize = optimize });
-    const commit_coord_mod = b.createModule(.{ .root_source_file = b.path("src/transactions/commit_coordinator.zig"), .target = target, .optimize = optimize });
-    wal_mod_for_tests.addImport("tde_hierarchy", tde_hierarchy_mod_for_tests);
-    wal_mod_for_tests.addImport("storage_page_manager", storage_page_manager_shared);
-    wal_mod_for_tests.addImport("key_provider", key_provider_mod_for_tests);
-    wal_mod_for_tests.addImport("fs_fsync", fs_fsync_mod);
-    wal_mod_for_tests.addImport("commit_coordinator", commit_coord_mod);
-    custom_tests.root_module.addImport("wal", wal_mod_for_tests);
+    // (These are already linked into the global wal_mod, but some tests import them directly too)
+
+    // Determine if we need to reconstruct for tests or can reuse.
+    // The global wal_mod has all dependencies. Let's reuse it as 'wal_mod_for_tests' alias if needed, or just use wal_mod.
+    custom_tests.root_module.addImport("wal", wal_mod);
+
     // Provide storage page manager to test redo optimization
     custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     // CDC enhanced is available through the geode module, no need for standalone module import
@@ -365,14 +424,14 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("storage_csr", storage_csr_mod_tests);
     // Backup & restore module for tests (uses wal + page manager + catalog)
     const storage_backup_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
-    storage_backup_mod_tests.addImport("wal", wal_mod_for_tests);
+    storage_backup_mod_tests.addImport("wal", wal_mod);
     storage_backup_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
     storage_backup_mod_tests.addImport("storage_catalog", storage_catalog_mod_tests);
     custom_tests.root_module.addImport("storage_backup", storage_backup_mod_tests);
 
     // WAL compaction pipeline module (checkpoint selection / compaction orchestration / archival hook)
     const wal_compaction_pipeline_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/wal_compaction_pipeline.zig"), .target = target, .optimize = optimize });
-    wal_compaction_pipeline_mod_tests.addImport("wal", wal_mod_for_tests);
+    wal_compaction_pipeline_mod_tests.addImport("wal", wal_mod);
     custom_tests.root_module.addImport("storage/wal_compaction_pipeline.zig", wal_compaction_pipeline_mod_tests);
 
     // Selectivity estimator module (frequency sampler + adaptive feedback)
@@ -554,7 +613,7 @@ pub fn build(b: *std.Build) void {
 
     // Attach physiological redo canary tests after test_step defined
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });
-    redo_canary_test.root_module.addImport("wal", wal_mod_for_tests);
+    redo_canary_test.root_module.addImport("wal", wal_mod);
     redo_canary_test.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     // Provide tde_hierarchy for encryption import (even if disabled)
     const tde_hierarchy_mod_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
@@ -622,7 +681,7 @@ pub fn build(b: *std.Build) void {
     write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
     const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
     const recovery_corrupt_latency_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_recovery_corrupt_latency.zig"), .target = target, .optimize = optimize }) });
-    recovery_corrupt_latency_tests.root_module.addImport("wal", wal_mod_for_tests);
+    recovery_corrupt_latency_tests.root_module.addImport("wal", wal_mod);
     recovery_corrupt_latency_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     const planner_plan_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_plan_selection.zig"), .target = target, .optimize = optimize }) });
     planner_plan_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
@@ -705,16 +764,13 @@ pub fn build(b: *std.Build) void {
     const range_tracker_mod = b.createModule(.{ .root_source_file = b.path("src/transactions/range_tracker.zig"), .target = target, .optimize = optimize });
     txn_mod.addImport("range_tracker", range_tracker_mod);
     root_mod.addImport("mvcc_adv", mvcc_adv_mod);
-    const wal_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
+    // const wal_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
     // Security TDE hierarchy module
-    const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
-    const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
+    // const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
+    // const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
+
     // Provide page manager dependency for WAL and additional imports (fs sync, commit coord)
-    wal_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
-    wal_mod.addImport("storage_page_manager", storage_page_manager_shared);
-    wal_mod.addImport("key_provider", key_provider_mod);
-    wal_mod.addImport("fs_fsync", fs_fsync_mod);
-    wal_mod.addImport("commit_coordinator", commit_coord_mod);
+    // wal_mod imports already configured globally at top of build function
     //    const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
     //    const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
 
@@ -1072,6 +1128,26 @@ pub fn build(b: *std.Build) void {
     const gpu_phase1_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/phase1_kernels.zig"), .target = target, .optimize = optimize }),
     });
+
+    // Massive Scale Storage Stress Test
+    const stress_storage_massive = b.addTest(.{
+        .name = "stress_storage_massive", // Set name to allow filtering
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/stress_storage_massive.zig"), .target = target, .optimize = optimize }),
+    });
+    stress_storage_massive.root_module.addImport("wal", wal_mod);
+    stress_storage_massive.root_module.addImport("storage_page_manager", storage_page_manager_shared);
+    stress_storage_massive.root_module.addImport("fsm", fsm_mod);
+    stress_storage_massive.root_module.addImport("page_vacuum", vacuum_mod);
+    stress_storage_massive.root_module.addImport("commit_coordinator", commit_coord_mod);
+    stress_storage_massive.linkLibC(); // WAL uses libc
+    stress_storage_massive.linkSystemLibrary("ssl"); // Crypto dependency
+    stress_storage_massive.linkSystemLibrary("crypto");
+
+    const run_stress_storage = b.addRunArtifact(stress_storage_massive);
+    // Only run if explicitly requested via filter or a separate step (optional: create "stress" step)
+    const stress_step = b.step("stress", "Run massive storage stress tests");
+    stress_step.dependOn(&run_stress_storage.step);
+
     gpu_phase1_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
     gpu_phase1_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
     configureVulkanPaths(b, gpu_phase1_test);
@@ -1256,6 +1332,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    zig_client_example.root_module.addImport("geode-client", zig_client_lib.root_module);
     b.installArtifact(zig_client_example);
     client_step.dependOn(&zig_client_example.step);
 

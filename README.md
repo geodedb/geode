@@ -44,7 +44,7 @@ nix develop github:spyderorg/geode
 #### Traditional Build
 ```bash
 # Prerequisites: Zig 0.15.1+
-git clone https://github.com/spyderorg/geode
+git clone https://gitlab.com/devnw/geode/geode
 cd geode
 
 # Build optimized version
@@ -317,7 +317,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 ### **Development Setup**
 1. **Prerequisites**: Zig 0.15.1+, Git
-2. **Clone Repository**: `git clone https://github.com/spyderorg/geode`
+2. **Clone Repository**: `git clone https://gitlab.com/devnw/geode/geode`
 3. **Development Environment**: `nix develop` (recommended) or manual setup
 4. **Run Tests**: `make test` to verify setup
 
@@ -339,8 +339,8 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 ## 🔗 Links
 
 - **Documentation**: [./docs/](docs/)
-- **GitHub Repository**: [https://github.com/spyderorg/geode](https://github.com/spyderorg/geode)
-- **Issue Tracker**: [GitHub Issues](https://github.com/spyderorg/geode/issues)
+- **GitHub Repository**: [https://gitlab.com/devnw/geode/geode](https://gitlab.com/devnw/geode/geode)
+- **Issue Tracker**: [GitHub Issues](https://gitlab.com/devnw/geode/geode/issues)
 - **ISO/IEC 39075:2024**: [GQL Standard](https://www.iso.org/standard/76120.html)
 
 ---
