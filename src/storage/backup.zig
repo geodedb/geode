@@ -78,6 +78,7 @@ pub const BackupManager = struct {
     current_backup_chain: std.ArrayList(u128),
     wal_manager: *wal.WALManager,
     page_mgr: *page_manager.PageManager,
+    enc_key: [32]u8,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -92,6 +93,22 @@ pub const BackupManager = struct {
             else => return err,
         };
 
+        // Load encryption key if enabled
+        var enc_key: [32]u8 = .{0} ** 32;
+        if (config.encryption) {
+            if (std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY")) |raw| {
+                defer allocator.free(raw);
+                if (raw.len == 64) {
+                    var i: usize = 0;
+                    while (i < 32) : (i += 1) {
+                        const hi = std.fmt.charToDigit(raw[i * 2], 16) catch 0;
+                        const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch 0;
+                        enc_key[i] = @as(u8, @intCast(hi * 16 + lo));
+                    }
+                }
+            }
+        }
+
         return .{
             .allocator = allocator,
             .config = config,
@@ -100,6 +117,7 @@ pub const BackupManager = struct {
             .current_backup_chain = std.ArrayList(u128).init(allocator),
             .wal_manager = wal_manager,
             .page_mgr = page_mgr,
+            .enc_key = enc_key,
         };
     }
 
@@ -159,12 +177,19 @@ pub const BackupManager = struct {
             const compressed_data = if (self.config.compression != .none)
                 try compressData(page_data, self.config.compression, self.allocator)
             else
-                page_data;
-            defer if (self.config.compression != .none) self.allocator.free(compressed_data);
+                try self.allocator.dupe(u8, page_data);
+            defer self.allocator.free(compressed_data);
 
-            try writer.writeInt(u32, @intCast(compressed_data.len), .little);
-            try writer.writeAll(compressed_data);
-            size_bytes += @sizeOf(u32) + compressed_data.len;
+            // Encrypt if configured
+            const final_data = if (self.config.encryption)
+                try encryptData(compressed_data, self.enc_key, self.allocator)
+            else
+                try self.allocator.dupe(u8, compressed_data);
+            defer self.allocator.free(final_data);
+
+            try writer.writeInt(u32, @intCast(final_data.len), .little);
+            try writer.writeAll(final_data);
+            size_bytes += @sizeOf(u32) + final_data.len;
         }
 
         const end_lsn = self.wal_manager.getCurrentLSN();
@@ -249,9 +274,16 @@ pub const BackupManager = struct {
         const wal_records = try self.wal_manager.getRecordsRange(start_lsn, end_lsn, self.allocator);
         defer self.allocator.free(wal_records);
 
-        try writer.writeInt(u64, wal_records.len, .little);
-        try writer.writeAll(wal_records);
-        size_bytes += @sizeOf(u64) + wal_records.len;
+        // Encrypt if configured
+        const final_wal = if (self.config.encryption)
+            try encryptData(wal_records, self.enc_key, self.allocator)
+        else
+            try self.allocator.dupe(u8, wal_records);
+        defer self.allocator.free(final_wal);
+
+        try writer.writeInt(u64, final_wal.len, .little);
+        try writer.writeAll(final_wal);
+        size_bytes += @sizeOf(u64) + final_wal.len;
 
         // Check incremental size limit
         if (size_bytes > self.config.max_incremental_size) {
@@ -411,12 +443,21 @@ pub const BackupManager = struct {
             defer self.allocator.free(compressed_data);
             _ = try reader.read(compressed_data);
 
+            // Decrypt if needed
+            var input_buffer = compressed_data;
+            var decrypted_buffer: ?[]u8 = null;
+            if (header.encrypted) {
+                decrypted_buffer = try decryptData(compressed_data, self.enc_key, self.allocator);
+                input_buffer = decrypted_buffer.?;
+            }
+            defer if (decrypted_buffer) |b| self.allocator.free(b);
+
             // Decompress if needed
             const page_data = if (header.compression != .none)
-                try decompressData(compressed_data, header.compression, self.allocator)
+                try decompressData(input_buffer, header.compression, self.allocator)
             else
-                compressed_data;
-            defer if (header.compression != .none) self.allocator.free(page_data);
+                try self.allocator.dupe(u8, input_buffer);
+            defer self.allocator.free(page_data);
 
             // Write page to restore directory
             const page_path = try std.fmt.allocPrint(self.allocator, "{s}/page_{}.dat", .{ restore_dir, i });
@@ -452,9 +493,55 @@ pub const BackupManager = struct {
         defer self.allocator.free(wal_data);
         _ = try reader.read(wal_data);
 
+        // Decrypt if needed
+        var decrypted_wal: []u8 = undefined;
+        var is_decrypted = false;
+        if (header.encrypted) {
+            decrypted_wal = try decryptData(wal_data, self.enc_key, self.allocator);
+            is_decrypted = true;
+        } else {
+            decrypted_wal = wal_data;
+        }
+        defer if (is_decrypted) self.allocator.free(decrypted_wal);
+
         // Apply WAL records to restore directory
-        // This would involve replaying the WAL records
-        _ = restore_dir; // Implementation would apply WAL records here
+        // Create a temporary file for the WAL data to allow recoverOptimized to read it
+        const temp_wal_path = try std.fmt.allocPrint(self.allocator, "{s}/temp_restore_wal_{x}.log", .{ restore_dir, backup_id });
+        defer self.allocator.free(temp_wal_path);
+        {
+            const tmp_f = try std.fs.cwd().createFile(temp_wal_path, .{});
+            defer tmp_f.close();
+            try tmp_f.writeAll(decrypted_wal);
+        }
+        defer std.fs.cwd().deleteFile(temp_wal_path) catch {}; // Best effort cleanup
+
+        // Initialize PageManager for the restore directory
+        // Assume default page size of 4096 if not tracked in backup meta
+        var pm = page_manager.PageManager.initPersistent(self.allocator, 4096, restore_dir);
+        defer pm.deinit();
+
+        // Initialize Wal for recovery
+        const Wal = @import("wal").Wal;
+        var recovery_wal = Wal.init(self.allocator);
+
+        // Configure encryption if needed (best effort: replicate env check)
+        if (self.config.encryption) {
+            recovery_wal.enc_enabled = true;
+            if (std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY")) |raw| {
+                defer self.allocator.free(raw);
+                if (raw.len == 64) {
+                    var i: usize = 0;
+                    while (i < 32) : (i += 1) {
+                        const hi = std.fmt.charToDigit(raw[i * 2], 16) catch 0;
+                        const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch 0;
+                        recovery_wal.enc_key[i] = @as(u8, @intCast(hi * 16 + lo));
+                    }
+                }
+            }
+        }
+
+        // Run recovery
+        _ = try recovery_wal.recoverOptimized(&pm, temp_wal_path, true);
     }
 
     /// Apply WAL records up to target LSN
@@ -465,9 +552,35 @@ pub const BackupManager = struct {
             return error.TargetLSNBeyondCurrentWAL;
         }
 
-        // Apply records
-        // This would involve replaying WAL records up to target_lsn
-        _ = restore_dir; // Implementation would apply WAL records here
+        // Initialize PM for restore target
+        var pm = page_manager.PageManager.initPersistent(self.allocator, 4096, restore_dir);
+        defer pm.deinit();
+
+        // Get all segments potentially needed.
+        const segments = try self.wal_manager.getSegmentsSince(0);
+        defer self.allocator.free(segments);
+
+        // Replay each
+        var recovery_wal = wal.Wal.init(self.allocator);
+
+        if (self.config.encryption) {
+            recovery_wal.enc_enabled = true;
+            if (std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY")) |raw| {
+                defer self.allocator.free(raw);
+                if (raw.len == 64) {
+                    var i: usize = 0;
+                    while (i < 32) : (i += 1) {
+                        const hi = std.fmt.charToDigit(raw[i * 2], 16) catch 0;
+                        const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch 0;
+                        recovery_wal.enc_key[i] = @as(u8, @intCast(hi * 16 + lo));
+                    }
+                }
+            }
+        }
+
+        for (segments) |seg_path| {
+            _ = try recovery_wal.recoverOptimized(&pm, seg_path, true);
+        }
     }
 
     /// Run retention policy to remove old backups
@@ -556,17 +669,88 @@ fn generateBackupId() u128 {
 }
 
 fn compressData(data: []const u8, compression: CompressionType, allocator: std.mem.Allocator) ![]u8 {
-    // Simplified compression placeholder
-    // In production, would use actual compression libraries
-    _ = compression;
+    if (compression == .none) return allocator.dupe(u8, data);
+
+    var out = std.ArrayList(u8).init(allocator);
+    errdefer out.deinit();
+
+    if (compression == .zstd) {
+        var compressor = try std.compress.zstd.compressor(out.writer(), .{});
+        try compressor.writeAll(data);
+        try compressor.finish();
+        return out.toOwnedSlice();
+    }
+
     return allocator.dupe(u8, data);
 }
 
 fn decompressData(data: []const u8, compression: CompressionType, allocator: std.mem.Allocator) ![]u8 {
-    // Simplified decompression placeholder
-    // In production, would use actual compression libraries
-    _ = compression;
+    if (compression == .none) return allocator.dupe(u8, data);
+
+    if (compression == .zstd) {
+        var fbs = std.io.fixedBufferStream(data);
+        var decompressor = try std.compress.zstd.decompressor(fbs.reader());
+
+        var out = std.ArrayList(u8).init(allocator);
+        defer out.deinit();
+
+        var buf: [4096]u8 = undefined;
+        while (true) {
+            const n = try decompressor.read(&buf);
+            if (n == 0) break;
+            try out.appendSlice(buf[0..n]);
+        }
+        return out.toOwnedSlice();
+    }
+
     return allocator.dupe(u8, data);
 }
 
 // (Legacy placeholder tests removed; real CANARY tests live in tests/canary_backup_restore.zig)
+fn encryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u8 {
+    const NonceSize = 12;
+    const TagSize = 16;
+
+    var nonce: [NonceSize]u8 = undefined;
+    std.crypto.random.bytes(&nonce);
+
+    var tag: [TagSize]u8 = undefined;
+    const ciphertext = try allocator.alloc(u8, data.len);
+    errdefer allocator.free(ciphertext);
+
+    std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(ciphertext, &tag, data, "", nonce, key);
+
+    const result = try allocator.alloc(u8, NonceSize + TagSize + data.len);
+    @memcpy(result[0..NonceSize], &nonce);
+    @memcpy(result[NonceSize .. NonceSize + TagSize], &tag);
+    @memcpy(result[NonceSize + TagSize ..], ciphertext);
+
+    allocator.free(ciphertext);
+    return result;
+}
+
+fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u8 {
+    const NonceSize = 12;
+    const TagSize = 16;
+    const Overhead = NonceSize + TagSize;
+
+    if (data.len < Overhead) return error.InvalidEncryptedData;
+
+    var nonce: [NonceSize]u8 = undefined;
+    @memcpy(&nonce, data[0..NonceSize]);
+
+    var tag: [TagSize]u8 = undefined;
+    @memcpy(&tag, data[NonceSize .. NonceSize + TagSize]);
+
+    const ciphertext = data[Overhead..];
+
+    const plaintext = try allocator.alloc(u8, ciphertext.len);
+    errdefer allocator.free(plaintext);
+
+    std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, ciphertext, tag, "", nonce, key) catch {
+        allocator.free(plaintext);
+        return error.DecryptionFailed;
+    };
+
+    return plaintext;
+}

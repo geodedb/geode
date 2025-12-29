@@ -15,10 +15,22 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-# Add Python client to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "python"))
-
-from geode_client import Client, Connection
+# Try to import geode_client - it may be installed as a package or in a sibling directory
+_GEODE_CLIENT_AVAILABLE = False
+try:
+    # First try the installed package
+    from geode_client import Client, Connection
+    _GEODE_CLIENT_AVAILABLE = True
+except ImportError:
+    # Try adding Python client sibling directory to path
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "python"))
+    try:
+        from geode_client import Client, Connection
+        _GEODE_CLIENT_AVAILABLE = True
+    except ImportError:
+        # Client not available - will report error at runtime
+        Client = None
+        Connection = None
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -280,6 +292,22 @@ async def main():
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
+
+    # Check if Python client is available
+    if not _GEODE_CLIENT_AVAILABLE:
+        error_msg = (
+            "Python client (geode_client) is not installed.\n"
+            "Install it from: pip install geode-client\n"
+            "Or clone from: git@gitlab.com:devnw/geode/geode-client-python.git"
+        )
+        if args.json:
+            print(json.dumps({
+                "error": error_msg,
+                "summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0, "errors": 1}
+            }))
+        else:
+            print(f"Error: {error_msg}", file=sys.stderr)
+        sys.exit(1)
 
     # Load spec
     with open(args.spec) as f:

@@ -399,6 +399,11 @@ pub fn main() !void {
             // Demo: evaluate WHERE and RETURN using the evaluator over a small synthetic rowset {a:int, s:str}
             // P2-3: Use main GPA instead of page_allocator
             const ally = gpa;
+
+            // GAP-004: Initialize Time-Series Store
+            var ts_store = gql.timeseries.Store.init(ally);
+            defer ts_store.deinit();
+
             if (res.program.statements.len == 0) {
                 std.debug.print("demo-eval: no statements in file\n", .{});
                 return;
@@ -423,7 +428,8 @@ pub fn main() !void {
                         var r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "Carol" } };
                         var r4 = [_]eval.Value{ .{ .Int = 2 }, .{ .Null = {} } };
                         const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..], r4[0..] };
-                        const out = exec.runGroupedQuery(ally, q, names, rows, param_names.items, param_values.items, null) catch |e| {
+                        // GAP-004: Pass ts_store to executor
+                        const out = exec.runGroupedQuery(ally, q, names, rows, param_names.items, param_values.items, null, &ts_store) catch |e| {
                             std.debug.print("demo-eval(grouped): error {s}\n", .{@errorName(e)});
                             return;
                         };
@@ -474,7 +480,7 @@ pub fn main() !void {
                         try w.print("\n", .{});
                         var i: usize = 0;
                         while (i < Avals.len and i < Svals.len) : (i += 1) {
-                            const env = eval.Env{ .names = names, .values = &.{ Avals[i], Svals[i] }, .param_names = param_names.items, .param_values = param_values.items, .allocator = ally };
+                            const env = eval.Env{ .names = names, .values = &.{ Avals[i], Svals[i] }, .param_names = param_names.items, .param_values = param_values.items, .allocator = ally, .timeseries_store = &ts_store };
                             var pass = true;
                             if (q.where_clause) |wc| {
                                 const v = eval.evalExpr(ally, wc, env) catch |e| {

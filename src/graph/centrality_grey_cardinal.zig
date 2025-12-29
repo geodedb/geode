@@ -1,3 +1,12 @@
+//! Grey Cardinal Composite Centrality
+//!
+//! Aggregates multiple normalized centrality measures into a single score with configurable weights.
+//! Formula: score(v) = sum_i w_i * norm(metric_i(v))
+//! Metrics supported: PageRank, Eigenvector, Betweenness, Closeness (harmonic), Bridge/Leverage.
+//!
+//! Note: Individual metrics are computed with normalization enabled. The final composite
+//! score is also optionally normalized to [0, 1].
+
 const std = @import("std");
 const builders = @import("builders.zig");
 const pagerank = @import("centrality_pagerank.zig");
@@ -5,12 +14,6 @@ const eigen = @import("centrality_eigenvector.zig");
 const between = @import("centrality_betweenness.zig");
 const close = @import("centrality_closeness.zig");
 const bridge = @import("centrality_bridge_leverage.zig");
-
-// CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=GreyCardinalComposite; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_067_GreyCardinalComposite; BENCH=BenchmarkCANARY_REQ_GQL_067_GreyCardinalComposite; OWNER=graph; UPDATED=2025-09-21
-// Grey Cardinal Composite Centrality:
-// Aggregates multiple normalized centrality measures into a single score with configurable weights.
-// Formula: score(v) = sum_i w_i * norm(metric_i(v)) where metrics: PageRank, Eigenvector, Betweenness, Closeness (harmonic), Bridge/Leverage.
-// We compute each metric (with normalize=true) and then weight & sum; output optionally re-normalized.
 
 pub const Options = struct {
     weight_pagerank: f64 = 1.0,
@@ -112,7 +115,7 @@ pub fn compute(allocator: std.mem.Allocator, g: *builders.Graph, opts: Options) 
     return Result{ .node_ids = res_ids, .scores = scores };
 }
 
-test "TestCANARY_REQ_GQL_067_GreyCardinalComposite basic weighting" {
+test "Grey Cardinal Composite: basic weighting" {
     var g = builders.Graph.init(std.testing.allocator);
     defer g.deinit();
     // Simple graph: path of 5 plus extra leaf on middle to differentiate metrics
@@ -137,4 +140,21 @@ test "TestCANARY_REQ_GQL_067_GreyCardinalComposite basic weighting" {
     const score2 = res.scores[idx2];
     var j: usize = 0;
     while (j < res.scores.len) : (j += 1) if (j != idx2) try std.testing.expect(score2 >= res.scores[j]);
+}
+
+test "Grey Cardinal Composite: empty/single node" {
+    var g = builders.Graph.init(std.testing.allocator);
+    defer g.deinit();
+
+    // Empty
+    var res = try compute(std.testing.allocator, &g, .{});
+    defer res.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), res.scores.len);
+
+    // Single node
+    g.addNode(0);
+    var res2 = try compute(std.testing.allocator, &g, .{});
+    defer res2.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), res2.scores.len);
+    // Normalized score for single node is typically 0 (min==max) or handled by individual metrics
 }

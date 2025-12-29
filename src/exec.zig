@@ -244,6 +244,7 @@ pub fn runGroupedQuery(
     param_names: []const []const u8,
     param_values: []const eval.Value,
     timings: ?*AggStageTimings,
+    timeseries_store: ?*const @import("timeseries/timeseries.zig").Store,
 ) ![]const []const BindingValue {
     // Validate GROUP BY legality using planner first
     // P2-3: Pass allocator to planQuery
@@ -359,7 +360,7 @@ pub fn runGroupedQuery(
     const t_build_start = if (timings) |_| std.time.nanoTimestamp() else 0;
     for (input_rows) |vals| {
         // Make eval env for this row
-        const env: eval.Env = .{ .names = input_names, .values = vals, .param_names = param_names, .param_values = param_values, .allocator = allocator };
+        const env: eval.Env = .{ .names = input_names, .values = vals, .param_names = param_names, .param_values = param_values, .allocator = allocator, .timeseries_store = timeseries_store };
         // Evaluate keys
         var out_row = try allocator.alloc(BindingValue, key_len + aggs.items.len);
         // Keys
@@ -688,7 +689,7 @@ test "executor: COUNT(expr) vs COUNT(*)" {
     const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "g2" } };
     const r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "g2" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..] };
-    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null);
+    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null, null);
     defer allocator.free(out);
     try std.testing.expect(out.len == 2);
     // Validate both groups: counts should be (1,2)
@@ -717,7 +718,7 @@ test "executor: empty input yields no groups" {
     const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{s_id} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{"s"};
     const rows: []const []eval.Value = &.{};
-    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null);
+    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null, null);
     defer allocator.free(out);
     try std.testing.expect(out.len == 0);
 }
@@ -735,7 +736,7 @@ test "executor: multi-key GROUP BY counts" {
     const r1 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "y" } };
     const r2 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "z" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..] };
-    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null);
+    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null, null);
     defer allocator.free(out);
     try std.testing.expect(out.len == 2);
 }
@@ -766,7 +767,7 @@ test "executor: complex HAVING with SUM/AVG/COUNT and projection" {
     const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "A" } };
     const r3 = [_]eval.Value{ .{ .Int = 10 }, .{ .Str = "B" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..] };
-    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null);
+    const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null, null);
     defer allocator.free(out);
     // Expect only group A remains, with columns: g, SUM(a)=4, AVG(a)=1
     try std.testing.expect(out.len == 1);
@@ -790,7 +791,7 @@ test "executor: COUNT on NULL-only inputs and COUNT(*)" {
     const r0 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
     const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
     const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
-    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null, null);
     defer allocator.free(out);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Int and out[0][0].Int == 0);

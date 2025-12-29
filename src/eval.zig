@@ -16,11 +16,9 @@ const value_types = @import("value_types.zig");
 // Phase 5 M5.2: Re-export EvalError from value_types module for backward compatibility
 pub const EvalError = value_types.EvalError;
 
-
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-003; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypeReexport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Re-export Value from value_types module for backward compatibility
 pub const Value = value_types.Value;
-
 
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-004; FEATURE="Circular Dependency Resolution"; ASPECT=DecTypeReexport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Re-export Dec from value_types module for backward compatibility
@@ -30,12 +28,10 @@ const Dec = value_types.Dec;
 // Phase 5 M5.2: Use toDec from value_types module
 const toDec = value_types.toDec;
 
-
 // CANARY: REQ=REQ-MEM-FIX-004; FEATURE="MemorySafety"; ASPECT=EnvOwnership; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-25
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-006; FEATURE="Circular Dependency Resolution"; ASPECT=EnvTypeReexport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Re-export Env from value_types module for backward compatibility
 pub const Env = value_types.Env;
-
 
 // CANARY: REQ=REQ-M5.3-EVAL-CALLBACKS-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksStorage; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.3: Module-level storage for execution callbacks
@@ -57,11 +53,9 @@ fn getExecutionCallbacks() evaluator_adapter.ExecutionCallbacks {
     };
 }
 
-
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-007; FEATURE="Circular Dependency Resolution"; ASPECT=NullCheck; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use isNull from value_types module
 const isNull = value_types.isNull;
-
 
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-008; FEATURE="Circular Dependency Resolution"; ASPECT=Truthy; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use truthy from value_types module
@@ -91,7 +85,6 @@ fn extValueListToValueList(allocator: std.mem.Allocator, ext_values: []ExtValue)
     return result;
 }
 
-
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-001; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotionImport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
 const type_promotion = @import("eval/type_promotion.zig");
@@ -108,7 +101,6 @@ const heapValueToEvalValue = type_promotion.heapValueToEvalValue;
 const cmpI128 = type_promotion.cmpI128;
 const cmpToBool = type_promotion.cmpToBool;
 const cmpIntsOp = type_promotion.cmpIntsOp;
-
 
 fn and3(a: Value, b: Value) Value {
     // Three-valued logic for AND: true ∧ x = x; false ∧ x = false; null ∧ true = null; null ∧ false = false; null ∧ null = null
@@ -231,7 +223,6 @@ fn regexRec(s: []const u8, p: []const u8, si0: usize, pi0: usize, allow_suffix_e
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-009; FEATURE="Circular Dependency Resolution"; ASPECT=ValueEquality; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use eqVals from value_types module
 const eqVals = value_types.eqVals;
-
 
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-007; FEATURE="Phase 6 Modularization"; ASPECT=IntComparison; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Integer comparison function moved to eval/type_promotion.zig
@@ -533,7 +524,6 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
 // Phase 5 M5.2: Use pow10 from value_types module
 const pow10 = value_types.pow10;
 
-
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-004; FEATURE="Phase 6 Modularization"; ASPECT=ComparisonHelpers; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Comparison helper functions moved to eval/type_promotion.zig
 // Functions: cmpI128, cmpToBool
@@ -672,7 +662,6 @@ fn transformPlusQuantifier(pattern: []const u8, buf: *[256]u8) ![]const u8 {
 // Phase 5 M5.2: Use stringify from value_types module
 const stringify = value_types.stringify;
 
-
 pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value {
     return switch (e) {
         .Null => Value{ .Null = {} },
@@ -802,6 +791,58 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 },
                 else => break :blk_call .{ .Null = {} }, // Not a simple function call
             };
+
+            // GAP-004: Wiring GQL to Time-Series
+            if (std.mem.eql(u8, function_name, "timeseries.value")) {
+                if (call.args.len != 3) return EvalError.InvalidArgs;
+                if (env.timeseries_store) |store_ptr| {
+                    // Cast to mutable pointer because Store methods might not be const-correct yet,
+                    // though getSeries should be const. current getSeries takes *Store.
+                    // We need to support *const Store if possible, or cast cast away const (unsafe) or change getSeries to *const.
+                    // Let's assume store_ptr is *const... check value_types definition.
+                    // value_types: ?*const Store.
+                    // timeseries.zig: getSeries takes *Store.
+                    // I need to change getSeries to take *const Store in timeseries.zig?
+                    // Yes, getSeries and hashKey should be *const.
+
+                    // Ignoring const correctness for a moment, let's fix timeseries.zig first?
+                    // Or cast.
+                    // Zig is strict.
+                    // Let's modify timeseries.zig to use *const Store for read ops.
+
+                    // WAIT. I already called replae_file_content on timeseries.zig.
+                    // I will fail if I try to use it with *const.
+
+                    // I should update timeseries.zig again to make getSeries const?
+                    // Or just cast in eval.zig? "(const_cast)" equivalent?
+                    // @constCast(ptr).
+
+                    const store = @constCast(store_ptr); // Temporary workaround if Store requires mut
+
+                    const device_id_val = try evalExpr(allocator, call.args[0].*, env);
+                    const metric_val = try evalExpr(allocator, call.args[1].*, env);
+                    const ts_val = try evalExpr(allocator, call.args[2].*, env);
+
+                    if (device_id_val != .Int or metric_val != .Str or ts_val != .Int) {
+                        return EvalError.TypeMismatch;
+                    }
+
+                    const ts_module = @import("timeseries/timeseries.zig");
+                    const key = ts_module.SeriesKey{
+                        .device_id = device_id_val.Int,
+                        .metric = metric_val.Str,
+                    };
+
+                    if (store.getSeries(key)) |series| {
+                        if (series.valueAt(ts_val.Int)) |pt| {
+                            break :blk_call .{ .Int = pt.value };
+                        }
+                    }
+                    break :blk_call .{ .Null = {} };
+                } else {
+                    break :blk_call .{ .Null = {} };
+                }
+            }
 
             // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-10-14
             // Handle all(x IN list WHERE condition) - returns true if all elements match the condition

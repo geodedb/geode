@@ -61,7 +61,7 @@ pub const Store = struct {
         var it = self.by_key.valueIterator();
         while (it.next()) |sp| {
             const s = sp.*;
-            s.points.deinit();
+            s.points.deinit(self.allocator);
             self.allocator.free(s.key.metric);
             self.allocator.destroy(s);
         }
@@ -76,6 +76,11 @@ pub const Store = struct {
         var out: u128 = 0;
         out = (@as(u128, x) << 64) | @as(u128, x ^ 0x9e3779b97f4a7c15);
         return out;
+    }
+
+    pub fn getSeries(self: *Store, key: SeriesKey) ?*Series {
+        const hk = self.hashKey(key);
+        return self.by_key.get(hk);
     }
 
     fn getOrCreateSeries(self: *Store, key: SeriesKey) !*Series {

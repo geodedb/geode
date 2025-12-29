@@ -64,8 +64,12 @@ setup: $(VENV_DIR)
 	@$(VENV_PIP) install --upgrade pip
 	@echo "Installing test harness dependencies..."
 	@$(VENV_PIP) install -r requirements.txt
-	@echo "Installing Python client and its dependencies..."
-	@$(VENV_PIP) install -r ../python/requirements.txt
+	@if [ -f "../python/requirements.txt" ]; then \
+		echo "Installing Python client dependencies..."; \
+		$(VENV_PIP) install -r ../python/requirements.txt; \
+	else \
+		echo "Python client moved to separate repository (geode-client-python)"; \
+	fi
 	@echo "✓ Python dependencies installed in $(VENV_DIR)"
 	@echo "Making scripts executable..."
 	@chmod +x runners/python_runner.py 2>/dev/null || true

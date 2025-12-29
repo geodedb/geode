@@ -116,6 +116,8 @@ pub const Env = struct {
     allocator: std.mem.Allocator,
     /// Track whether this Env owns its arrays and should free them
     owned: bool = false,
+    /// Reference to TimeSeries store (GAP-004 wiring)
+    timeseries_store: ?*const @import("timeseries/timeseries.zig").Store = null,
 
     /// Lookup a variable by name, checking regular bindings first, then parameters
     pub fn get(self: Env, name: []const u8) ?Value {
@@ -186,6 +188,7 @@ pub const Env = struct {
             .param_values = self.param_values,
             .allocator = allocator,
             .owned = true, // New Env owns its newly allocated arrays
+            .timeseries_store = self.timeseries_store,
         };
     }
 };
