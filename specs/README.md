@@ -69,6 +69,8 @@ This directory contains specification and research documents for Geode's feature
 
 ### `/security/` - Field-Level Encryption & Key Management
 - `field-level-enc-research-report.md` - Production-ready FLE spec (AEAD, key hierarchy, RBAC)
+- `field-level-enc-research-report-claude.md` - Detailed crypto analysis (ChaCha20-Poly1305 vs AES-GCM)
+- `field-level-enc-research-report-pqc-PR.md` - Post-quantum cryptography extensions
 - `enc-verification-testing.md` - Encryption verification & testing
 - **Status**: Implementation-Ready
 

@@ -1,22 +1,21 @@
 # Docker Documentation
 
-Documentation for Docker deployment and development with Geode.
+Complete Docker documentation for Geode deployment and development.
 
-## Quick Start
+## Main Guide
 
-- **[QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md)** - Getting started with Docker
+- **[DOCKER.md](DOCKER.md)** - Comprehensive Docker guide covering:
+  - Quick Start
+  - Pre-built Images
+  - Development Environment
+  - Production Deployment
+  - Distributed Deployment
+  - Security & FIPS
+  - Troubleshooting
 
-## Development
+## Reference Documents
 
-- **[DOCKER_DEV.md](DOCKER_DEV.md)** - Development environment setup
-- **[DOCKER_DEV_SETUP.md](DOCKER_DEV_SETUP.md)** - Detailed setup instructions
-- **[DOCKER_INTEGRATION_TESTS.md](DOCKER_INTEGRATION_TESTS.md)** - Running integration tests
-
-## Deployment
-
-- **[DOCKER_DEPLOY.md](DOCKER_DEPLOY.md)** - Production deployment guide
-- **[DOCKER.md](DOCKER.md)** - General Docker usage
-
-## Configuration
-
-- **[DOCKER_MSQUIC_FIPS_COMPLETION.md](DOCKER_MSQUIC_FIPS_COMPLETION.md)** - FIPS compliance configuration
+- **[DOCKER_INTEGRATION_TESTS.md](DOCKER_INTEGRATION_TESTS.md)** - Integration test fixes and configuration
+- **[DOCKER_BUILD_FIXES.md](DOCKER_BUILD_FIXES.md)** - Build troubleshooting and fixes
+- **[DOCKER_MSQUIC_FIPS_COMPLETION.md](DOCKER_MSQUIC_FIPS_COMPLETION.md)** - FIPS/MSQUIC implementation details
+- **[DOCKER_ZIG_0.15.1_FIX.md](DOCKER_ZIG_0.15.1_FIX.md)** - Zig version specific fixes

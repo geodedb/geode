@@ -1,12 +1,23 @@
-# Docker Build Guide
+# Geode Docker Guide
 
-This directory contains optimized Docker configurations for building and running Geode in production.
+Complete documentation for Docker deployment and development with Geode.
 
-## CI/CD Docker Images
+## Table of Contents
 
-The recommended approach is to use pre-built Docker images from the CI/CD pipeline, which are built from pre-compiled binaries and avoid slow recompilation.
+- [Quick Start](#quick-start)
+- [Pre-built Images](#pre-built-images)
+- [Development Environment](#development-environment)
+- [Production Deployment](#production-deployment)
+- [Distributed Deployment](#distributed-deployment)
+- [Configuration Reference](#configuration-reference)
+- [Security & FIPS](#security--fips)
+- [Troubleshooting](#troubleshooting)
 
-### Quick Start
+---
+
+## Quick Start
+
+### Using Pre-built Images (Fastest)
 
 ```bash
 # Pull from GitHub Container Registry
@@ -15,193 +26,464 @@ docker pull ghcr.io/spyderorg/geode:latest
 # Run the container
 docker run -d -p 8443:8443/udp --name geode ghcr.io/spyderorg/geode:latest
 
-# With GPU support
-docker run -d -p 8443:8443/udp --gpus all --name geode ghcr.io/spyderorg/geode:gpu
-
-# Alpine-based (smaller size)
-docker run -d -p 8443:8443/udp --name geode ghcr.io/spyderorg/geode:alpine
+# Test connectivity
+docker exec geode geode query "RETURN 1 AS health" --server 127.0.0.1:8443
 ```
 
-## Available Images
+### Development Environment (5 Minutes)
+
+```bash
+# Start development environment
+./dev.sh start
+
+# Open development shell
+./dev.sh shell
+
+# Build Geode
+zb
+
+# Run tests
+make test
+```
+
+---
+
+## Pre-built Images
+
+### Available Variants
 
 | Image Tag | Base | Size | Use Case |
 |-----------|------|------|----------|
 | `latest` | Debian Bookworm | ~250MB | General purpose, recommended |
 | `alpine` | Alpine 3.19 | ~80MB | Minimal size, musl-based |
 | `gpu` | NVIDIA CUDA 12.6 | ~1.2GB | GPU acceleration support |
+| `prod` | Distroless | ~180MB | Production, minimal attack surface |
 
-## Local Development Builds
-
-For local development, you can build images from the CI Dockerfiles after compiling binaries:
+### Pull Commands
 
 ```bash
-# Build binaries first
-zig build -Doptimize=ReleaseSafe
+# Standard (recommended)
+docker pull ghcr.io/spyderorg/geode:latest
 
-# Build Docker image using pre-built binaries
-docker build -f Dockerfile.ci -t geode:local .
+# Alpine (smaller)
+docker pull ghcr.io/spyderorg/geode:alpine
 
-# Or for Alpine
-zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe
-docker build -f Dockerfile.ci.alpine -t geode:alpine-local .
+# GPU support
+docker pull ghcr.io/spyderorg/geode:gpu
+
+# Production optimized
+docker pull ghcr.io/spyderorg/geode:prod
 ```
 
-## CI/CD Dockerfiles
+### Running Pre-built Images
 
-The CI/CD pipeline uses lightweight Dockerfiles that avoid recompilation:
+```bash
+# Basic server
+docker run -d -p 8443:8443/udp ghcr.io/spyderorg/geode:latest
 
-### 1. Dockerfile.ci (Debian-based)
-- Uses pre-built binaries from pipeline artifacts
-- Debian Bookworm base for compatibility
-- Runtime dependencies only
-- ~250MB final size
+# With persistent data
+docker run -d -p 8443:8443/udp \
+  -v ./data:/data \
+  ghcr.io/spyderorg/geode:latest --data-dir /data
 
-### 2. Dockerfile.ci.alpine (Alpine-based)
-- Uses musl-compiled binaries
-- Alpine 3.19 base for minimal size
-- Static linking for portability
-- ~80MB final size
+# With TLS certificates
+docker run -d -p 8443:8443/udp \
+  -v ./certs:/certs:ro \
+  -v ./data:/data \
+  ghcr.io/spyderorg/geode:latest \
+  --data-dir /data \
+  --cert /certs/server.crt \
+  --key /certs/server.key
 
-### 3. Dockerfile.ci.gpu (GPU-enabled)
-- Uses pre-built binaries from pipeline artifacts
-- NVIDIA CUDA 12.6 base for GPU support
-- Vulkan support included
-- ~1.2GB final size
+# With GPU support
+docker run -d -p 8443:8443/udp --gpus all ghcr.io/spyderorg/geode:gpu
+```
 
-## Key Optimizations
+---
 
-### 1. No Recompilation in Docker
-- Binaries are compiled once in the CI pipeline
-- Docker images simply copy pre-built binaries
-- **Result**: 10x faster Docker builds, no disk space issues
+## Development Environment
 
-### 2. Multi-Platform Support
-- amd64 (x86_64) and arm64 (ARM64) support
-- Built from native artifacts for each platform
-- No QEMU emulation overhead during builds
+A complete Docker-based development environment replicating the Nix flake setup.
 
-### 3. Security Scanning
-- All images scanned with Trivy for vulnerabilities
-- Results uploaded to GitHub Security tab
-- Automated scanning on every build
+### What's Included
 
-### 4. Minimal Runtime Dependencies
-- Only ca-certificates, openssl, and libvulkan1
-- No build tools in final images
-- Non-root user (geode:10000)
+- **Zig 0.15.1** - Primary build system
+- **Python 3.12** - Test harness and geodetestlab
+- **OpenSSL 3.3.2 with FIPS** - Enterprise cryptography
+- **MsQUIC v2.5.4** - High-performance QUIC implementation
+- **HashiCorp Vault** - Secrets management
+- **MinIO** - S3-compatible storage
+- **Redis** - Caching layer
+- **Optional**: Prometheus + Grafana monitoring
 
-### 5. .dockerignore
-Excludes unnecessary files from build context:
-- Documentation (~50MB)
-- Test files (~100MB)
-- Build artifacts (~500MB)
-- **Result**: 95% smaller build context
+### Prerequisites
 
-## GitHub Actions Integration
+- Docker 20.10+
+- Docker Compose 1.29+
+- 8GB+ RAM
+- 20GB+ disk space
 
-Docker builds are integrated into `.github/workflows/build.yml` and `.github/workflows/release.yml`:
+### Setup & Usage
 
-### Build Pipeline Integration
-1. **Build binaries** in build-and-test job
-2. **Upload artifacts** to GitHub Actions
-3. **Download artifacts** in docker-build job
-4. **Build Docker images** using pre-built binaries
-5. **Security scan** with Trivy
-6. **Push to registry** (ghcr.io)
+```bash
+# Start environment (first build ~10 minutes)
+./dev.sh start
 
-### Build Cache
+# Check service health
+./dev.sh status
+
+# Enter development shell
+./dev.sh shell
+
+# Build Geode (inside shell)
+zb          # Debug build
+zbr         # Release build
+zbt         # Build with tests
+
+# Run tests
+make test
+make geodetestlab
+make verify-fast
+
+# Start Geode server
+./zig-out/bin/geode serve --listen 127.0.0.1:9999
+
+# View logs
+./dev.sh logs -f
+
+# Stop environment
+./dev.sh stop
+
+# Full cleanup (removes volumes)
+./dev.sh down
+```
+
+### Development Commands
+
+| Command | Description |
+|---------|-------------|
+| `./dev.sh start` | Start development environment |
+| `./dev.sh stop` | Stop development environment |
+| `./dev.sh restart` | Restart development environment |
+| `./dev.sh shell` | Open interactive shell |
+| `./dev.sh exec <cmd>` | Execute command in container |
+| `./dev.sh build` | Build geode project |
+| `./dev.sh test` | Run tests |
+| `./dev.sh clean` | Clean build artifacts |
+| `./dev.sh logs [-f]` | View logs |
+| `./dev.sh status` | Show service status |
+| `./dev.sh down` | Remove containers and volumes |
+| `./dev.sh rebuild` | Rebuild Docker image |
+| `./dev.sh monitoring` | Start with Prometheus + Grafana |
+
+### Service Access
+
+| Service | Port | Credentials |
+|---------|------|-------------|
+| Vault | 8200 | Token: `geode-dev-token` |
+| MinIO Console | 9001 | `admin` / `geode-dev-secret-123` |
+| Redis | 6379 | Password: `geode-dev-password` |
+| Prometheus | 9090 | None |
+| Grafana | 3000 | `admin` / `geode-dev-password` |
+
+---
+
+## Production Deployment
+
+### Building Production Images
+
+```bash
+# Build complete production image
+./docker-build.sh all geode:latest
+
+# Or build specific stages
+./docker-build.sh openssl     # OpenSSL FIPS only
+./docker-build.sh msquic      # MsQUIC only
+./docker-build.sh builder     # Full Geode build
+./docker-build.sh runtime     # Production runtime
+```
+
+### Multi-Stage Build Architecture
+
+1. **Stage 1 - OpenSSL FIPS Builder**: Compiles OpenSSL 3.3.2 with FIPS module
+2. **Stage 2 - MsQUIC Builder**: Builds Microsoft MsQUIC v2.5.5
+3. **Stage 3 - Geode Builder**: Compiles Geode with all dependencies
+4. **Stage 4 - Runtime**: Minimal Debian base with only runtime dependencies
+
+### Production Deployment
+
+```bash
+# Run with production configuration
+docker run -d \
+  --name geode-prod \
+  --restart=unless-stopped \
+  -p 8443:8443/udp \
+  -v /var/lib/geode:/data \
+  -v /etc/geode/certs:/certs:ro \
+  -e LOG_LEVEL=warn \
+  geode:latest \
+  --data-dir /data \
+  --cert /certs/server.crt \
+  --key /certs/server.key \
+  --listen 0.0.0.0:8443
+```
+
+### Docker Compose (Single Node)
+
 ```yaml
-cache-from: type=gha,scope=debian
-cache-to: type=gha,mode=max,scope=debian
+version: '3.8'
+
+services:
+  geode:
+    image: ghcr.io/spyderorg/geode:latest
+    container_name: geode-server
+    ports:
+      - "8443:8443/udp"
+      - "9090:9090"
+    volumes:
+      - geode-data:/data
+      - ./certs:/certs:ro
+    environment:
+      - GEODE_LOG_LEVEL=info
+      - GEODE_MAX_CONNECTIONS=1000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:8443"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  geode-data:
 ```
-- Uses GitHub Actions cache
-- Separate cache scopes per variant
-- **Result**: Instant Docker builds (binaries already compiled)
 
-## Image Variants
+---
 
-| Dockerfile | Base | Binaries | Use Case |
-|------------|------|----------|----------|
-| `Dockerfile.ci` | Debian Bookworm | GNU libc | General purpose, maximum compatibility |
-| `Dockerfile.ci.alpine` | Alpine 3.19 | musl libc | Minimal size, static linking |
-| `Dockerfile.ci.gpu` | NVIDIA CUDA 12.6 | GNU libc | GPU acceleration, Vulkan support |
+## Distributed Deployment
 
-No build arguments required - images use pre-built binaries from artifacts.
+Deploy a 3-node Geode cluster with Raft consensus.
 
-## Image Sizes
+### Architecture
 
-| Variant | Uncompressed | Compressed (registry) |
-|---------|--------------|----------------------|
-| Debian (latest) | ~250MB | ~90MB |
-| Alpine | ~80MB | ~30MB |
-| GPU (CUDA) | ~1.2GB | ~450MB |
+```
+       ┌──────────────┐
+       │   HAProxy    │
+       │  LB (7500)   │
+       └──────┬───────┘
+              │
+    ┌─────────┴──────────┬──────────┐
+    │                    │          │
+┌───▼────┐         ┌────▼────┐ ┌───▼────┐
+│ Leader │◄────────► Follow-1│ │Follow-2│
+│  7567  │  Raft   │  7569   │ │  7571  │
+└────────┘         └─────────┘ └────────┘
+```
 
-## Security Features
+### Quick Start
 
-1. **Non-root user**: Runs as `geode` user (UID 10000)
-2. **Minimal attack surface**: Only runtime dependencies
-3. **Health checks**: Built-in container health monitoring
-4. **No build tools**: gcc, make, etc. not in final image
+```bash
+# Start distributed cluster
+make docker-up-distributed
+
+# Or manually:
+docker-compose -f docker-compose.distributed.yml up -d
+
+# Check cluster status
+docker-compose -f docker-compose.distributed.yml ps
+
+# View logs
+docker-compose -f docker-compose.distributed.yml logs -f
+
+# Stop cluster
+docker-compose -f docker-compose.distributed.yml down
+```
+
+### Cluster Environment Variables
+
+```bash
+NODE_ID=node-1
+NODE_ROLE=leader|follower
+CLUSTER_NAME=geode-cluster
+GEODE_DISTRIBUTED=true
+GEODE_SHARD_COUNT=3
+GEODE_REPLICATION_FACTOR=2
+```
+
+---
+
+## Configuration Reference
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GEODE_LOG_LEVEL` | Log level (debug, info, warn, error) | info |
+| `GEODE_MAX_CONNECTIONS` | Maximum concurrent connections | 1000 |
+| `GEODE_CACHE_SIZE` | Query cache size | 1GB |
+| `GEODE_WAL_SIZE_LIMIT` | WAL size limit | 10GB |
+| `LOG_LEVEL` | Alternative log level env var | error |
+| `FIPS_MODE` | Enable FIPS mode | enabled |
+
+### Volume Mounts
+
+| Path | Description |
+|------|-------------|
+| `/data` | Persistent data storage (WAL, pages) |
+| `/certs` | TLS certificates |
+| `/var/log/geode` | Application logs |
+| `/config` | Configuration files |
+
+### Ports
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| 8443 | UDP | QUIC with TLS 1.3 (primary) |
+| 9090 | TCP | Prometheus metrics endpoint |
+
+---
+
+## Security & FIPS
+
+### FIPS Mode
+
+OpenSSL FIPS module is enabled by default. Verify with:
+
+```bash
+docker run --rm ghcr.io/spyderorg/geode:latest openssl version -a
+
+# Check FIPS providers
+docker exec <container> openssl list -providers
+```
+
+### Security Best Practices
+
+```yaml
+services:
+  geode:
+    image: ghcr.io/spyderorg/geode:prod
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+```
+
+### TLS Configuration
+
+```bash
+# Generate certificates
+docker run --rm -v ./certs:/certs ghcr.io/spyderorg/geode:latest \
+  cert_gen --output-dir /certs
+
+# Verify certificates
+openssl x509 -in ./certs/server.crt -text -noout
+```
+
+---
 
 ## Troubleshooting
 
-### Build fails with missing binaries
-- Ensure you've compiled binaries first: `zig build -Doptimize=ReleaseSafe`
-- For Alpine: Use musl target: `zig build -Dtarget=x86_64-linux-musl`
-- Check `zig-out/bin/` directory exists and contains binaries
+### Container Won't Start
 
-### Permission denied
-- Images run as non-root user `geode:10000`
-- Mount volumes with proper ownership: `docker run -v ./data:/data:rw`
-- Or use host UID mapping: `docker run --user $(id -u):$(id -g) -v ./data:/data:rw`
-- Or override user: `docker run --user root`
-
-### GPU not detected
 ```bash
-# Verify NVIDIA runtime
-docker run --rm --gpus all nvidia/cuda:12.6.0-base nvidia-smi
+# Check logs
+docker logs <container>
+docker-compose logs geode
 
-# If successful, Geode should work
-docker run --rm --gpus all geode:latest query "RETURN gpu.available()"
+# Verify port availability
+netstat -uapn | grep 8443
 ```
 
-## Performance Benchmarks
+### Health Check Failures
 
-| Metric | Old (Compilation) | New (Artifacts) | Improvement |
-|--------|-------------------|-----------------|-------------|
-| Docker build time | 15min | 30sec | 97% faster |
-| CI build minutes | 15 | 0.5 | 97% reduction |
-| Image size (Debian) | 3.2GB | 250MB | 92% smaller |
-| Image size (Alpine) | N/A | 80MB | Minimal |
-| Disk space issues | Frequent | Never | 100% reliable |
-| Multi-platform builds | Slow (QEMU) | Fast (native) | 10x faster |
-
-## Advanced Usage
-
-### Local development with cache
 ```bash
-# Export cache to local directory
-docker build --cache-to type=local,dest=/tmp/docker-cache \
-             -f Dockerfile.prod -t geode .
-
-# Use cache on next build
-docker build --cache-from type=local,src=/tmp/docker-cache \
-             -f Dockerfile.prod -t geode .
+# Test manually
+docker exec <container> geode query "RETURN 1" --server 127.0.0.1:8443
 ```
 
-### Multi-platform builds
+### Permission Errors
+
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 \
-                    -f Dockerfile.prod -t geode:multi .
+# Fix ownership (from host)
+sudo chown -R $(id -u):$(id -g) .
+
+# Or set UID/GID in .env
+echo "USER_UID=$(id -u)" > .env
+echo "USER_GID=$(id -g)" >> .env
+./dev.sh rebuild
 ```
+
+### Port Conflicts
+
+Edit `docker-compose.yml` and change the host port:
+
+```yaml
+ports:
+  - "9443:8443/udp"  # Change host port (left side)
+```
+
+### Build Failures
+
+```bash
+# Rebuild from scratch
+./dev.sh rebuild
+
+# Try simple Dockerfile
+docker build -f Dockerfile.simple -t geode:latest .
+```
+
+### Debug Mode
+
+```bash
+# Enable debug logging
+docker run -e GEODE_LOG_LEVEL=debug ghcr.io/spyderorg/geode:latest
+
+# Attach for debugging
+docker exec -it <container> /bin/sh
+```
+
+### Performance Tuning
+
+```bash
+# Increase UDP buffer sizes for QUIC
+docker run \
+  --sysctl net.core.rmem_max=26214400 \
+  --sysctl net.core.wmem_max=26214400 \
+  --ulimit nofile=65536:65536 \
+  ghcr.io/spyderorg/geode:latest
+```
+
+### Resource Limits
+
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: '4'
+      memory: 8G
+    reservations:
+      cpus: '2'
+      memory: 4G
+```
+
+---
 
 ## Related Files
 
-- `Dockerfile.ci` - Lightweight Debian-based image (uses pre-built binaries)
-- `Dockerfile.ci.alpine` - Lightweight Alpine-based image (uses musl binaries)
-- `Dockerfile.ci.gpu` - GPU-enabled image (NVIDIA CUDA base)
-- `Dockerfile` - Legacy multi-stage build (slower, for reference)
-- `Dockerfile.prod` - Legacy production build (slower, for reference)
-- `.dockerignore` - Build context exclusions
-- `.github/workflows/build.yml` - Main CI/CD pipeline with Docker builds
-- `.github/workflows/release.yml` - Release pipeline with Docker builds
+- `Dockerfile` - Multi-stage production build
+- `Dockerfile.dev` - Development environment
+- `Dockerfile.simple` - Fallback with inline Zig installation
+- `Dockerfile.prod` - Distroless production image
+- `docker-compose.yml` - Standard deployment
+- `docker-compose.dev.yml` - Development orchestration
+- `docker-compose.distributed.yml` - 3-node cluster
+- `dev.sh` - Development helper script
+- `docker-build.sh` - Build orchestration script
+
+---
+
+*Last Updated: December 2025*
