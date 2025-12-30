@@ -2234,6 +2234,35 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
+            // Handle direct Date value property access (from date() function)
+            if (target == .Date) {
+                const datetime_module = @import("types/datetime.zig");
+                const ymd = datetime_module.Date.dateFromDays(target.Date.days_since_epoch);
+
+                if (std.mem.eql(u8, member.field, "year")) {
+                    break :blk_member Value{ .Int = ymd.year };
+                } else if (std.mem.eql(u8, member.field, "month")) {
+                    break :blk_member Value{ .Int = ymd.month };
+                } else if (std.mem.eql(u8, member.field, "day")) {
+                    break :blk_member Value{ .Int = ymd.day };
+                }
+            }
+
+            // Handle direct Time value property access (from time() function)
+            if (target == .Time) {
+                const hours = @divFloor(target.Time.micros_since_midnight, 3600_000_000);
+                const minutes = @divFloor(@rem(target.Time.micros_since_midnight, 3600_000_000), 60_000_000);
+                const seconds = @divFloor(@rem(target.Time.micros_since_midnight, 60_000_000), 1_000_000);
+
+                if (std.mem.eql(u8, member.field, "hour")) {
+                    break :blk_member Value{ .Int = @intCast(hours) };
+                } else if (std.mem.eql(u8, member.field, "minute")) {
+                    break :blk_member Value{ .Int = @intCast(minutes) };
+                } else if (std.mem.eql(u8, member.field, "second")) {
+                    break :blk_member Value{ .Int = @intCast(seconds) };
+                }
+            }
+
             // If target is an ExtValue, handle datetime property access
             if (target == .ExtValue) {
                 const ext = target.ExtValue;

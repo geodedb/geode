@@ -36,7 +36,7 @@ GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-python client-test-go client-test-rust client-test-zig rust-build-docker rust-test-docker
 .PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
-.PHONY: geodetestlab geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
+.PHONY: geodetestlab geodetestlab-spec geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
 .PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
 .PHONY: client-test-harness client-test-setup client-test-basic client-test-all client-test-html client-test-coverage client-test-comprehensive
 .PHONY: deps deps-check
@@ -456,6 +456,29 @@ load-dataset: build
 # Geodetestlab test suite targets
 geodetestlab: build geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25 client-test-comprehensive
 	@echo "All geodetestlab tests complete"
+
+# Run a specific geodetestlab spec file
+# Usage: make geodetestlab-spec SPEC=fle_comprehensive_security.yml
+#        make geodetestlab-spec SPEC=fle_comprehensive  (partial match)
+#        make geodetestlab-spec SPEC=geodetestlab/specs/geode_auth.yml (full path)
+SPEC ?=
+geodetestlab-spec: build
+	@if [ -z "$(SPEC)" ]; then \
+		echo "Error: SPEC variable required"; \
+		echo "Usage: make geodetestlab-spec SPEC=<spec_name_or_path>"; \
+		echo ""; \
+		echo "Examples:"; \
+		echo "  make geodetestlab-spec SPEC=fle_comprehensive_security.yml"; \
+		echo "  make geodetestlab-spec SPEC=fle_comprehensive"; \
+		echo "  make geodetestlab-spec SPEC=geode_auth"; \
+		echo ""; \
+		echo "Available specs:"; \
+		ls -1 geodetestlab/specs/*.yml | xargs -n1 basename | head -20; \
+		echo "  ... (use 'ls geodetestlab/specs/' to see all)"; \
+		exit 1; \
+	fi
+	@echo "Running geodetestlab spec: $(SPEC)"
+	@python3 scripts/test/extended_test_runner.py "$(SPEC)"
 
 # Run comprehensive geodetestlab test suite
 geodetestlab-comprehensive: build

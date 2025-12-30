@@ -1,5 +1,5 @@
 const std = @import("std");
-const hmac_mod = @import("../crypto/hmac.zig");
+const hmac_mod = @import("fle_hmac");
 
 // CANARY: FLE_BLIND_INDEX - Blind Index for Searchable Encrypted Fields
 // CANARY: REQ=REQ-FLE-BI-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15

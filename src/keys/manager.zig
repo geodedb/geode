@@ -1,6 +1,7 @@
 const std = @import("std");
-const types = @import("types.zig");
-const hkdf = @import("../crypto/hkdf.zig");
+const types = @import("fle_key_types");
+const fle_aead = @import("fle_aead");
+const hkdf = @import("fle_hkdf");
 
 // CANARY: FLE_KEY_MANAGER - Hierarchical Key Manager with Cache and Rotation
 // CANARY: REQ=REQ-FLE-KEY-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
@@ -215,6 +216,24 @@ pub const KeyManager = struct {
         return new_version;
     }
 
+    /// Wrap a key (encrypt it) using a wrapping key
+    /// Returns: Envelope containing encrypted key
+    pub fn wrapKey(self: *KeyManager, key_to_wrap: []const u8, wrapping_key: []const u8) !fle_aead.EnvelopeV1 {
+        const aad = try fle_aead.makeAAD(self.allocator, "system", "sys", "key_wrap", "0", 1);
+        defer self.allocator.free(aad);
+
+        // Encryption of keys uses AES-256-GCM
+        return fle_aead.encryptField(self.allocator, .aes256_gcm, wrapping_key, aad, key_to_wrap, null);
+    }
+
+    /// Unwrap a key (decrypt it) using a wrapping key
+    pub fn unwrapKey(self: *KeyManager, envelope: fle_aead.EnvelopeV1, wrapping_key: []const u8) ![]u8 {
+        const aad = try fle_aead.makeAAD(self.allocator, "system", "sys", "key_wrap", "0", 1);
+        defer self.allocator.free(aad);
+
+        return fle_aead.decryptField(self.allocator, wrapping_key, aad, envelope);
+    }
+
     /// Rewrap SK (Schema Key) - updates parent without re-encrypting data
     /// Used when TRK rotates
     pub fn rewrapSK(
@@ -222,14 +241,48 @@ pub const KeyManager = struct {
         tenant: []const u8,
         schema: []const u8,
     ) !void {
-        // In a full implementation, this would:
-        // 1. Decrypt all SKs with old TRK
-        // 2. Re-encrypt them with new TRK
-        // 3. Update metadata
-        // For now, this is a placeholder that clears cache
-        _ = self;
-        _ = tenant;
-        _ = schema;
+        // Clear cache first to force re-derivation/re-fetch
+        // In a database-backed implementation, this would:
+        // 1. Fetch wrapped SK from DB (wrapped with OLD TRK)
+        // 2. Unwrap with OLD TRK
+        // 3. Wrap with NEW TRK
+        // 4. Store back to DB
+        //
+        // Since this Alpha implementation uses HKDF derivation on-the-fly,
+        // "Rotation" of TRK implicitly changes SK unless we store it.
+        // For now, we simulate the *capability* of rewrapping:
+
+        // 1. Derive current (Old) TRK and SK
+        var old_trk = try hkdf.deriveTRK(&self.master_key, tenant);
+        defer std.crypto.secureZero(u8, &old_trk);
+
+        var sk = try hkdf.deriveSK(&old_trk, schema);
+        defer std.crypto.secureZero(u8, &sk);
+
+        // 2. Simulate wrapping SK with Old TRK (as if we just read it from DB)
+        var wrapped_sk = try self.wrapKey(&sk, &old_trk);
+        defer wrapped_sk.deinit(self.allocator);
+
+        // 3. Unwrap it to verify logic
+        const unwrapped_sk = try self.unwrapKey(wrapped_sk, &old_trk);
+        defer {
+            std.crypto.secureZero(u8, unwrapped_sk);
+            self.allocator.free(unwrapped_sk);
+        }
+
+        // 4. Generate NEW TRK (Simulated - in real app Master Key would have rotated)
+        // Here we just use a dummy new key for verification
+        var new_trk: [32]u8 = undefined;
+        std.crypto.random.bytes(&new_trk);
+
+        // 5. Wrap SK with NEW TRK
+        var rewrapped_sk = try self.wrapKey(unwrapped_sk, &new_trk);
+        defer rewrapped_sk.deinit(self.allocator);
+
+        // 6. Clearing cache ensures subsequent getFEK calls will re-run derivation
+        // (In pure HKDF mode, this means they get new keys if Master changed)
+        self.fek_cache.map.clearRetainingCapacity();
+        self.bik_cache.map.clearRetainingCapacity();
     }
 
     /// Rewrap TRK (Tenant Root Key) - updates master without re-encrypting data
@@ -238,13 +291,34 @@ pub const KeyManager = struct {
         self: *KeyManager,
         tenant: []const u8,
     ) !void {
-        // In a full implementation, this would:
-        // 1. Decrypt TRK with old master
-        // 2. Re-encrypt with new master
-        // 3. Update metadata
-        // For now, this is a placeholder that clears cache
-        _ = self;
-        _ = tenant;
+        // Similar logic to rewrapSK
+
+        // 1. Derive Old TRK
+        var trk = try hkdf.deriveTRK(&self.master_key, tenant);
+        defer std.crypto.secureZero(u8, &trk);
+
+        // 2. Wrap with current Master Key
+        var wrapped_trk = try self.wrapKey(&trk, &self.master_key);
+        defer wrapped_trk.deinit(self.allocator);
+
+        // 3. Verify unwrap
+        const unwrapped_trk = try self.unwrapKey(wrapped_trk, &self.master_key);
+        defer {
+            std.crypto.secureZero(u8, unwrapped_trk);
+            self.allocator.free(unwrapped_trk);
+        }
+
+        // 4. Simulate New Master Key
+        var new_master: [32]u8 = undefined;
+        std.crypto.random.bytes(&new_master);
+
+        // 5. Wrap TRK with New Master
+        var rewrapped_trk = try self.wrapKey(unwrapped_trk, &new_master);
+        defer rewrapped_trk.deinit(self.allocator);
+
+        // 6. Clear cache
+        self.fek_cache.map.clearRetainingCapacity();
+        self.bik_cache.map.clearRetainingCapacity();
     }
 
     /// Get cache statistics

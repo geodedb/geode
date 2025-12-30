@@ -366,6 +366,8 @@ pub const execution = @import("execution.zig");
 pub const graph_store = @import("graph_store.zig");
 pub const fle_integration = @import("fle_integration.zig");
 pub const fle_commands = @import("admin/fle_commands.zig");
+pub const fle_key_manager = @import("fle_key_manager");
+pub const fle_key_types = @import("fle_key_types");
 
 // User management and authentication
 pub const user_management = @import("security/user_management.zig");

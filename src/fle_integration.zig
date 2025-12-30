@@ -1,10 +1,10 @@
 const std = @import("std");
 const fle_catalog = @import("schema/fle_catalog.zig");
 const fle_annotations = @import("schema/annotations.zig");
-const fle_aead = @import("crypto/aead.zig");
-const key_manager_mod = @import("keys/manager.zig");
-const key_types = @import("keys/types.zig");
-const blind_index_mod = @import("index/blind_index.zig");
+const fle_aead = @import("fle_aead");
+const key_manager_mod = @import("fle_key_manager");
+const key_types = @import("fle_key_types");
+const blind_index_mod = @import("fle_blind_index");
 
 // CANARY: FLE_INTEGRATION - Field-Level Encryption Integration Layer
 // CANARY: REQ=REQ-FLE-INTEGRATION-001; FEATURE="FieldLevelEncryption"; ASPECT=INTEGRATION; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15

@@ -242,6 +242,7 @@ pub fn build(b: *std.Build) void {
     // Add dependencies for FLE modules
     fle_key_manager_mod.addImport("fle_hkdf", fle_hkdf_mod);
     fle_key_manager_mod.addImport("fle_key_types", fle_key_types_mod);
+    fle_key_manager_mod.addImport("fle_aead", fle_aead_mod);
     fle_blind_index_mod.addImport("fle_hmac", fle_hmac_mod);
     fle_catalog_mod.addImport("annotations", fle_annotations_mod);
 
@@ -912,6 +913,13 @@ pub fn build(b: *std.Build) void {
     test_harness_mod.addImport("geode_auth", auth_mod);
     test_harness_mod.addImport("rls", rls_mod);
     test_harness_mod.addImport("interface", storage_interface_mod);
+    // FLE modules
+    test_harness_mod.addImport("fle_key_manager", fle_key_manager_mod);
+    test_harness_mod.addImport("fle_key_types", fle_key_types_mod);
+    test_harness_mod.addImport("fle_aead", fle_aead_mod);
+    test_harness_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    test_harness_mod.addImport("fle_catalog", fle_catalog_mod);
+    test_harness_mod.addImport("fle_annotations", fle_annotations_mod);
 
     // Add interface to page manager module
     storage_page_manager_shared.addImport("interface", storage_interface_mod);
@@ -1098,6 +1106,13 @@ pub fn build(b: *std.Build) void {
     const october_2025_integration_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_october_2025_features_integration.zig"), .target = target, .optimize = optimize }) });
     october_2025_integration_test.root_module.addImport("geode", root_mod);
     test_step.dependOn(&october_2025_integration_test.step);
+
+    // FLE Lifecycle Test
+    const fle_lifecycle_test = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_fle_lifecycle.zig"), .target = target, .optimize = optimize }),
+    });
+    fle_lifecycle_test.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&fle_lifecycle_test.step);
 
     // Add unit tests for new modules
     const crypto_test = b.addTest(.{
