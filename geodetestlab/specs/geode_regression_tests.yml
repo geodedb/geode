@@ -174,7 +174,7 @@ tests:
       stdout_contains: ["name"]
 
   - name: with-aggregation
-    skip: true  # WITH clause mixing aggregation and non-aggregation with WHERE causes server hang - needs implementation
+    # Testing: WITH clause mixing aggregation and non-aggregation with WHERE
     args: ["query", "MATCH (n:Person) WITH n.age AS age, count(*) AS count WHERE count > 0 RETURN age, count", "--format", "json"]
     expect:
       exit_code: 0
@@ -267,14 +267,6 @@ tests:
       exit_code: 0
       stdout_contains: ["true", "false", "default"]
 
-  # Pattern Comprehension
-  - name: pattern-comprehension
-    skip: true  # Pattern comprehension list syntax not implemented in ISO GQL
-    args: ["query", "MATCH (p:Person) RETURN p.name, [(p)-[:KNOWS]->(friend) | friend.name] AS friends", "--format", "json"]
-    expect:
-      exit_code: 0
-      stdout_contains: ["friends"]
-
   # OPTIONAL MATCH
   - name: optional-match
     args: ["query", "MATCH (p:Person) OPTIONAL MATCH (p)-[:OWNS]->(thing) RETURN p.name, thing.name AS owned", "--format", "json"]
@@ -284,7 +276,7 @@ tests:
 
   # Path updates (GQL doesn't have FOREACH, using alternative)
   - name: path-node-update
-    skip: true  # Variable-length path with SET not fully implemented
+    # Testing: Variable-length path with SET
     args: ["query", "MATCH (n)-[*]->(m) SET n.visited = true, m.visited = true RETURN count(n)", "--format", "json"]
     expect:
       exit_code: 0
@@ -292,31 +284,11 @@ tests:
 
   # List operations (GQL doesn't have UNWIND, using VALUES instead)
   - name: values-list
-    skip: true  # VALUES clause not fully implemented
+    # Testing: VALUES clause with RETURN
     args: ["query", "VALUES (1), (2), (3), (4), (5) AS (number) RETURN number * 2 AS doubled", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["2", "4", "6", "8", "10"]
-
-  - name: values-with-match
-    skip: true  # Complex stdin with multi-statement not supported in test harness
-    args: ["query", "-"]
-    stdin: |
-      CREATE (:Person {name: 'Alice'})
-      CREATE (:Person {name: 'Bob'})
-      CREATE (:Person {name: 'Charlie'})
-      VALUES ('Alice'), ('Bob'), ('Charlie') AS (name)
-      MATCH (p:Person {name: name})
-      RETURN p
-    expect:
-      exit_code: 0
-      geode_query:
-        status_class: "00000"
-        columns: ["p"]
-        rows:
-          - contains_properties: {name: "Alice"}
-          - contains_properties: {name: "Bob"}
-          - contains_properties: {name: "Charlie"}
 
   # SQL-style comments
   - name: sql-style-comments
