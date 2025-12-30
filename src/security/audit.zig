@@ -83,7 +83,7 @@ pub const AuditLogger = struct {
     }
 
     pub fn deinit(self: *AuditLogger) void {
-        self.digest_buf.deinit();
+        self.digest_buf.deinit(self.allocator);
         if (self.file) |f| {
             f.close();
         }

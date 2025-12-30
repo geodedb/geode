@@ -903,6 +903,9 @@ pub fn build(b: *std.Build) void {
     rls_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("rls", rls_mod);
 
+    const audit_security_mod = b.createModule(.{ .root_source_file = b.path("src/security/audit.zig"), .target = target, .optimize = optimize });
+    audit_security_mod.addImport("rls", rls_mod);
+
     const storage_interface_mod = b.createModule(.{ .root_source_file = b.path("src/storage/interface.zig"), .target = target, .optimize = optimize });
 
     // Add security module imports to test_harness_mod (defined earlier)
@@ -1278,7 +1281,10 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&rls_test.step);
 
-    const audit_chain_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize }) });
+    const audit_chain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize });
+    audit_chain_test_mod.addImport("audit", audit_security_mod);
+    audit_chain_test_mod.addImport("rls", rls_mod);
+    const audit_chain_tests = b.addTest(.{ .root_module = audit_chain_test_mod });
     test_step.dependOn(&audit_chain_tests.step);
 
     // REPL tests - temporarily disabled for Zig 0.15.1 migration
