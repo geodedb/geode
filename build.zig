@@ -394,7 +394,9 @@ pub fn build(b: *std.Build) void {
     const conformance_patch_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/conformance_tests.zig"), .target = target, .optimize = optimize }) });
     conformance_patch_tests.root_module.addImport("geode", root_mod);
     const run_conformance_patch_tests = b.addRunArtifact(conformance_patch_tests);
-    gql_conformance_tests.root_module.addImport("test_harness", b.createModule(.{ .root_source_file = b.path("src/test_harness.zig"), .target = target, .optimize = optimize }));
+    // Create test_harness module (imports will be added later after auth/rls modules are defined)
+    const test_harness_mod = b.createModule(.{ .root_source_file = b.path("src/test_harness.zig"), .target = target, .optimize = optimize });
+    gql_conformance_tests.root_module.addImport("test_harness", test_harness_mod);
     // Server graph exec module available through geode module
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
@@ -891,12 +893,22 @@ pub fn build(b: *std.Build) void {
     });
 
     // Create separate modules for security components
-    const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth.zig"), .target = target, .optimize = optimize });
+    const mfa_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa.zig"), .target = target, .optimize = optimize });
+    const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/geode_auth_lib.zig"), .target = target, .optimize = optimize });
+    auth_mod.addImport("mfa", mfa_mod);
+    root_mod.addImport("geode_auth", auth_mod);
+    root_mod.addImport("mfa", mfa_mod);
 
-    const rls_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls.zig"), .target = target, .optimize = optimize });
-    rls_mod.addImport("auth", auth_mod);
+    const rls_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls_core.zig"), .target = target, .optimize = optimize });
+    rls_mod.addImport("geode_auth", auth_mod);
+    root_mod.addImport("rls", rls_mod);
 
     const storage_interface_mod = b.createModule(.{ .root_source_file = b.path("src/storage/interface.zig"), .target = target, .optimize = optimize });
+
+    // Add security module imports to test_harness_mod (defined earlier)
+    test_harness_mod.addImport("geode_auth", auth_mod);
+    test_harness_mod.addImport("rls", rls_mod);
+    test_harness_mod.addImport("interface", storage_interface_mod);
 
     // Add interface to page manager module
     storage_page_manager_shared.addImport("interface", storage_interface_mod);
@@ -907,7 +919,7 @@ pub fn build(b: *std.Build) void {
     user_storage_mod.addImport("storage_page_manager", storage_page_manager_shared);
 
     const user_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_manager.zig"), .target = target, .optimize = optimize });
-    user_manager_mod.addImport("auth", auth_mod);
+    user_manager_mod.addImport("geode_auth", auth_mod);
     user_manager_mod.addImport("rls", rls_mod);
     user_manager_mod.addImport("interface", storage_interface_mod);
     user_manager_mod.addImport("user_storage", user_storage_mod);
@@ -916,7 +928,7 @@ pub fn build(b: *std.Build) void {
     const storage_inmemory_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
     storage_inmemory_mod.addImport("interface", storage_interface_mod);
 
-    user_auth_exe.root_module.addImport("auth", auth_mod);
+    user_auth_exe.root_module.addImport("geode_auth", auth_mod);
     user_auth_exe.root_module.addImport("rls", rls_mod);
     user_auth_exe.root_module.addImport("user_manager", user_manager_mod);
     user_auth_exe.root_module.addImport("storage/inmemory", storage_inmemory_mod);

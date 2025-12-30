@@ -22,6 +22,7 @@ const cert_gen = @import("../tools/cert_gen.zig");
 
 // Import real logger for proper log level handling
 const logger = @import("../log/logger.zig");
+const audit = @import("../security/audit.zig");
 // Import server state management (M3.1 Phase 3 modularization)
 const server_state = @import("server_state.zig");
 // Import backup manager (M3.1 Phase 3 modularization)
@@ -249,11 +250,9 @@ var g_match_max_frontier_override: ?usize = null;
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC_CONTROL"; ASPECT=Refactor; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=server; UPDATED=2025-09-20
 // Removed: handleCdcControl() function (~12 lines) now in message_handlers module (M3.2 Phase 3 message handlers extraction)
 
-
 // Removed: handleQuicConnection() function (~166 lines) now in quic_connection_handler module (M3.3 Phase 3 QUIC handlers extraction)
 // Removed: processMessage() function (~422 lines) now in quic_connection_handler module (M3.3 Phase 3 QUIC handlers extraction)
 // Total extracted: ~588 lines to quic_connection_handler.zig module
-
 
 pub fn main() !void {
     // P2-3: Use GeneralPurposeAllocator instead of page_allocator for server main
@@ -284,7 +283,7 @@ pub fn main() !void {
     if (log_level_arg) |lla| {
         logger.setLevel(logger.parseLevel(lla));
     }
-    log.info("server.start", .{.{ .key = "level", .value = log_level_arg orelse "info" }});
+    std.log.info("server.start", .{.{ .key = "level", .value = log_level_arg orelse "info" }});
 
     if (config.match_max_results_override) |mmr| g_match_max_results_override = mmr;
     if (config.match_max_frontier_override) |mfr| g_match_max_frontier_override = mfr;
@@ -304,6 +303,25 @@ pub fn main() !void {
             try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
         };
     }
+
+    // Initialize AuditLogger (Phase 2 Spec Compliance)
+    var audit_config = audit.AuditLogger.Config{};
+    const audit_path_env = std.process.getEnvVarOwned(gpa, "GEODE_AUDIT_LOG_PATH") catch null;
+    defer if (audit_path_env) |p| gpa.free(p);
+    if (audit_path_env) |p| {
+        audit_config.file_path = p;
+    }
+
+    // Create heap-allocated audit logger to ensure stability
+    var audit_logger = try gpa.create(audit.AuditLogger);
+    audit_logger.* = try audit.AuditLogger.init(gpa, audit_config);
+    defer {
+        audit_logger.deinit();
+        gpa.destroy(audit_logger);
+    }
+
+    // Inject audit logger into graph storage manager
+    graph_storage_mgr.setAuditLogger(audit_logger);
 
     // Initialize server components using modularized server_init (M3.2 Phase 3 initialization extraction)
     var init_ctx = try server_init.initialize(

@@ -36,7 +36,7 @@ const Value = value_types.Value;
 const audit_mod = @import("../security/audit.zig");
 const tde_mod = @import("../security/tde.zig");
 const cdc_mod = @import("../streaming/cdc_enhanced.zig");
-const rls = @import("../security/rls.zig");
+const rls = @import("rls");
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
 

@@ -65,18 +65,18 @@ REQ-AUTH-002,Argon2idHashing,PasswordSecurity,IMPLEMENTED,,,security,2025-10-14,
 REQ-AUTH-002,AuthenticationLogout,RealImplementation,IMPL,TestCANARY_REQ_AUTH_002_RealLogout,,cli,2025-09-30,src/cli/main.zig
 REQ-AUTH-CLI-001,CLIUserManagement,FileStorage,IMPL,,,cli,2025-10-26,src/cli/user_storage_simple.zig
 REQ-AUTH-CLI-001,CLIUserManagement,SecureStorage,IMPL,,,cli,2025-10-26,src/cli/user_storage_secure.zig
-REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-DEFAULT-001,Default User Creation,Security,IMPL,TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,IMPL,TestCANARY_REQ_AUTH_HASH_001_Argon2id,,security,2025-10-16,src/security/auth.zig
-REQ-AUTH-POLICY-001,Password Reset Tracking,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_001_ForceReset,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-POLICY-002,Enhanced Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_002_PassphrasePolicy,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-POLICY-003,Enhanced Password Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_003_PassphraseValidation,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-POLICY-004,Unified Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_004_UnifiedPolicy,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-POLICY-005,Password Policy Validation Before Hashing,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_005_PreHashValidation,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-POLICY-006,Post-Authentication Policy Check,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_006_PostAuthPolicyCheck,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-POLICY-007,Mandatory Password Policy Enforcement,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_007_MandatoryPolicyEnforcement,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-POLICY-008,Pre-Hash Password Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_008_PreHashValidation,,security,2025-09-30,src/security/auth.zig
-REQ-AUTH-POLICY-009,Password Update Policy Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation,,security,2025-09-30,src/security/auth.zig
+REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-DEFAULT-001,Default User Creation,Security,IMPL,TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,IMPL,TestCANARY_REQ_AUTH_HASH_001_Argon2id,,security,2025-10-16,src/security/geode_auth_lib.zig
+REQ-AUTH-POLICY-001,Password Reset Tracking,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_001_ForceReset,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-POLICY-002,Enhanced Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_002_PassphrasePolicy,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-POLICY-003,Enhanced Password Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_003_PassphraseValidation,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-POLICY-004,Unified Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_004_UnifiedPolicy,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-POLICY-005,Password Policy Validation Before Hashing,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_005_PreHashValidation,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-POLICY-006,Post-Authentication Policy Check,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_006_PostAuthPolicyCheck,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-POLICY-007,Mandatory Password Policy Enforcement,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_007_MandatoryPolicyEnforcement,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-POLICY-008,Pre-Hash Password Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_008_PreHashValidation,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-POLICY-009,Password Update Policy Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-010,CLI Password Policy Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_010_CLIPolicyValidation,,security,2025-09-30,src/cli/main.zig
 REQ-AUTH-POLICY-011,Pre-Authentication Policy Check,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_011_PreAuthValidation,,security,2025-09-30,src/cli/main.zig
 REQ-AUTH-QUIC-001,QUIC Authentication,ConnectionAuth,IMPL,,,cli,2025-10-25,src/cli/main.zig
@@ -621,7 +621,6 @@ REQ-GQL-028,WAL/Recovery,CorruptPageRecovery,TESTED,TestCANARY_REQ_GQL_028_Corru
 REQ-GQL-028,WAL/Recovery,FailureInjection,TESTED,TestCANARY_REQ_GQL_028_WalFailureInjection,,storage,2025-09-21,tests/canary_wal_failure_injection.zig
 REQ-GQL-028,WAL/Recovery,RedoOptimizedVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_028_RedoOptimizedVarianceEnvelope,storage,2025-09-21,tests/benchmark_wal_redo_optimized_variance.zig
 REQ-GQL-031,Security Audit,AuditFormatting,TESTED,audit_tests,,security,2025-11-12,src/security/audit_formatter.zig
-REQ-GQL-031,Security Audit,AuditLogging,TESTED,e2e_rls_integration,,security,2025-11-12,src/security/audit.zig
 REQ-GQL-031,Security Audit,AuditSinks,TESTED,audit_tests,,security,2025-11-12,src/security/audit_sink.zig
 REQ-GQL-032,Check Constraint Evaluation,Engine,IMPL,TestCANARY_REQ_GQL_032_CheckConstraint,,schema,2025-09-20,src/storage/constraints.zig
 REQ-GQL-032,Check Constraint Extended Ops,Engine,IMPL,TestCANARY_REQ_GQL_032_CheckConstraintRangeAnd,,schema,2025-09-20,src/storage/constraints.zig
@@ -1075,12 +1074,12 @@ REQ-GQL-ALGO-PERF-001,PageRank Optimization,Performance,IMPL,benchmark_pagerank,
 REQ-GQL-ALGO-PERF-002,Betweenness Optimization,Performance,IMPL,benchmark_betweenness,,graph,2025-10-16,src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-003,Closeness Optimization,Performance,IMPL,benchmark_closeness,,graph,2025-10-16,src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-004,Eigenvector Optimization,Performance,IMPL,benchmark_eigenvector,,graph,2025-10-16,src/graph/builtin_algorithms.zig
-REQ-GQL-AUTH-001,User creation,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_001_CreateUser,,security,2025-09-26,src/security/auth.zig
-REQ-GQL-AUTH-002,Password authentication,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_002_AuthPassword,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-AUTH-001,User creation,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_001_CreateUser,,security,2025-09-26,src/security/geode_auth_lib.zig
+REQ-GQL-AUTH-002,Password authentication,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_002_AuthPassword,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-AUTH-002,Password authentication,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_002_AuthPassword,,security,2025-09-26,tests/test_auth_mfa_flows.zig
-REQ-GQL-AUTH-003,MFA authentication,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_003_AuthMFA,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-AUTH-003,MFA authentication,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_003_AuthMFA,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-AUTH-003,MFA authentication,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_003_AuthMFA,,security,2025-09-26,tests/test_auth_mfa_flows.zig
-REQ-GQL-AUTH-004,MFA recovery code,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_004_Recovery|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-AUTH-004,MFA recovery code,SECURITY,TESTED,TestCANARY_REQ_GQL_AUTH_004_Recovery|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-AUTH-004,MFA recovery code,TEST,TESTED,TestCANARY_REQ_GQL_AUTH_004_Recovery,,security,2025-09-26,tests/test_recovery_codes.zig
 "REQ-GQL-BACKUP-RESTORE"" {
     // CANARY: REQ=REQ-GQL-BACKUP-RESTORE",BackupRestore,Core,TESTED,TestCANARY_REQ_GQL_BACKUP_RESTORE,,team,2025-10-02,tests/integration/test_backup_restore.zig
@@ -1221,19 +1220,19 @@ REQ-GQL-MATCH-CALL-007,MatchCallIntegration,LabelMatching,TESTED,TestMatchCallLa
 REQ-GQL-MATCH-CALL-008,MatchCallIntegration,DirectNodeIdFallback,TESTED,TestMatchCallDirectId,,engine,2025-10-08,src/test_match_call_integration.zig
 REQ-GQL-MATCH-CALL-BINDING,MatchCallBinding,Execution,FIXED,,,execution,2025-10-13,src/execution/match_operations.zig
 REQ-GQL-MFA-002,MFA authentication enforcement,SECURITY,TESTED,tests/unit_mfa_enforcement.zig:1,,security,2025-09-26,tests/unit_mfa_enforcement.zig
-REQ-GQL-MFA-003,MFA admin policy,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAllRoles|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAnyRole,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-003,MFA admin policy,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAllRoles|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAnyRole,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-003,MFA admin policy,SECURITY,TESTED,,,security,2025-09-26,tests/test_mfa_policies.zig
-REQ-GQL-MFA-004,MFA challenge issued,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_004_IssuedFlow,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-004,MFA challenge issued,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_004_IssuedFlow,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-004,MFA challenge issued,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_004_IssuedFlow,,security,2025-09-26,tests/test_auth_mfa_flows.zig
-REQ-GQL-MFA-005,MFA challenge success,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_005_SuccessFlow|TestCANARY_REQ_GQL_MFA_005_SuccessFlow_complete,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-005,MFA challenge success,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_005_SuccessFlow|TestCANARY_REQ_GQL_MFA_005_SuccessFlow_complete,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-005,MFA challenge success,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_005_SuccessFlow,,security,2025-09-26,tests/test_auth_mfa_flows.zig
-REQ-GQL-MFA-006,MFA challenge failure,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_006_FailureFlow,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-006,MFA challenge failure,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_006_FailureFlow,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-006,MFA challenge failure,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_006_FailureFlow,,security,2025-09-26,tests/test_auth_mfa_flows.zig
-REQ-GQL-MFA-007,MFA recovery code used,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_007_RecoveryAudit|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse,,security,2025-09-26,src/security/auth.zig
-REQ-GQL-MFA-007,Session step-up metadata,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow,,security,2025-09-26,src/security/auth.zig
-REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-007,MFA recovery code used,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_007_RecoveryAudit|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse,,security,2025-09-26,src/security/geode_auth_lib.zig
+REQ-GQL-MFA-007,Session step-up metadata,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow,,security,2025-09-26,src/security/geode_auth_lib.zig
+REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_008_StepUpRequire,,security,2025-09-26,tests/test_session_step_up.zig
-REQ-GQL-MFA-009,Session step-up mark,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-009,Session step-up mark,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-009,Session step-up mark,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_009_StepUpMark,,security,2025-09-26,tests/test_session_step_up.zig
 REQ-GQL-MFA-010,ConfigurableElevationTTL,TEST,TESTED,TestCANARY_REQ_GQL_MFA_010_ElevationTTL,,security,2025-09-26,tests/test_session_elevation_policy.zig
 REQ-GQL-MFA-AUDIT-001,MfaAuditLogging,SECURITY,TESTED,TestMfaAuditEvents,,security,2025-09-26,docs/SECURITY_PROGRESS.md
@@ -1254,7 +1253,7 @@ REQ-GQL-MFA-CORE-001,MfaRiskStepUpDecision,DecisionLogic,TESTED,TestCANARY_REQ_G
 REQ-GQL-MFA-CORE-001,MfaRiskStepUpDecision,DecisionLogic,TESTED,TestCANARY_REQ_GQL_MFA_CORE_001_StepUpBoundary,,security,2025-09-27,tests/canary_mfa_risk_stepup.zig
 REQ-GQL-MFA-CORE-001,MfaRiskStepUpDecision,LatencyVarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_MFA_CORE_001_StepUpLatencyVariance,security,2025-09-27,benchmarks/benchmark_mfa_stepup_latency.zig
 REQ-GQL-MFA-PERF-001,MfaPolicyEvaluation,VarianceEnvelope,BENCHED,,BenchmarkCANARY_REQ_GQL_MFA_PERF_001_PolicyEvaluationVarianceEnvelope,security,2025-09-26,benchmarks/benchmark_mfa_policy_evaluation_variance.zig
-REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval,,security,2025-09-26,src/security/auth.zig
+REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval,,security,2025-09-26,src/security/geode_auth_lib.zig
 REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,IMPL,,,security,2025-09-26,tests/test_mfa_policies.zig
 REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-MULTI-CHAIN-REL-001,MultiChainRelationshipMatch,Execution,IMPL,,,engine,2025-12-23,src/execution/match_operations.zig
@@ -1545,7 +1544,7 @@ REQ-LIST-PROP-006,ListProperties,MemberAccess,IMPL,,,eval,2025-12-27,src/eval.zi
 REQ-LIST-PROP-007,ListProperties,EdgeMemberAccess,IMPL,,,eval,2025-12-27,src/eval.zig
 REQ-LSP-001,Language Server Protocol,LSPServer,IMPL,,,cli,2025-10-28,src/cli/main.zig
 REQ-M10-CONSTANTS-001,CodeQuality,MAGIC_NUMBERS,IMPL,,,core,2025-10-17,src/execution.zig
-REQ-M10-CONSTANTS-002,CodeQuality,MAGIC_NUMBERS,IMPL,,,security,2025-10-17,src/security/rls.zig
+REQ-M10-CONSTANTS-002,CodeQuality,MAGIC_NUMBERS,IMPL,,,security,2025-10-17,src/security/rls_core.zig
 REQ-M10-CONSTANTS-003,CodeQuality,MAGIC_NUMBERS,IMPL,,,security,2025-10-17,src/security/rls_enhanced.zig
 REQ-M11-DRY-001,CodeQuality,DuplicateCode,IMPL,,,core,2025-10-17,src/server/main.zig
 REQ-M11-DRY-002,CodeQuality,DuplicateCode,IMPL,,,core,2025-10-17,src/cli/main.zig

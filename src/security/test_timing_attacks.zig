@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const auth = @import("auth.zig");
+const auth = @import("geode_auth");
 const hash_mod = @import("../types/hash.zig");
 
 test "Password verification - timing resistance with varying prefixes" {

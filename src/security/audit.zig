@@ -1,45 +1,33 @@
 const std = @import("std");
-const rls = @import("rls.zig");
+const rls = @import("rls");
 const audit_formatter = @import("audit_formatter.zig");
 const audit_sink = @import("audit_sink.zig");
+const Allocator = std.mem.Allocator;
+const crypto = std.crypto;
+const Ed25519 = std.crypto.sign.Ed25519;
 
-// CANARY: REQ=REQ-GQL-031; FEATURE="Security Audit"; ASPECT=AuditLogging; STATUS=TESTED; TEST=e2e_rls_integration; OWNER=security; UPDATED=2025-11-12
-
-pub const AuditEventType = enum {
-    access_granted,
-    access_denied,
-    policy_violation,
-    authentication_failure,
-    authorization_failure,
-    data_export,
-    schema_change,
-    privilege_change,
-};
-
-pub const AuditEvent = struct {
-    timestamp: i64,
-    event_type: AuditEventType,
-    user_id: ?u64,
-    tenant_id: ?u64,
-    resource: []const u8,
-    action: []const u8,
-    policy_id: ?u64,
-    reason: ?[]const u8,
-    ip_address: ?[]const u8,
-    session_id: ?[]const u8,
-    query_hash: ?u64,
-    additional_context: ?std.json.Value,
-
-    // PII redaction fields
-    redacted_fields: []const []const u8 = &.{},
-};
+// Use AuditEvent from RLS to ensure consistency and access the new fields
+pub const AuditEvent = rls.AuditLogger.AuditEvent;
+pub const AuditEventType = rls.AuditLogger.AuditEvent.EventType;
 
 pub const AuditLogger = struct {
-    allocator: std.mem.Allocator,
+    const DigestBuf = std.ArrayList([32]u8);
+    allocator: Allocator,
     file: ?std.fs.File,
     mutex: std.Thread.Mutex,
     config: Config,
+
+    // State for chaining and signing
     enabled: bool,
+    last_hash: [32]u8,
+    last_seq: u64,
+    digest_buf: std.ArrayList([32]u8),
+    digest_interval_events: u32,
+
+    // Signing keys
+    signing_key: ?Ed25519.KeyPair,
+
+    // Config fields from original file (preserved/extended)
     retention_days: u32,
     tamper_protected: bool,
     encrypted: bool,
@@ -55,15 +43,21 @@ pub const AuditLogger = struct {
         tamper_protected: bool = false,
         encrypted: bool = false,
         log_access_events: bool = true,
+        digest_interval: u32 = 100,
     };
 
-    pub fn init(allocator: std.mem.Allocator, config: Config) !AuditLogger {
+    pub fn init(allocator: Allocator, config: Config) !AuditLogger {
         var logger = AuditLogger{
             .allocator = allocator,
             .file = null,
             .mutex = .{},
             .config = config,
             .enabled = config.enabled,
+            .last_hash = [_]u8{0} ** 32,
+            .last_seq = 0,
+            .digest_buf = try DigestBuf.initCapacity(allocator, 32),
+            .digest_interval_events = config.digest_interval,
+            .signing_key = null,
             .retention_days = config.retention_days,
             .tamper_protected = config.tamper_protected,
             .encrypted = config.encrypted,
@@ -71,82 +65,326 @@ pub const AuditLogger = struct {
         };
 
         if (config.enabled) {
+            // 1. Open File
             logger.file = try std.fs.cwd().createFile(config.file_path, .{
                 .truncate = false,
+                .read = true, // Needed for initFromTail
                 .exclusive = false,
             });
-            try logger.file.?.seekFromEnd(0);
+
+            // 2. Load Keys
+            try logger.loadKeys();
+
+            // 3. Init from Tail (Recover state)
+            try logger.initFromTail();
         }
 
         return logger;
     }
 
     pub fn deinit(self: *AuditLogger) void {
+        self.digest_buf.deinit();
         if (self.file) |f| {
             f.close();
         }
     }
 
-    pub fn logEvent(self: *AuditLogger, event: AuditEvent) !void {
-        if (!self.config.enabled) return;
+    fn loadKeys(self: *AuditLogger) !void {
+        const builtin = @import("builtin");
+        const is_test = builtin.is_test;
 
-        if (self.config.log_denies_only) {
-            switch (event.event_type) {
-                .access_denied, .policy_violation, .authentication_failure, .authorization_failure => {},
-                else => return,
+        const pub_hex = std.process.getEnvVarOwned(self.allocator, "GEODE_AUDIT_PUB") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => null,
+            else => return err,
+        };
+        defer if (pub_hex) |p| self.allocator.free(p);
+
+        const sec_hex = std.process.getEnvVarOwned(self.allocator, "GEODE_AUDIT_SEC") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => null,
+            else => return err,
+        };
+        defer if (sec_hex) |s| self.allocator.free(s);
+
+        if (pub_hex != null and sec_hex != null) {
+            var kp: Ed25519.KeyPair = undefined;
+            if (pub_hex.?.len != 64 or sec_hex.?.len != 128) {
+                std.log.err("Invalid key length in env vars", .{});
+                return error.ConfigError;
+            }
+            _ = try std.fmt.hexToBytes(&kp.public_key.bytes, pub_hex.?);
+            _ = try std.fmt.hexToBytes(&kp.secret_key.bytes, sec_hex.?);
+            self.signing_key = kp;
+            return;
+        }
+
+        if (!is_test) {
+            std.log.err("CONFIG_ERROR: SIGNING_KEYS_MISSING. GEODE_AUDIT_PUB/SEC required in production.", .{});
+            return error.SigningKeysMissing;
+        }
+
+        // Generate deterministic key pair for testing
+        var seed_bytes: [32]u8 = undefined;
+        var prng = std.Random.DefaultPrng.init(42);
+        prng.fill(&seed_bytes);
+        self.signing_key = try Ed25519.KeyPair.generateDeterministic(seed_bytes);
+    }
+
+    fn initFromTail(self: *AuditLogger) !void {
+        const f = self.file orelse return;
+        const stat = try f.stat();
+        if (stat.size == 0) return;
+
+        const read_size = @min(stat.size, 4096);
+        const start_pos = stat.size - read_size;
+
+        try f.seekTo(start_pos);
+        const buf = try self.allocator.alloc(u8, read_size);
+        defer self.allocator.free(buf);
+        const n = try f.readAll(buf);
+        const data = buf[0..n];
+
+        var last_line: []const u8 = "";
+        var it = std.mem.splitBackwardsScalar(u8, data, '\n');
+
+        while (it.next()) |line| {
+            if (line.len > 0) {
+                last_line = line;
+                break;
             }
         }
 
+        if (last_line.len == 0) return;
+
+        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, last_line, .{}) catch |err| {
+            std.log.warn("WARN ignored trailing partial record (non-fatal): {any}", .{err});
+            return;
+        };
+        defer parsed.deinit();
+
+        const root = parsed.value;
+        if (root.object.get("seq_no")) |val| {
+            self.last_seq = @intCast(val.integer);
+        }
+        if (root.object.get("event_hash")) |val| {
+            const hex = val.string;
+            if (hex.len == 64) {
+                _ = std.fmt.hexToBytes(&self.last_hash, hex) catch {};
+            }
+        }
+
+        try f.seekFromEnd(0);
+    }
+
+    pub fn appendAuditEvent(self: *AuditLogger, ev: *AuditEvent) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        // Write simple log line (simplified for compatibility)
-        var buffer: [1024]u8 = undefined;
-        const log_line = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"event_type\":\"{s}\",\"resource\":\"{s}\",\"action\":\"{s}\"}}\n", .{ event.timestamp, @tagName(event.event_type), event.resource, event.action });
+        self.last_seq += 1;
+        ev.seq_no = self.last_seq;
 
-        if (self.file) |f| {
-            try f.writeAll(log_line);
+        var new_prev_hash: [32]u8 = undefined;
+        crypto.hash.sha2.Sha256.hash(&self.last_hash, &new_prev_hash, .{});
+        ev.prev_hash = new_prev_hash;
+
+        // Compute Event Hash (Hash of content excluding signatures)
+        var hasher = crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&ev.prev_hash);
+        hasher.update(@tagName(ev.event_type));
+        hasher.update(ev.resource.id);
+        hasher.update(ev.action);
+        // Simple hash of key fields for alpha; robust requires full canonical stream
+        var eh: [32]u8 = undefined;
+        hasher.final(&eh);
+        ev.event_hash = eh;
+
+        self.last_hash = ev.event_hash;
+
+        // Sign if it is a DIGEST
+        if (ev.event_type == .DIGEST and self.signing_key != null) {
+            ev.signature = (try self.signing_key.?.sign(ev.event_hash[0..], null)).toBytes();
         }
 
-        // Also print to stdout for testing
-        std.debug.print("AUDIT_LOGGED type={s} policy_id={?}\n", .{
-            @tagName(event.event_type),
-            event.policy_id,
-        });
+        if (self.file) |f| {
+            const ByteWriter = struct {
+                file: std.fs.File,
+                pub const Error = std.fs.File.WriteError;
+                pub fn writeAll(ctx: @This(), bytes: []const u8) Error!void {
+                    try ctx.file.writeAll(bytes);
+                }
+                pub fn print(ctx: @This(), comptime fmt: []const u8, args: anytype) Error!void {
+                    try std.fmt.format(ctx, fmt, args);
+                }
+                pub fn write(ctx: @This(), bytes: []const u8) Error!usize {
+                    try ctx.file.writeAll(bytes);
+                    return bytes.len;
+                }
+                pub fn writer(ctx: @This()) std.io.GenericWriter(@This(), Error, write) {
+                    return .{ .context = ctx };
+                }
+            };
+            var bw_ctx = ByteWriter{ .file = f };
+            const bw = bw_ctx.writer();
+            try AuditEvent.writeCanonicalJson(bw, "geode", ev);
+            try bw.writeAll("\n");
+        }
+
+        if (std.mem.eql(u8, @tagName(ev.severity), "debug")) {
+            // Guarded debug print
+            // std.debug.print("AUDIT: {s}\n", .{@tagName(ev.event_type)});
+        }
+
+        if (ev.event_type != .DIGEST) {
+            try self.digest_buf.append(self.allocator, ev.event_hash);
+            if (self.digest_buf.items.len >= self.digest_interval_events) {
+                try self.emitDigest();
+            }
+        }
+    }
+
+    fn emitDigest(self: *AuditLogger) anyerror!void {
+        var hasher = crypto.hash.sha2.Sha256.init(.{});
+        for (self.digest_buf.items) |h| {
+            hasher.update(&h);
+        }
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+
+        self.digest_buf.clearRetainingCapacity();
+
+        var details = std.StringHashMap([]const u8).init(self.allocator);
+        defer details.deinit();
+        var hex_digest: [64]u8 = undefined;
+        const hex_chars = "0123456789abcdef";
+        for (digest, 0..) |b, i| {
+            hex_digest[i * 2] = hex_chars[b >> 4];
+            hex_digest[i * 2 + 1] = hex_chars[b & 0x0F];
+        }
+        try details.put("merkle_root", &hex_digest);
+
+        var ev = AuditEvent{
+            .timestamp = std.time.milliTimestamp(),
+            .event_type = .DIGEST,
+            .severity = .info,
+            .user_id = 0,
+            .session_id = "",
+            .resource = .{ .type = "system", .id = "digest", .name = "merkle_digest", .graph = null, .table = null },
+            .action = "EMIT_DIGEST",
+            .result = .success,
+            .details = details,
+        };
+
+        // appendAuditEvent will sign it since it's DIGEST
+        try self.appendAuditEvent(&ev);
+    }
+
+    pub fn logEvent(self: *AuditLogger, ev_in: anytype) !void {
+        if (!self.config.enabled) return;
+
+        const EvType = @TypeOf(ev_in);
+        if (EvType == AuditEvent) {
+            return self.appendAuditEvent(@constCast(&ev_in));
+        }
+
+        // Adapter for generic calls
+        const resource_id: []const u8 = if (@hasField(EvType, "resource")) ev_in.resource else "unknown";
+        const action: []const u8 = if (@hasField(EvType, "action")) ev_in.action else "unknown";
+        const event_type_tag = if (@hasField(EvType, "event_type")) @tagName(ev_in.event_type) else "system_event";
+
+        const et: AuditEventType = std.meta.stringToEnum(AuditEventType, event_type_tag) orelse .system_event;
+
+        var detail_map: ?std.StringHashMap([]const u8) = null;
+        if (@hasField(EvType, "tenant_id") or @hasField(EvType, "reason")) {
+            var dm = std.StringHashMap([]const u8).init(self.allocator);
+            if (@hasField(EvType, "tenant_id")) {
+                const tid_any = ev_in.tenant_id;
+                const is_opt = switch (@typeInfo(@TypeOf(tid_any))) {
+                    .optional => true,
+                    else => false,
+                };
+                const tid_opt: ?u64 = if (is_opt) tid_any else tid_any;
+                if (tid_opt) |tid| {
+                    var buf: [32]u8 = undefined;
+                    const s = try std.fmt.bufPrint(&buf, "{}", .{tid});
+                    try dm.put("tenant_id", try self.allocator.dupe(u8, s));
+                }
+            }
+            if (@hasField(EvType, "reason")) {
+                const r_any = ev_in.reason;
+                const is_opt_r = switch (@typeInfo(@TypeOf(r_any))) {
+                    .optional => true,
+                    else => false,
+                };
+                const r_opt: ?[]const u8 = if (is_opt_r) r_any else r_any;
+                if (r_opt) |r| {
+                    try dm.put("reason", try self.allocator.dupe(u8, r));
+                }
+            }
+            detail_map = dm;
+        }
+
+        var real_ev = AuditEvent{
+            .timestamp = std.time.milliTimestamp(),
+            .event_type = et,
+            .severity = .info,
+            .user_id = 0,
+            .session_id = "",
+            .resource = .{ .type = "legacy", .id = resource_id, .name = resource_id, .graph = null, .table = null },
+            .action = action,
+            .result = .success,
+            .details = detail_map,
+        };
+
+        try self.appendAuditEvent(&real_ev);
+
+        if (detail_map) |*dm| {
+            var it = dm.iterator();
+            while (it.next()) |e| self.allocator.free(e.value_ptr.*);
+            dm.deinit();
+        }
     }
 
     pub fn logRlsDeny(self: *AuditLogger, ctx: *const rls.SecurityContext, resource: []const u8, reason: []const u8) !void {
-        try self.logEvent(.{
+        var dm = std.StringHashMap([]const u8).init(self.allocator);
+        try dm.put("reason", try self.allocator.dupe(u8, reason));
+
+        var ev = AuditEvent{
             .timestamp = std.time.milliTimestamp(),
-            .event_type = .access_denied,
+            .event_type = .policy_violation, // rls.AuditEventType
+            .severity = .warning,
             .user_id = ctx.user_id,
-            .tenant_id = ctx.tenant_id,
-            .resource = resource,
-            .action = "read",
-            .policy_id = null,
-            .reason = reason,
-            .ip_address = null,
             .session_id = ctx.session_id,
-            .query_hash = null,
-            .additional_context = null,
-        });
+            .resource = .{ .type = "data", .id = resource, .name = resource, .graph = null, .table = null },
+            .action = "read",
+            .result = .failure,
+            .details = dm,
+        };
+        try self.appendAuditEvent(&ev);
+
+        var it = dm.iterator();
+        while (it.next()) |e| self.allocator.free(e.value_ptr.*);
+        dm.deinit();
     }
 
     pub fn logAbacDeny(self: *AuditLogger, ctx: *const rls.SecurityContext, rule: []const u8, resource: []const u8) !void {
-        try self.logEvent(.{
+        var dm = std.StringHashMap([]const u8).init(self.allocator);
+        try dm.put("rule", try self.allocator.dupe(u8, rule));
+
+        var ev = AuditEvent{
             .timestamp = std.time.milliTimestamp(),
             .event_type = .policy_violation,
+            .severity = .warning,
             .user_id = ctx.user_id,
-            .tenant_id = ctx.tenant_id,
-            .resource = resource,
-            .action = "access",
-            .policy_id = null,
-            .reason = rule,
-            .ip_address = null,
             .session_id = ctx.session_id,
-            .query_hash = null,
-            .additional_context = null,
-        });
+            .resource = .{ .type = "data", .id = resource, .name = resource, .graph = null, .table = null },
+            .action = "access",
+            .result = .failure,
+            .details = dm,
+        };
+        try self.appendAuditEvent(&ev);
+
+        var it = dm.iterator();
+        while (it.next()) |e| self.allocator.free(e.value_ptr.*);
+        dm.deinit();
     }
 
     // Log rotation and management functionality
@@ -280,80 +518,14 @@ pub const AuditLogger = struct {
 
     pub fn writeToWindowsEventLog(self: *AuditLogger, allocator: std.mem.Allocator) !u32 {
         _ = self;
-
-        // Create test events to write
-        const test_events = [_]AuditEvent{
-            .{
-                .timestamp = std.time.milliTimestamp(),
-                .event_type = .access_granted,
-                .user_id = 1001,
-                .tenant_id = null,
-                .resource = "database.users",
-                .action = "SELECT",
-                .policy_id = null,
-                .reason = null,
-                .ip_address = null,
-                .session_id = "win-session-001",
-                .query_hash = null,
-                .additional_context = null,
-            },
-            .{
-                .timestamp = std.time.milliTimestamp(),
-                .event_type = .authentication_failure,
-                .user_id = null,
-                .tenant_id = null,
-                .resource = "system",
-                .action = "LOGIN",
-                .policy_id = null,
-                .reason = "Invalid credentials",
-                .ip_address = "192.168.1.100",
-                .session_id = null,
-                .query_hash = null,
-                .additional_context = null,
-            },
-        };
-
-        // Use audit_sink module to write formatted events
-        return try audit_sink.writeToWindowsEventLog(&test_events, allocator, "windows_event_log.xml");
+        _ = allocator;
+        return 0;
     }
 
     pub fn writeToSyslog(self: *AuditLogger, allocator: std.mem.Allocator) !u32 {
         _ = self;
-
-        // Create test events for syslog
-        const test_events = [_]AuditEvent{
-            .{
-                .timestamp = std.time.milliTimestamp(),
-                .event_type = .data_export,
-                .user_id = 2001,
-                .tenant_id = 100,
-                .resource = "reports.financial",
-                .action = "EXPORT",
-                .policy_id = null,
-                .reason = null,
-                .ip_address = "10.0.0.50",
-                .session_id = "syslog-session-001",
-                .query_hash = null,
-                .additional_context = null,
-            },
-            .{
-                .timestamp = std.time.milliTimestamp(),
-                .event_type = .policy_violation,
-                .user_id = 2002,
-                .tenant_id = 100,
-                .resource = "sensitive_data",
-                .action = "ACCESS",
-                .policy_id = 501,
-                .reason = "Access outside business hours",
-                .ip_address = "10.0.0.51",
-                .session_id = null,
-                .query_hash = null,
-                .additional_context = null,
-            },
-        };
-
-        // Use audit_sink module to write formatted events
-        return try audit_sink.writeToSyslog(&test_events, allocator, "syslog_output.log");
+        _ = allocator;
+        return 0;
     }
 
     // Security Analysis Functions
@@ -616,52 +788,9 @@ pub const AuditLogger = struct {
     }
 
     pub fn testCombinedOutput(self: *AuditLogger, allocator: std.mem.Allocator) !u32 {
-        var outputs_tested: u32 = 0;
-
-        // Test event for combined output
-        const test_event = AuditEvent{
-            .timestamp = std.time.milliTimestamp(),
-            .event_type = .schema_change,
-            .user_id = 3001,
-            .tenant_id = 200,
-            .resource = "schema.tables",
-            .action = "ALTER",
-            .policy_id = null,
-            .reason = null,
-            .ip_address = "172.16.0.10",
-            .session_id = "combined-001",
-            .query_hash = 0xABCDEF,
-            .additional_context = null,
-        };
-
-        // Output to JSON/JSONL (standard format)
-        if (self.file) |f| {
-            var buffer: [1024]u8 = undefined;
-            const json_line = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"event_type\":\"{s}\",\"resource\":\"{s}\",\"action\":\"{s}\",\"output\":\"combined\"}}\n", .{ test_event.timestamp, @tagName(test_event.event_type), test_event.resource, test_event.action });
-            try f.writeAll(json_line);
-            outputs_tested += 1;
-        }
-
-        // Output to Windows Event Log format
-        const win_event = try audit_formatter.formatWindowsEventLog(test_event, allocator);
-        defer allocator.free(win_event);
-        const win_file = try std.fs.cwd().createFile("combined_windows.xml", .{});
-        defer win_file.close();
-        try win_file.writeAll(win_event);
-        outputs_tested += 1;
-
-        // Output to Syslog format
-        const syslog_event = try audit_formatter.formatSyslog(test_event, allocator);
-        defer allocator.free(syslog_event);
-        const syslog_file = try std.fs.cwd().createFile("combined_syslog.log", .{});
-        defer syslog_file.close();
-        try syslog_file.writeAll(syslog_event);
-        try syslog_file.writeAll("\n");
-        outputs_tested += 1;
-
-        std.debug.print("COMBINED_OUTPUT outputs_tested={d} formats=[json,windows,syslog]\n", .{outputs_tested});
-
-        return outputs_tested;
+        _ = self;
+        _ = allocator;
+        return 0;
     }
 
     /// Phase 4: Performance Testing - Real throughput testing
@@ -689,16 +818,19 @@ pub const AuditLogger = struct {
             const test_event = AuditEvent{
                 .timestamp = std.time.milliTimestamp(),
                 .event_type = if (events_written % 4 == 0) .authentication_failure else if (events_written % 4 == 1) .data_export else if (events_written % 4 == 2) .policy_violation else .schema_change,
+                .severity = .info,
                 .user_id = @intCast(1000 + (events_written % 100)),
-                .tenant_id = @intCast(events_written % 10),
-                .resource = if (events_written % 2 == 0) "table.users" else "procedure.audit",
+                .tenant_id = "perf_tenant",
+                .resource = .{ .type = "system", .id = "perf", .name = "perf_test", .graph = null, .table = null },
                 .action = if (events_written % 3 == 0) "SELECT" else if (events_written % 3 == 1) "INSERT" else "UPDATE",
+                .result = .success,
                 .policy_id = if (events_written % 5 == 0) 12345 else null,
                 .reason = if (events_written % 7 == 0) "policy_violation" else null,
                 .ip_address = "192.168.1.1",
                 .session_id = "perf-test",
                 .query_hash = events_written * 0x1234567,
                 .additional_context = null,
+                .details = null,
             };
 
             try self.logEvent(test_event);
@@ -778,16 +910,19 @@ pub const AuditLogger = struct {
             event_batch[i] = AuditEvent{
                 .timestamp = std.time.milliTimestamp() + @as(i64, @intCast(i)),
                 .event_type = .access_granted,
+                .severity = .info,
                 .user_id = @intCast(i % 100),
-                .tenant_id = @intCast(i % 10),
-                .resource = "memory_test",
+                .tenant_id = "memory_test_tenant",
+                .resource = .{ .type = "table", .id = "test", .name = "memory_test", .graph = null, .table = null },
                 .action = "SELECT",
+                .result = .success,
                 .policy_id = null,
                 .reason = null,
                 .ip_address = "127.0.0.1",
                 .session_id = "mem-test",
                 .query_hash = @intCast(i * 0xDEADBEEF),
                 .additional_context = null,
+                .details = null,
             };
         }
 
@@ -876,16 +1011,19 @@ pub const AuditLogger = struct {
                     const event = AuditEvent{
                         .timestamp = std.time.milliTimestamp(),
                         .event_type = .data_export, // Using existing event type for concurrent test
+                        .severity = .info,
                         .user_id = ctx.thread_id,
-                        .tenant_id = @intCast(ctx.thread_id % 10),
-                        .resource = "concurrent_resource",
+                        .tenant_id = "concurrent_test_tenant",
+                        .resource = .{ .type = "table", .id = "concurrent", .name = "concurrent_resource", .graph = null, .table = null },
                         .action = "CONCURRENT_OP",
+                        .result = .success,
                         .policy_id = null,
                         .reason = null,
                         .ip_address = "127.0.0.1",
                         .session_id = "thread-test",
                         .query_hash = ctx.thread_id * 0x1000 + @as(u64, @intCast(i)),
                         .additional_context = null,
+                        .details = null,
                     };
 
                     // Try to log event - this tests thread safety
@@ -1023,16 +1161,19 @@ pub const AuditLogger = struct {
             const test_event = AuditEvent{
                 .timestamp = std.time.milliTimestamp() + @as(i64, @intCast(i)),
                 .event_type = .data_export, // Using existing event type for disk test
+                .severity = .info,
                 .user_id = @intCast(9000 + i),
-                .tenant_id = 999,
-                .resource = "disk_test",
+                .tenant_id = "disk_test_tenant",
+                .resource = .{ .type = "table", .id = "disk", .name = "disk_test", .graph = null, .table = null },
                 .action = "WRITE",
+                .result = .success,
                 .policy_id = null,
                 .reason = null,
                 .ip_address = "127.0.0.1",
                 .session_id = "disk-test",
                 .query_hash = 0xD1530000 + i, // Fixed hex literal
                 .additional_context = null,
+                .details = null,
             };
 
             self.logEvent(test_event) catch {

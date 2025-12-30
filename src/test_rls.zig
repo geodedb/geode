@@ -1,6 +1,6 @@
 const std = @import("std");
-const auth = @import("security/auth.zig");
-const rls = @import("security/rls.zig");
+const auth = @import("geode_auth");
+const rls = @import("rls");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

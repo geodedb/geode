@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const auth = @import("auth.zig");
-const rls = @import("rls.zig");
+const auth = @import("geode_auth");
+const rls = @import("rls");
 
 // CANARY: REQ=REQ-M10-CONSTANTS-003; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=IMPL; OWNER=security; UPDATED=2025-10-17
 // Enhanced RLS cache configuration constants

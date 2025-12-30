@@ -1,5 +1,5 @@
 const std = @import("std");
-const auth = @import("auth");
+const auth = @import("geode_auth");
 const rls = @import("rls");
 const user_manager = @import("user_manager");
 const user_storage = @import("user_storage");
@@ -115,7 +115,7 @@ fn printUsage() !void {
         \\
         \\Commands:
         \\  user     Manage users
-        \\  role     Manage roles  
+        \\  role     Manage roles
         \\  policy   Manage RLS policies
         \\  grant    Grant permissions
         \\  revoke   Revoke permissions

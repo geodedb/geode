@@ -1,5 +1,6 @@
 const std = @import("std");
 const graph_exec = @import("graph/exec.zig");
+const audit = @import("../security/audit.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-005; FEATURE="ServerRefactoring"; ASPECT=GRAPH_STORAGE; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
 // CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=PerGraphStorage; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
@@ -17,6 +18,13 @@ var g_data_dir: ?[]const u8 = null;
 var g_graph_storages: ?std.StringHashMap(*graph_exec.GraphStorage) = null;
 /// Allocator for graph storage map
 var g_allocator: ?std.mem.Allocator = null;
+/// Global audit logger (optional)
+var g_audit_logger: ?*audit.AuditLogger = null;
+
+/// Set the global audit logger for new graph storages
+pub fn setAuditLogger(logger: *audit.AuditLogger) void {
+    g_audit_logger = logger;
+}
 
 /// Get or create the global graph storage instance
 /// Attempts to load from persistent storage if data directory is set
@@ -44,7 +52,7 @@ pub fn getOrCreateGraphStorage(allocator: std.mem.Allocator) *graph_exec.GraphSt
 
     // Create new graph and initialize with sample data if no persistent data
     const graph = allocator.create(graph_exec.GraphStorage) catch unreachable;
-    graph.* = graph_exec.GraphStorage.init(allocator);
+    graph.* = graph_exec.GraphStorage.init(allocator, g_audit_logger);
     initializeSampleGraph(allocator, graph) catch {};
     g_graph_storage = graph;
     return graph;
@@ -67,7 +75,7 @@ pub fn getNextNodeId(graph: *graph_exec.GraphStorage) graph_exec.NodeId {
 /// Returns newly allocated GraphStorage on success
 pub fn tryLoadGraphFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !*graph_exec.GraphStorage {
     const g = allocator.create(graph_exec.GraphStorage) catch return error.OutOfMemory;
-    g.* = graph_exec.GraphStorage.init(allocator);
+    g.* = graph_exec.GraphStorage.init(allocator, g_audit_logger);
     var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
     defer dir.close();
     // nodes.jsonl and edges.jsonl simple line-delimited json
@@ -362,7 +370,7 @@ pub fn createGraphStorage(allocator: std.mem.Allocator, name: []const u8) !*grap
 
     // Create new empty graph storage
     const graph = try allocator.create(graph_exec.GraphStorage);
-    graph.* = graph_exec.GraphStorage.init(allocator);
+    graph.* = graph_exec.GraphStorage.init(allocator, g_audit_logger);
 
     // Register in multi-graph storage
     if (g_graph_storages) |*storages| {

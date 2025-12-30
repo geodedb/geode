@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const Auth = @import("auth.zig").Auth;
+const Auth = @import("geode_auth").Auth;
 
 test "Argon2id - same password produces different hashes (random salts)" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

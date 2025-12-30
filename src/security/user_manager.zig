@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const auth = @import("auth");
+const auth = @import("geode_auth");
 const rls = @import("rls");
 const storage = @import("interface");
 const user_storage = @import("user_storage");

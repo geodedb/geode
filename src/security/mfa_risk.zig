@@ -1,5 +1,5 @@
 const std = @import("std");
-const mfa = @import("mfa.zig");
+const mfa = @import("mfa");
 
 // MFA Risk Sensitivity & Step-Up Decision Module
 // Provides per-action risk scoring and step-up enforcement logic.

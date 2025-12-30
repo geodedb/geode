@@ -1,4 +1,5 @@
 const std = @import("std");
+const audit = @import("../security/audit.zig");
 
 // Shared types between graph execution and index optimization
 // This module contains types that are used by both exec.zig and index_optimizer.zig
@@ -93,8 +94,9 @@ pub const GraphStorage = struct {
     incoming: std.AutoHashMap(NodeId, std.ArrayList(EdgeId)),
     // Optional CSR adjacency (outgoing)
     csr: ?*const anyopaque = null, // Will be cast to CSRAdjacency when needed
+    audit_logger: ?*audit.AuditLogger,
 
-    pub fn init(allocator: std.mem.Allocator) GraphStorage {
+    pub fn init(allocator: std.mem.Allocator, logger: ?*audit.AuditLogger) GraphStorage {
         return .{
             .allocator = allocator,
             .nodes = std.AutoHashMap(NodeId, Node).init(allocator),
@@ -102,6 +104,7 @@ pub const GraphStorage = struct {
             .outgoing = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
             .incoming = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
             .csr = null,
+            .audit_logger = logger,
         };
     }
 
@@ -138,6 +141,38 @@ pub const GraphStorage = struct {
             .labels = owned_labels,
             .properties = props,
         });
+
+        if (self.audit_logger) |logger| {
+            var details = std.StringHashMap([]const u8).init(allocator);
+            // Construct label string
+            if (labels.len > 0) {
+                var buf = std.ArrayList(u8).init(allocator);
+                defer buf.deinit();
+                for (labels, 0..) |l, i| {
+                    if (i > 0) try buf.appendSlice(",");
+                    try buf.appendSlice(l);
+                }
+                try details.put("labels", try allocator.dupe(u8, buf.items));
+            }
+            const rid = try std.fmt.allocPrint(allocator, "node:{}", .{id});
+            defer allocator.free(rid);
+
+            var ev = audit.AuditEvent{
+                .timestamp = std.time.milliTimestamp(),
+                .event_type = .data_modification,
+                .severity = .info,
+                .user_id = .system, // Or context? GraphStorage doesn't have ctx
+                .session_id = "",
+                .resource = .{ .type = "graph_node", .id = rid, .name = rid, .graph = null, .table = null },
+                .action = "create",
+                .result = .success,
+                .details = details,
+            };
+            try logger.appendAuditEvent(&ev);
+            var it = details.iterator();
+            while (it.next()) |e| allocator.free(e.value_ptr.*);
+            details.deinit();
+        }
     }
 
     // Add an edge to the graph
@@ -169,6 +204,36 @@ pub const GraphStorage = struct {
         }
         try target_result.value_ptr.append(allocator, edge_id);
 
+        if (self.audit_logger) |logger| {
+            var details = std.StringHashMap([]const u8).init(allocator);
+            try details.put("type", try allocator.dupe(u8, edge_type));
+            const src_str = try std.fmt.allocPrint(allocator, "{}", .{source});
+            defer allocator.free(src_str);
+            const tgt_str = try std.fmt.allocPrint(allocator, "{}", .{target});
+            defer allocator.free(tgt_str);
+            try details.put("source", try allocator.dupe(u8, src_str));
+            try details.put("target", try allocator.dupe(u8, tgt_str));
+
+            const rid = try std.fmt.allocPrint(allocator, "edge:{}", .{edge_id});
+            defer allocator.free(rid);
+
+            var ev = audit.AuditEvent{
+                .timestamp = std.time.milliTimestamp(),
+                .event_type = .data_modification,
+                .severity = .info,
+                .user_id = .system,
+                .session_id = "",
+                .resource = .{ .type = "graph_edge", .id = rid, .name = rid, .graph = null, .table = null },
+                .action = "create",
+                .result = .success,
+                .details = details,
+            };
+            try logger.appendAuditEvent(&ev);
+            var it = details.iterator();
+            while (it.next()) |e| allocator.free(e.value_ptr.*);
+            details.deinit();
+        }
+
         return edge_id;
     }
 
@@ -195,6 +260,49 @@ pub const GraphStorage = struct {
             // Deep copy the key to ensure it remains valid after AST is freed
             const owned_key = try allocator.dupe(u8, key);
             try node.properties.put(owned_key, value);
+
+            if (self.audit_logger) |logger| {
+                var details = std.StringHashMap([]const u8).init(allocator);
+                try details.put("key", try allocator.dupe(u8, key));
+                // Simplify value logging for now (e.g. type or short string)
+                // Proper value logging might need JSON serialization of PropertyValue, but simplified is OK.
+                // Value logging simplified to type for now
+                // If we alloc'd val_str, we must own it or free it.
+                // The switch returns either literal or alloc'd.
+                // To be safe and uniform, we dupe literal or take ownership.
+                // const stored_val = try allocator.dupe(u8, val_str);
+                // If we alloc'd inside switch (Int, String), we leaked that intermediate buffer if we duped it again.
+                // Better: just format directly into details.
+
+                // Let's redo details putting cleanly without leak risk
+                // Reset details for key/value
+                // We already put 'key'.
+
+                // For value, we just put string representation
+                try details.put("value_type", try allocator.dupe(u8, @tagName(value)));
+
+                const rid = try std.fmt.allocPrint(allocator, "node:{}", .{node_id});
+                defer allocator.free(rid);
+
+                var ev = audit.AuditEvent{
+                    .timestamp = std.time.milliTimestamp(),
+                    .event_type = .data_modification,
+                    .resource = .{ .type = "graph_node", .id = rid, .name = rid, .graph = null, .table = null },
+                    .action = "update_property",
+                    .result = .success,
+                    .details = details,
+                };
+                try logger.appendAuditEvent(&ev);
+
+                // Cleanup
+                // Clean up any extra allocs from switch cases if needed?
+                // The switch cases above were hypothetical. I haven't implemented them yet.
+                // The code above (lines 106-111 in original) handles property values.
+
+                var it = details.iterator();
+                while (it.next()) |e| allocator.free(e.value_ptr.*);
+                details.deinit();
+            }
         } else {
             return error.NodeNotFound;
         }
@@ -214,6 +322,28 @@ pub const GraphStorage = struct {
             // Deep copy the key to ensure it remains valid after AST is freed
             const owned_key = try allocator.dupe(u8, key);
             try self.edges.items[edge_id].properties.put(owned_key, value);
+
+            if (self.audit_logger) |logger| {
+                var details = std.StringHashMap([]const u8).init(allocator);
+                try details.put("key", try allocator.dupe(u8, key));
+                try details.put("value_type", try allocator.dupe(u8, @tagName(value)));
+
+                const rid = try std.fmt.allocPrint(allocator, "edge:{}", .{edge_id});
+                defer allocator.free(rid);
+
+                var ev = audit.AuditEvent{
+                    .timestamp = std.time.milliTimestamp(),
+                    .event_type = .data_modification,
+                    .resource = .{ .type = "graph_edge", .id = rid, .name = rid, .graph = null, .table = null },
+                    .action = "update_property",
+                    .result = .success,
+                    .details = details,
+                };
+                try logger.appendAuditEvent(&ev);
+                var it = details.iterator();
+                while (it.next()) |e| allocator.free(e.value_ptr.*);
+                details.deinit();
+            }
         } else {
             return error.EdgeNotFound;
         }
@@ -231,6 +361,25 @@ pub const GraphStorage = struct {
     pub fn removeNodeProperty(self: *GraphStorage, node_id: NodeId, key: []const u8) !void {
         if (self.nodes.getPtr(node_id)) |node| {
             _ = node.properties.remove(key);
+
+            if (self.audit_logger) |logger| {
+                var details = std.StringHashMap([]const u8).init(self.allocator);
+                try details.put("key", try self.allocator.dupe(u8, key));
+                const rid = try std.fmt.allocPrint(self.allocator, "node:{}", .{node_id});
+                defer self.allocator.free(rid);
+                var ev = audit.AuditEvent{
+                    .timestamp = std.time.milliTimestamp(),
+                    .event_type = .data_modification,
+                    .resource = .{ .type = "graph_node", .id = rid, .name = rid, .graph = null, .table = null },
+                    .action = "delete_property",
+                    .result = .success,
+                    .details = details,
+                };
+                try logger.appendAuditEvent(&ev);
+                var it = details.iterator();
+                while (it.next()) |e| self.allocator.free(e.value_ptr.*);
+                details.deinit();
+            }
         } else {
             return error.NodeNotFound;
         }
@@ -240,6 +389,24 @@ pub const GraphStorage = struct {
     pub fn removeEdgeProperty(self: *GraphStorage, edge_id: EdgeId, key: []const u8) !void {
         if (edge_id < self.edges.items.len) {
             _ = self.edges.items[edge_id].properties.remove(key);
+            if (self.audit_logger) |logger| {
+                var details = std.StringHashMap([]const u8).init(self.allocator);
+                try details.put("key", try self.allocator.dupe(u8, key));
+                const rid = try std.fmt.allocPrint(self.allocator, "edge:{}", .{edge_id});
+                defer self.allocator.free(rid);
+                var ev = audit.AuditEvent{
+                    .timestamp = std.time.milliTimestamp(),
+                    .event_type = .data_modification,
+                    .resource = .{ .type = "graph_edge", .id = rid, .name = rid, .graph = null, .table = null },
+                    .action = "delete_property",
+                    .result = .success,
+                    .details = details,
+                };
+                try logger.appendAuditEvent(&ev);
+                var it = details.iterator();
+                while (it.next()) |e| self.allocator.free(e.value_ptr.*);
+                details.deinit();
+            }
         } else {
             return error.EdgeNotFound;
         }
@@ -248,6 +415,22 @@ pub const GraphStorage = struct {
     // CANARY: REQ=REQ-TXN-UNDO-SERVER-012; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageRemoveNode; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
     // Remove a node from the graph (for rollback support)
     pub fn removeNode(self: *GraphStorage, node_id: NodeId) void {
+        if (self.audit_logger) |logger| {
+            // simplified logging for delete
+            const rid = std.fmt.allocPrint(self.allocator, "node:{}", .{node_id}) catch "unknown";
+            defer if (!std.mem.eql(u8, rid, "unknown")) self.allocator.free(rid);
+
+            var ev = audit.AuditEvent{
+                .timestamp = std.time.milliTimestamp(),
+                .event_type = .data_modification,
+                .resource = .{ .type = "graph_node", .id = rid, .name = rid, .graph = null, .table = null },
+                .action = "delete",
+                .result = .success,
+                .details = null,
+            };
+            logger.appendAuditEvent(&ev) catch {};
+        }
+
         // Remove from adjacency lists
         if (self.outgoing.fetchRemove(node_id)) |entry| {
             entry.value.deinit(self.allocator);
@@ -296,6 +479,21 @@ pub const GraphStorage = struct {
     // Mark an edge as deleted (for rollback support) - we can't actually remove from ArrayList
     // without reindexing, so we mark it by setting source/target to max value
     pub fn removeEdge(self: *GraphStorage, edge_id: EdgeId) void {
+        if (self.audit_logger) |logger| {
+            const rid = std.fmt.allocPrint(self.allocator, "edge:{}", .{edge_id}) catch "unknown";
+            defer if (!std.mem.eql(u8, rid, "unknown")) self.allocator.free(rid);
+
+            var ev = audit.AuditEvent{
+                .timestamp = std.time.milliTimestamp(),
+                .event_type = .data_modification,
+                .resource = .{ .type = "graph_edge", .id = rid, .name = rid, .graph = null, .table = null },
+                .action = "delete",
+                .result = .success,
+                .details = null,
+            };
+            logger.appendAuditEvent(&ev) catch {};
+        }
+
         if (edge_id < self.edges.items.len) {
             const edge = &self.edges.items[edge_id];
             const source = edge.source;

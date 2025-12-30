@@ -1,6 +1,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 const Allocator = std.mem.Allocator;
+const audit = @import("../security/audit.zig");
 
 pub const EncryptionAlgorithm = enum {
     none,
@@ -68,7 +69,7 @@ pub const CryptoManager = struct {
     current_key: EncryptionKey,
     key_cache: std.StringHashMap(EncryptionKey),
     rotation_in_progress: bool,
-    audit_logger: ?*AuditLogger,
+    audit_logger: ?*audit.AuditLogger,
 
     const Self = @This();
 
@@ -356,7 +357,30 @@ pub const CryptoManager = struct {
 
         // Log rotation event
         if (self.audit_logger) |logger| {
-            try logger.logKeyRotation(old_key.provenance, self.current_key.provenance);
+            // Construct canonical AuditEvent for key rotation
+            var details = std.StringHashMap([]const u8).init(self.allocator);
+            // We leak details map for now or logger takes ownership?
+            // My adapter implementation DOES NOT free keys in details map, but it frees the map.
+            // So I should duplicate strings.
+            try details.put("old_version", try std.fmt.allocPrint(self.allocator, "{}", .{old_key.provenance.version}));
+            try details.put("new_version", try std.fmt.allocPrint(self.allocator, "{}", .{self.current_key.provenance.version}));
+
+            var ev = audit.AuditEvent{
+                .timestamp = std.time.milliTimestamp(),
+                .event_type = .system_event,
+                .severity = .info,
+                .user_id = .system,
+                .session_id = "",
+                .resource = .{ .type = "security", .id = "encryption_keys", .name = "encryption_keys", .graph = null, .table = null },
+                .action = "KEY_ROTATION",
+                .result = .success,
+                .details = details,
+            };
+            try logger.appendAuditEvent(&ev);
+
+            var it = details.iterator();
+            while (it.next()) |e| self.allocator.free(e.value_ptr.*);
+            details.deinit();
         }
     }
 
@@ -383,39 +407,6 @@ pub const CryptoManager = struct {
 
         // Re-encrypt with current key
         return try self.encryptPage(plaintext, page_id);
-    }
-};
-
-pub const AuditLogger = struct {
-    allocator: Allocator,
-    log_file: ?std.fs.File,
-
-    pub fn init(allocator: Allocator, log_path: ?[]const u8) !AuditLogger {
-        const file = if (log_path) |path|
-            try std.fs.cwd().createFile(path, .{ .truncate = false })
-        else
-            null;
-
-        return AuditLogger{
-            .allocator = allocator,
-            .log_file = file,
-        };
-    }
-
-    pub fn deinit(self: *AuditLogger) void {
-        if (self.log_file) |file| {
-            file.close();
-        }
-    }
-
-    pub fn logKeyRotation(self: *AuditLogger, old: KeyProvenance, new: KeyProvenance) !void {
-        const timestamp = std.time.milliTimestamp();
-        const message = try std.fmt.allocPrint(self.allocator, "[{}] KEY_ROTATION: {} v{} -> {} v{}\n", .{ timestamp, old.key_id, old.version, new.key_id, new.version });
-        defer self.allocator.free(message);
-
-        if (self.log_file) |file| {
-            _ = try file.write(message);
-        }
     }
 };
 

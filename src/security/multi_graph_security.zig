@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const auth = @import("auth.zig");
+const auth = @import("geode_auth");
 
 // ============================================================================
 // Graph-Scoped RBAC

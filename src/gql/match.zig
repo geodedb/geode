@@ -4,7 +4,7 @@ const planner = @import("../planner.zig");
 const exec = @import("../exec.zig");
 const txn = @import("../transactions/manager.zig");
 const storage = @import("../storage/interface.zig");
-const rls = @import("../security/rls.zig");
+const rls = @import("rls");
 const diagnostics = @import("../diagnostics.zig");
 
 // CANARY: REQ=REQ-GQL-MATCH; FEATURE="MATCH Engine"; ASPECT=ComplexPatterns; STATUS=TESTED; TEST=e2e_match_complex; OWNER=gql; UPDATED=2025-09-25

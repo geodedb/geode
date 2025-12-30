@@ -3,7 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
-const mfa = @import("mfa.zig");
+const mfa = @import("mfa");
 // Note: hash_module import will need to be configured via build.zig module system
 // For now, use std.crypto.pwhash.argon2 directly
 
