@@ -138,7 +138,7 @@ pub fn run(allocator: std.mem.Allocator, config: StressConfig) !void {
     var verified: usize = 0;
     for (items.items) |item| {
         if (item.deleted) continue;
-        const p = pm.asPage(item.page_id);
+        const p = pm.asPage(@intCast(item.page_id));
         const sl = p.readSlot(item.slot_id);
         const data = p.buf[sl.off .. sl.off + sl.sz];
         const h = std.hash.Wyhash.hash(0, data);
