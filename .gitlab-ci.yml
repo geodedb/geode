@@ -59,7 +59,7 @@ snapshot:
     GIT_DEPTH: 0
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
-    - apk add --no-cache curl git bash tar xz
+    - apk add --no-cache curl git bash tar xz coreutils
     # Install Zig
     - |
       ZIG_URL="https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
@@ -115,7 +115,7 @@ release:
     GIT_DEPTH: 0
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
-    - apk add --no-cache curl git bash tar xz
+    - apk add --no-cache curl git bash tar xz coreutils
     # Install Zig
     - |
       ZIG_URL="https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
