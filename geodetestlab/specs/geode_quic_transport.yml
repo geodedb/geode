@@ -85,6 +85,7 @@ tests:
   # Connection error handling
   - name: "connection-timeout"
     description: "Test connection timeout handling"
+    no_server_override: true  # Use explicit --server address (not the auto-started server)
     args: ["query", "--server", "127.0.0.1:65000", "--timeout", "1", "RETURN 1"]
     expect:
       exit_code: 1
@@ -93,6 +94,7 @@ tests:
 
   - name: "invalid-host"
     description: "Test invalid hostname handling"
+    no_server_override: true  # Use explicit --server address (not the auto-started server)
     args: ["query", "--server", "invalid.invalid:3141", "--timeout", "2", "RETURN 1"]
     expect:
       exit_code: 1
@@ -100,6 +102,7 @@ tests:
 
   - name: "connection-refused"
     description: "Test connection refused handling"
+    no_server_override: true  # Use explicit --server address (not the auto-started server)
     args: ["query", "--server", "127.0.0.1:12345", "--timeout", "1", "RETURN 1"]
     expect:
       exit_code: 1

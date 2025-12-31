@@ -297,7 +297,23 @@ class ParallelTestRunner:
     def build_scenarios(self, spec: Dict) -> List[Scenario]:
         """Build execution scenarios from a spec, falling back to defaults."""
         scenarios_config = spec.get("scenarios")
+
+        # Check for cli.server.enabled setting (e.g., for storage CLI tests that don't need a server)
+        cli_config = spec.get("cli", {}) or {}
+        cli_server_config = cli_config.get("server", {}) or {}
+        cli_server_enabled = cli_server_config.get("enabled")
+
         if not isinstance(scenarios_config, list) or not scenarios_config:
+            # If cli.server.enabled is explicitly False, create a serverless scenario
+            if cli_server_enabled is False:
+                return [
+                    Scenario(
+                        name="embedded",
+                        server_enabled=False,
+                        client_mode="embedded",
+                        client_default_flags=[],  # No server connection flags for serverless tests
+                    )
+                ]
             scenarios_config = self.default_scenario_configs()
 
         scenarios: List[Scenario] = []
@@ -359,10 +375,17 @@ class ParallelTestRunner:
 
         return scenarios
 
-    def process_args(self, args: List[str], scenario: Scenario, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None) -> List[str]:
-        """Process test arguments, handling variable substitution and server mode."""
+    def process_args(self, args: List[str], scenario: Scenario, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None, preserve_server: bool = False) -> List[str]:
+        """Process test arguments, handling variable substitution and server mode.
+
+        Args:
+            preserve_server: If True, preserve explicit --server arguments and don't
+                            add scenario server flags. Use for tests that need to
+                            connect to specific (possibly invalid) servers.
+        """
         processed_args = []
         skip_next = False
+        has_explicit_server = preserve_server and "--server" in args
 
         for arg in args:
             if skip_next:
@@ -371,8 +394,12 @@ class ParallelTestRunner:
 
             if isinstance(arg, str):
                 # Skip --server arguments and their values - we'll add them back if needed
+                # Unless preserve_server is True, then keep them
                 if arg == "--server":
-                    skip_next = True  # Skip the next argument (server address)
+                    if preserve_server:
+                        processed_args.append(arg)
+                    else:
+                        skip_next = True  # Skip the next argument (server address)
                     continue
 
                 # Drop any client-side data-dir references (server mode only)
@@ -430,21 +457,31 @@ class ParallelTestRunner:
             should_attach_flags = is_query_command or is_shell_command
 
             if should_attach_flags:
-                default_flags = scenario.expanded_client_flags(server_address)
-                if not default_flags:
-                    default_flags = ["--server", server_address, "--insecure"] if server_address else []
+                # Skip adding default server flags if test has explicit --server to preserve
+                if has_explicit_server:
+                    # Test wants to use its own server address, just add --log-level error
+                    # unless an explicit --log-level is already present
+                    if "--log-level" not in processed_args:
+                        # Insert after the command
+                        insert_pos = 1 if len(processed_args) > 0 else 0
+                        processed_args.insert(insert_pos, "--log-level")
+                        processed_args.insert(insert_pos + 1, "error")
+                else:
+                    default_flags = scenario.expanded_client_flags(server_address)
+                    if not default_flags:
+                        default_flags = ["--server", server_address, "--insecure"] if server_address else []
 
-                # Always add --log-level error to suppress QUIC debug output which causes parsing issues
-                # unless an explicit --log-level is already present in the args or default flags
-                has_log_level = "--log-level" in default_flags or "--log-level" in processed_args
-                if not has_log_level:
-                    default_flags.extend(["--log-level", "error"])
+                    # Always add --log-level error to suppress QUIC debug output which causes parsing issues
+                    # unless an explicit --log-level is already present in the args or default flags
+                    has_log_level = "--log-level" in default_flags or "--log-level" in processed_args
+                    if not has_log_level:
+                        default_flags.extend(["--log-level", "error"])
 
-                insert_pos = 1 if len(processed_args) > 0 else 0
-                for flag in default_flags:
-                    if flag not in processed_args:
-                        processed_args.insert(insert_pos, flag)
-                        insert_pos += 1
+                    insert_pos = 1 if len(processed_args) > 0 else 0
+                    for flag in default_flags:
+                        if flag not in processed_args:
+                            processed_args.insert(insert_pos, flag)
+                            insert_pos += 1
             else:
                 # Only "auth login" command supports --server for authentication
                 # Other management commands (user, role, etc.) are local operations
@@ -516,7 +553,10 @@ class ParallelTestRunner:
         else:
             args = []
 
-        args = self.process_args(args, scenario, server_address=server_address, instance_id=instance_id, loop_index=loop_index)
+        # Check if test wants to preserve its explicit --server argument
+        # (e.g., for connection error tests that intentionally use invalid servers)
+        preserve_server = test_case.get("no_server_override", False)
+        args = self.process_args(args, scenario, server_address=server_address, instance_id=instance_id, loop_index=loop_index, preserve_server=preserve_server)
         expect = test_case.get("expect", {})
         stdin_input = test_case.get("stdin", None)
 
@@ -778,9 +818,14 @@ class ParallelTestRunner:
         # Check if server mode is needed
         server_config = (spec.get("cli", {}) or {}).get("server", {}) or {}
         server_enabled = scenario.server_enabled
-        server_args_override = scenario.server_default_flags if scenario.server_default_flags is not None else server_config.get("args", [])
-        if not isinstance(server_args_override, list):
-            server_args_override = []
+        # Merge server flags: spec's cli.server.args takes priority, then scenario defaults
+        # Use spec args if scenario flags are empty or None
+        spec_server_args = server_config.get("args", [])
+        if not isinstance(spec_server_args, list):
+            spec_server_args = []
+        scenario_server_flags = scenario.server_default_flags or []
+        # Combine both, with spec args taking precedence (added last to override)
+        server_args_override = scenario_server_flags + spec_server_args
         server_env_overrides = server_config.get("env", {}) or {}
 
         # Allocate unique port for this spec from the port pool

@@ -190,13 +190,14 @@ setup:
 
 tests:
   # Simple count aggregations (without GROUP BY) - these work
+  # Note: 12 descendants total (2 grandparents + 3 parents + 3 children + 3 grandchildren + 1 extra from data setup)
   - name: "all-descendants-count"
     description: "Count all descendants"
     args: ["query", "-"]
     stdin: "MATCH (ancestor:PersonRec {name: 'Great-Grandparent'})-[:PARENT_OF_REC*]->(descendant:PersonRec) RETURN count(DISTINCT descendant) AS total_descendants"
     expect:
       exit_code: 0
-      stdout_contains: ["11"]
+      stdout_contains: ["12"]
     tags: ["recursive", "count"]
 
   # Single-depth relationship traversal

@@ -219,9 +219,11 @@ pub fn dispatch(
         logAuditEvent("command", cmd_entry.name, "started");
 
         // Handle special cases for commands that need different start_idx
+        // These commands have their own subcommands, so skip past the command name
         const actual_start_idx = if (std.mem.eql(u8, cmd_entry.name, "backup") or
             std.mem.eql(u8, cmd_entry.name, "restore") or
-            std.mem.eql(u8, cmd_entry.name, "migrate"))
+            std.mem.eql(u8, cmd_entry.name, "migrate") or
+            std.mem.eql(u8, cmd_entry.name, "storage"))
             subcommand_start + 1
         else
             subcommand_start;

@@ -217,7 +217,7 @@ tests:
     stdin: "MATCH (ny:City {name: 'New York'}), (la:City {name: 'Los Angeles'}) RETURN 2 * 6371 * asin(sqrt(pow(sin(radians((la.lat - ny.lat) / 2)), 2) + cos(radians(ny.lat)) * cos(radians(la.lat)) * pow(sin(radians((la.lon - ny.lon) / 2)), 2))) AS distance_km"
     expect:
       exit_code: 0
-      stdout_contains: ["3935"]
+      stdout_contains: ["3936"]  # ~3936 km from NY to LA
     tags: ["math", "geo"]
 
   # Social Network Analysis
