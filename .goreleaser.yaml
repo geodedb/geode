@@ -439,11 +439,12 @@ metadata:
 # =============================================================================
 # SBOMs (Software Bill of Materials)
 # =============================================================================
-
-sboms:
-  - id: archive
-    artifacts: archive
-    args: ["scan", "--output", "cyclonedx-json=$document", "$artifact"]
+# Disabled - requires syft to be installed in CI
+# TODO: Install syft in CI and re-enable
+# sboms:
+#   - id: archive
+#     artifacts: archive
+#     args: ["scan", "--output", "cyclonedx-json=$document", "$artifact"]
 
 # =============================================================================
 # Signs (optional - enable for production)
