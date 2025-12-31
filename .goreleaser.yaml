@@ -35,9 +35,10 @@ builds:
       # macOS targets
       - x86_64-macos
       - aarch64-macos
-      # Windows targets
-      - x86_64-windows
-      - aarch64-windows
+      # Windows targets - currently disabled due to QUIC library socket type incompatibilities
+      # TODO: Re-enable when vendor/quic adds Windows socket support
+      # - x86_64-windows
+      # - aarch64-windows
 
 # =============================================================================
 # Archives - Binary Distribution

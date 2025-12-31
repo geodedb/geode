@@ -6,7 +6,7 @@ fn printOut(comptime fmt: []const u8, args: anytype) void {
     // Write directly to STDOUT so help text lands in the expected stream for tests.
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout = std.io.getStdOut();
     stdout.writeAll(msg) catch {};
 }
 
