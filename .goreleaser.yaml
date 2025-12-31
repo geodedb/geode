@@ -2,56 +2,91 @@ version: 2
 
 project_name: geode
 
-# Note: GoReleaser Pro features enabled via CI/CD with GORELEASER_KEY
-# Pro features used: enhanced caching, improved performance
+# Note: GoReleaser Pro features may be enabled via CI/CD with GORELEASER_KEY
+# This configuration works with both free and Pro versions
 
 before:
   hooks:
-    # Binaries are built separately by GitLab CI with Zig
-    # They are placed in dist/ directory before GoReleaser runs
-    # No need to rebuild here - just package what's already built
+    # Ensure clean state
+    - rm -rf dist/
 
-# Zig builds are handled separately (make release or GitLab CI)
-# GoReleaser is used only for packaging, not building
+# =============================================================================
+# Zig Cross-Compilation Builds
+# =============================================================================
+# Using GoReleaser's native Zig builder for cross-compilation
+# Reference: https://goreleaser.com/customization/builds/zig/
+
 builds:
   - id: geode
-    skip: true
+    builder: zig
+    binary: geode
+    dir: .
+    command: build
+    flags:
+      - "-Doptimize=ReleaseSafe"
+    targets:
+      # Linux targets
+      - x86_64-linux-gnu
+      - x86_64-linux-musl
+      - aarch64-linux-gnu
+      - aarch64-linux-musl
+      - arm-linux-gnueabihf
+      - riscv64-linux-gnu
+      # macOS targets
+      - x86_64-macos
+      - aarch64-macos
+      # Windows targets
+      - x86_64-windows
+      - aarch64-windows
 
-# Create archives from pre-built binaries
+# =============================================================================
+# Archives - Binary Distribution
+# =============================================================================
+
 archives:
   - id: geode-archives
-    # Package pre-built binaries into versioned archives
-    # Use meta mode since we're packaging without GoReleaser builds
-    meta: true
-    name_template: "geode_{{ .Version }}"
-    formats:
-      - tar.gz
-      - zip
+    builds:
+      - geode
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macOS
+      {{- else if eq .Os "linux" }}Linux
+      {{- else if eq .Os "windows" }}Windows
+      {{- else }}{{ title .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
+      {{- else if eq .Arch "arm64" }}arm64
+      {{- else if eq .Arch "riscv64" }}riscv64
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- with .Abi }}_{{ . }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
     files:
-      # Include binaries from Zig build output
-      # Local builds: zig-out/bin/*
-      # CI builds: dist/*
-      - "zig-out/bin/*"
-      # Include documentation
       - README.md
       - LICENSE
-      - "docs/**/*"
+      - docs/QUICK_REFERENCE.md
+      - docs/API_REFERENCE.md
+
+# =============================================================================
+# Checksums
+# =============================================================================
 
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
-snapshot:
-  version_template: "{{ .Branch }}-{{ .ShortCommit }}-snapshot"
+# =============================================================================
+# Snapshots
+# =============================================================================
 
-# Nightly builds (GoReleaser Pro feature)
-# Automatic nightly releases for development/testing
-# Note: This configuration is handled by the nightly workflow with --nightly flag
-# Features:
-# - Automatic nightly releases
-# - Publishes as pre-release
-# - Docker images tagged as :nightly
-# - Keeps last 7 nightly releases
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+# =============================================================================
+# Changelog Generation
+# =============================================================================
 
 changelog:
   sort: asc
@@ -75,18 +110,6 @@ changelog:
     - title: "Documentation"
       regexp: '^.*docs(\(.+\))?:.*$'
       order: 5
-    - title: "Refactor"
-      regexp: '^.*refactor(\(.+\))?:.*$'
-      order: 6
-    - title: "Tests"
-      regexp: '^.*test(\(.+\))?:.*$'
-      order: 7
-    - title: "CI/CD"
-      regexp: '^.*ci(\(.+\))?:.*$'
-      order: 8
-    - title: "Build System"
-      regexp: '^.*build(\(.+\))?:.*$'
-      order: 9
     - title: "Other"
       order: 999
   filters:
@@ -96,20 +119,20 @@ changelog:
       - 'Merge pull request'
       - 'Merge branch'
 
-# Docker images for GitLab Container Registry
-# Uses CI_REGISTRY_IMAGE environment variable from GitLab CI
-# Pre-built binaries from dist/ directory are packaged into Docker images
+# =============================================================================
+# Docker Images - Multi-Architecture
+# =============================================================================
+
 dockers:
-  # Debian-based image (default) - uses pre-built binaries from GitLab CI
+  # Debian-based images
   - id: geode-debian-amd64
+    ids:
+      - geode
     goos: linux
     goarch: amd64
     image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:latest"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}.{{ .Minor }}"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}"
-    dockerfile: Dockerfile.ci
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
+    dockerfile: Dockerfile.release
     use: buildx
     build_flag_templates:
       - "--pull"
@@ -121,122 +144,198 @@ dockers:
       - "--label=org.opencontainers.image.source={{.GitURL}}"
       - "--label=org.opencontainers.image.description=Geode Graph Database - GQL-compliant property-graph database"
       - "--label=org.opencontainers.image.licenses=MIT"
-    extra_files:
-      - dist/
 
-  # Alpine-based image (smaller) - uses pre-built binaries from GitLab CI
+  - id: geode-debian-arm64
+    ids:
+      - geode
+    goos: linux
+    goarch: arm64
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
+    dockerfile: Dockerfile.release
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+
+  # Alpine-based images (smaller)
   - id: geode-alpine-amd64
+    ids:
+      - geode
     goos: linux
     goarch: amd64
+    goamd64: v1
     image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:alpine"
-    dockerfile: Dockerfile.ci.alpine
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64"
+    dockerfile: Dockerfile.release.alpine
     use: buildx
     build_flag_templates:
       - "--pull"
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}-alpine"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.source={{.GitURL}}"
-      - "--label=org.opencontainers.image.description=Geode Graph Database (Alpine) - GQL-compliant property-graph database"
-      - "--label=org.opencontainers.image.licenses=MIT"
-    extra_files:
-      - dist/
 
-# System packages (deb, rpm)
-# Disabled for local snapshot testing - will work in CI with dist/ populated
-nfpms: []
+  - id: geode-alpine-arm64
+    ids:
+      - geode
+    goos: linux
+    goarch: arm64
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64"
+    dockerfile: Dockerfile.release.alpine
+    use: buildx
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}-alpine"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
 
-# Commented out for reference - uncomment for CI:
-# nfpms:
-#   - id: geode-packages
-#     package_name: geode
-#     vendor: Spyder
-#     homepage: https://gitlab.com/devnw/spyder/geode
-#     maintainer: Geode CI <ci@geode.dev>
-#     description: |-
-#       Geode Graph Database - GQL-compliant property-graph database.
-#
-#       Geode is a high-performance graph database implementing the ISO/IEC 39075:2024
-#       GQL standard with ACID guarantees and QUIC/TLS transport.
-#     license: MIT
-#     formats:
-#       - deb
-#       - rpm
-#     bindir: /usr/bin
-#     section: database
-#     priority: optional
-#     provides:
-#       - geode
-#     dependencies:
-#       - ca-certificates
-#       - openssl
-#     recommends:
-#       - libvulkan1
-#     file_name_template: >-
-#       {{ .ProjectName }}_{{ .Version }}_
-#       {{- if eq .Os "linux" }}Linux{{- else }}{{ title .Os }}{{ end }}_
-#       {{- if eq .Arch "amd64" }}x86_64
-#       {{- else if eq .Arch "386" }}i386
-#       {{- else if eq .Arch "arm" }}armv{{ .Arm }}
-#       {{- else }}{{ .Arch }}{{ end }}
-#       {{- with .Libc }}_{{ . }}{{ end }}
-#     contents:
-#       # Main binary from GitLab CI build
-#       - src: dist/geode
-#         dst: /usr/bin/geode
-#         file_info:
-#           mode: 0755
-#
-#       # CLI client binary
-#       - src: dist/geodec
-#         dst: /usr/bin/geodec
-#         file_info:
-#           mode: 0755
-#
-#       # Documentation
-#       - src: README.md
-#         dst: /usr/share/doc/geode/README.md
-#
-#       - src: LICENSE
-#         dst: /usr/share/doc/geode/LICENSE
-#
-#       # Data directory
-#       - dst: /var/lib/geode
-#         type: dir
-#         file_info:
-#           mode: 0750
-#
-#       # Log directory
-#       - dst: /var/log/geode
-#         type: dir
-#         file_info:
-#           mode: 0750
-#
-#     overrides:
-#       deb:
-#         dependencies:
-#           - libssl3
-#         recommends:
-#           - vulkan-tools
-#       rpm:
-#         dependencies:
-#           - openssl-libs
-#       apk:
-#         dependencies:
-#           - libssl3
+# =============================================================================
+# Docker Manifests - Multi-arch tags
+# =============================================================================
 
-# Homebrew formula (CLI tool)
-# Disabled for local testing and GitLab - GitHub only
-brews: []
+docker_manifests:
+  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}"
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
+
+  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:latest"
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
+
+  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}.{{ .Minor }}"
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
+
+  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}"
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
+
+  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:alpine"
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64"
+
+  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine"
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64"
+
+# =============================================================================
+# System Packages - nFPM (deb, rpm, apk)
+# =============================================================================
+
+nfpms:
+  - id: geode-packages
+    package_name: geode
+    builds:
+      - geode
+    vendor: Spyder
+    homepage: https://gitlab.com/devnw/geode/geode
+    maintainer: Geode Team <geode@devnw.com>
+    description: |-
+      Geode Graph Database - ISO/IEC 39075:2024 GQL-compliant property-graph database.
+
+      Geode is a high-performance graph database implementing the GQL standard
+      with ACID guarantees, QUIC/TLS transport, and enterprise security features.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+    section: database
+    priority: optional
+    provides:
+      - geode
+    dependencies:
+      - ca-certificates
+    recommends:
+      - openssl
+    file_name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "linux" }}Linux{{- else }}{{ title .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
+      {{- else if eq .Arch "arm64" }}arm64
+      {{- else if eq .Arch "riscv64" }}riscv64
+      {{- else }}{{ .Arch }}{{ end }}
+    contents:
+      # Documentation
+      - src: README.md
+        dst: /usr/share/doc/geode/README.md
+        file_info:
+          mode: 0644
+
+      - src: LICENSE
+        dst: /usr/share/doc/geode/LICENSE
+        file_info:
+          mode: 0644
+
+      - src: docs/QUICK_REFERENCE.md
+        dst: /usr/share/doc/geode/QUICK_REFERENCE.md
+        file_info:
+          mode: 0644
+
+      # Data directory
+      - dst: /var/lib/geode
+        type: dir
+        file_info:
+          mode: 0750
+
+      # Log directory
+      - dst: /var/log/geode
+        type: dir
+        file_info:
+          mode: 0750
+
+      # Certificate directory
+      - dst: /etc/geode/certs
+        type: dir
+        file_info:
+          mode: 0700
+
+    overrides:
+      deb:
+        dependencies:
+          - ca-certificates
+          - libssl3
+        recommends:
+          - libvulkan1
+      rpm:
+        dependencies:
+          - ca-certificates
+          - openssl-libs
+      apk:
+        dependencies:
+          - ca-certificates
+          - libssl3
+
+    scripts:
+      postinstall: scripts/packaging/postinstall.sh
+      preremove: scripts/packaging/preremove.sh
+
+# =============================================================================
+# GitLab Release
+# =============================================================================
 
 release:
   gitlab:
     owner: devnw
-    name: spyder/geode
+    name: geode/geode
 
   name_template: "Geode v{{ .Version }}"
 
@@ -246,11 +345,14 @@ release:
   header: |
     ## Geode v{{ .Version }}
 
-    ISO/IEC 39075:2024 GQL-compliant property-graph database.
+    **ISO/IEC 39075:2024 GQL-compliant property-graph database.**
 
     ### Highlights
 
-    <!-- Add release highlights here -->
+    - 98.6% GQL Compliance
+    - Enterprise Security (TDE, RLS, Audit Logging)
+    - QUIC/TLS Transport
+    - Multi-platform Support
 
   footer: |
     ---
@@ -259,8 +361,15 @@ release:
 
     **Linux (Debian/Ubuntu)**
     ```bash
-    wget {{ .Env.CI_API_V4_URL }}/projects/{{ .Env.CI_PROJECT_ID }}/packages/generic/geode/{{ .Version }}/geode_{{ .Version }}_Linux_x86_64.deb
+    # Download and install
+    wget https://gitlab.com/devnw/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.deb
     sudo dpkg -i geode_{{ .Version }}_Linux_x86_64.deb
+    ```
+
+    **Linux (RHEL/Fedora)**
+    ```bash
+    wget https://gitlab.com/devnw/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.rpm
+    sudo rpm -i geode_{{ .Version }}_Linux_x86_64.rpm
     ```
 
     **Docker**
@@ -269,31 +378,93 @@ release:
     docker run -p 8443:8443/udp {{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}
     ```
 
-    **Manual Installation**
+    **macOS (Homebrew)**
+    ```bash
+    brew tap devnw/geode
+    brew install geode
+    ```
+
+    **Binary Download**
     Download the appropriate archive for your platform from the assets below.
 
   disable: false
 
-# Announce releases (disabled for GitLab)
+  extra_files:
+    - glob: ./dist/*.deb
+    - glob: ./dist/*.rpm
+    - glob: ./dist/*.apk
+
+# =============================================================================
+# Homebrew Tap
+# =============================================================================
+
+brews:
+  - name: geode
+    ids:
+      - geode-archives
+    repository:
+      owner: devnw
+      name: homebrew-geode
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    url_template: "https://gitlab.com/devnw/geode/geode/-/releases/{{ .Tag }}/downloads/{{ .ArtifactName }}"
+    commit_author:
+      name: geode-bot
+      email: geode-bot@devnw.com
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    directory: Formula
+    homepage: "https://gitlab.com/devnw/geode/geode"
+    description: "ISO/IEC 39075:2024 GQL-compliant property-graph database"
+    license: "MIT"
+    skip_upload: auto
+    test: |
+      system "#{bin}/geode", "--version"
+    install: |
+      bin.install "geode"
+
+# =============================================================================
+# Universal Binaries (macOS)
+# =============================================================================
+
+universal_binaries:
+  - id: geode-universal
+    ids:
+      - geode
+    name_template: "geode"
+    replace: true
+
+# =============================================================================
+# Announce (disabled - configure webhooks in GitLab)
+# =============================================================================
+
 announce:
   skip: true
 
-# Homebrew (disabled for GitLab - GitHub only)
-# brews section removed
-
+# =============================================================================
 # Metadata
+# =============================================================================
+
 metadata:
   mod_timestamp: "{{ .CommitTimestamp }}"
 
-# Signing (disabled - configure in GitLab CI if needed)
-# signs section removed
-
+# =============================================================================
 # SBOMs (Software Bill of Materials)
-# Disabled for local testing - requires syft to be installed
-sboms: []
-# sboms:
-#   - id: archive
-#     artifacts: archive
+# =============================================================================
 
-# Milestones (disabled for GitLab)
-# milestones section removed
+sboms:
+  - id: archive
+    artifacts: archive
+    args: ["scan", "--output", "cyclonedx-json=$document", "$artifact"]
+
+# =============================================================================
+# Signs (optional - enable for production)
+# =============================================================================
+
+# signs:
+#   - cmd: cosign
+#     artifacts: checksum
+#     output: true
+#     args:
+#       - "sign-blob"
+#       - "--output-signature=${signature}"
+#       - "${artifact}"
+#       - "--yes"

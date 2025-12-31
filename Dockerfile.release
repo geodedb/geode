@@ -1,0 +1,36 @@
+# Dockerfile.release - Production release image for GoReleaser
+# This Dockerfile is used by GoReleaser to build release Docker images
+# The binary is copied from the GoReleaser build context
+
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 10000 geode \
+    && mkdir -p /data /certs /var/log/geode \
+    && chown -R geode:geode /data /certs /var/log/geode
+
+# Copy the binary from the GoReleaser build context
+# GoReleaser places the binary at the root of the context
+COPY geode /usr/local/bin/geode
+
+# Set execute permissions
+RUN chmod +x /usr/local/bin/geode
+
+# Switch to non-root user
+USER geode
+WORKDIR /home/geode
+
+# Expose ports (QUIC + metrics)
+EXPOSE 8443/udp 9090/tcp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["/usr/local/bin/geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:8443", "--insecure"] || exit 1
+
+# Default entrypoint
+ENTRYPOINT ["/usr/local/bin/geode"]
+CMD ["serve", "--data-dir", "/data", "--log-level", "error"]
