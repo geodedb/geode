@@ -500,52 +500,27 @@ geodetestlab-comprehensive: build
 # Run authentication and authorization tests
 geodetestlab-auth: build
 	@echo "Running geodetestlab authentication tests..."
-	@if [ -f "geodetestlab/specs/geode_auth.yml" ] && [ -f "geodetestlab/geodetestlab/core/runner.py" ]; then \
-		python3 -m geodetestlab.geodetestlab.core.runner --spec geodetestlab/specs/geode_auth.yml; \
-	else \
-		echo "Auth test spec not found or runner not found"; \
-		exit 1; \
-	fi
+	@python3 scripts/test/extended_test_runner.py geode_auth
 
 # Run user management tests
 geodetestlab-user-management: build
 	@echo "Running geodetestlab user management tests..."
-	@if [ -f "geodetestlab/specs/geode_user_management_comprehensive.yml" ] && [ -f "geodetestlab/geodetestlab/core/runner.py" ]; then \
-		python3 -m geodetestlab.geodetestlab.core.runner --spec geodetestlab/specs/geode_user_management_comprehensive.yml; \
-	else \
-		echo "User management test spec not found or runner not found"; \
-		exit 1; \
-	fi
+	@python3 scripts/test/extended_test_runner.py geode_user_management
 
 # Run backup and restore tests
 geodetestlab-backup: build
 	@echo "Running geodetestlab backup tests..."
-	@if [ -f "geodetestlab/specs/geode_backup_comprehensive.yml" ] && [ -f "geodetestlab/geodetestlab/core/runner.py" ]; then \
-		python3 -m geodetestlab.geodetestlab.core.runner --spec geodetestlab/specs/geode_backup_comprehensive.yml; \
-	else \
-		echo "Backup test spec not found or runner not found"; \
-		exit 1; \
-	fi
+	@python3 scripts/test/extended_test_runner.py geode_backup
 
 # Run vector K-NN and similarity search tests
 geodetestlab-vector-knn: build
 	@echo "Running geodetestlab vector K-NN tests..."
-	@if [ -f "geodetestlab/specs/geode_vector_knn_comprehensive.yml" ] && [ -f "geodetestlab/geodetestlab/core/runner.py" ]; then \
-		python3 -m geodetestlab.geodetestlab.core.runner --spec geodetestlab/specs/geode_vector_knn_comprehensive.yml; \
-	else \
-		echo "Vector K-NN test spec not found or runner not found"; \
-		exit 1; \
-	fi
+	@python3 scripts/test/extended_test_runner.py vector
 
 # Run full-text search and BM25 tests
 geodetestlab-fulltext-bm25: build
 	@echo "Running geodetestlab full-text BM25 tests..."
-	@if [ -f "geodetestlab/specs/geode_fulltext_bm25_comprehensive.yml" ] && [ -f "geodetestlab/geodetestlab/core/runner.py" ]; then \
-		python3 -m geodetestlab.geodetestlab.core.runner --spec geodetestlab/specs/geode_fulltext_bm25_comprehensive.yml; \
-	else \
-		echo "Full-text BM25 test spec not found or runner not found"; \
-		exit 1; \
-	fi
+	@python3 scripts/test/extended_test_runner.py fulltext bm25
 
 # Parallel testing infrastructure targets
 WORKERS ?= 4
