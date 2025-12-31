@@ -638,9 +638,9 @@ class ParallelTestRunner:
         # Validate test expectations
         success, message = self.validate_expectations(result, expect, test_case, spec_name)
 
-        # Cleanup catalog objects in server mode to prevent pollution
-        if server_address:
-            self.cleanup_catalog_objects(server_address)
+        # Note: Do NOT cleanup catalog objects between tests in the same spec.
+        # Tests within a spec share data from the spec-level setup.
+        # Cleanup happens when the server is stopped at the end of the spec.
 
         return TestResult(
             spec_file=spec_name,

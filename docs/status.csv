@@ -1052,7 +1052,7 @@ REQ-GQL-202,UserStorage,PersistentStorage,IMPL,TestCANARY_REQ_GQL_202_UserStorag
 REQ-GQL-203,VectorKNNIntegration,IndexIntegration,TESTED,TestCANARY_REQ_GQL_203_VectorKNNIntegration,,index,2025-10-04,tests/test_vector_knn_integration.zig
 REQ-GQL-203,VectorKNNOptimization,IndexOptimization,TESTED,TestCANARY_REQ_GQL_203_VectorKNNOptimization,,index,2025-10-04,tests/test_vector_knn_optimizer.zig
 REQ-GQL-204,FullTextBM25Integration,IndexIntegration,TESTED,TestCANARY_REQ_GQL_204_FullTextBM25Integration,,index,2025-10-04,tests/test_fulltext_bm25_integration.zig
-REQ-GQL-2PC-001,Distributed 2PC,TXN,STUB,tests/e2e_2pc_distributed.zig:1,,txn,2025-09-26,src/transactions/two_phase_commit.zig
+REQ-GQL-2PC-001,Distributed 2PC,TXN,IMPL,tests/e2e_2pc_distributed.zig:1,,txn,2025-12-30,src/transactions/two_phase_commit.zig
 REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,IMPL,TestCANARY_2PC_Coordinator,,distributed,2025-09-29,src/distributed/txn_coordinator.zig
 REQ-GQL-2PC-003,2PC Idempotence,2PC,IMPL,TestCANARY_2PC_Idempotent,,distributed,2025-09-29,src/distributed/txn_coordinator.zig
 REQ-GQL-2PC-004,2PC Raft Integration,2PC,IMPL,TestCANARY_2PC_RaftIntegration,,distributed,2025-09-29,src/distributed/raft_consensus.zig
@@ -1201,6 +1201,7 @@ REQ-GQL-KEYS-001,KeysFunction,NodePropertyKeys,IMPL,,,eval,2025-12-28,src/eval.z
 REQ-GQL-KEYS-002,KeysFunction,NodeEdgeMapKeys,IMPL,,,eval,2025-12-28,src/eval.zig
 REQ-GQL-KEYS-003,KeysFunction,NodeEdgeMapKeys,IMPL,,,eval,2025-12-28,src/eval.zig
 REQ-GQL-KEYWORD-001,GQL Keyword Handling,Parser,TESTED,TestCANARY_REQ_GQL_KEYWORD_001_Parser,,parser,2025-01-03,tests/gql_keyword_regression_test.zig
+REQ-GQL-KEYWORDS-001,GQL Reserved Words,ISO39075Compliance,IMPL,,,parser,2025-12-30,src/gql/token.zig
 "REQ-GQL-LARGE-DATASET"" {
     // CANARY: REQ=REQ-GQL-LARGE-DATASET",LargeDataset,Scalability,TESTED,TestCANARY_REQ_GQL_LARGE_DATASET,,team,2025-10-02,tests/integration/test_large_social_network.zig
 REQ-GQL-LAST-001,ListFunctions,LastElement,IMPL,,,eval,2025-12-24,src/eval.zig
@@ -1339,7 +1340,7 @@ REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,TestCANARY_REQ_
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,e2e_raft_persist_snapshot_membership,,distributed,2025-09-25,src/distributed/raft_persistent.zig
 REQ-GQL-REL-AGG-NO-GROUPBY-001,RelationshipAggregationNoGroupBy,EdgeCollection,IMPL,,,execution,2025-12-28,src/execution/match_operations.zig
 REQ-GQL-REL-DIRECTION-001,RelationshipDirection,NonAggregation,IMPL,,,engine,2025-12-23,src/execution/match_operations.zig
-REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,SECURITY,STUB,tests/test_key_rotation.zig,,security,2025-09-26,src/security/key_rotation.zig
+REQ-GQL-SEC-KEYROT-001,KeyRotation,SECURITY,IMPL,tests/test_key_rotation.zig,,security,2025-12-30,src/security/key_rotation.zig
 REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,SECURITY,TESTED,tests/test_key_rotation.zig,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,TEST,TESTED,tests/test_key_rotation.zig,,security,2025-09-26,src/security/key_rotation.zig
 REQ-GQL-SEC-KEYROT-002,KeyRotationScheduling,TEST,TESTED,TestCANARY_REQ_GQL_SEC_KEYROT_002_Schedule,,security,2025-09-26,tests/test_key_rotation_schedule.zig
@@ -1829,6 +1830,9 @@ REQ-SERVER-REFACTOR-013,ServerRefactoring,STDIO_HANDLER,IMPL,,,refactor,2025-11-
 REQ-SERVER-STARTUP-INTEGRATION-001,Server Startup Integration Tests,EndToEndServerTesting,TESTED,TestCANARY_REQ_SERVER_STARTUP_INTEGRATION_001_EndToEndServerTesting,,server,2025-10-05,tests/test_server_startup_integration.zig
 REQ-SERVER-STARTUP-REGRESSION-001,Server Startup Regression Tests,UnifiedBinaryServerStartup,TESTED,TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup,,server,2025-10-05,tests/test_server_startup_regression.zig
 REQ-SET-RETURN-FIX-001,SetReturnFix,NoReturnClause,IMPL,,,engine,2025-12-23,src/execution/match_operations.zig
+REQ-STREAMING-KAFKA-001,Kafka Sink Implementation,ProducerSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/kafka_sink.zig
+REQ-STREAMING-KEYROT-REENCRYPT-001,Page Re-encryption,ReEncryption,IMPL,,,security,2025-12-30,src/security/key_rotation.zig
+REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/webhook_sink.zig
 REQ-STRING-MINMAX-001,StringMinMax,MinAggregation,IMPL,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
 REQ-STRING-MINMAX-002,StringMinMax,MaxAggregation,IMPL,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
 REQ-STRING-MINMAX-003,StringMinMax,MinStore,IMPL,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
@@ -1886,6 +1890,10 @@ REQ-TXN-ISOLATION-001,Enhanced Transaction Isolation,IsolationLevels,IMPL,TestCA
 REQ-TXN-ISOLATION-002,Advanced Phantom Read Prevention,PhantomReadPrevention,IMPL,TestCANARY_REQ_TXN_ISOLATION_002_PhantomReadPrevention,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig
 REQ-TXN-ISOLATION-003,Serializable Snapshot Isolation,SerializableSSI,IMPL,TestCANARY_REQ_TXN_ISOLATION_003_SerializableSSI,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig
 REQ-TXN-ISOLATION-004,Deadlock Detection and Resolution,DeadlockResolution,IMPL,TestCANARY_REQ_TXN_ISOLATION_004_DeadlockResolution,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig
+REQ-TXN-ISOLATION-005,SSI RW Dependency Tracking,ReadDependencies,IMPL,,,txn,2025-12-30,src/server/txn/enhanced_isolation.zig
+REQ-TXN-ISOLATION-006,SSI Predicate Lock Checking,PredicateLocks,IMPL,,,txn,2025-12-30,src/server/txn/enhanced_isolation.zig
+REQ-TXN-ISOLATION-007,SSI WR Dependency Tracking,WriteDependencies,IMPL,,,txn,2025-12-30,src/server/txn/enhanced_isolation.zig
+REQ-TXN-ISOLATION-008,SSI Read Set Validation,CommitValidation,IMPL,,,txn,2025-12-30,src/server/txn/enhanced_isolation.zig
 REQ-TXN-ISOLATION-INTEGRATION-001,Enhanced Transaction Isolation Integration,SerializableIsolation,TESTED,TestCANARY_TXN_ISOLATION_INTEGRATION_001,,txn,2025-10-05,tests/test_enhanced_transaction_isolation_integration.zig
 REQ-TXN-ISOLATION-INTEGRATION-001,Transaction Isolation Integration,ServerIntegration,IMPL,TestCANARY_REQ_TXN_ISOLATION_INTEGRATION_001_ServerIntegration,,txn,2025-10-05,src/server/txn/isolation_integration.zig
 REQ-TXN-ISOLATION-INTEGRATION-002,Phantom Read Prevention Integration,PhantomReadPrevention,TESTED,TestCANARY_TXN_ISOLATION_INTEGRATION_002,,txn,2025-10-05,tests/test_enhanced_transaction_isolation_integration.zig
@@ -1898,6 +1906,7 @@ REQ-TXN-ISOLATION-TEST-003,Dependency Tracking Tests,SerializableSSI,TESTED,Test
 REQ-TXN-PHANTOM-001,Phantom Read Prevention,PhantomReadPrevention,IMPL,TestCANARY_REQ_TXN_PHANTOM_001_BasicPhantomPrevention,,txn,2025-10-05,src/server/txn/phantom_read_prevention.zig
 REQ-TXN-PHANTOM-002,Phantom Read Prevention,PredicateLocks,IMPL,TestCANARY_REQ_TXN_PHANTOM_002_PredicateLocks,,txn,2025-10-05,src/server/txn/phantom_read_prevention.zig
 REQ-TXN-PHANTOM-003,Phantom Read Prevention,RangeQueryValidation,IMPL,TestCANARY_REQ_TXN_PHANTOM_003_RangeQueryValidation,,txn,2025-10-05,src/server/txn/phantom_read_prevention.zig
+REQ-TXN-PHANTOM-004,Phantom Read Prevention,PredicateConflictCheck,IMPL,,,txn,2025-12-30,src/server/txn/phantom_read_prevention.zig
 REQ-TXN-PHANTOM-MVCC-001,Phantom Read MVCC Integration,SerializableIsolation,TESTED,TestCANARY_REQ_TXN_PHANTOM_MVCC_001_SerializableIsolation,,txn,2025-10-05,tests/test_phantom_read_mvcc_integration.zig
 REQ-TXN-PHANTOM-MVCC-002,Phantom Read MVCC Integration,TransactionLifecycle,TESTED,TestCANARY_REQ_TXN_PHANTOM_MVCC_002_TransactionLifecycle,,txn,2025-10-05,tests/test_phantom_read_mvcc_integration.zig
 REQ-TXN-PHANTOM-MVCC-003,Phantom Read MVCC Integration,ConflictDetection,TESTED,TestCANARY_REQ_TXN_PHANTOM_MVCC_003_ConflictDetection,,txn,2025-10-05,tests/test_phantom_read_mvcc_integration.zig
