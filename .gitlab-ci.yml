@@ -69,9 +69,13 @@ snapshot:
       zig version
     # Docker login
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-    # Setup Docker buildx
-    - docker buildx create --use --name multiarch-builder || docker buildx use multiarch-builder
-    - docker buildx inspect --bootstrap
+    # Setup Docker buildx with docker-container driver for multi-arch support
+    - |
+      docker context create builder-ctx || true
+      docker buildx create --name multiarch-builder --driver docker-container --use builder-ctx 2>/dev/null || \
+        docker buildx use multiarch-builder 2>/dev/null || \
+        docker buildx create --driver docker-container --use 2>/dev/null || true
+      docker buildx inspect --bootstrap || true
   script:
     - |
       echo "=== Running GoReleaser Snapshot ==="
@@ -121,9 +125,13 @@ release:
       zig version
     # Docker login
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-    # Setup Docker buildx for multi-arch
-    - docker buildx create --use --name multiarch-builder || docker buildx use multiarch-builder
-    - docker buildx inspect --bootstrap
+    # Setup Docker buildx with docker-container driver for multi-arch support
+    - |
+      docker context create builder-ctx || true
+      docker buildx create --name multiarch-builder --driver docker-container --use builder-ctx 2>/dev/null || \
+        docker buildx use multiarch-builder 2>/dev/null || \
+        docker buildx create --driver docker-container --use 2>/dev/null || true
+      docker buildx inspect --bootstrap || true
   script:
     - |
       echo "=== Building Release: ${CI_COMMIT_TAG} ==="
