@@ -416,10 +416,29 @@ pub const EnhancedIsolationManager = struct {
         // Perform base MVCC read
         const result = try self.mvcc_manager.read(txn, resource_id);
 
+        // CANARY: REQ=REQ-TXN-ISOLATION-005; FEATURE="SSI RW Dependency Tracking"; ASPECT=ReadDependencies; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
         // Track dependencies for SSI
         if (isolation == .SerializableSnapshot) {
-            // TODO: Identify writing transactions and add RW dependencies
-            // This would require version history analysis
+            // Identify writing transactions and add RW dependencies
+            // Look at version history to find which transaction wrote the version we're reading
+            if (self.mvcc_manager.versions.get(resource_id)) |versions| {
+                for (versions.items) |version| {
+                    // If this version was written by another active transaction, add RW dependency
+                    if (version.txn_id != txn.id and version.end_ts == null) {
+                        // This version is from an active transaction - add RW dependency
+                        // (reader depends on writer)
+                        try self.dependency_tracker.addReadDependency(txn.id, version.txn_id);
+                    } else if (version.txn_id != txn.id and
+                        version.start_ts <= txn.snapshot_timestamp and
+                        (version.end_ts == null or version.end_ts.? > txn.snapshot_timestamp))
+                    {
+                        // This is the visible version we read - track dependency if writer still active
+                        if (self.mvcc_manager.active_transactions.contains(version.txn_id)) {
+                            try self.dependency_tracker.addReadDependency(txn.id, version.txn_id);
+                        }
+                    }
+                }
+            }
         }
 
         return result;
@@ -435,19 +454,41 @@ pub const EnhancedIsolationManager = struct {
     ) !void {
         const start_time = std.time.milliTimestamp();
 
+        // CANARY: REQ=REQ-TXN-ISOLATION-006; FEATURE="SSI Predicate Lock Checking"; ASPECT=PredicateLocks; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
         // Check for phantom read conflicts if required
         if (isolation.preventsPhantomReads()) {
-            // TODO: Check predicate locks - requires label and property information
-            // This would need to be called with additional metadata
+            // Check predicate locks - look for conflicting range/predicate locks held by other transactions
+            const predicate_conflicts = self.phantom_prevention.checkPredicateConflicts(txn.id, resource_id);
+            if (predicate_conflicts) {
+                self.conflict_statistics.total_conflicts += 1;
+                self.conflict_statistics.phantom_read_conflicts += 1;
+                return error.PhantomReadConflict;
+            }
         }
 
         // Perform base MVCC write
         try self.mvcc_manager.write(txn, resource_id, data);
 
+        // CANARY: REQ=REQ-TXN-ISOLATION-007; FEATURE="SSI WR Dependency Tracking"; ASPECT=WriteDependencies; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
         // Track dependencies for SSI
         if (isolation == .SerializableSnapshot) {
-            // TODO: Identify reading transactions and add WR dependencies
-            // This would require tracking concurrent readers
+            // Identify reading transactions and add WR dependencies
+            // Check all active transactions to see if any have read this resource
+            var active_iter = self.mvcc_manager.active_transactions.iterator();
+            while (active_iter.next()) |entry| {
+                const other_txn = entry.value_ptr.*;
+                if (other_txn.id != txn.id) {
+                    // Check if other transaction has read this resource
+                    for (other_txn.read_set.items) |read_resource| {
+                        if (read_resource == resource_id) {
+                            // Other transaction read what we're writing - add WR dependency
+                            // (writer depends on reader for serialization order)
+                            try self.dependency_tracker.addWriteDependency(txn.id, other_txn.id);
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         // Check for dangerous structures in SSI
@@ -471,10 +512,35 @@ pub const EnhancedIsolationManager = struct {
     ) !void {
         const start_time = std.time.milliTimestamp();
 
+        // CANARY: REQ=REQ-TXN-ISOLATION-008; FEATURE="SSI Read Set Validation"; ASPECT=CommitValidation; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
         // Final phantom read validation for serializable transactions
         if (isolation.preventsPhantomReads()) {
-            // TODO: Validate read set against concurrent writes
-            // This requires integration with the actual storage layer
+            // Validate read set against concurrent writes
+            // Check if any resource we read has been modified by a committed transaction
+            // since we started
+            for (txn.read_set.items) |read_resource| {
+                if (self.mvcc_manager.versions.get(read_resource)) |versions| {
+                    for (versions.items) |version| {
+                        // Check if a newer version was committed after our snapshot
+                        if (version.txn_id != txn.id and
+                            version.start_ts > txn.snapshot_timestamp)
+                        {
+                            // A concurrent transaction modified data we read
+                            // Check if that transaction has committed
+                            if (!self.mvcc_manager.active_transactions.contains(version.txn_id)) {
+                                // The modifying transaction committed - we have a conflict
+                                self.conflict_statistics.total_conflicts += 1;
+                                self.conflict_statistics.transactions_aborted += 1;
+
+                                const resolution_time = @as(f64, @floatFromInt(std.time.milliTimestamp() - start_time));
+                                self.conflict_statistics.updateResolutionTime(resolution_time);
+
+                                return error.WriteSkewConflict;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // SSI final validation

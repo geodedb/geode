@@ -279,8 +279,8 @@ pub const Lexer = struct {
             self.col = save_col;
             return .{ .kind = .identifier, .lexeme = slice, .loc = loc };
         }
-        if (kind == .local_datetime_lit) {
-            // Expect LOCAL DATETIME"..."
+        if (kind == .LOCAL) {
+            // Check for LOCAL DATETIME"..." pattern
             const save_idx = self.idx;
             const save_line = self.line;
             const save_col = self.col;
@@ -300,11 +300,11 @@ pub const Lexer = struct {
                     }
                 }
             }
-            // Fallback: not a typed literal
+            // Fallback: not a LOCAL DATETIME literal, return LOCAL as keyword
             self.idx = save_idx;
             self.line = save_line;
             self.col = save_col;
-            return .{ .kind = .identifier, .lexeme = slice, .loc = loc };
+            return .{ .kind = .LOCAL, .lexeme = slice, .loc = loc };
         }
         // Special handling for KEYS/LABELS: if followed by '(', treat as function call (identifier)
         // Note: VALUES removed from this check as it's needed as a keyword for VALUES statements

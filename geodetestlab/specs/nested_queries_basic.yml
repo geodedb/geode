@@ -99,7 +99,6 @@ tests:
     tags: ["filter", "order"]
 
   - name: "high-salary-filter"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "High salary filter"
     args: ["query", "-"]
     stdin: "MATCH (e:EmpBasic) WHERE e.salary > 100000 RETURN e.name, e.salary ORDER BY e.salary DESC"
@@ -110,7 +109,6 @@ tests:
 
   # Level 2: Single WITH clause
   - name: "single-with-filter"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Single WITH clause with filter"
     args: ["query", "-"]
     stdin: "MATCH (e:EmpBasic) WITH e WHERE e.salary > 90000 RETURN e.name"
@@ -121,7 +119,6 @@ tests:
 
   # Level 3: UNION queries
   - name: "simple-union"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Simple UNION query"
     args: ["query", "-"]
     stdin: "MATCH (e:EmpBasic) WHERE e.department = 'Engineering' RETURN e.name AS name UNION MATCH (e:EmpBasic) WHERE e.department = 'Sales' RETURN e.name AS name"
@@ -131,7 +128,6 @@ tests:
     tags: ["union"]
 
   - name: "union-all-query"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "UNION ALL query"
     args: ["query", "-"]
     stdin: "MATCH (e:EmpBasic) WHERE e.salary > 100000 RETURN e.name AS name UNION ALL MATCH (e:EmpBasic) WHERE e.salary > 90000 RETURN e.name AS name"
@@ -142,7 +138,6 @@ tests:
 
   # Level 4: Relationship traversal
   - name: "managers-with-employees"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Managers with their employees"
     args: ["query", "-"]
     stdin: "MATCH (m:EmpBasic)-[:MANAGES_BASIC]->(e:EmpBasic) RETURN m.name AS manager, e.name AS employee"
@@ -152,7 +147,6 @@ tests:
     tags: ["relationship", "traversal"]
 
   - name: "employee-department-relationship"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Employee works in department"
     args: ["query", "-"]
     stdin: "MATCH (e:EmpBasic)-[:WORKS_IN_BASIC]->(d:DeptBasic) WHERE d.name = 'Engineering' RETURN e.name"
@@ -162,7 +156,6 @@ tests:
     tags: ["relationship", "filter"]
 
   - name: "project-assignments"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Project assignment relationships"
     args: ["query", "-"]
     stdin: "MATCH (e:EmpBasic)-[:ASSIGNED_BASIC]->(p:ProjBasic) WHERE p.name = 'Alpha' RETURN e.name"
@@ -173,7 +166,6 @@ tests:
 
   # Level 5: Multiple conditions
   - name: "multiple-where-conditions"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Multiple WHERE conditions with AND"
     args: ["query", "-"]
     stdin: "MATCH (e:EmpBasic) WHERE e.salary > 80000 AND e.department = 'Engineering' RETURN e.name"
@@ -183,7 +175,6 @@ tests:
     tags: ["filter", "and"]
 
   - name: "where-or-conditions"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "WHERE with OR conditions"
     args: ["query", "-"]
     stdin: "MATCH (e:EmpBasic) WHERE e.department = 'HR' OR e.department = 'Marketing' RETURN e.name"
@@ -194,7 +185,6 @@ tests:
 
   # Level 7: Property access and comparison
   - name: "property-comparison"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Property comparison between nodes"
     args: ["query", "-"]
     stdin: "MATCH (d:DeptBasic) WHERE d.budget > 250000 RETURN d.name"
@@ -204,7 +194,6 @@ tests:
     tags: ["property", "comparison"]
 
   - name: "department-location-filter"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Filter departments by location"
     args: ["query", "-"]
     stdin: "MATCH (d:DeptBasic) WHERE d.location = 'NYC' RETURN d.name"

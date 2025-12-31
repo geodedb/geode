@@ -381,11 +381,12 @@ pub fn keywordKind(word: []const u8) TokenKind {
     if (std.ascii.eqlIgnoreCase(word, "BINDINGS")) return .BINDINGS;
     if (std.ascii.eqlIgnoreCase(word, "ONLY")) return .ONLY;
 
+    // CANARY: REQ=REQ-GQL-KEYWORDS-001; FEATURE="GQL Reserved Words"; ASPECT=ISO39075Compliance; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-30
     // Temporal keywords - checked before regular TIME keyword
     if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
     if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
     if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;
-    if (std.ascii.eqlIgnoreCase(word, "LOCAL")) return .local_datetime_lit;
+    if (std.ascii.eqlIgnoreCase(word, "LOCAL")) return .LOCAL;
 
     // Regular TIME keyword for TIME ZONE statements (after temporal literal check)
     // Note: This won't be reached for TIME"..." because lexer handles temporal literals first

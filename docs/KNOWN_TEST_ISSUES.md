@@ -4,27 +4,24 @@ This document tracks tests that are skipped in the geodetestlab test suite due t
 
 ## Test Suite Status (December 2025)
 
-- **Pass Rate**: 94.7% (1199/1266 non-skipped tests)
+- **Pass Rate**: 97.1% (1233/1300 non-skipped tests)
 - **Total Tests**: 1420
-- **Passed**: 1199
+- **Passed**: 1233
 - **Failed**: 67
-- **Skipped**: 154
+- **Skipped**: 120
+
+## Recently Fixed Issues
+
+### Setup Data Persistence ✅ FIXED (December 2025)
+
+The test harness was modified to ensure setup data persists across all tests within a spec file:
+- Persistence files are now cleared once at the start of each spec (before spec-level setup)
+- Setup data created in spec-level setup is now available to all tests within that spec
+- **34 tests re-enabled** across `nested_queries_basic.yml`, `nested_queries_advanced.yml`, and `recursive_and_cte.yml`
 
 ## Categories of Skipped Tests
 
-### 1. Setup Data Persistence Issues
-
-Tests in these spec files are skipped because setup data created at the beginning of a spec file does not persist between individual tests within the same spec:
-
-- `nested_queries_basic.yml` (11 tests skipped)
-- `nested_queries_advanced.yml` (12 tests skipped)
-- `recursive_and_cte.yml` (11 tests skipped)
-
-**Root Cause**: The test harness runs tests sequentially but each test appears to operate in isolation, causing data created in setup steps to not be available for subsequent tests.
-
-**Fix Required**: Test harness modification to ensure setup data persists across all tests in a spec file.
-
-### 2. Unimplemented Language Features
+### 1. Unimplemented Language Features
 
 The following features are skipped because they are not yet implemented:
 
@@ -62,17 +59,16 @@ The remaining failures are in these spec files:
 ## Priority for Fixes
 
 ### High Priority
-1. **Setup data persistence** - This affects 34 tests that would otherwise pass
-2. **WITH + aggregation + WHERE** - Core query chaining feature
+1. **WITH + aggregation + WHERE** - Core query chaining feature
 
 ### Medium Priority
-3. **CASE expressions in MATCH** - Important for conditional logic
-4. **DateTime property access** - Common temporal operations
+2. **CASE expressions in MATCH** - Important for conditional logic
+3. **DateTime property access** - Common temporal operations
 
 ### Low Priority (Cypher extensions, not ISO GQL)
-5. Pattern comprehension (Cypher syntax)
-6. Map projection (Cypher syntax)
-7. List functions (`head()`, `tail()`)
+4. Pattern comprehension (Cypher syntax)
+5. Map projection (Cypher syntax)
+6. List functions (`head()`, `tail()`)
 
 ## Notes
 

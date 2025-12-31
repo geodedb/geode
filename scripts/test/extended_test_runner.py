@@ -4,13 +4,19 @@
 import subprocess
 import yaml
 import sys
+import os
 from pathlib import Path
 
 import uuid
 import time
 
-def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None, spec_config=None, spec_data_dir=None):
-    """Run a single test case with optional instance_id and loop_index for parallel/loop tests."""
+def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=None, loop_index=None, spec_config=None, spec_data_dir=None, spec_id=None, is_first_test=False):
+    """Run a single test case with optional instance_id and loop_index for parallel/loop tests.
+
+    Args:
+        spec_id: A unique ID shared across all tests in the same spec file for data persistence.
+        is_first_test: If True, clear persistence files (only first test in spec should do this).
+    """
     # Check if test should be skipped
     if test_case.get("skip", False):
         return None, "skipped"
@@ -31,8 +37,9 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
 
     expect = test_case.get("expect", {})
 
-    # Generate unique test ID for isolation
-    test_id = str(uuid.uuid4())[:8]
+    # Use spec_id for test isolation if provided, otherwise generate per-test ID
+    # This ensures data created in setup persists across all tests in the same spec
+    test_id = spec_id if spec_id else str(uuid.uuid4())[:8]
     test_timestamp = int(time.time() * 1000)
 
     # Check if this test should skip isolation (for error testing)
@@ -134,26 +141,9 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
     # Handle special test expectations - don't skip, just mark as limitations
     json_asserts = "stdout_json_assert" in expect
     geode_query = "geode_query" in expect
-    
-    # Clear persistence files before test to ensure clean state
-    import os
-    try:
-        os.remove('/tmp/geode_graph_store.dat')
-    except FileNotFoundError:
-        pass  # File doesn't exist, that's fine
 
-    # Clear catalog files at start of each test to ensure clean state
-    # This prevents setup failures on subsequent runs while still allowing
-    # duplicate detection between setup and main test within a single run
-    catalog_paths = [
-        '/tmp/geode_catalog.dat',
-        '/tmp/geode_fle_catalog.dat',
-    ]
-    for catalog_path in catalog_paths:
-        try:
-            os.remove(catalog_path)
-        except FileNotFoundError:
-            pass  # File doesn't exist, that's fine
+    # Note: Persistence files are now cleared at spec level (before setup) in main()
+    # This ensures setup data created in spec-level setup persists across all tests
 
     # Execute setup commands if present
     setup_commands = test_case.get("setup", [])
@@ -756,6 +746,19 @@ def main():
         spec_failed = 0
         spec_skipped = 0
 
+        # Generate a unique spec_id for data persistence across all tests in this spec
+        # This ensures setup data created in earlier tests is visible to later tests
+        spec_id = str(uuid.uuid4())[:8]
+        test_index = 0  # Track test index to identify first test
+
+        # Clear persistence files BEFORE spec-level setup to ensure clean slate
+        # This is done at spec level so setup data persists across all tests
+        for persistence_path in ['/tmp/geode_graph_store.dat', '/tmp/geode_catalog.dat', '/tmp/geode_fle_catalog.dat']:
+            try:
+                os.remove(persistence_path)
+            except FileNotFoundError:
+                pass  # File doesn't exist, that's fine
+
         try:
             # Execute spec-level setup if present
             spec_setup = spec.get("setup", [])
@@ -822,7 +825,8 @@ def main():
                 # Handle parallel tests with multiple instances
                 if test.get("parallel") and test.get("instances"):
                     for instance in range(test["instances"]):
-                        success, message = run_test(test, spec_name=spec_file.name, instance_id=instance, spec_config=spec, spec_data_dir=spec_data_dir)
+                        is_first = (test_index == 0 and instance == 0)
+                        success, message = run_test(test, spec_name=spec_file.name, instance_id=instance, spec_config=spec, spec_data_dir=spec_data_dir, spec_id=spec_id, is_first_test=is_first)
 
                         if success is None:
                             spec_skipped += 1
@@ -838,11 +842,13 @@ def main():
                             total_failed += 1
                             all_failures.append((spec_file.name, f"{name} [instance {instance}]", message))
                             has_tests = True
+                    test_index += 1  # Increment after all parallel instances complete
 
                 # Handle loop tests
                 elif test.get("loop"):
                     for i in range(test["loop"]):
-                        success, message = run_test(test, spec_name=spec_file.name, loop_index=i, spec_config=spec, spec_data_dir=spec_data_dir)
+                        is_first = (test_index == 0 and i == 0)
+                        success, message = run_test(test, spec_name=spec_file.name, loop_index=i, spec_config=spec, spec_data_dir=spec_data_dir, spec_id=spec_id, is_first_test=is_first)
 
                         if success is None:
                             spec_skipped += 1
@@ -858,10 +864,12 @@ def main():
                             total_failed += 1
                             all_failures.append((spec_file.name, f"{name} [iteration {i}]", message))
                             has_tests = True
+                    test_index += 1  # Increment after all loop iterations complete
 
                 # Handle normal tests
                 else:
-                    success, message = run_test(test, spec_name=spec_file.name, spec_config=spec, spec_data_dir=spec_data_dir)
+                    is_first = (test_index == 0)
+                    success, message = run_test(test, spec_name=spec_file.name, spec_config=spec, spec_data_dir=spec_data_dir, spec_id=spec_id, is_first_test=is_first)
 
                     if success is None:
                         # Skipped
@@ -878,6 +886,7 @@ def main():
                         total_failed += 1
                         all_failures.append((spec_file.name, name, message))
                         has_tests = True
+                    test_index += 1  # Increment after normal test completes
 
         finally:
             # Stop server if it was started

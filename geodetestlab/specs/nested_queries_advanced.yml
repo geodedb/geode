@@ -117,7 +117,6 @@ tests:
     tags: ["nested", "union"]
 
   - name: "union-all-products"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "UNION ALL for products from different categories"
     args: ["query", "-"]
     stdin: "MATCH (p:ProdAdv) WHERE p.category = 'Electronics' RETURN p.name AS name UNION ALL MATCH (p:ProdAdv) WHERE p.category = 'Furniture' RETURN p.name AS name"
@@ -128,7 +127,6 @@ tests:
 
   # DISTINCT Queries
   - name: "high-value-customers"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "High value customers query with DISTINCT"
     args: ["query", "-"]
     stdin: "MATCH (c:CustAdv)-[:PLACED_ADV]->(o:OrderAdv) WHERE o.total_amount > 500 RETURN DISTINCT c.name, c.tier ORDER BY c.name"
@@ -138,7 +136,6 @@ tests:
     tags: ["filter", "distinct"]
 
   - name: "distinct-suppliers"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "DISTINCT supplier countries"
     args: ["query", "-"]
     stdin: "MATCH (s:SupplierAdv) RETURN DISTINCT s.country AS country ORDER BY country"
@@ -149,7 +146,6 @@ tests:
 
   # Filter with AND Conditions
   - name: "electronics-high-rating"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Electronics with high rating"
     args: ["query", "-"]
     stdin: "MATCH (p:ProdAdv) WHERE p.category = 'Electronics' AND p.rating > 4.3 RETURN p.name, p.price, p.rating ORDER BY p.rating DESC"
@@ -159,7 +155,6 @@ tests:
     tags: ["filter", "category"]
 
   - name: "furniture-high-rating"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Furniture with high rating and stock"
     args: ["query", "-"]
     stdin: "MATCH (p:ProdAdv) WHERE p.category = 'Furniture' AND p.rating > 4.2 RETURN p.name, p.rating"
@@ -170,7 +165,6 @@ tests:
 
   # Filter with OR Conditions
   - name: "gold-or-silver-customers"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Customers with Gold or Silver tier"
     args: ["query", "-"]
     stdin: "MATCH (c:CustAdv) WHERE c.tier = 'Gold' OR c.tier = 'Silver' RETURN c.name, c.tier ORDER BY c.name"
@@ -181,7 +175,6 @@ tests:
 
   # Relationship Traversal
   - name: "customer-orders-relationship"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Customer orders via relationship"
     args: ["query", "-"]
     stdin: "MATCH (c:CustAdv)-[:PLACED_ADV]->(o:OrderAdv) RETURN c.name, o.total_amount ORDER BY o.total_amount DESC"
@@ -191,7 +184,6 @@ tests:
     tags: ["relationship"]
 
   - name: "supplier-products-relationship"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Supplier products via relationship"
     args: ["query", "-"]
     stdin: "MATCH (s:SupplierAdv)-[:SUPPLIES_ADV]->(p:ProdAdv) RETURN s.name, p.name"
@@ -202,7 +194,6 @@ tests:
 
   # Credit limit filters
   - name: "high-credit-customers"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Customers with high credit limit"
     args: ["query", "-"]
     stdin: "MATCH (c:CustAdv) WHERE c.credit_limit >= 5000 RETURN c.name, c.credit_limit ORDER BY c.credit_limit DESC"
@@ -212,7 +203,6 @@ tests:
     tags: ["filter"]
 
   - name: "order-status-filter"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Filter orders by status"
     args: ["query", "-"]
     stdin: "MATCH (o:OrderAdv) WHERE o.status = 'Completed' RETURN o.id, o.total_amount ORDER BY o.total_amount DESC"
@@ -223,7 +213,6 @@ tests:
 
   # Price range queries
   - name: "products-price-range"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Products in price range"
     args: ["query", "-"]
     stdin: "MATCH (p:ProdAdv) WHERE p.price >= 100 AND p.price <= 500 RETURN p.name, p.price ORDER BY p.price DESC"
@@ -234,7 +223,6 @@ tests:
 
   # Stock queries
   - name: "high-stock-products"
-    skip: true  # Setup data not persisting between tests in same spec
     description: "Products with high stock"
     args: ["query", "-"]
     stdin: "MATCH (p:ProdAdv) WHERE p.stock > 100 RETURN p.name, p.stock ORDER BY p.stock DESC"

@@ -320,6 +320,26 @@ pub const PhantomReadPrevention = struct {
         try self.query_tracker.recordQuery(query);
     }
 
+    /// CANARY: REQ=REQ-TXN-PHANTOM-004; FEATURE="Phantom Read Prevention"; ASPECT=PredicateConflictCheck; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
+    /// Check if a write to a resource would conflict with existing predicate locks
+    pub fn checkPredicateConflicts(self: *PhantomReadPrevention, txn_id: mvcc.TxnId, resource_id: u64) bool {
+        // Check if any existing predicate lock from another transaction
+        // would be affected by a write to this resource
+        _ = resource_id; // Resource ID used for lookup in more advanced implementations
+
+        for (self.predicate_locks.items) |pred_lock| {
+            if (pred_lock.txn_id != txn_id) {
+                // Conservative check: if there are any predicate locks from other transactions,
+                // we consider it a potential conflict since we don't have full tuple information
+                // In a more sophisticated implementation, we would check if the written tuple
+                // satisfies the predicate lock's conditions
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// Get phantom read statistics for monitoring
     pub fn getStatistics(self: *PhantomReadPrevention) PhantomReadStats {
         var active_predicate_locks: u32 = 0;
