@@ -171,9 +171,13 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("commit_coord", commit_coord_mod);
 
     // Link with OpenSSL for vendor/quic crypto operations
+    // Only link system libraries for native builds (not cross-compilation)
     geode_exe.linkLibC();
-    geode_exe.linkSystemLibrary("ssl");
-    geode_exe.linkSystemLibrary("crypto");
+    const is_native = target.result.isNativeCpu() and target.result.os.tag == @import("builtin").os.tag;
+    if (is_native) {
+        geode_exe.linkSystemLibrary("ssl");
+        geode_exe.linkSystemLibrary("crypto");
+    }
     if (target.result.os.tag == .linux) {
         geode_exe.linkSystemLibrary("dl");
     }
