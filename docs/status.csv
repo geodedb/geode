@@ -742,7 +742,7 @@ REQ-GQL-051,GPU Acceleration,Phase1Traversal,REMOVED,TestCANARY_REQ_GQL_051_CPUB
 REQ-GQL-051,GPU Acceleration,Phase2Benchmark,BENCHED,,BenchmarkCANARY_REQ_GQL_051_PageRank,engine,2025-10-26,src/benchmarks/bench_gpu_pagerank.zig
 REQ-GQL-051,GPU Acceleration,Phase3Benchmark,BENCHED,,BenchmarkCANARY_REQ_GQL_051_SetOps,engine,2025-10-26,src/benchmarks/bench_gpu_setops.zig
 REQ-GQL-051,GPU Acceleration,Phase3SetOps,IMPL,TestCANARY_REQ_GQL_051_GPUUnionDistinctSmall,,engine,2025-10-26,src/gpu/gpu_setops_kernels.zig
-REQ-GQL-051,GPU Acceleration,Phase3VulkanPageRank,WIP,TestCANARY_REQ_GQL_051_GPUPageRankVulkan,,engine,2025-10-26,src/gpu/pagerank_kernels.zig
+REQ-GQL-051,GPU Acceleration,Phase3VulkanPageRank,IMPL,TestCANARY_REQ_GQL_051_GPUPageRankVulkan,,engine,2025-12-30,src/gpu/pagerank_kernels.zig
 REQ-GQL-051,GPU Acceleration,Phase4Benchmark,BENCHED,,BenchmarkCANARY_REQ_GQL_051_ShortestPath,engine,2025-10-26,src/benchmarks/bench_gpu_shortest_path.zig
 REQ-GQL-051,GPU Acceleration,Phase4ShortestPath,IMPL,TestCANARY_REQ_GQL_051_GPUDijkstraSmall,,engine,2025-10-26,src/gpu/shortest_path_kernels.zig
 REQ-GQL-051,GPU Acceleration,Phase5Telemetry,IMPL,TestCANARY_REQ_GQL_051_GPUTelemetryStruct,,engine,2025-10-26,src/gpu/telemetry.zig
@@ -788,8 +788,10 @@ REQ-GQL-063,Shortest Paths,UnweightedBFSPaths,BENCHED,TestCANARY_REQ_GQL_063_Unw
 REQ-GQL-064,Connectivity,BiconnectedComponents,BENCHED,TestCANARY_REQ_GQL_064_Biconnected,BenchmarkCANARY_REQ_GQL_064_Biconnected,graph,2025-09-20,src/graph/connectivity_biconnected.zig
 REQ-GQL-064,Connectivity,BridgesArticulation,BENCHED,TestCANARY_REQ_GQL_064_BridgesArticulation,BenchmarkCANARY_REQ_GQL_064_BridgesArticulation,graph,2025-09-20,src/graph/connectivity_bridges_articulation.zig
 REQ-GQL-064,Connectivity,KosarajuValidation,TESTED,TestCANARY_REQ_GQL_064_Kosaraju,BenchmarkCANARY_REQ_GQL_064_Kosaraju,graph,2025-09-20,src/graph/connectivity_kosaraju.zig
+REQ-GQL-064,Connectivity,SCC_WRAPPER,IMPL,,,graph,2025-12-30,src/graph/strongly_connected_components.zig
 REQ-GQL-064,Connectivity,TarjanSCC,BENCHED,TestCANARY_REQ_GQL_064_TarjanSCC,BenchmarkCANARY_REQ_GQL_064_TarjanSCC,graph,2025-09-21,src/graph/connectivity_tarjan_scc.zig
 REQ-GQL-064,Connectivity,TarjanSCC,BENCHED,TestCANARY_REQ_GQL_064_TarjanSCC,BenchmarkCANARY_REQ_GQL_064_TarjanSCC,graph,2025-09-21,tests/benchmark_connectivity_tarjan_scc.zig
+REQ-GQL-065,CommunityDetection,LabelPropagation,IMPL,,,graph,2025-12-30,src/graph/community_label_propagation.zig
 REQ-GQL-065,Spanning Trees,Kruskal,BENCHED,TestCANARY_REQ_GQL_065_Kruskal,BenchmarkCANARY_REQ_GQL_065_Kruskal,graph,2025-09-21,src/graph/spanning_kruskal.zig
 REQ-GQL-065,Spanning Trees,Prim,BENCHED,TestCANARY_REQ_GQL_065_Prim,BenchmarkCANARY_REQ_GQL_065_Prim,graph,2025-09-21,src/graph/spanning_prim.zig
 REQ-GQL-066,Flow/Matching,Dinic,BENCHED,TestCANARY_REQ_GQL_066_DinicBasic,BenchmarkCANARY_REQ_GQL_066_Dinic,graph,2025-09-21,src/graph/flow_dinic.zig
@@ -1610,7 +1612,11 @@ REQ-M7.2-TXN-MANAGER-001,Phase 7 Modularization,TransactionManager,IMPL,,,transa
 REQ-M8.1-TEST-FRAMEWORK-001,Module Testing,TestFramework,IMPL,,,testing,2025-11-14,tests/module_test_framework.zig
 REQ-MATERIALIZED-VIEWS-001,Materialized View Management,QueryOptimization,IMPL,test_materialized_views,,query,2025-10-05,src/query/materialized_views.zig
 REQ-MATERIALIZED-VIEWS-001,Materialized View Management,Testing,TESTED,test_materialized_views,,query,2025-10-05,tests/test_materialized_views.zig
+REQ-MATERIALIZED-VIEWS-002,MV Dependency Extraction,ASTDependencyParsing,IMPL,test_materialized_views,,query,2025-12-30,src/query/materialized_views.zig
 REQ-MATERIALIZED-VIEWS-002,Materialized View Integration,DistributedQueries,TESTED,test_materialized_views_integration,,query,2025-10-05,tests/test_materialized_views_integration.zig
+REQ-MATERIALIZED-VIEWS-003,MV Storage Calculation,AccurateStorageMetrics,IMPL,test_materialized_views,,query,2025-12-30,src/query/materialized_views.zig
+REQ-MATERIALIZED-VIEWS-004,MV Filter Evaluation,PredicateEvaluation,IMPL,test_materialized_views,,query,2025-12-30,src/query/materialized_views.zig
+REQ-MATERIALIZED-VIEWS-005,MV Query Compatibility,SemanticQueryMatching,IMPL,test_materialized_views,,query,2025-12-30,src/query/materialized_views.zig
 REQ-MATH-ARITH-001,ArithmeticFunctions,MOD,IMPL,,,math,2025-10-26,src/eval.zig
 REQ-MATH-ARITH-001,ArithmeticFunctions,ROUND,IMPL,,,math,2025-12-22,src/eval.zig
 REQ-MATH-ARITH-002,ArithmeticFunctions,SIGN,IMPL,,,math,2025-10-26,src/eval.zig
@@ -1751,6 +1757,11 @@ REQ-PERF-PHASE5-P1-002,MetricsOptimization,LOCK_FREE_HISTOGRAM,IMPL,,,performanc
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,TESTING,IMPL,,,performance,2025-11-16,benchmarks/phase5_8_metrics_atomic.zig
 REQ-PERF-PHASE5-P2-001,StructOptimization,TESTING,ASSESSMENT,,,performance,2025-11-16,benchmarks/phase5_9_struct_by_value.zig
 REQ-PLANNER-CARD-001,Cardinality Estimator,RealImplementation,IMPL,test_cardinality_scan_estimation,,planner,2025-10-05,tests/test_cardinality_estimator.zig
+REQ-QP-FILTER-001,QueryPlannerOptimization,FilterMerging,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
+REQ-QP-PARALLEL-001,QueryPlannerOptimization,Parallelization,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
+REQ-QP-PUSH-001,QueryPlannerOptimization,PredicatePushdown,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
+REQ-QP-SORT-001,QueryPlannerOptimization,SortElimination,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
+REQ-QP-STATS-001,QueryPlannerOptimization,StatisticsEstimation,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
 REQ-QUIC-CONN-CLEANUP-001,ConnectionMemoryManagement,ResourceLeak,IMPL,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-CONN-CLEANUP-002,ConnectionMemoryManagement,ConnectionListCleanup,IMPL,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-CONN-CLEANUP-003,ConnectionMemoryManagement,ProperCleanup,IMPL,,,server,2025-12-27,src/server/quic_connection_handler.zig
@@ -1793,6 +1804,11 @@ REQ-RLS-ENHANCED-INTEGRATION-003,Enhanced RLS Integration,PerformanceOptimizatio
 REQ-RLS-ENHANCED-INTEGRATION-004,Enhanced RLS Integration,MultiTenantScenario,TESTED,test_multi_tenant_scenario,,security,2025-10-05,tests/test_rls_enhanced_integration.zig
 REQ-RLS-ENHANCED-INTEGRATION-005,Enhanced RLS Integration,AuditingIntegration,TESTED,test_auditing_integration,,security,2025-10-05,tests/test_rls_enhanced_integration.zig
 REQ-RLS-ENHANCED-INTEGRATION-006,Enhanced RLS Integration,ErrorHandlingRobustness,TESTED,test_error_handling_robustness,,security,2025-10-05,tests/test_rls_enhanced_integration.zig
+REQ-RLS-EXPR-001,RLSExpressionCompilation,Bytecode,IMPL,,,security,2025-12-30,src/security/rls_core.zig
+REQ-RLS-EXPR-002,RLSExpressionCompilation,PolicyCompilation,IMPL,,,security,2025-12-30,src/security/rls_core.zig
+REQ-RLS-EXPR-003,RLSExpressionCompilation,ExpressionCompiler,IMPL,,,security,2025-12-30,src/security/rls_core.zig
+REQ-RLS-EXPR-004,RLSExpressionCompilation,BytecodeVM,IMPL,,,security,2025-12-30,src/security/rls_core.zig
+REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,IMPL,,,security,2025-12-30,src/security/rls_core.zig
 REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,IMPL,test_s3_backup_mock,,storage,2025-10-05,tests/test_s3_backup.zig
 REQ-SERVER-BACKUP-001,Server Backup API,UnitTests,TESTED,TestServer_BackupAPIUnit,,server,2025-10-05,tests/test_server_backup_api_unit.zig
 REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,PARTIAL,,,refactor,2025-11-12,src/server/server_state.zig
@@ -1911,6 +1927,8 @@ REQ-TXN-UNDO-SERVER-017,TransactionUndoLog,MultiGraphRollback,IMPL,,,engine,2025
 REQ-TYPE-001,TypeFunctions,type,IMPL,,,types,2025-12-22,src/eval.zig
 REQ-TYPE-001,TypeFunctions,type,IMPL,,,types,2025-12-22,src/eval.zig
 REQ-TYPE-001,TypeFunctions,type_name,IMPL,,,types,2025-12-22,src/eval.zig
+REQ-TYPE-SERIAL-001,TypeSerialization,ExtendedTypes,IMPL,,,storage,2025-12-30,src/graph_store.zig
+REQ-TYPE-SERIAL-002,TypeSerialization,EdgeExtValue,IMPL,,,storage,2025-12-30,src/graph_store.zig
 REQ-VECTOR-DOCS-INTEGRATION-001,Vector Documentation Integration,GQLWorkflows,TESTED,TestCANARY_REQ_VECTOR_DOCS_INTEGRATION_001_CreateIndexWorkflow,,docs,2025-10-05,tests/test_vector_documentation_integration.zig
 REQ-VECTOR-DOCS-INTEGRATION-002,Vector Documentation Integration,QueryOptimization,TESTED,TestCANARY_REQ_VECTOR_DOCS_INTEGRATION_002_IndexOptimization,,docs,2025-10-05,tests/test_vector_documentation_integration.zig
 REQ-VECTOR-DOCS-INTEGRATION-003,Vector Documentation Integration,PopulationSystem,TESTED,TestCANARY_REQ_VECTOR_DOCS_INTEGRATION_003_IndexPopulation,,docs,2025-10-05,tests/test_vector_documentation_integration.zig

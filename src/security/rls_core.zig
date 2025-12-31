@@ -122,6 +122,38 @@ pub const RLSEngine = struct {
         bytecode: []const u8,
         constants: []const Value,
         jump_table: []const usize,
+
+        // CANARY: REQ=REQ-RLS-EXPR-001; FEATURE="RLSExpressionCompilation"; ASPECT=Bytecode; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
+        pub const Opcode = enum(u8) {
+            nop = 0x00,
+            // Stack operations
+            push_const = 0x01, // Push constants[arg] onto stack
+            push_true = 0x02, // Push true
+            push_false = 0x03, // Push false
+            push_null = 0x04, // Push null
+            pop = 0x05, // Pop top of stack
+            // Variable access
+            load_row = 0x10, // Load row[constants[arg]] onto stack
+            load_user = 0x11, // Load current user ID onto stack
+            load_session = 0x12, // Load session[constants[arg]] onto stack
+            // Comparisons (pop 2, push bool)
+            eq = 0x20, // ==
+            neq = 0x21, // <>
+            lt = 0x22, // <
+            gt = 0x23, // >
+            lte = 0x24, // <=
+            gte = 0x25, // >=
+            // Logical (pop 1-2, push bool)
+            op_and = 0x30, // AND
+            op_or = 0x31, // OR
+            op_not = 0x32, // NOT
+            // Control flow
+            jump = 0x40, // Jump to jump_table[arg]
+            jump_if_false = 0x41, // Pop and jump if false
+            jump_if_true = 0x42, // Pop and jump if true
+            // Return
+            ret = 0xFF, // Return top of stack as result
+        };
     };
 
     pub const TemporalConstraint = struct {
@@ -211,14 +243,17 @@ pub const RLSEngine = struct {
         }
 
         // Compile expressions if provided
-        const compiled_policy = policy;
-        if (policy.using_expr) |expr| {
-            _ = expr;
-            // TODO: Compile expression
+        // CANARY: REQ=REQ-RLS-EXPR-002; FEATURE="RLSExpressionCompilation"; ASPECT=PolicyCompilation; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
+        var compiled_policy = policy;
+        if (compiled_policy.using_expr) |*expr| {
+            if (expr.compiled == null) {
+                expr.compiled = try self.compileExpression(expr.raw);
+            }
         }
-        if (policy.check_expr) |expr| {
-            _ = expr;
-            // TODO: Compile expression
+        if (compiled_policy.check_expr) |*expr| {
+            if (expr.compiled == null) {
+                expr.compiled = try self.compileExpression(expr.raw);
+            }
         }
 
         try result.value_ptr.append(self.allocator, compiled_policy);
@@ -393,16 +428,139 @@ pub const RLSEngine = struct {
         return result;
     }
 
+    // CANARY: REQ=REQ-RLS-EXPR-003; FEATURE="RLSExpressionCompilation"; ASPECT=ExpressionCompiler; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
     fn compileExpression(self: *Self, expr: []const u8) !*CompiledExpression {
-        _ = expr;
-
-        // Compile to bytecode
+        const Opcode = CompiledExpression.Opcode;
         var bytecode = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
         var constants = std.ArrayList(Value).initCapacity(self.allocator, 0) catch unreachable;
         var jump_table = std.ArrayList(usize).initCapacity(self.allocator, 0) catch unreachable;
 
-        // Simplified compilation - would implement full bytecode generation
-        try bytecode.append(self.allocator, 0x00); // NOP
+        // Simple expression parser supporting:
+        // - row.field_name = 'value'
+        // - row.field_name = current_user
+        // - expr1 AND expr2, expr1 OR expr2
+        // - TRUE, FALSE
+        var i: usize = 0;
+        while (i < expr.len) {
+            // Skip whitespace
+            while (i < expr.len and (expr[i] == ' ' or expr[i] == '\t' or expr[i] == '\n')) : (i += 1) {}
+            if (i >= expr.len) break;
+
+            // Check for TRUE/FALSE literals
+            if (i + 4 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 4], "true")) {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.push_true));
+                i += 4;
+                continue;
+            }
+            if (i + 5 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 5], "false")) {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.push_false));
+                i += 5;
+                continue;
+            }
+
+            // Check for AND/OR
+            if (i + 3 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 3], "and")) {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.op_and));
+                i += 3;
+                continue;
+            }
+            if (i + 2 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 2], "or")) {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.op_or));
+                i += 2;
+                continue;
+            }
+
+            // Check for NOT
+            if (i + 3 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 3], "not")) {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.op_not));
+                i += 3;
+                continue;
+            }
+
+            // Check for row.field_name pattern
+            if (i + 4 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 4], "row.")) {
+                i += 4;
+                const field_start = i;
+                while (i < expr.len and (std.ascii.isAlphanumeric(expr[i]) or expr[i] == '_')) : (i += 1) {}
+                const field_name = expr[field_start..i];
+                // Add field name to constants and emit load_row
+                try constants.append(self.allocator, .{ .string = field_name });
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.load_row));
+                try bytecode.append(self.allocator, @intCast(constants.items.len - 1));
+                continue;
+            }
+
+            // Check for current_user
+            if (i + 12 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 12], "current_user")) {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.load_user));
+                i += 12;
+                continue;
+            }
+
+            // Check for comparison operators
+            if (i + 2 <= expr.len and expr[i] == '<' and expr[i + 1] == '>') {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.neq));
+                i += 2;
+                continue;
+            }
+            if (i + 2 <= expr.len and expr[i] == '<' and expr[i + 1] == '=') {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.lte));
+                i += 2;
+                continue;
+            }
+            if (i + 2 <= expr.len and expr[i] == '>' and expr[i + 1] == '=') {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.gte));
+                i += 2;
+                continue;
+            }
+            if (expr[i] == '=') {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.eq));
+                i += 1;
+                continue;
+            }
+            if (expr[i] == '<') {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.lt));
+                i += 1;
+                continue;
+            }
+            if (expr[i] == '>') {
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.gt));
+                i += 1;
+                continue;
+            }
+
+            // Check for string literal 'value'
+            if (expr[i] == '\'') {
+                i += 1;
+                const str_start = i;
+                while (i < expr.len and expr[i] != '\'') : (i += 1) {}
+                const str_value = expr[str_start..i];
+                if (i < expr.len) i += 1; // Skip closing quote
+                try constants.append(self.allocator, .{ .string = str_value });
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.push_const));
+                try bytecode.append(self.allocator, @intCast(constants.items.len - 1));
+                continue;
+            }
+
+            // Check for integer literal
+            if (std.ascii.isDigit(expr[i]) or (expr[i] == '-' and i + 1 < expr.len and std.ascii.isDigit(expr[i + 1]))) {
+                const num_start = i;
+                if (expr[i] == '-') i += 1;
+                while (i < expr.len and std.ascii.isDigit(expr[i])) : (i += 1) {}
+                const num_str = expr[num_start..i];
+                const num_value = std.fmt.parseInt(i64, num_str, 10) catch 0;
+                try constants.append(self.allocator, .{ .integer = num_value });
+                try bytecode.append(self.allocator, @intFromEnum(Opcode.push_const));
+                try bytecode.append(self.allocator, @intCast(constants.items.len - 1));
+                continue;
+            }
+
+            // Skip unknown characters
+            i += 1;
+        }
+
+        // Add return instruction
+        try bytecode.append(self.allocator, @intFromEnum(Opcode.ret));
 
         const compiled = try self.allocator.create(CompiledExpression);
         compiled.* = CompiledExpression{
@@ -412,21 +570,6 @@ pub const RLSEngine = struct {
         };
 
         return compiled;
-    }
-
-    fn compileNode(
-        self: *Self,
-        node: *anyopaque,
-        bytecode: *std.ArrayList(u8),
-        constants: *std.ArrayList(Value),
-        jump_table: *std.ArrayList(usize),
-    ) !void {
-        _ = self;
-        _ = node;
-        _ = bytecode;
-        _ = constants;
-        _ = jump_table;
-        // Simplified compilation - would implement full bytecode generation
     }
 
     fn evaluateExpression(
@@ -443,18 +586,255 @@ pub const RLSEngine = struct {
         return try self.context_evaluator.evaluate(expr.raw, row, context);
     }
 
+    // CANARY: REQ=REQ-RLS-EXPR-004; FEATURE="RLSExpressionCompilation"; ASPECT=BytecodeVM; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
     fn evaluateCompiledExpression(
         self: *Self,
         expr: *CompiledExpression,
         row: *const std.StringHashMap(Value),
         context: *auth.SecurityContext,
     ) !bool {
-        _ = self;
-        _ = expr;
-        _ = row;
-        _ = context;
-        // Simplified VM execution - would implement full bytecode interpreter
+        const Opcode = CompiledExpression.Opcode;
+        var stack: [64]Value = undefined;
+        var sp: usize = 0; // Stack pointer
+
+        var pc: usize = 0; // Program counter
+        while (pc < expr.bytecode.len) {
+            const opcode: Opcode = @enumFromInt(expr.bytecode[pc]);
+            pc += 1;
+
+            switch (opcode) {
+                .nop => {},
+                .push_const => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (idx < expr.constants.len) {
+                        stack[sp] = expr.constants[idx];
+                        sp += 1;
+                    }
+                },
+                .push_true => {
+                    stack[sp] = .{ .boolean = true };
+                    sp += 1;
+                },
+                .push_false => {
+                    stack[sp] = .{ .boolean = false };
+                    sp += 1;
+                },
+                .push_null => {
+                    stack[sp] = .null;
+                    sp += 1;
+                },
+                .pop => {
+                    if (sp > 0) sp -= 1;
+                },
+                .load_row => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (idx < expr.constants.len) {
+                        const field_name = switch (expr.constants[idx]) {
+                            .string => |s| s,
+                            else => "",
+                        };
+                        if (row.get(field_name)) |val| {
+                            stack[sp] = val;
+                        } else {
+                            stack[sp] = .null;
+                        }
+                        sp += 1;
+                    }
+                },
+                .load_user => {
+                    // Push current user ID as integer
+                    stack[sp] = .{ .integer = @intCast(context.user.id) };
+                    sp += 1;
+                },
+                .load_session => {
+                    // Session variable access (simplified)
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    _ = idx;
+                    stack[sp] = .null;
+                    sp += 1;
+                },
+                .eq => {
+                    if (sp >= 2) {
+                        const b = stack[sp - 1];
+                        const a = stack[sp - 2];
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = self.valuesEqual(a, b) };
+                        sp += 1;
+                    }
+                },
+                .neq => {
+                    if (sp >= 2) {
+                        const b = stack[sp - 1];
+                        const a = stack[sp - 2];
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = !self.valuesEqual(a, b) };
+                        sp += 1;
+                    }
+                },
+                .lt, .gt, .lte, .gte => {
+                    if (sp >= 2) {
+                        const b = stack[sp - 1];
+                        const a = stack[sp - 2];
+                        sp -= 2;
+                        const cmp = self.compareValues(a, b);
+                        const result = switch (opcode) {
+                            .lt => cmp < 0,
+                            .gt => cmp > 0,
+                            .lte => cmp <= 0,
+                            .gte => cmp >= 0,
+                            else => false,
+                        };
+                        stack[sp] = .{ .boolean = result };
+                        sp += 1;
+                    }
+                },
+                .op_and => {
+                    if (sp >= 2) {
+                        const b = self.valueToBool(stack[sp - 1]);
+                        const a = self.valueToBool(stack[sp - 2]);
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = a and b };
+                        sp += 1;
+                    }
+                },
+                .op_or => {
+                    if (sp >= 2) {
+                        const b = self.valueToBool(stack[sp - 1]);
+                        const a = self.valueToBool(stack[sp - 2]);
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = a or b };
+                        sp += 1;
+                    }
+                },
+                .op_not => {
+                    if (sp >= 1) {
+                        const a = self.valueToBool(stack[sp - 1]);
+                        sp -= 1;
+                        stack[sp] = .{ .boolean = !a };
+                        sp += 1;
+                    }
+                },
+                .jump => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (idx < expr.jump_table.len) {
+                        pc = expr.jump_table[idx];
+                    }
+                },
+                .jump_if_false => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (sp > 0) {
+                        sp -= 1;
+                        if (!self.valueToBool(stack[sp])) {
+                            if (idx < expr.jump_table.len) {
+                                pc = expr.jump_table[idx];
+                            }
+                        }
+                    }
+                },
+                .jump_if_true => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (sp > 0) {
+                        sp -= 1;
+                        if (self.valueToBool(stack[sp])) {
+                            if (idx < expr.jump_table.len) {
+                                pc = expr.jump_table[idx];
+                            }
+                        }
+                    }
+                },
+                .ret => {
+                    // Return top of stack as boolean result
+                    if (sp > 0) {
+                        return self.valueToBool(stack[sp - 1]);
+                    }
+                    return true; // Default to true if stack is empty
+                },
+            }
+        }
+
+        // If we fall through, return top of stack or true
+        if (sp > 0) {
+            return self.valueToBool(stack[sp - 1]);
+        }
         return true;
+    }
+
+    fn valuesEqual(self: *Self, a: Value, b: Value) bool {
+        _ = self;
+        return switch (a) {
+            .null => b == .null,
+            .boolean => |av| switch (b) {
+                .boolean => |bv| av == bv,
+                else => false,
+            },
+            .integer => |av| switch (b) {
+                .integer => |bv| av == bv,
+                .float => |bv| @as(f64, @floatFromInt(av)) == bv,
+                else => false,
+            },
+            .float => |av| switch (b) {
+                .float => |bv| av == bv,
+                .integer => |bv| av == @as(f64, @floatFromInt(bv)),
+                else => false,
+            },
+            .string => |av| switch (b) {
+                .string => |bv| std.mem.eql(u8, av, bv),
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    fn compareValues(self: *Self, a: Value, b: Value) i32 {
+        _ = self;
+        return switch (a) {
+            .integer => |av| switch (b) {
+                .integer => |bv| if (av < bv) @as(i32, -1) else if (av > bv) @as(i32, 1) else @as(i32, 0),
+                .float => |bv| blk: {
+                    const af: f64 = @floatFromInt(av);
+                    break :blk if (af < bv) @as(i32, -1) else if (af > bv) @as(i32, 1) else @as(i32, 0);
+                },
+                else => 0,
+            },
+            .float => |av| switch (b) {
+                .float => |bv| if (av < bv) @as(i32, -1) else if (av > bv) @as(i32, 1) else @as(i32, 0),
+                .integer => |bv| blk: {
+                    const bf: f64 = @floatFromInt(bv);
+                    break :blk if (av < bf) @as(i32, -1) else if (av > bf) @as(i32, 1) else @as(i32, 0);
+                },
+                else => 0,
+            },
+            .string => |av| switch (b) {
+                .string => |bv| blk: {
+                    const order = std.mem.order(u8, av, bv);
+                    break :blk switch (order) {
+                        .lt => @as(i32, -1),
+                        .gt => @as(i32, 1),
+                        .eq => @as(i32, 0),
+                    };
+                },
+                else => 0,
+            },
+            else => 0,
+        };
+    }
+
+    fn valueToBool(self: *Self, v: Value) bool {
+        _ = self;
+        return switch (v) {
+            .null => false,
+            .boolean => |b| b,
+            .integer => |i| i != 0,
+            .float => |f| f != 0.0,
+            .string => |s| s.len > 0,
+            else => true,
+        };
     }
 
     fn checkTemporalConstraint(self: *Self, constraint: TemporalConstraint) bool {
@@ -962,16 +1342,48 @@ pub const AttributeBasedAccessControl = struct {
             ttl: i64,
         };
 
+        // CANARY: REQ=REQ-RLS-EXPR-005; FEATURE="RLSExpressionCompilation"; ASPECT=AttributeEvaluation; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
         pub fn evaluate(
             self: *AttributeEvaluator,
             rule: ABACAttributeRule,
             attributes: std.StringHashMap(Value),
         ) !bool {
-            _ = self;
-            _ = rule;
-            _ = attributes;
-            // TODO: Implement attribute evaluation
-            return true;
+            // Check cache first
+            const now = std.time.milliTimestamp();
+            if (self.attribute_cache.get(rule.name)) |cached| {
+                if (now - cached.timestamp < cached.ttl) {
+                    return switch (cached.value) {
+                        .boolean => |b| b,
+                        else => true,
+                    };
+                }
+            }
+
+            // Evaluate the rule based on available attributes
+            // ABAC rules are matched by name - check if the rule's required attribute exists
+            const result = if (attributes.get(rule.name)) |attr_value| blk: {
+                // Attribute exists - evaluate based on type
+                break :blk switch (attr_value) {
+                    .null => false, // null attributes don't satisfy rules
+                    .boolean => |b| b, // boolean attributes are direct results
+                    .string => |s| s.len > 0, // non-empty strings satisfy
+                    .integer => |i| i != 0, // non-zero integers satisfy
+                    .float => |f| f != 0.0, // non-zero floats satisfy
+                    else => true, // arrays and objects are truthy if present
+                };
+            } else blk: {
+                // Attribute not present - rule doesn't apply (permissive default)
+                break :blk true;
+            };
+
+            // Cache the result
+            self.attribute_cache.put(rule.name, .{
+                .value = .{ .boolean = result },
+                .timestamp = now,
+                .ttl = 60_000, // 60 second TTL
+            }) catch {};
+
+            return result;
         }
     };
 

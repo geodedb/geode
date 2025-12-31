@@ -7,6 +7,7 @@ const MVCCManager = opaque {}; // Forward declaration to avoid import conflict
 // const enhanced_query_transport = @import("../distributed/enhanced_query_transport.zig");
 const ast = @import("../gql/ast.zig");
 const graph_storage = @import("../types/graph_common.zig");
+const lib = @import("../lib.zig");
 
 // CANARY: REQ=REQ-MATERIALIZED-VIEWS-001; FEATURE="Materialized View Management"; ASPECT=QueryOptimization; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-10-05
 
@@ -504,11 +505,49 @@ pub const MaterializedViewManager = struct {
     }
 
     fn extractDependencies(self: *MaterializedViewManager, view_name: []const u8, query: []const u8) !void {
-        // Simplified dependency extraction - in practice would parse the query AST
-        _ = self;
-        _ = view_name;
-        _ = query;
-        // TODO: Parse query AST and extract table/view dependencies
+        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-002; FEATURE="MV Dependency Extraction"; ASPECT=ASTDependencyParsing; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
+        // Parse query AST and extract table/view dependencies (node labels and relationship types)
+        var parse_result = lib.parseGql(query, self.allocator) catch |err| {
+            std.debug.print("Failed to parse query for dependency extraction: {}\n", .{err});
+            return;
+        };
+        defer parse_result.deinit();
+
+        const program = parse_result.program;
+        if (program.statements.len == 0) return;
+
+        // Extract dependencies from each statement
+        for (program.statements) |stmt| {
+            switch (stmt) {
+                .Query => |q| {
+                    // Extract labels from MATCH clause graph patterns
+                    for (q.match.chains) |chain| {
+                        // Check standalone head node
+                        if (chain.head) |head| {
+                            for (head.labels) |label| {
+                                try self.dependency_tracker.addDependency(view_name, label);
+                            }
+                        }
+                        // Check hop patterns
+                        for (chain.hops) |hop| {
+                            // Left node labels
+                            for (hop.left.labels) |label| {
+                                try self.dependency_tracker.addDependency(view_name, label);
+                            }
+                            // Relationship types
+                            for (hop.rel.types) |rel_type| {
+                                try self.dependency_tracker.addDependency(view_name, rel_type);
+                            }
+                            // Right node labels
+                            for (hop.right.labels) |label| {
+                                try self.dependency_tracker.addDependency(view_name, label);
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
     }
 
     fn executeSourceQuery(self: *MaterializedViewManager, query: []const u8) !QueryResult {
@@ -535,24 +574,403 @@ pub const MaterializedViewManager = struct {
     }
 
     fn calculateStorageSize(self: *MaterializedViewManager, data: MaterializedViewData) u64 {
+        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-003; FEATURE="MV Storage Calculation"; ASPECT=AccurateStorageMetrics; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
         _ = self;
-        _ = data;
-        // TODO: Calculate actual storage size
-        return 1024; // Placeholder
+        var total_size: u64 = 0;
+
+        // Calculate schema size
+        for (data.schema.items) |col| {
+            total_size += col.name.len;
+            total_size += @sizeOf(graph_storage.Column);
+        }
+
+        // Calculate row data size
+        for (data.rows.items) |binding| {
+            // Base binding overhead
+            total_size += @sizeOf(graph_storage.Binding);
+            total_size += binding.name.len;
+
+            // Calculate value size based on type
+            total_size += calculateBindingValueSize(binding.value);
+
+            // Calculate vars map size
+            var vars_iter = binding.vars.iterator();
+            while (vars_iter.next()) |entry| {
+                total_size += entry.key_ptr.*.len;
+                total_size += calculateBindingValueSize(entry.value_ptr.*);
+            }
+        }
+
+        // Add overhead for ArrayList metadata
+        total_size += @sizeOf(ArrayList(graph_storage.Binding));
+        total_size += @sizeOf(ArrayList(graph_storage.Column));
+
+        return total_size;
+    }
+
+    fn calculateBindingValueSize(value: graph_storage.BindingValue) u64 {
+        return switch (value) {
+            .Null => 1,
+            .Node => |node| blk: {
+                var size: u64 = @sizeOf(graph_storage.Node);
+                for (node.labels) |label| {
+                    size += label.len;
+                }
+                // Properties map overhead
+                size += node.properties.count() * 64; // Estimate per-property overhead
+                break :blk size;
+            },
+            .Edge => |edge| blk: {
+                var size: u64 = @sizeOf(graph_storage.Edge);
+                size += edge.rel_type.len;
+                size += edge.properties.count() * 64;
+                break :blk size;
+            },
+            .Property, .Value => |pv| calculatePropertyValueSize(pv),
+            .Path => |path| path.len * @sizeOf(graph_storage.Edge),
+        };
+    }
+
+    fn calculatePropertyValueSize(pv: graph_storage.PropertyValue) u64 {
+        return switch (pv) {
+            .Null => 1,
+            .Bool => @sizeOf(bool),
+            .Int => @sizeOf(i64),
+            .String => |s| s.len,
+            .Decimal => @sizeOf(i128) + @sizeOf(u8),
+            .VectorF32 => |v| @sizeOf(u16) + v.data.len * @sizeOf(f32),
+        };
     }
 
     fn evaluateFilter(self: *MaterializedViewManager, row: graph_storage.Binding, filter: []const u8) bool {
+        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-004; FEATURE="MV Filter Evaluation"; ASPECT=PredicateEvaluation; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
+        // Parse filter expression and evaluate against the row binding
+        // Supports simple property comparisons: property = value, property > value, etc.
+
+        // Parse the filter string - expect simple format: "property_name op value"
+        const trimmed = std.mem.trim(u8, filter, " \t\n\r");
+        if (trimmed.len == 0) return true; // Empty filter matches all
+
+        // Find operator
+        const op_result = findOperator(trimmed);
+        if (op_result.op == .none) {
+            // No valid operator found, treat as always true
+            return true;
+        }
+
+        const prop_name = std.mem.trim(u8, trimmed[0..op_result.pos], " ");
+        const value_str = std.mem.trim(u8, trimmed[op_result.end..], " ");
+
+        // Get property value from binding
+        const prop_value = getBindingProperty(row, prop_name) orelse return false;
+
+        // Parse expected value and compare
+        return evaluateComparison(self, prop_value, op_result.op, value_str);
+    }
+
+    const FilterOp = enum { none, eq, neq, lt, gt, lte, gte, contains };
+
+    const OpResult = struct { op: FilterOp, pos: usize, end: usize };
+
+    fn findOperator(s: []const u8) OpResult {
+        // Check for two-character operators first
+        var i: usize = 0;
+        while (i < s.len) : (i += 1) {
+            if (i + 1 < s.len) {
+                const two = s[i .. i + 2];
+                if (std.mem.eql(u8, two, "==")) return .{ .op = .eq, .pos = i, .end = i + 2 };
+                if (std.mem.eql(u8, two, "!=")) return .{ .op = .neq, .pos = i, .end = i + 2 };
+                if (std.mem.eql(u8, two, "<=")) return .{ .op = .lte, .pos = i, .end = i + 2 };
+                if (std.mem.eql(u8, two, ">=")) return .{ .op = .gte, .pos = i, .end = i + 2 };
+            }
+            // Single-character operators
+            if (s[i] == '=') return .{ .op = .eq, .pos = i, .end = i + 1 };
+            if (s[i] == '<') return .{ .op = .lt, .pos = i, .end = i + 1 };
+            if (s[i] == '>') return .{ .op = .gt, .pos = i, .end = i + 1 };
+        }
+        // Check for CONTAINS keyword
+        if (std.mem.indexOf(u8, s, " CONTAINS ")) |pos| {
+            return .{ .op = .contains, .pos = pos, .end = pos + 10 };
+        }
+        return .{ .op = .none, .pos = 0, .end = 0 };
+    }
+
+    fn getBindingProperty(binding: graph_storage.Binding, prop_name: []const u8) ?graph_storage.PropertyValue {
+        // Try to get from the binding's vars map first
+        if (binding.vars.get(prop_name)) |bv| {
+            switch (bv) {
+                .Property, .Value => |pv| return pv,
+                .Node => |node| {
+                    // Try to get property from node
+                    if (node.properties.get(prop_name)) |pv| return pv;
+                },
+                .Edge => |edge| {
+                    if (edge.properties.get(prop_name)) |pv| return pv;
+                },
+                else => {},
+            }
+        }
+
+        // Check main binding value
+        switch (binding.value) {
+            .Property, .Value => |pv| return pv,
+            .Node => |node| {
+                if (node.properties.get(prop_name)) |pv| return pv;
+            },
+            .Edge => |edge| {
+                if (edge.properties.get(prop_name)) |pv| return pv;
+            },
+            else => {},
+        }
+
+        return null;
+    }
+
+    fn evaluateComparison(self: *MaterializedViewManager, pv: graph_storage.PropertyValue, op: FilterOp, value_str: []const u8) bool {
         _ = self;
-        _ = row;
-        _ = filter;
-        // TODO: Evaluate filter predicate
-        return true; // Placeholder
+        switch (pv) {
+            .Null => return op == .eq and std.mem.eql(u8, value_str, "null"),
+            .Bool => |b| {
+                const expected = std.mem.eql(u8, value_str, "true");
+                return switch (op) {
+                    .eq => b == expected,
+                    .neq => b != expected,
+                    else => false,
+                };
+            },
+            .Int => |i| {
+                const expected = std.fmt.parseInt(i64, value_str, 10) catch return false;
+                return switch (op) {
+                    .eq => i == expected,
+                    .neq => i != expected,
+                    .lt => i < expected,
+                    .gt => i > expected,
+                    .lte => i <= expected,
+                    .gte => i >= expected,
+                    else => false,
+                };
+            },
+            .String => |s| {
+                // Remove surrounding quotes if present
+                const clean_value = if (value_str.len >= 2 and value_str[0] == '"' and value_str[value_str.len - 1] == '"')
+                    value_str[1 .. value_str.len - 1]
+                else if (value_str.len >= 2 and value_str[0] == '\'' and value_str[value_str.len - 1] == '\'')
+                    value_str[1 .. value_str.len - 1]
+                else
+                    value_str;
+
+                return switch (op) {
+                    .eq => std.mem.eql(u8, s, clean_value),
+                    .neq => !std.mem.eql(u8, s, clean_value),
+                    .lt => std.mem.order(u8, s, clean_value) == .lt,
+                    .gt => std.mem.order(u8, s, clean_value) == .gt,
+                    .lte => std.mem.order(u8, s, clean_value) != .gt,
+                    .gte => std.mem.order(u8, s, clean_value) != .lt,
+                    .contains => std.mem.indexOf(u8, s, clean_value) != null,
+                    else => false,
+                };
+            },
+            .Decimal => |d| {
+                // Parse expected decimal value (simplified)
+                const expected = std.fmt.parseFloat(f64, value_str) catch return false;
+                const actual = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale)));
+                return switch (op) {
+                    .eq => @abs(actual - expected) < 0.0001,
+                    .neq => @abs(actual - expected) >= 0.0001,
+                    .lt => actual < expected,
+                    .gt => actual > expected,
+                    .lte => actual <= expected,
+                    .gte => actual >= expected,
+                    else => false,
+                };
+            },
+            .VectorF32 => return false, // Vector comparisons not supported in simple filters
+        }
     }
 
     fn isQueryCompatible(self: *MaterializedViewManager, query1: []const u8, query2: []const u8) bool {
-        _ = self;
-        // Simple string comparison for now - in practice would use semantic analysis
-        return std.mem.eql(u8, query1, query2);
+        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-005; FEATURE="MV Query Compatibility"; ASPECT=SemanticQueryMatching; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
+        // Check if query1 can be satisfied by a materialized view with query2 as its source
+        // Uses semantic analysis to compare query patterns
+
+        // Fast path: exact match
+        if (std.mem.eql(u8, query1, query2)) return true;
+
+        // Parse both queries
+        var parse1 = lib.parseGql(query1, self.allocator) catch return false;
+        defer parse1.deinit();
+        var parse2 = lib.parseGql(query2, self.allocator) catch return false;
+        defer parse2.deinit();
+
+        // Must have at least one statement each
+        if (parse1.program.statements.len == 0 or parse2.program.statements.len == 0) return false;
+
+        // Check first statement of each
+        const stmt1 = parse1.program.statements[0];
+        const stmt2 = parse2.program.statements[0];
+
+        // Both must be Query statements
+        const q1 = switch (stmt1) {
+            .Query => |q| q,
+            else => return false,
+        };
+        const q2 = switch (stmt2) {
+            .Query => |q| q,
+            else => return false,
+        };
+
+        // Check MATCH clause compatibility: query1's patterns must be a subset of query2's
+        if (!matchPatternsCompatible(q1.match, q2.match)) return false;
+
+        // Check RETURN clause compatibility: query1's return items must be satisfiable by query2
+        if (!returnClausesCompatible(q1.ret, q2.ret)) return false;
+
+        return true;
+    }
+
+    fn matchPatternsCompatible(pattern1: ast.GraphPattern, pattern2: ast.GraphPattern) bool {
+        // Extract all labels from both patterns
+        const labels1 = extractAllLabels(pattern1);
+        const labels2 = extractAllLabels(pattern2);
+
+        // All labels in pattern1 must exist in pattern2
+        for (labels1.items) |label| {
+            var found = false;
+            for (labels2.items) |other| {
+                if (std.mem.eql(u8, label, other)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+
+        return true;
+    }
+
+    const LabelList = struct {
+        items: []const []const u8,
+        len: usize,
+    };
+
+    fn extractAllLabels(pattern: ast.GraphPattern) LabelList {
+        // Count labels first
+        var count: usize = 0;
+        for (pattern.chains) |chain| {
+            if (chain.head) |head| {
+                count += head.labels.len;
+            }
+            for (chain.hops) |hop| {
+                count += hop.left.labels.len;
+                count += hop.rel.types.len;
+                count += hop.right.labels.len;
+            }
+        }
+
+        // Use a static buffer for simplicity (thread-local would be better for production)
+        const StaticBuffer = struct {
+            var buf: [256][]const u8 = undefined;
+        };
+
+        var idx: usize = 0;
+        for (pattern.chains) |chain| {
+            if (chain.head) |head| {
+                for (head.labels) |label| {
+                    if (idx < 256) {
+                        StaticBuffer.buf[idx] = label;
+                        idx += 1;
+                    }
+                }
+            }
+            for (chain.hops) |hop| {
+                for (hop.left.labels) |label| {
+                    if (idx < 256) {
+                        StaticBuffer.buf[idx] = label;
+                        idx += 1;
+                    }
+                }
+                for (hop.rel.types) |rtype| {
+                    if (idx < 256) {
+                        StaticBuffer.buf[idx] = rtype;
+                        idx += 1;
+                    }
+                }
+                for (hop.right.labels) |label| {
+                    if (idx < 256) {
+                        StaticBuffer.buf[idx] = label;
+                        idx += 1;
+                    }
+                }
+            }
+        }
+
+        return LabelList{ .items = StaticBuffer.buf[0..idx], .len = idx };
+    }
+
+    fn returnClausesCompatible(ret1: ast.ReturnClause, ret2: ast.ReturnClause) bool {
+        // Check if all items in ret1 can be found in ret2
+        for (ret1.items) |item1| {
+            var found = false;
+            for (ret2.items) |item2| {
+                if (returnItemsMatch(item1, item2)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+
+    fn returnItemsMatch(item1: ast.ReturnItem, item2: ast.ReturnItem) bool {
+        // Check alias match if both have aliases
+        if (item1.alias != null and item2.alias != null) {
+            if (std.mem.eql(u8, item1.alias.?, item2.alias.?)) return true;
+        }
+
+        // Check expression match (simplified comparison)
+        return expressionsMatch(item1.expr, item2.expr);
+    }
+
+    fn expressionsMatch(expr1: ast.Expr, expr2: ast.Expr) bool {
+        // Compare expression types and content
+        return switch (expr1) {
+            .Ident => |id1| switch (expr2) {
+                .Ident => |id2| std.mem.eql(u8, id1.orig, id2.orig),
+                else => false,
+            },
+            .PropertyAccess => |pa1| switch (expr2) {
+                .PropertyAccess => |pa2| blk: {
+                    // Compare base and property
+                    const base_match = expressionsMatch(pa1.base.*, pa2.base.*);
+                    const prop_match = std.mem.eql(u8, pa1.prop, pa2.prop);
+                    break :blk base_match and prop_match;
+                },
+                else => false,
+            },
+            .FunctionCall => |fc1| switch (expr2) {
+                .FunctionCall => |fc2| blk: {
+                    // Compare function name and arity
+                    if (!std.mem.eql(u8, fc1.name, fc2.name)) break :blk false;
+                    if (fc1.args.len != fc2.args.len) break :blk false;
+                    // Compare arguments
+                    for (fc1.args, fc2.args) |a1, a2| {
+                        if (!expressionsMatch(a1.*, a2.*)) break :blk false;
+                    }
+                    break :blk true;
+                },
+                else => false,
+            },
+            .IntLiteral => |int1| switch (expr2) {
+                .IntLiteral => |int2| int1 == int2,
+                else => false,
+            },
+            .StringLiteral => |s1| switch (expr2) {
+                .StringLiteral => |s2| std.mem.eql(u8, s1, s2),
+                else => false,
+            },
+            else => false, // Other types don't match
+        };
     }
 
     fn updateRefreshSuccessRate(self: *MaterializedViewManager) void {

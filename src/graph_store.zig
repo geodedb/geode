@@ -803,8 +803,74 @@ pub const GraphStore = struct {
                                     _ = try file.write(&i_buf);
                                 }
                             },
+                            // CANARY: REQ=REQ-TYPE-SERIAL-001; FEATURE="TypeSerialization"; ASPECT=ExtendedTypes; STATUS=IMPL; OWNER=storage; UPDATED=2025-12-30
+                            .Hash => |hash| {
+                                // Write algorithm (u8)
+                                _ = try file.write(&[1]u8{@intFromEnum(hash.alg)});
+                                // Write digest length and data
+                                var digest_len_buf: [4]u8 = undefined;
+                                std.mem.writeInt(u32, &digest_len_buf, @intCast(hash.digest.len), .little);
+                                _ = try file.write(&digest_len_buf);
+                                _ = try file.write(hash.digest);
+                                // Write optional salt
+                                if (hash.salt) |salt| {
+                                    _ = try file.write(&[1]u8{1}); // has salt
+                                    var salt_len_buf: [4]u8 = undefined;
+                                    std.mem.writeInt(u32, &salt_len_buf, @intCast(salt.len), .little);
+                                    _ = try file.write(&salt_len_buf);
+                                    _ = try file.write(salt);
+                                } else {
+                                    _ = try file.write(&[1]u8{0}); // no salt
+                                }
+                            },
+                            .LanguageTag => |lt| {
+                                // Write tag length and data
+                                var tag_len_buf: [4]u8 = undefined;
+                                std.mem.writeInt(u32, &tag_len_buf, @intCast(lt.tag.len), .little);
+                                _ = try file.write(&tag_len_buf);
+                                _ = try file.write(lt.tag);
+                            },
+                            .Temperature => |temp| {
+                                // Write value_K (f64) and unit (u8)
+                                var buf: [9]u8 = undefined;
+                                std.mem.writeInt(u64, buf[0..8], @bitCast(temp.value_K), .little);
+                                buf[8] = @intFromEnum(temp.unit_in);
+                                _ = try file.write(&buf);
+                            },
+                            .Pressure => |pres| {
+                                // Write value_Pa (f64) and unit (u8)
+                                var buf: [9]u8 = undefined;
+                                std.mem.writeInt(u64, buf[0..8], @bitCast(pres.value_Pa), .little);
+                                buf[8] = @intFromEnum(pres.unit_in);
+                                _ = try file.write(&buf);
+                            },
+                            .Date => |date| {
+                                // Write days_since_epoch (i32)
+                                var buf: [4]u8 = undefined;
+                                std.mem.writeInt(i32, &buf, date.days_since_epoch, .little);
+                                _ = try file.write(&buf);
+                            },
+                            .Time => |time| {
+                                // Write micros_since_midnight (i64)
+                                var buf: [8]u8 = undefined;
+                                std.mem.writeInt(i64, &buf, time.micros_since_midnight, .little);
+                                _ = try file.write(&buf);
+                            },
+                            .TimestampTZ => |ts| {
+                                // Write micros_since_epoch_utc (i64)
+                                var buf: [8]u8 = undefined;
+                                std.mem.writeInt(i64, &buf, ts.micros_since_epoch_utc, .little);
+                                _ = try file.write(&buf);
+                            },
+                            .List => |list| {
+                                // Write list length
+                                var len_buf: [4]u8 = undefined;
+                                std.mem.writeInt(u32, &len_buf, @intCast(list.len), .little);
+                                _ = try file.write(&len_buf);
+                                // Note: Nested list serialization not supported yet
+                            },
                             else => {
-                                // TODO: Implement serialization for remaining types (Hash, LanguageTag, Temperature, Pressure, Date, Time, TimestampTZ, List)
+                                // Other types not yet supported
                             },
                         }
                     },
@@ -884,8 +950,54 @@ pub const GraphStore = struct {
                     .Null => {
                         // Nothing to write for null
                     },
-                    .ExtValue => {
-                        // TODO: Implement ExtValue serialization for edges if needed
+                    // CANARY: REQ=REQ-TYPE-SERIAL-002; FEATURE="TypeSerialization"; ASPECT=EdgeExtValue; STATUS=IMPL; OWNER=storage; UPDATED=2025-12-30
+                    .ExtValue => |ext| {
+                        // Write ExtValue sub-type tag and data (same as node serialization)
+                        const ext_type: u8 = switch (ext) {
+                            .Hash => 0x20,
+                            .LanguageTag => 0x21,
+                            .Temperature => 0x22,
+                            .Pressure => 0x23,
+                            .Date => 0x24,
+                            .Time => 0x25,
+                            .TimestampTZ => 0x26,
+                            .List => 0x27,
+                            .VectorF32 => 0x28,
+                            .VectorI32 => 0x29,
+                            else => 0xFF,
+                        };
+                        _ = try file.write(&[1]u8{ext_type});
+
+                        switch (ext) {
+                            .Date => |date| {
+                                var buf: [4]u8 = undefined;
+                                std.mem.writeInt(i32, &buf, date.days_since_epoch, .little);
+                                _ = try file.write(&buf);
+                            },
+                            .Time => |time| {
+                                var buf: [8]u8 = undefined;
+                                std.mem.writeInt(i64, &buf, time.micros_since_midnight, .little);
+                                _ = try file.write(&buf);
+                            },
+                            .TimestampTZ => |ts| {
+                                var buf: [8]u8 = undefined;
+                                std.mem.writeInt(i64, &buf, ts.micros_since_epoch_utc, .little);
+                                _ = try file.write(&buf);
+                            },
+                            .Temperature => |temp| {
+                                var buf: [9]u8 = undefined;
+                                std.mem.writeInt(u64, buf[0..8], @bitCast(temp.value_K), .little);
+                                buf[8] = @intFromEnum(temp.unit_in);
+                                _ = try file.write(&buf);
+                            },
+                            .Pressure => |pres| {
+                                var buf: [9]u8 = undefined;
+                                std.mem.writeInt(u64, buf[0..8], @bitCast(pres.value_Pa), .little);
+                                buf[8] = @intFromEnum(pres.unit_in);
+                                _ = try file.write(&buf);
+                            },
+                            else => {},
+                        }
                     },
                 }
             }
