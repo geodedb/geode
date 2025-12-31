@@ -48,19 +48,8 @@ archives:
   - id: geode-archives
     builds:
       - geode
-    name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_
-      {{- if eq .Os "darwin" }}macOS
-      {{- else if eq .Os "linux" }}Linux
-      {{- else if eq .Os "windows" }}Windows
-      {{- else }}{{ title .Os }}{{ end }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
-      {{- else if eq .Arch "arm64" }}arm64
-      {{- else if eq .Arch "riscv64" }}riscv64
-      {{- else }}{{ .Arch }}{{ end }}
-      {{- with .Abi }}_{{ . }}{{ end }}
+    # Use Target directly which contains the full Zig target string
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Target }}"
     format_overrides:
       - goos: windows
         format: zip
