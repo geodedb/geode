@@ -125,15 +125,36 @@ function startLanguageServer(context) {
             fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{gql,gcypher,cypher,pgql}')
         },
         outputChannel: outputChannel,
-        traceOutputChannel: outputChannel
+        traceOutputChannel: outputChannel,
+        diagnosticCollectionName: 'geode-gql',
+        initializationFailedHandler: (error) => {
+            outputChannel.appendLine(`LSP initialization failed: ${error}`);
+            return false; // Don't try to restart
+        },
+        errorHandler: {
+            error: (error, message, count) => {
+                outputChannel.appendLine(`LSP error: ${error} - ${message} (count: ${count})`);
+                return { action: node_1.ErrorAction.Continue };
+            },
+            closed: () => {
+                outputChannel.appendLine('LSP connection closed');
+                return { action: node_1.CloseAction.DoNotRestart };
+            }
+        }
     };
+    outputChannel.appendLine(`Starting LSP server: ${serverPath} ${serverArgs.join(' ')}`);
     // Create and start client
     client = new node_1.LanguageClient('geode-gql', 'Geode GQL Language Server', serverOptions, clientOptions);
+    // Set up trace logging for diagnostics
+    client.onDidChangeState((event) => {
+        outputChannel.appendLine(`LSP state changed: ${event.oldState} -> ${event.newState}`);
+    });
     client.start().then(() => {
-        outputChannel.appendLine('Language server started');
+        outputChannel.appendLine('Language server started successfully');
         updateStatusBar('lsp-ready');
     }).catch((error) => {
         outputChannel.appendLine(`Failed to start language server: ${error}`);
+        outputChannel.appendLine(`Server path was: ${serverPath}`);
         vscode.window.showWarningMessage('Geode LSP failed to start. Make sure "geode" is in your PATH.', 'Show Output').then(choice => {
             if (choice === 'Show Output') {
                 outputChannel.show();

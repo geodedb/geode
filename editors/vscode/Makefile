@@ -69,13 +69,13 @@ install-cursor: package
 	cursor --install-extension $(VSIX_FILE)
 	@echo "Extension installed. Restart Cursor to activate."
 
-# Install for development (symlink)
+# Install for development (copy with dependencies)
 install-dev: build
 	@echo "Installing extension for development..."
 	@EXTDIR="$$HOME/.vscode/extensions/$(EXTENSION_NAME)-dev"; \
 	rm -rf "$$EXTDIR"; \
 	mkdir -p "$$EXTDIR"; \
-	cp -r package.json language-configuration.json out syntaxes snippets images README.md "$$EXTDIR/"; \
+	cp -r package.json language-configuration.json out syntaxes snippets images README.md node_modules "$$EXTDIR/"; \
 	echo "Development extension installed to $$EXTDIR"; \
 	echo "Restart VS Code and select 'Geode GQL' for .gql files"
 
