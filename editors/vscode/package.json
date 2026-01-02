@@ -1,20 +1,43 @@
 {
   "name": "geode-gql",
   "displayName": "Geode GQL",
-  "description": "GQL (Graph Query Language) support for Geode database",
+  "description": "GQL (Graph Query Language) and Cypher support for Geode graph database - syntax highlighting, LSP, snippets, and query execution",
   "version": "1.0.0",
   "publisher": "geode-db",
+  "icon": "images/geode-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/geode-db/geode"
+  },
+  "homepage": "https://github.com/geode-db/geode",
+  "bugs": {
+    "url": "https://github.com/geode-db/geode/issues"
+  },
+  "license": "MIT",
   "engines": {
     "vscode": "^1.75.0"
   },
   "categories": [
     "Programming Languages",
     "Linters",
-    "Formatters"
+    "Formatters",
+    "Snippets"
+  ],
+  "keywords": [
+    "gql",
+    "cypher",
+    "graph",
+    "database",
+    "query",
+    "neo4j",
+    "geode",
+    "iso-gql"
   ],
   "activationEvents": [
     "onLanguage:gql",
-    "onLanguage:cypher"
+    "onLanguage:cypher",
+    "onCommand:geode.runQuery",
+    "onCommand:geode.connectServer"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -23,7 +46,11 @@
         "id": "gql",
         "aliases": ["GQL", "Graph Query Language", "ISO GQL"],
         "extensions": [".gql", ".gcypher", ".pgql"],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/gql-icon.png",
+          "dark": "./images/gql-icon.png"
+        }
       },
       {
         "id": "cypher",
@@ -37,12 +64,132 @@
         "language": "gql",
         "scopeName": "source.gql",
         "path": "./syntaxes/gql.tmLanguage.json"
+      },
+      {
+        "language": "cypher",
+        "scopeName": "source.gql",
+        "path": "./syntaxes/gql.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "gql",
+        "path": "./snippets/gql.json"
+      },
+      {
+        "language": "cypher",
+        "path": "./snippets/gql.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "geode.runQuery",
+        "title": "Run GQL Query",
+        "category": "Geode",
+        "icon": "$(play)"
+      },
+      {
+        "command": "geode.runSelection",
+        "title": "Run Selected Query",
+        "category": "Geode",
+        "icon": "$(play)"
+      },
+      {
+        "command": "geode.formatDocument",
+        "title": "Format GQL Document",
+        "category": "Geode",
+        "icon": "$(code)"
+      },
+      {
+        "command": "geode.connectServer",
+        "title": "Connect to Geode Server",
+        "category": "Geode",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "geode.disconnectServer",
+        "title": "Disconnect from Server",
+        "category": "Geode",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "geode.showDocumentation",
+        "title": "Show GQL Documentation",
+        "category": "Geode",
+        "icon": "$(book)"
+      },
+      {
+        "command": "geode.explainQuery",
+        "title": "Explain Query Plan",
+        "category": "Geode",
+        "icon": "$(info)"
+      },
+      {
+        "command": "geode.restartLsp",
+        "title": "Restart Language Server",
+        "category": "Geode",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "geode.runQuery",
+          "when": "resourceLangId == gql || resourceLangId == cypher",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "geode.runSelection",
+          "when": "resourceLangId == gql || resourceLangId == cypher",
+          "group": "1_run"
+        },
+        {
+          "command": "geode.explainQuery",
+          "when": "resourceLangId == gql || resourceLangId == cypher",
+          "group": "1_run"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "geode.runQuery",
+          "when": "resourceLangId == gql || resourceLangId == cypher"
+        },
+        {
+          "command": "geode.runSelection",
+          "when": "resourceLangId == gql || resourceLangId == cypher && editorHasSelection"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "geode.runQuery",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "resourceLangId == gql || resourceLangId == cypher"
+      },
+      {
+        "command": "geode.runSelection",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter",
+        "when": "resourceLangId == gql || resourceLangId == cypher && editorHasSelection"
+      },
+      {
+        "command": "geode.formatDocument",
+        "key": "shift+alt+f",
+        "when": "resourceLangId == gql || resourceLangId == cypher"
       }
     ],
     "configuration": {
       "type": "object",
       "title": "Geode GQL",
       "properties": {
+        "geode.lsp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the Geode Language Server"
+        },
         "geode.lsp.path": {
           "type": "string",
           "default": "geode",
@@ -58,6 +205,42 @@
           "enum": ["off", "messages", "verbose"],
           "default": "off",
           "description": "Traces the communication between VS Code and the language server"
+        },
+        "geode.server.host": {
+          "type": "string",
+          "default": "localhost",
+          "description": "Geode server hostname"
+        },
+        "geode.server.port": {
+          "type": "number",
+          "default": 3141,
+          "description": "Geode server port"
+        },
+        "geode.server.autoConnect": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically connect to the server on startup"
+        },
+        "geode.query.timeout": {
+          "type": "number",
+          "default": 30000,
+          "description": "Query execution timeout in milliseconds"
+        },
+        "geode.query.maxResults": {
+          "type": "number",
+          "default": 1000,
+          "description": "Maximum number of results to display"
+        },
+        "geode.format.indentSize": {
+          "type": "number",
+          "default": 2,
+          "description": "Number of spaces for indentation"
+        },
+        "geode.format.keywordCase": {
+          "type": "string",
+          "enum": ["upper", "lower", "preserve"],
+          "default": "upper",
+          "description": "Case for GQL keywords"
         }
       }
     }
@@ -65,7 +248,11 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "publish": "vsce publish"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -73,6 +260,7 @@
   "devDependencies": {
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^2.22.0",
     "typescript": "^5.0.0"
   }
 }
