@@ -64,7 +64,7 @@ function activate(context) {
         startLanguageServer(context);
     }
     // Register commands
-    context.subscriptions.push(vscode.commands.registerCommand('geode.runQuery', runQuery), vscode.commands.registerCommand('geode.runSelection', runSelection), vscode.commands.registerCommand('geode.formatDocument', formatDocument), vscode.commands.registerCommand('geode.connectServer', connectServer), vscode.commands.registerCommand('geode.disconnectServer', disconnectServer), vscode.commands.registerCommand('geode.showDocumentation', showDocumentation), vscode.commands.registerCommand('geode.explainQuery', explainQuery), vscode.commands.registerCommand('geode.restartLsp', () => restartLanguageServer(context)));
+    context.subscriptions.push(vscode.commands.registerCommand('geode.runQuery', runQuery), vscode.commands.registerCommand('geode.runSelection', runSelection), vscode.commands.registerCommand('geode.formatDocument', formatDocument), vscode.commands.registerCommand('geode.connectServer', connectServer), vscode.commands.registerCommand('geode.disconnectServer', disconnectServer), vscode.commands.registerCommand('geode.showDocumentation', showDocumentation), vscode.commands.registerCommand('geode.explainQuery', explainQuery), vscode.commands.registerCommand('geode.restartLsp', () => restartLanguageServer(context)), vscode.commands.registerCommand('geode.runFile', runFile));
     // Auto-connect if configured
     if (config.get('server.autoConnect', false)) {
         connectServer();
@@ -249,6 +249,32 @@ async function runSelection() {
     }
     await executeQuery(query);
 }
+async function runFile(uri) {
+    let fileUri = uri;
+    // If called from context menu, uri is provided
+    // If called from command palette, use active editor
+    if (!fileUri) {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('No active editor or file selected');
+            return;
+        }
+        fileUri = editor.document.uri;
+    }
+    try {
+        const document = await vscode.workspace.openTextDocument(fileUri);
+        const query = document.getText();
+        if (!query.trim()) {
+            vscode.window.showWarningMessage('File is empty');
+            return;
+        }
+        outputChannel.appendLine(`\n--- Running File: ${path.basename(fileUri.fsPath)} ---`);
+        await executeQuery(query);
+    }
+    catch (error) {
+        vscode.window.showErrorMessage(`Failed to read file: ${error}`);
+    }
+}
 async function executeQuery(query) {
     const config = vscode.workspace.getConfiguration('geode');
     const host = config.get('server.host', 'localhost');
@@ -268,8 +294,14 @@ async function executeQuery(query) {
 }
 function runGeodeQuery(query, host, port, timeout) {
     return new Promise((resolve, reject) => {
+        const config = vscode.workspace.getConfiguration('geode');
+        const insecure = config.get('server.insecure', false);
         const geodeCmd = resolveGeodeBinary(vscode.workspace.getConfiguration('geode.lsp'));
-        const args = ['query', '--server', `${host}:${port}`, '--format', 'json', query];
+        const args = ['query', '--server', `${host}:${port}`, '--format', 'json'];
+        if (insecure) {
+            args.push('--insecure');
+        }
+        args.push(query);
         const process = cp.spawn(geodeCmd, args, {
             timeout: timeout
         });

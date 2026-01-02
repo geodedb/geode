@@ -129,6 +129,8 @@ vendor/*
 *.swo
 *~
 .DS_Store
+editors/vscode/*.vsix
+
 
 # Claude settings
 .claude/settings.local.json
