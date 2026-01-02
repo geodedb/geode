@@ -212,13 +212,11 @@ test-python-client:
 build-vscode-extension:
   stage: test
   image: node:20-alpine
-  variables:
-    NODE_ENV: production
   before_script:
     - apk add --no-cache make git
   script:
     - cd editors/vscode
-    - npm install
+    - npm ci
     - npm run compile
     - npm run package
     - ls -la *.vsix
