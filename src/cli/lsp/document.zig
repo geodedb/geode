@@ -109,6 +109,7 @@ pub const Document = struct {
 
     /// Find the position (line, column) of an identifier in the document text.
     /// Searches case-insensitively and ensures the match is a whole word.
+    /// Skips comments (-- and // single-line, /* */ multi-line).
     /// Returns null if not found.
     pub fn findIdentifierPosition(self: *const Document, identifier: []const u8) ?struct { line: u32, character: u32 } {
         if (identifier.len == 0) return null;
@@ -116,6 +117,7 @@ pub const Document = struct {
         var line: u32 = 0;
         var line_start: usize = 0;
         var i: usize = 0;
+        var in_multiline_comment = false;
 
         while (i < self.text.len) {
             // Check for newline
@@ -124,6 +126,37 @@ pub const Document = struct {
                 line_start = i + 1;
                 i += 1;
                 continue;
+            }
+
+            // Skip multi-line comments /* ... */
+            if (in_multiline_comment) {
+                if (i + 1 < self.text.len and self.text[i] == '*' and self.text[i + 1] == '/') {
+                    in_multiline_comment = false;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+
+            // Check for start of multi-line comment
+            if (i + 1 < self.text.len and self.text[i] == '/' and self.text[i + 1] == '*') {
+                in_multiline_comment = true;
+                i += 2;
+                continue;
+            }
+
+            // Check for single-line comments: -- or //
+            if (i + 1 < self.text.len) {
+                const c0 = self.text[i];
+                const c1 = self.text[i + 1];
+                if ((c0 == '-' and c1 == '-') or (c0 == '/' and c1 == '/')) {
+                    // Skip to end of line
+                    while (i < self.text.len and self.text[i] != '\n') {
+                        i += 1;
+                    }
+                    continue;
+                }
             }
 
             // Check if this could be the start of the identifier
