@@ -1,0 +1,14 @@
+{
+  "command": "geode",
+  "args": ["lsp"],
+  "extensionToLanguage": {
+    ".gql": "gql",
+    ".gcypher": "gql",
+    ".cypher": "cypher",
+    ".pgql": "gql"
+  },
+  "transport": "stdio",
+  "initializationOptions": {},
+  "settings": {},
+  "maxRestarts": 3
+}

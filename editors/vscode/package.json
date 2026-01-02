@@ -1,0 +1,78 @@
+{
+  "name": "geode-gql",
+  "displayName": "Geode GQL",
+  "description": "GQL (Graph Query Language) support for Geode database",
+  "version": "1.0.0",
+  "publisher": "geode-db",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "activationEvents": [
+    "onLanguage:gql",
+    "onLanguage:cypher"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "gql",
+        "aliases": ["GQL", "Graph Query Language", "ISO GQL"],
+        "extensions": [".gql", ".gcypher", ".pgql"],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "cypher",
+        "aliases": ["Cypher"],
+        "extensions": [".cypher"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gql",
+        "scopeName": "source.gql",
+        "path": "./syntaxes/gql.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Geode GQL",
+      "properties": {
+        "geode.lsp.path": {
+          "type": "string",
+          "default": "geode",
+          "description": "Path to the geode executable"
+        },
+        "geode.lsp.args": {
+          "type": "array",
+          "default": ["lsp"],
+          "description": "Arguments to pass to the LSP server"
+        },
+        "geode.lsp.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  }
+}

@@ -361,9 +361,51 @@ All LSP implementation files include appropriate CANARY markers:
 - GQL Parser: `src/gql/parser.zig`
 - Geode Library API: `src/lib.zig`
 
+## Editor Extensions & Plugins
+
+Complete editor integration packages are available in the repository:
+
+### Claude Code Plugin
+Located in `claude-code-lsp-plugin/`:
+```bash
+# Install plugin
+claude /plugin install /path/to/claude-code-lsp-plugin
+
+# Or install from marketplace (when published)
+claude /plugin install geode-lsp@claude-code-lsps
+```
+
+Features:
+- Automatic LSP integration for Claude Code
+- File extension mapping for .gql, .gcypher, .cypher, .pgql
+- Auto-installation hooks
+
+### VS Code Extension
+Located in `editors/vscode/`:
+```bash
+cd editors/vscode
+npm install
+npm run compile
+npx vsce package
+# Then install the .vsix file in VS Code
+```
+
+Features:
+- Full syntax highlighting with TextMate grammar
+- LSP integration via vscode-languageclient
+- Configurable settings for LSP path and args
+
+### Neovim Configuration
+Located in `editors/neovim/`:
+- `gql.lua` - Full nvim-lspconfig setup with key mappings
+- `gql.vim` - Vim-style syntax highlighting
+
+See `editors/README.md` for complete setup instructions.
+
 ---
 
 *Implementation Date: October 28, 2025*
+*Updated: January 2, 2026*
 *Status: ✅ COMPLETE - All features implemented, compiled, and tested*
 *Build: zig-out/bin/geode (18MB binary)*
 *Launch: `./zig-out/bin/geode lsp`*
