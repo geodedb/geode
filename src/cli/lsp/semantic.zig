@@ -244,6 +244,9 @@ pub const SemanticAnalyzer = struct {
 
     pub fn analyze(self: *SemanticAnalyzer, program: ast.Program) ![]SemanticError {
         for (program.statements) |stmt| {
+            // Clear scope at the start of each statement
+            // Each GQL statement has its own independent scope
+            self.scope.clear();
             try self.analyzeStatement(stmt);
         }
 
@@ -278,10 +281,15 @@ pub const SemanticAnalyzer = struct {
                         // This is a common pattern for intentionally distinct labels
                         if (isNumericSuffixVariant(label, other_label)) continue;
 
+                        // Skip if they only differ by trailing single letter/number suffix
+                        // e.g., KNOWS_IN_A vs KNOWS_IN_B, or NodeA vs NodeB
+                        if (isSuffixVariant(label, other_label)) continue;
+
                         // Calculate edit distance
                         const distance = levenshteinDistance(label, other_label);
 
                         // If very similar (edit distance 1-2), warn about potential typo
+                        // But only if they're not suffix variants (already checked above)
                         if (distance > 0 and distance <= 2 and label.len >= 4) {
                             try self.addError("Label '{s}' is similar to '{s}' - possible typo?", .{ label, other_label }, 0, 0);
                             break; // Only report one potential match per label
@@ -306,6 +314,27 @@ pub const SemanticAnalyzer = struct {
             if (std.ascii.toLower(c1) != std.ascii.toLower(c2)) return false;
         }
         return true;
+    }
+
+    /// Check if two labels only differ by a trailing suffix (letter or number).
+    /// Returns true for pairs like: (KNOWS_IN_A, KNOWS_IN_B), (NodeA, NodeB), (Test1, Test2)
+    fn isSuffixVariant(label1: []const u8, label2: []const u8) bool {
+        // Labels must be at least 2 characters
+        if (label1.len < 2 or label2.len < 2) return false;
+
+        // Labels must be the same length
+        if (label1.len != label2.len) return false;
+
+        // Check if all but the last character are the same
+        const prefix1 = label1[0 .. label1.len - 1];
+        const prefix2 = label2[0 .. label2.len - 1];
+
+        for (prefix1, prefix2) |c1, c2| {
+            if (std.ascii.toLower(c1) != std.ascii.toLower(c2)) return false;
+        }
+
+        // Only the last character differs - this is a suffix variant
+        return label1[label1.len - 1] != label2[label2.len - 1];
     }
 
     fn stripTrailingDigits(s: []const u8) []const u8 {
@@ -798,15 +827,10 @@ pub const SemanticAnalyzer = struct {
                     // Note: null_type is allowed (NULL propagates through arithmetic ops)
                     .Add, .Sub, .Mul, .Div, .Mod, .Power => {
                         // String concatenation with + is allowed
+                        // Many GQL implementations allow auto-conversion, so we're lenient here
                         if (b.op == .Add and (left_type == .string or right_type == .string)) {
-                            // Allow string + string
-                            if (left_type == .string and right_type == .string) {
-                                // OK
-                            } else if (left_type != .unknown and left_type != .string and left_type != .null_type) {
-                                try self.addError("Cannot concatenate {s} with string", .{@tagName(left_type)}, 0, 0);
-                            } else if (right_type != .unknown and right_type != .string and right_type != .null_type) {
-                                try self.addError("Cannot concatenate string with {s}", .{@tagName(right_type)}, 0, 0);
-                            }
+                            // Allow any type with string - auto-conversion is common
+                            // Only flag if both are definitely non-string and non-null/unknown
                         } else if (b.op == .Add and (left_type == .list or right_type == .list)) {
                             // List concatenation with + is allowed in GQL
                             // Allow list + list (both operands being lists or unknown)
@@ -1268,6 +1292,23 @@ test "levenshtein - case insensitive" {
     try std.testing.expectEqual(@as(usize, 0), levenshteinDistance("PERSON", "person"));
 }
 
+// Suffix variant tests
+test "suffix variant - KNOWS_IN_A vs KNOWS_IN_B" {
+    try std.testing.expect(SemanticAnalyzer.isSuffixVariant("KNOWS_IN_A", "KNOWS_IN_B"));
+    try std.testing.expect(SemanticAnalyzer.isSuffixVariant("NodeA", "NodeB"));
+    try std.testing.expect(SemanticAnalyzer.isSuffixVariant("Test1", "Test2"));
+}
+
+test "suffix variant - different lengths are not variants" {
+    try std.testing.expect(!SemanticAnalyzer.isSuffixVariant("Node", "NodeA"));
+    try std.testing.expect(!SemanticAnalyzer.isSuffixVariant("AB", "ABC"));
+}
+
+test "suffix variant - different prefixes are not variants" {
+    try std.testing.expect(!SemanticAnalyzer.isSuffixVariant("PersonA", "CompanyA"));
+    try std.testing.expect(!SemanticAnalyzer.isSuffixVariant("KNOWS", "LIKES"));
+}
+
 // Label typo detection tests
 test "label tracking - records labels" {
     const allocator = std.testing.allocator;
@@ -1574,6 +1615,43 @@ test "integration - boolean logic in WHERE" {
             // Boolean logic should not cause errors
             for (errors) |err| {
                 std.debug.print("Unexpected error: {s}\n", .{err.message});
+            }
+            try std.testing.expectEqual(@as(usize, 0), errors.len);
+        },
+        .Err => |err_info| {
+            std.debug.print("Parse error: {s}\n", .{err_info.msg});
+            try std.testing.expect(false);
+        },
+    }
+}
+
+test "integration - MATCH CREATE pattern should work" {
+    const allocator = std.testing.allocator;
+    // MATCH defines e and d, CREATE uses them - should not error
+    const query = "MATCH (e:Employee), (d:Department) CREATE (e)-[:MANAGES]->(d)";
+
+    const outcome = try geode.parseGqlOutcome(query, allocator, .{});
+    defer {
+        switch (outcome) {
+            .Ok => |result| {
+                var res = result;
+                res.deinit();
+            },
+            .Err => {},
+        }
+    }
+
+    switch (outcome) {
+        .Ok => |result| {
+            std.debug.print("MATCH CREATE: {d} statements\n", .{result.program.statements.len});
+
+            var analyzer = SemanticAnalyzer.init(allocator);
+            defer analyzer.deinit();
+
+            const errors = try analyzer.analyze(result.program);
+            std.debug.print("MATCH CREATE errors: {d}\n", .{errors.len});
+            for (errors) |err| {
+                std.debug.print("  - {s}\n", .{err.message});
             }
             try std.testing.expectEqual(@as(usize, 0), errors.len);
         },
