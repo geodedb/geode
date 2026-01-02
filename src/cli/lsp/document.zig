@@ -109,7 +109,7 @@ pub const Document = struct {
 
     /// Find the position (line, column) of an identifier in the document text.
     /// Searches case-insensitively and ensures the match is a whole word.
-    /// Skips comments (-- and // single-line, /* */ multi-line).
+    /// Skips comments (-- and // single-line, /* */ multi-line) and string literals.
     /// Returns null if not found.
     pub fn findIdentifierPosition(self: *const Document, identifier: []const u8) ?struct { line: u32, character: u32 } {
         if (identifier.len == 0) return null;
@@ -157,6 +157,30 @@ pub const Document = struct {
                     }
                     continue;
                 }
+            }
+
+            // Skip string literals (single and double quoted)
+            if (self.text[i] == '\'' or self.text[i] == '"') {
+                const quote_char = self.text[i];
+                i += 1;
+                // Skip until closing quote (handle escape sequences)
+                while (i < self.text.len) {
+                    if (self.text[i] == '\n') {
+                        // Count newlines inside strings for accurate line tracking
+                        line += 1;
+                        line_start = i + 1;
+                        i += 1;
+                    } else if (self.text[i] == '\\' and i + 1 < self.text.len) {
+                        // Skip escaped character
+                        i += 2;
+                    } else if (self.text[i] == quote_char) {
+                        i += 1;
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+                continue;
             }
 
             // Check if this could be the start of the identifier

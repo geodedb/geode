@@ -274,6 +274,10 @@ pub const SemanticAnalyzer = struct {
 
                     // Check if the other label is more commonly used
                     if (other_count > 1) {
+                        // Skip if the labels only differ by trailing numbers (e.g., Person1 vs Person)
+                        // This is a common pattern for intentionally distinct labels
+                        if (isNumericSuffixVariant(label, other_label)) continue;
+
                         // Calculate edit distance
                         const distance = levenshteinDistance(label, other_label);
 
@@ -286,6 +290,30 @@ pub const SemanticAnalyzer = struct {
                 }
             }
         }
+    }
+
+    /// Check if two labels only differ by trailing numeric suffixes.
+    /// Returns true for pairs like: (Person1, Person), (User2, User1), (Node10, Node)
+    fn isNumericSuffixVariant(label1: []const u8, label2: []const u8) bool {
+        const base1 = stripTrailingDigits(label1);
+        const base2 = stripTrailingDigits(label2);
+
+        // If after stripping digits they're the same (case-insensitive), they're variants
+        if (base1.len == 0 or base2.len == 0) return false;
+        if (base1.len != base2.len) return false;
+
+        for (base1, base2) |c1, c2| {
+            if (std.ascii.toLower(c1) != std.ascii.toLower(c2)) return false;
+        }
+        return true;
+    }
+
+    fn stripTrailingDigits(s: []const u8) []const u8 {
+        var end = s.len;
+        while (end > 0 and std.ascii.isDigit(s[end - 1])) {
+            end -= 1;
+        }
+        return s[0..end];
     }
 
     /// Record a label usage for typo detection
@@ -389,6 +417,27 @@ pub const SemanticAnalyzer = struct {
         // 8. Analyze REMOVE clauses
         for (query.remove_clauses) |remove_clause| {
             try self.analyzeRemoveClause(remove_clause);
+        }
+
+        // 8b. Analyze DELETE items (for MATCH ... DELETE n queries)
+        for (query.delete_items) |item| {
+            switch (item) {
+                .Variable => |v| {
+                    if (!self.scope.contains(v)) {
+                        try self.addError("Undefined variable: {s}", .{v}, 0, 0);
+                    }
+                },
+                .Node => |n| {
+                    if (!self.scope.contains(n)) {
+                        try self.addError("Undefined variable: {s}", .{n}, 0, 0);
+                    }
+                },
+                .Relationship => |r| {
+                    if (!self.scope.contains(r)) {
+                        try self.addError("Undefined variable: {s}", .{r}, 0, 0);
+                    }
+                },
+            }
         }
 
         // 9. Analyze WITH clause - this creates new scope for subsequent clauses
@@ -736,31 +785,33 @@ pub const SemanticAnalyzer = struct {
 
                 switch (b.op) {
                     // Boolean operators require boolean operands
+                    // Note: null_type is allowed (NULL propagates through boolean ops)
                     .And, .Or, .Xor => {
-                        if (left_type != .unknown and left_type != .boolean) {
+                        if (left_type != .unknown and left_type != .boolean and left_type != .null_type) {
                             try self.addError("Boolean operator requires boolean operand, got {s}", .{@tagName(left_type)}, 0, 0);
                         }
-                        if (right_type != .unknown and right_type != .boolean) {
+                        if (right_type != .unknown and right_type != .boolean and right_type != .null_type) {
                             try self.addError("Boolean operator requires boolean operand, got {s}", .{@tagName(right_type)}, 0, 0);
                         }
                     },
                     // Arithmetic operators require numeric operands
+                    // Note: null_type is allowed (NULL propagates through arithmetic ops)
                     .Add, .Sub, .Mul, .Div, .Mod, .Power => {
                         // String concatenation with + is allowed
                         if (b.op == .Add and (left_type == .string or right_type == .string)) {
                             // Allow string + string
                             if (left_type == .string and right_type == .string) {
                                 // OK
-                            } else if (left_type != .unknown and left_type != .string) {
+                            } else if (left_type != .unknown and left_type != .string and left_type != .null_type) {
                                 try self.addError("Cannot concatenate {s} with string", .{@tagName(left_type)}, 0, 0);
-                            } else if (right_type != .unknown and right_type != .string) {
+                            } else if (right_type != .unknown and right_type != .string and right_type != .null_type) {
                                 try self.addError("Cannot concatenate string with {s}", .{@tagName(right_type)}, 0, 0);
                             }
                         } else {
-                            if (left_type != .unknown and left_type != .number) {
+                            if (left_type != .unknown and left_type != .number and left_type != .null_type) {
                                 try self.addError("Arithmetic operator requires numeric operand, got {s}", .{@tagName(left_type)}, 0, 0);
                             }
-                            if (right_type != .unknown and right_type != .number) {
+                            if (right_type != .unknown and right_type != .number and right_type != .null_type) {
                                 try self.addError("Arithmetic operator requires numeric operand, got {s}", .{@tagName(right_type)}, 0, 0);
                             }
                         }
@@ -793,15 +844,16 @@ pub const SemanticAnalyzer = struct {
                 try self.analyzeExpr(u.expr.*);
 
                 // Type checking for unary operators
+                // Note: null_type is allowed (NULL propagates through unary ops)
                 const expr_type = inferType(u.expr.*);
                 switch (u.op) {
                     .Not => {
-                        if (expr_type != .unknown and expr_type != .boolean) {
+                        if (expr_type != .unknown and expr_type != .boolean and expr_type != .null_type) {
                             try self.addError("NOT operator requires boolean operand, got {s}", .{@tagName(expr_type)}, 0, 0);
                         }
                     },
                     .Neg, .Pos => {
-                        if (expr_type != .unknown and expr_type != .number) {
+                        if (expr_type != .unknown and expr_type != .number and expr_type != .null_type) {
                             try self.addError("Numeric operator requires numeric operand, got {s}", .{@tagName(expr_type)}, 0, 0);
                         }
                     },

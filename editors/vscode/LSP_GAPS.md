@@ -57,6 +57,8 @@ This document tracks gaps in the GQL/Geode LSP semantic analyzer implementation.
 **Status**: FIXED (partial)
 **Issue**: Full position tracking requires AST changes to store token positions.
 **Fix**: Added `findIdentifierPosition` to Document which searches for the undefined variable in the document text. Errors now highlight the actual identifier location instead of line 0, column 0. Note: This finds the first occurrence, which may not always be the exact usage location, but is a significant improvement.
+- Skips comments (-- single-line, // single-line, /* */ multi-line)
+- Skips string literals (single and double quoted)
 
 ### 11. Type Checking
 **Status**: FIXED
@@ -68,6 +70,7 @@ This document tracks gaps in the GQL/Geode LSP semantic analyzer implementation.
 - String literals with arithmetic operators (except +) are flagged
 - Regex match operators require string operand
 - Unknown types (variables, function calls) are not flagged to avoid false positives
+- NULL type is allowed in all operators (three-valued logic: NULL propagates)
 
 ### 12. Label/Type Validation
 **Status**: FIXED (partial)
@@ -77,6 +80,7 @@ This document tracks gaps in the GQL/Geode LSP semantic analyzer implementation.
 - Uses Levenshtein distance to detect similar labels (edit distance 1-2)
 - Labels used only once that are similar to labels used multiple times are flagged as potential typos
 - Example: If you use `:Person` twice and `:Persn` once, warns about possible typo
+- Skips numeric suffix variants (Person1, Person2 not flagged as typos of Person)
 
 ## Implementation Notes
 
@@ -84,9 +88,15 @@ The semantic analyzer follows this order for Query analysis:
 1. LET bindings (pre-MATCH)
 2. MATCH pattern bindings (nodes, relationships, paths)
 3. Inline LET bindings (post-MATCH)
-4. WHERE clause verification
-5. WITH clause: verify expressions, then create new scope with WITH items
-6. SET/REMOVE clause verification
-7. RETURN clause verification and alias binding
-8. ORDER BY verification
-9. Chained query recursion
+4. CREATE pattern bindings (if present)
+5. WHERE clause verification
+6. FILTER clause verification
+7. SET clause verification
+8. REMOVE clause verification
+9. DELETE items verification (for MATCH ... DELETE n queries)
+10. WITH clause: verify expressions, then create new scope with WITH items
+11. GROUP BY verification
+12. HAVING verification
+13. RETURN clause verification and alias binding
+14. ORDER BY verification
+15. Chained query recursion
