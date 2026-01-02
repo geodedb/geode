@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const protocol = @import("protocol.zig");
 const Document = @import("document.zig").Document;
 const geode = @import("geode");
+const semantic = @import("semantic.zig");
 
 // GQL Keywords for completion
 const GQL_KEYWORDS = [_][]const u8{
@@ -114,6 +115,44 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
                     .severity = .Error,
                     .source = "geode",
                     .message = try allocator.dupe(u8, last_err),
+                };
+                try diagnostics.append(allocator, diag);
+            }
+
+            // Perform semantic analysis for undefined variable detection
+            var analyzer = semantic.SemanticAnalyzer.init(allocator);
+            defer analyzer.deinit();
+
+            const sem_errors = analyzer.analyze(result.program) catch {
+                // If semantic analysis fails, return existing diagnostics
+                return diagnostics.toOwnedSlice(allocator);
+            };
+
+            for (sem_errors) |sem_err| {
+                // Try to find the position of the undefined variable in the document
+                var line = sem_err.line;
+                var column = sem_err.column;
+                var end_column = sem_err.column + 1;
+
+                // Extract variable name from error message like "Undefined variable: xyz"
+                const prefix = "Undefined variable: ";
+                if (std.mem.startsWith(u8, sem_err.message, prefix)) {
+                    const var_name = sem_err.message[prefix.len..];
+                    if (doc.findIdentifierPosition(var_name)) |pos| {
+                        line = pos.line;
+                        column = pos.character;
+                        end_column = pos.character + @as(u32, @intCast(var_name.len));
+                    }
+                }
+
+                const diag = protocol.Diagnostic{
+                    .range = .{
+                        .start = .{ .line = line, .character = column },
+                        .end = .{ .line = line, .character = end_column },
+                    },
+                    .severity = .Error,
+                    .source = "geode",
+                    .message = try allocator.dupe(u8, sem_err.message),
                 };
                 try diagnostics.append(allocator, diag);
             }

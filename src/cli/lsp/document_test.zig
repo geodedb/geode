@@ -353,3 +353,119 @@ test "Document - mixed line endings" {
     const offset3 = doc.getOffset(2, 0);
     try testing.expectEqual(@as(usize, 23), offset3.?);
 }
+
+test "Document - findIdentifierPosition single line" {
+    const allocator = testing.allocator;
+    const text = "MATCH (person:Person) RETURN person";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    // Find "person" - should find first occurrence at character 7
+    const pos1 = doc.findIdentifierPosition("person");
+    try testing.expect(pos1 != null);
+    try testing.expectEqual(@as(u32, 0), pos1.?.line);
+    try testing.expectEqual(@as(u32, 7), pos1.?.character);
+
+    // Find "Person" - case-insensitive, so also finds "person" first at character 7
+    const pos2 = doc.findIdentifierPosition("Person");
+    try testing.expect(pos2 != null);
+    try testing.expectEqual(@as(u32, 0), pos2.?.line);
+    try testing.expectEqual(@as(u32, 7), pos2.?.character);
+
+    // Find "MATCH" at character 0
+    const pos3 = doc.findIdentifierPosition("MATCH");
+    try testing.expect(pos3 != null);
+    try testing.expectEqual(@as(u32, 0), pos3.?.line);
+    try testing.expectEqual(@as(u32, 0), pos3.?.character);
+}
+
+test "Document - findIdentifierPosition multiple lines" {
+    const allocator = testing.allocator;
+    const text = "MATCH (n:Person)\nWHERE undefinedVar > 5\nRETURN n";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    // Find "undefinedVar" on line 1
+    const pos = doc.findIdentifierPosition("undefinedVar");
+    try testing.expect(pos != null);
+    try testing.expectEqual(@as(u32, 1), pos.?.line);
+    try testing.expectEqual(@as(u32, 6), pos.?.character); // "WHERE " = 6 chars
+}
+
+test "Document - findIdentifierPosition case insensitive" {
+    const allocator = testing.allocator;
+    const text = "MATCH (myNode:Person) RETURN myNode";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    // Search with different case
+    const pos1 = doc.findIdentifierPosition("MYNODE");
+    try testing.expect(pos1 != null);
+    try testing.expectEqual(@as(u32, 0), pos1.?.line);
+    try testing.expectEqual(@as(u32, 7), pos1.?.character);
+
+    const pos2 = doc.findIdentifierPosition("mynode");
+    try testing.expect(pos2 != null);
+    try testing.expectEqual(@as(u32, 0), pos2.?.line);
+    try testing.expectEqual(@as(u32, 7), pos2.?.character);
+}
+
+test "Document - findIdentifierPosition word boundaries" {
+    const allocator = testing.allocator;
+    const text = "MATCH (node:PersonNode) RETURN node";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    // "Person" should NOT match "PersonNode" - it's part of a larger word
+    const pos1 = doc.findIdentifierPosition("Person");
+    try testing.expect(pos1 == null);
+
+    // "PersonNode" should match
+    const pos2 = doc.findIdentifierPosition("PersonNode");
+    try testing.expect(pos2 != null);
+    try testing.expectEqual(@as(u32, 12), pos2.?.character);
+
+    // "node" should match at character 7, not inside PersonNode
+    const pos3 = doc.findIdentifierPosition("node");
+    try testing.expect(pos3 != null);
+    try testing.expectEqual(@as(u32, 7), pos3.?.character);
+}
+
+test "Document - findIdentifierPosition not found" {
+    const allocator = testing.allocator;
+    const text = "MATCH (n:Person) RETURN n";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    const pos = doc.findIdentifierPosition("undefinedVariable");
+    try testing.expect(pos == null);
+}
+
+test "Document - findIdentifierPosition empty identifier" {
+    const allocator = testing.allocator;
+    const text = "MATCH (n) RETURN n";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    const pos = doc.findIdentifierPosition("");
+    try testing.expect(pos == null);
+}
+
+test "Document - findIdentifierPosition with underscores" {
+    const allocator = testing.allocator;
+    const text = "MATCH (my_node:Person) RETURN my_node";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    const pos = doc.findIdentifierPosition("my_node");
+    try testing.expect(pos != null);
+    try testing.expectEqual(@as(u32, 0), pos.?.line);
+    try testing.expectEqual(@as(u32, 7), pos.?.character);
+}

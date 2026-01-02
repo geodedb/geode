@@ -31,16 +31,14 @@ pub const Lexer = struct {
             if (t.isIdentifierStart(@intCast(c))) return self.scanIdentifierOrKeyword();
             if (t.isDigit(c)) return self.scanNumeric();
         } else {
-            // Potential Unicode identifier
-            const cp_len = std.unicode.utf8CodepointSequenceLength(c) catch 1;
-            if (self.idx + cp_len <= self.src.len) {
-                const cp_bytes = self.src[self.idx .. self.idx + cp_len];
-                var iter = std.unicode.Utf8Iterator{ .bytes = cp_bytes, .i = 0 };
-                if (iter.nextCodepoint()) |cp| {
-                    if (t.isIdentifierStart(cp)) return self.scanIdentifierOrKeyword();
-                    if (t.isUnicodeDigit(cp)) return self.scanNumeric();
-                }
-            }
+            // Potential Unicode identifier - decode manually to avoid std lib assertions
+            const cp = decodeUtf8Codepoint(self.src, self.idx) orelse {
+                // Invalid UTF-8, treat as invalid token
+                self.advance();
+                return self.mkTok(.invalid, 1);
+            };
+            if (t.isIdentifierStart(cp)) return self.scanIdentifierOrKeyword();
+            if (t.isUnicodeDigit(cp)) return self.scanNumeric();
         }
 
         if (self.matchSingle()) |tokv| return tokn(tokv);
@@ -630,3 +628,127 @@ pub const Lexer = struct {
         return .{ .kind = .invalid, .lexeme = self.src[self.idx..self.idx], .loc = .{ .line = self.line, .column = self.col } };
     }
 };
+
+/// Safely decode a UTF-8 codepoint without assertions.
+/// Returns null for invalid UTF-8 sequences.
+fn decodeUtf8Codepoint(src: []const u8, idx: usize) ?u21 {
+    if (idx >= src.len) return null;
+
+    const b0 = src[idx];
+
+    // ASCII (single byte)
+    if (b0 < 0x80) return @intCast(b0);
+
+    // Determine sequence length from first byte
+    const len: usize = if (b0 & 0xE0 == 0xC0) 2 // 110xxxxx
+    else if (b0 & 0xF0 == 0xE0) 3 // 1110xxxx
+    else if (b0 & 0xF8 == 0xF0) 4 // 11110xxx
+    else return null; // Invalid start byte (10xxxxxx or 11111xxx)
+
+    // Check we have enough bytes
+    if (idx + len > src.len) return null;
+
+    // Validate and decode
+    var cp: u21 = switch (len) {
+        2 => @as(u21, b0 & 0x1F),
+        3 => @as(u21, b0 & 0x0F),
+        4 => @as(u21, b0 & 0x07),
+        else => unreachable,
+    };
+
+    // Process continuation bytes
+    for (src[idx + 1 .. idx + len]) |b| {
+        if (b & 0xC0 != 0x80) return null; // Invalid continuation byte
+        cp = (cp << 6) | @as(u21, b & 0x3F);
+    }
+
+    // Check for overlong encodings and invalid ranges
+    const min_cp: u21 = switch (len) {
+        2 => 0x80,
+        3 => 0x800,
+        4 => 0x10000,
+        else => unreachable,
+    };
+    if (cp < min_cp) return null; // Overlong encoding
+    if (cp > 0x10FFFF) return null; // Beyond Unicode range
+    if (cp >= 0xD800 and cp <= 0xDFFF) return null; // Surrogate pair
+
+    return cp;
+}
+
+// Unit tests for UTF-8 decoding
+test "decodeUtf8Codepoint - valid ASCII" {
+    const src = "Hello";
+    try std.testing.expectEqual(@as(?u21, 'H'), decodeUtf8Codepoint(src, 0));
+    try std.testing.expectEqual(@as(?u21, 'e'), decodeUtf8Codepoint(src, 1));
+    try std.testing.expectEqual(@as(?u21, 'l'), decodeUtf8Codepoint(src, 2));
+}
+
+test "decodeUtf8Codepoint - valid 2-byte UTF-8" {
+    const src = "é"; // U+00E9 = 0xC3 0xA9
+    try std.testing.expectEqual(@as(?u21, 0x00E9), decodeUtf8Codepoint(src, 0));
+}
+
+test "decodeUtf8Codepoint - valid 3-byte UTF-8" {
+    const src = "中"; // U+4E2D = 0xE4 0xB8 0xAD
+    try std.testing.expectEqual(@as(?u21, 0x4E2D), decodeUtf8Codepoint(src, 0));
+}
+
+test "decodeUtf8Codepoint - valid 4-byte UTF-8" {
+    const src = "𝄞"; // U+1D11E = 0xF0 0x9D 0x84 0x9E
+    try std.testing.expectEqual(@as(?u21, 0x1D11E), decodeUtf8Codepoint(src, 0));
+}
+
+test "decodeUtf8Codepoint - invalid start byte (continuation)" {
+    const src = [_]u8{ 0x80, 0x41 }; // 0x80 is a continuation byte, not valid start
+    try std.testing.expectEqual(@as(?u21, null), decodeUtf8Codepoint(&src, 0));
+}
+
+test "decodeUtf8Codepoint - invalid continuation byte" {
+    const src = [_]u8{ 0xC3, 0x41 }; // 0xC3 expects continuation, but 0x41 is ASCII
+    try std.testing.expectEqual(@as(?u21, null), decodeUtf8Codepoint(&src, 0));
+}
+
+test "decodeUtf8Codepoint - truncated sequence" {
+    const src = [_]u8{0xE4}; // 3-byte start but only 1 byte available
+    try std.testing.expectEqual(@as(?u21, null), decodeUtf8Codepoint(&src, 0));
+}
+
+test "decodeUtf8Codepoint - overlong encoding" {
+    // Overlong encoding of 'A' (0x41) as 2 bytes: 0xC1 0x81
+    const src = [_]u8{ 0xC1, 0x81 };
+    try std.testing.expectEqual(@as(?u21, null), decodeUtf8Codepoint(&src, 0));
+}
+
+test "decodeUtf8Codepoint - surrogate pair (invalid)" {
+    // U+D800 is a surrogate, encoded as: 0xED 0xA0 0x80
+    const src = [_]u8{ 0xED, 0xA0, 0x80 };
+    try std.testing.expectEqual(@as(?u21, null), decodeUtf8Codepoint(&src, 0));
+}
+
+test "decodeUtf8Codepoint - empty input" {
+    const src = "";
+    try std.testing.expectEqual(@as(?u21, null), decodeUtf8Codepoint(src, 0));
+}
+
+test "decodeUtf8Codepoint - index out of bounds" {
+    const src = "Hi";
+    try std.testing.expectEqual(@as(?u21, null), decodeUtf8Codepoint(src, 10));
+}
+
+// Unit tests for lexer with invalid UTF-8
+test "lexer - handles invalid UTF-8 gracefully" {
+    // Invalid UTF-8 sequence followed by valid GQL
+    const src = [_]u8{ 0x80, 0x80, 'R', 'E', 'T', 'U', 'R', 'N' };
+    var lexer = Lexer{ .src = &src };
+
+    // Should get invalid tokens for bad UTF-8, then RETURN keyword
+    const tok1 = lexer.next();
+    try std.testing.expectEqual(t.TokenKind.invalid, tok1.kind);
+
+    const tok2 = lexer.next();
+    try std.testing.expectEqual(t.TokenKind.invalid, tok2.kind);
+
+    const tok3 = lexer.next();
+    try std.testing.expectEqual(t.TokenKind.kw_return, tok3.kind);
+}

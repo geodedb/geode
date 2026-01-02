@@ -106,6 +106,68 @@ pub const Document = struct {
     fn isIdentifierChar(c: u8) bool {
         return std.ascii.isAlphanumeric(c) or c == '_';
     }
+
+    /// Find the position (line, column) of an identifier in the document text.
+    /// Searches case-insensitively and ensures the match is a whole word.
+    /// Returns null if not found.
+    pub fn findIdentifierPosition(self: *const Document, identifier: []const u8) ?struct { line: u32, character: u32 } {
+        if (identifier.len == 0) return null;
+
+        var line: u32 = 0;
+        var line_start: usize = 0;
+        var i: usize = 0;
+
+        while (i < self.text.len) {
+            // Check for newline
+            if (self.text[i] == '\n') {
+                line += 1;
+                line_start = i + 1;
+                i += 1;
+                continue;
+            }
+
+            // Check if this could be the start of the identifier
+            // Must be preceded by non-identifier character or be at start
+            const at_word_boundary = i == 0 or !isIdentifierChar(self.text[i - 1]);
+            if (!at_word_boundary) {
+                i += 1;
+                continue;
+            }
+
+            // Check if we have enough characters left
+            if (i + identifier.len > self.text.len) {
+                i += 1;
+                continue;
+            }
+
+            // Case-insensitive comparison
+            var match = true;
+            for (identifier, 0..) |c, j| {
+                const doc_char = self.text[i + j];
+                if (std.ascii.toLower(c) != std.ascii.toLower(doc_char)) {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (match) {
+                // Check that it's followed by non-identifier character or end
+                const end_pos = i + identifier.len;
+                const at_word_end = end_pos >= self.text.len or !isIdentifierChar(self.text[end_pos]);
+
+                if (at_word_end) {
+                    return .{
+                        .line = line,
+                        .character = @intCast(i - line_start),
+                    };
+                }
+            }
+
+            i += 1;
+        }
+
+        return null;
+    }
 };
 
 pub const DocumentStore = struct {
