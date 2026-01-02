@@ -8,6 +8,18 @@ const Document = @import("document.zig").Document;
 const geode = @import("geode");
 const semantic = @import("semantic.zig");
 
+/// Formatting options for the GQL formatter
+pub const FormattingOptions = struct {
+    /// Number of spaces for indentation (default: 4)
+    indent_size: u32 = 4,
+    /// Whether to fold property maps onto multiple lines (default: true)
+    fold_property_maps: bool = true,
+    /// Maximum line length before folding (default: 80)
+    max_line_length: u32 = 80,
+    /// Minimum number of properties to trigger folding (default: 2)
+    min_properties_to_fold: u32 = 2,
+};
+
 // GQL Keywords for completion
 const GQL_KEYWORDS = [_][]const u8{
     "MATCH",     "CREATE",   "DELETE",     "MERGE",    "SET",
@@ -262,10 +274,251 @@ pub fn provideDefinition(allocator: Allocator, doc: *const Document, line: u32, 
 }
 
 /// Format a GQL document with proper keyword casing, indentation, and spacing.
+/// If options is null, uses default options (which enables property map folding).
 pub fn provideFormatting(allocator: Allocator, doc: *const Document) !?[]const u8 {
+    return provideFormattingWithOptions(allocator, doc, .{});
+}
+
+/// Format a GQL document with custom formatting options.
+pub fn provideFormattingWithOptions(allocator: Allocator, doc: *const Document, options: FormattingOptions) !?[]const u8 {
     const text = doc.text;
     if (text.len == 0) return null;
 
+    // First pass: basic formatting (keyword casing, newlines before clauses)
+    const basic_formatted = try formatBasic(allocator, text) orelse return null;
+    defer allocator.free(basic_formatted);
+
+    // Second pass: fold property maps if enabled
+    if (options.fold_property_maps) {
+        return try foldPropertyMaps(allocator, basic_formatted, options);
+    }
+
+    return try allocator.dupe(u8, basic_formatted);
+}
+
+/// Fold property maps onto multiple lines for better readability.
+fn foldPropertyMaps(allocator: Allocator, text: []const u8, options: FormattingOptions) ![]const u8 {
+    var result = try std.ArrayList(u8).initCapacity(allocator, text.len * 2);
+    errdefer result.deinit(allocator);
+
+    var i: usize = 0;
+    var current_indent: usize = 0;
+    var in_string = false;
+    var string_char: u8 = 0;
+
+    while (i < text.len) {
+        const c = text[i];
+
+        // Track indentation at start of lines
+        if (i == 0 or (i > 0 and text[i - 1] == '\n')) {
+            current_indent = 0;
+            var j = i;
+            while (j < text.len and text[j] == ' ') : (j += 1) {
+                current_indent += 1;
+            }
+        }
+
+        // Handle string literals
+        if (!in_string and (c == '\'' or c == '"')) {
+            in_string = true;
+            string_char = c;
+            try result.append(allocator, c);
+            i += 1;
+            continue;
+        }
+
+        if (in_string) {
+            try result.append(allocator, c);
+            if (c == string_char and (i == 0 or text[i - 1] != '\\')) {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Handle property maps
+        if (c == '{') {
+            // Find matching closing brace
+            const brace_end = findMatchingBrace(text, i);
+            if (brace_end) |end| {
+                const property_map = text[i .. end + 1];
+                const property_count = countProperties(property_map);
+
+                // Check if we should fold this property map
+                const should_fold = property_count >= options.min_properties_to_fold or
+                    (result.items.len > 0 and getLineLength(result.items) + property_map.len > options.max_line_length);
+
+                if (should_fold and property_count > 0) {
+                    // Fold the property map
+                    try foldPropertyMap(allocator, &result, property_map, current_indent, options);
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+
+        try result.append(allocator, c);
+        i += 1;
+    }
+
+    return try result.toOwnedSlice(allocator);
+}
+
+/// Find the matching closing brace for an opening brace.
+fn findMatchingBrace(text: []const u8, start: usize) ?usize {
+    if (start >= text.len or text[start] != '{') return null;
+
+    var depth: usize = 0;
+    var i = start;
+    var in_string = false;
+    var string_char: u8 = 0;
+
+    while (i < text.len) {
+        const c = text[i];
+
+        if (!in_string and (c == '\'' or c == '"')) {
+            in_string = true;
+            string_char = c;
+        } else if (in_string and c == string_char and (i == 0 or text[i - 1] != '\\')) {
+            in_string = false;
+        } else if (!in_string) {
+            if (c == '{') depth += 1;
+            if (c == '}') {
+                depth -= 1;
+                if (depth == 0) return i;
+            }
+        }
+        i += 1;
+    }
+    return null;
+}
+
+/// Count the number of properties in a property map.
+fn countProperties(property_map: []const u8) usize {
+    if (property_map.len < 2) return 0;
+
+    var count: usize = 0;
+    var in_string = false;
+    var string_char: u8 = 0;
+    var depth: usize = 0;
+    var has_content = false;
+
+    for (property_map, 0..) |c, i| {
+        if (!in_string and (c == '\'' or c == '"')) {
+            in_string = true;
+            string_char = c;
+            has_content = true;
+        } else if (in_string and c == string_char and (i == 0 or property_map[i - 1] != '\\')) {
+            in_string = false;
+        } else if (!in_string) {
+            if (c == '{' or c == '[' or c == '(') depth += 1;
+            if (c == '}' or c == ']' or c == ')') {
+                if (depth > 0) depth -= 1;
+            }
+            if (c == ',' and depth == 1) {
+                count += 1;
+            }
+            if (c == ':' and depth == 1) {
+                has_content = true;
+            }
+        }
+    }
+
+    // If we have content but no commas, that's one property
+    if (has_content and count == 0) return 1;
+    // Otherwise, count + 1 for the last property
+    return if (count > 0) count + 1 else 0;
+}
+
+/// Get the length of the current line (from the last newline to end).
+fn getLineLength(items: []const u8) usize {
+    var len: usize = 0;
+    var i = items.len;
+    while (i > 0) {
+        i -= 1;
+        if (items[i] == '\n') break;
+        len += 1;
+    }
+    return len;
+}
+
+/// Fold a property map onto multiple lines.
+fn foldPropertyMap(allocator: Allocator, result: *std.ArrayList(u8), property_map: []const u8, base_indent: usize, options: FormattingOptions) !void {
+    const indent_str = "    "; // 4 spaces per level
+    const prop_indent = options.indent_size;
+
+    // Opening brace
+    try result.append(allocator, '{');
+    try result.append(allocator, '\n');
+
+    // Add base indent + one level for properties
+    for (0..base_indent) |_| {
+        try result.append(allocator, ' ');
+    }
+    for (0..prop_indent) |_| {
+        try result.append(allocator, ' ');
+    }
+    _ = indent_str;
+
+    // Parse and add each property on its own line
+    var in_string = false;
+    var string_char: u8 = 0;
+    var depth: usize = 0;
+    var i: usize = 1; // Skip opening brace
+    var prop_start: usize = 1;
+
+    while (i < property_map.len) {
+        const c = property_map[i];
+
+        if (!in_string and (c == '\'' or c == '"')) {
+            in_string = true;
+            string_char = c;
+        } else if (in_string and c == string_char and (i == 0 or property_map[i - 1] != '\\')) {
+            in_string = false;
+        } else if (!in_string) {
+            if (c == '{' or c == '[' or c == '(') depth += 1;
+            if (c == '}' or c == ']' or c == ')') {
+                if (depth > 0) {
+                    depth -= 1;
+                } else {
+                    // End of property map - add last property
+                    const prop = std.mem.trim(u8, property_map[prop_start..i], " \t\n\r");
+                    if (prop.len > 0) {
+                        try result.appendSlice(allocator, prop);
+                        try result.append(allocator, '\n');
+                    }
+                    // Add closing brace with base indent
+                    for (0..base_indent) |_| {
+                        try result.append(allocator, ' ');
+                    }
+                    try result.append(allocator, '}');
+                    return;
+                }
+            }
+            if (c == ',' and depth == 0) {
+                // Property separator - add this property
+                const prop = std.mem.trim(u8, property_map[prop_start..i], " \t\n\r");
+                if (prop.len > 0) {
+                    try result.appendSlice(allocator, prop);
+                    try result.append(allocator, ',');
+                    try result.append(allocator, '\n');
+                    // Add indent for next property
+                    for (0..base_indent) |_| {
+                        try result.append(allocator, ' ');
+                    }
+                    for (0..prop_indent) |_| {
+                        try result.append(allocator, ' ');
+                    }
+                }
+                prop_start = i + 1;
+            }
+        }
+        i += 1;
+    }
+}
+
+/// Basic formatting: keyword casing and newlines before clause keywords.
+fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, text.len);
     errdefer result.deinit(allocator);
 

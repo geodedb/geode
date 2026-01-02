@@ -272,6 +272,21 @@
           "enum": ["upper", "lower", "preserve"],
           "default": "upper",
           "description": "Case for GQL keywords"
+        },
+        "geode.format.foldPropertyMaps": {
+          "type": "boolean",
+          "default": true,
+          "description": "Fold property maps with multiple properties onto separate lines for better readability"
+        },
+        "geode.format.maxLineLength": {
+          "type": "number",
+          "default": 80,
+          "description": "Maximum line length before folding property maps (when fold is enabled)"
+        },
+        "geode.format.minPropertiesToFold": {
+          "type": "number",
+          "default": 2,
+          "description": "Minimum number of properties before folding property maps"
         }
       }
     }

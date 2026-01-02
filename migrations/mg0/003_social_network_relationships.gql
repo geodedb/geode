@@ -252,7 +252,7 @@ CREATE (u)-[:POSTED {timestamp: p.created_at, device_id: 'device-5'}]->(p);
 
 -- Distribute remaining posts among users
 MATCH (p:Post)
-WHERE NOT ((:User)-[:POSTED]->(p))
+WHERE NOT (:User)-[:POSTED]->(p)
 WITH p, toInteger(substring(p.id, 5)) AS post_num
 MATCH (u:User {id: 'user-' + toString(6 + (post_num % 45))})
 CREATE (u)-[:POSTED {timestamp: p.created_at, device_id: 'device-auto-' + toString(post_num)}]->(p);

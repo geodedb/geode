@@ -30,6 +30,7 @@ pub const Server = struct {
     documents: DocumentStore,
     initialized: bool = false,
     shutdown_requested: bool = false,
+    formatting_options: features.FormattingOptions = .{},
 
     pub fn init(allocator: Allocator) Server {
         return .{
@@ -133,7 +134,25 @@ pub const Server = struct {
     }
 
     fn handleInitialize(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        _ = params;
+        // Parse initialization options for formatting settings
+        if (params) |p| {
+            if (p.object.get("initializationOptions")) |init_opts| {
+                if (init_opts.object.get("format")) |format_opts| {
+                    if (format_opts.object.get("foldPropertyMaps")) |fold| {
+                        self.formatting_options.fold_property_maps = fold.bool;
+                    }
+                    if (format_opts.object.get("indentSize")) |indent| {
+                        self.formatting_options.indent_size = @intCast(indent.integer);
+                    }
+                    if (format_opts.object.get("maxLineLength")) |max_len| {
+                        self.formatting_options.max_line_length = @intCast(max_len.integer);
+                    }
+                    if (format_opts.object.get("minPropertiesToFold")) |min_props| {
+                        self.formatting_options.min_properties_to_fold = @intCast(min_props.integer);
+                    }
+                }
+            }
+        }
 
         const capabilities = ServerCapabilities{};
 
@@ -360,7 +379,7 @@ pub const Server = struct {
             return;
         };
 
-        const formatted = features.provideFormatting(self.allocator, doc) catch {
+        const formatted = features.provideFormattingWithOptions(self.allocator, doc, self.formatting_options) catch {
             try self.sendResult(id, .null);
             return;
         };

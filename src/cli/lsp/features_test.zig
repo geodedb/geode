@@ -444,3 +444,82 @@ test "provideFormatting - formats with newlines before keywords" {
     try testing.expect(formatted != null);
     try testing.expectEqualStrings("MATCH (n)\nRETURN n\n", formatted.?);
 }
+
+test "provideFormattingWithOptions - folds property maps with multiple properties" {
+    const allocator = testing.allocator;
+    const text = "CREATE (:Person {name: 'Alice', age: 30, city: 'NYC'})";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    const options = features.FormattingOptions{
+        .fold_property_maps = true,
+        .indent_size = 4,
+        .min_properties_to_fold = 2,
+    };
+    const formatted = try features.provideFormattingWithOptions(allocator, doc, options);
+    defer if (formatted) |f| allocator.free(f);
+
+    try testing.expect(formatted != null);
+    // Should fold properties onto separate lines
+    try testing.expect(std.mem.indexOf(u8, formatted.?, "name: 'Alice',\n") != null);
+    try testing.expect(std.mem.indexOf(u8, formatted.?, "age: 30,\n") != null);
+    try testing.expect(std.mem.indexOf(u8, formatted.?, "city: 'NYC'\n") != null);
+}
+
+test "provideFormattingWithOptions - does not fold with fold disabled" {
+    const allocator = testing.allocator;
+    const text = "CREATE (:Person {name: 'Alice', age: 30})";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    const options = features.FormattingOptions{
+        .fold_property_maps = false,
+    };
+    const formatted = try features.provideFormattingWithOptions(allocator, doc, options);
+    defer if (formatted) |f| allocator.free(f);
+
+    try testing.expect(formatted != null);
+    // With folding disabled, properties stay on one line
+    try testing.expect(std.mem.indexOf(u8, formatted.?, "{name: 'Alice', age: 30}") != null);
+}
+
+test "provideFormattingWithOptions - does not fold single property" {
+    const allocator = testing.allocator;
+    const text = "CREATE (:Person {name: 'Alice'})";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    const options = features.FormattingOptions{
+        .fold_property_maps = true,
+        .min_properties_to_fold = 2,
+    };
+    const formatted = try features.provideFormattingWithOptions(allocator, doc, options);
+    defer if (formatted) |f| allocator.free(f);
+
+    try testing.expect(formatted != null);
+    // Single property should not be folded
+    try testing.expect(std.mem.indexOf(u8, formatted.?, "{name: 'Alice'}") != null);
+}
+
+test "provideFormattingWithOptions - respects min properties to fold" {
+    const allocator = testing.allocator;
+    const text = "CREATE (:Person {name: 'Alice', age: 30})";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    // Require 3 properties to fold (we have 2)
+    const options = features.FormattingOptions{
+        .fold_property_maps = true,
+        .min_properties_to_fold = 3,
+    };
+    const formatted = try features.provideFormattingWithOptions(allocator, doc, options);
+    defer if (formatted) |f| allocator.free(f);
+
+    try testing.expect(formatted != null);
+    // 2 properties should not be folded when min is 3
+    try testing.expect(std.mem.indexOf(u8, formatted.?, "{name: 'Alice', age: 30}") != null);
+}

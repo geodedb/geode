@@ -115,6 +115,9 @@ function startLanguageServer(context: vscode.ExtensionContext) {
         transport: TransportKind.stdio
     };
 
+    // Get formatting configuration
+    const formatConfig = vscode.workspace.getConfiguration('geode.format');
+
     // Client options
     const clientOptions: LanguageClientOptions = {
         documentSelector: [
@@ -129,6 +132,14 @@ function startLanguageServer(context: vscode.ExtensionContext) {
         outputChannel: outputChannel,
         traceOutputChannel: outputChannel,
         diagnosticCollectionName: 'geode-gql',
+        initializationOptions: {
+            format: {
+                foldPropertyMaps: formatConfig.get<boolean>('foldPropertyMaps', true),
+                indentSize: formatConfig.get<number>('indentSize', 4),
+                maxLineLength: formatConfig.get<number>('maxLineLength', 80),
+                minPropertiesToFold: formatConfig.get<number>('minPropertiesToFold', 2)
+            }
+        },
         initializationFailedHandler: (error) => {
             outputChannel.appendLine(`LSP initialization failed: ${error}`);
             return false;  // Don't try to restart

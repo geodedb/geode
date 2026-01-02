@@ -24,6 +24,13 @@ M.config = {
         max_results = 1000,
         output_format = "json",
     },
+    -- Formatting settings
+    format = {
+        indent_size = 4,
+        fold_property_maps = true, -- Fold property maps onto multiple lines
+        max_line_length = 80,      -- Max line length before folding
+        min_properties_to_fold = 2, -- Min properties to trigger folding
+    },
     -- UI settings
     ui = {
         show_diagnostics = true,
