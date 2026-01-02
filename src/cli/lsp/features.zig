@@ -742,6 +742,7 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
     var string_char: u8 = 0;
     var last_was_newline = true;
     var last_was_space = false;
+    var last_was_comment = false; // Track if previous line was a comment (for comment groups)
 
     while (i < text.len) {
         const c = text[i];
@@ -777,6 +778,28 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
         if (i + 1 < text.len) {
             // Single-line comment
             if ((c == '-' and text[i + 1] == '-') or (c == '/' and text[i + 1] == '/')) {
+                // Add blank line before comment if:
+                // - Not at start of file
+                // - Previous line was NOT a comment (keep comment groups together)
+                // - Not already preceded by blank line
+                if (result.items.len > 0 and !last_was_comment) {
+                    if (!last_was_newline) {
+                        // Trim trailing space before adding newlines
+                        while (result.items.len > 0 and result.items[result.items.len - 1] == ' ') {
+                            _ = result.pop();
+                        }
+                        try result.append(allocator, '\n');
+                        try result.append(allocator, '\n');
+                    } else {
+                        // Check if we already have a blank line (double newline)
+                        const has_blank_line = result.items.len >= 2 and
+                            result.items[result.items.len - 1] == '\n' and
+                            result.items[result.items.len - 2] == '\n';
+                        if (!has_blank_line) {
+                            try result.append(allocator, '\n');
+                        }
+                    }
+                }
                 // Copy until newline
                 while (i < text.len and text[i] != '\n') {
                     try result.append(allocator, text[i]);
@@ -787,12 +810,33 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
                     i += 1;
                     last_was_newline = true;
                     last_was_space = false;
+                    last_was_comment = true; // Mark that we just processed a comment
                     line_start = true;
                 }
                 continue;
             }
             // Multi-line comment
             if (c == '/' and text[i + 1] == '*') {
+                // Add blank line before comment if:
+                // - Not at start of file
+                // - Previous line was NOT a comment (keep comment groups together)
+                // - Not already preceded by blank line
+                if (result.items.len > 0 and !last_was_comment) {
+                    if (!last_was_newline) {
+                        while (result.items.len > 0 and result.items[result.items.len - 1] == ' ') {
+                            _ = result.pop();
+                        }
+                        try result.append(allocator, '\n');
+                        try result.append(allocator, '\n');
+                    } else {
+                        const has_blank_line = result.items.len >= 2 and
+                            result.items[result.items.len - 1] == '\n' and
+                            result.items[result.items.len - 2] == '\n';
+                        if (!has_blank_line) {
+                            try result.append(allocator, '\n');
+                        }
+                    }
+                }
                 try result.append(allocator, '/');
                 try result.append(allocator, '*');
                 i += 2;
@@ -808,6 +852,7 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
                 }
                 last_was_space = false;
                 last_was_newline = false;
+                last_was_comment = true; // Mark that we just processed a comment
                 continue;
             }
         }
@@ -908,6 +953,7 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
 
             last_was_space = false;
             last_was_newline = false;
+            last_was_comment = false; // Reset comment flag when processing non-comment content
             line_start = false;
             continue;
         }

@@ -946,6 +946,63 @@ test "provideFormattingWithOptions - comment preservation with statements" {
     try testing.expect(std.mem.indexOf(u8, formatted.?, "-- Clean any previous data") != null);
 }
 
+test "provideFormattingWithOptions - comment groups stay together" {
+    const allocator = testing.allocator;
+    // Multiple consecutive comments should NOT have blank lines between them
+    const text =
+        \\CREATE (n:Node);
+        \\-- ============================================================================
+        \\-- SECTION 11: SET OPERATIONS EDGE CASES
+        \\-- ============================================================================
+        \\-- 11.1 UNION with empty set
+        \\MATCH (x) RETURN x;
+    ;
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    const options = features.FormattingOptions{
+        .fold_property_maps = false,
+    };
+    const formatted = try features.provideFormattingWithOptions(allocator, doc, options);
+    defer if (formatted) |f| allocator.free(f);
+
+    try testing.expect(formatted != null);
+    // Comment group should stay together - no extra blank lines between comments
+    // Look for consecutive comment lines
+    const comment_block =
+        \\-- ============================================================================
+        \\-- SECTION 11: SET OPERATIONS EDGE CASES
+        \\-- ============================================================================
+        \\-- 11.1 UNION with empty set
+    ;
+    try testing.expect(std.mem.indexOf(u8, formatted.?, comment_block) != null);
+}
+
+test "provideFormattingWithOptions - blank line before comment after code" {
+    const allocator = testing.allocator;
+    // A comment after code should have a blank line before it
+    const text =
+        \\CREATE (n:Node);
+        \\-- This is a comment
+        \\MATCH (x) RETURN x;
+    ;
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    const options = features.FormattingOptions{
+        .fold_property_maps = false,
+    };
+    const formatted = try features.provideFormattingWithOptions(allocator, doc, options);
+    defer if (formatted) |f| allocator.free(f);
+
+    try testing.expect(formatted != null);
+    // There should be a blank line before the comment (after code)
+    // Look for: ";\n\n-- This is a comment"
+    try testing.expect(std.mem.indexOf(u8, formatted.?, ";\n\n-- This is a comment") != null);
+}
+
 test "provideFormattingWithOptions - multi-pattern MATCH" {
     const allocator = testing.allocator;
     // Pattern from comprehensive_test.gql Section 15.9
