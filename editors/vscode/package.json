@@ -133,6 +133,12 @@
         "title": "Restart Language Server",
         "category": "Geode",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "geode.runFile",
+        "title": "Run GQL File",
+        "category": "Geode",
+        "icon": "$(play)"
       }
     ],
     "menus": {
@@ -163,6 +169,17 @@
         {
           "command": "geode.runSelection",
           "when": "resourceLangId == gql || resourceLangId == cypher && editorHasSelection"
+        },
+        {
+          "command": "geode.runFile",
+          "when": "resourceLangId == gql || resourceLangId == cypher"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "geode.runFile",
+          "when": "resourceExtname == .gql || resourceExtname == .gcypher || resourceExtname == .pgql || resourceExtname == .cypher",
+          "group": "navigation"
         }
       ]
     },
@@ -229,6 +246,11 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically connect to the server on startup"
+        },
+        "geode.server.insecure": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip TLS certificate verification (use for development/self-signed certs)"
         },
         "geode.query.timeout": {
           "type": "number",

@@ -431,7 +431,7 @@ test "provideDefinition - returns null (not implemented)" {
     try testing.expect(location == null);
 }
 
-test "provideFormatting - returns original text" {
+test "provideFormatting - formats with newlines before keywords" {
     const allocator = testing.allocator;
     const text = "MATCH (n) RETURN n";
 
@@ -439,7 +439,8 @@ test "provideFormatting - returns original text" {
     defer doc.deinit();
 
     const formatted = try features.provideFormatting(allocator, doc);
-    // Currently returns the original text
+    defer if (formatted) |f| allocator.free(f);
+    // Formatter adds newlines before clause keywords like RETURN
     try testing.expect(formatted != null);
-    try testing.expectEqualStrings(text, formatted.?);
+    try testing.expectEqualStrings("MATCH (n)\nRETURN n\n", formatted.?);
 }

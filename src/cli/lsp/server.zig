@@ -340,9 +340,102 @@ pub const Server = struct {
     }
 
     fn handleFormatting(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        _ = params;
-        // Not implemented yet
-        try self.sendResult(id, .null);
+        const p = params orelse {
+            try self.sendResult(id, .null);
+            return;
+        };
+
+        const text_doc = p.object.get("textDocument") orelse {
+            try self.sendResult(id, .null);
+            return;
+        };
+
+        const uri = text_doc.object.get("uri") orelse {
+            try self.sendResult(id, .null);
+            return;
+        };
+
+        const doc = self.documents.get(uri.string) orelse {
+            try self.sendResult(id, .null);
+            return;
+        };
+
+        const formatted = features.provideFormatting(self.allocator, doc) catch {
+            try self.sendResult(id, .null);
+            return;
+        };
+
+        if (formatted) |new_text| {
+            defer self.allocator.free(new_text);
+
+            // Count lines in original document for range
+            var line_count: u32 = 0;
+            var last_line_len: u32 = 0;
+            for (doc.text, 0..) |c, idx| {
+                if (c == '\n') {
+                    line_count += 1;
+                    last_line_len = 0;
+                } else {
+                    last_line_len += 1;
+                }
+                _ = idx;
+            }
+
+            // Build JSON response with TextEdit array
+            var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 1024);
+            defer buffer.deinit(self.allocator);
+
+            try buffer.appendSlice(self.allocator, "{\"jsonrpc\":\"2.0\",\"id\":");
+
+            // Serialize the id
+            switch (id) {
+                .integer => |i| {
+                    var num_buf: [32]u8 = undefined;
+                    const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch "0";
+                    try buffer.appendSlice(self.allocator, num_str);
+                },
+                .string => |s| {
+                    try buffer.append(self.allocator, '"');
+                    try buffer.appendSlice(self.allocator, s);
+                    try buffer.append(self.allocator, '"');
+                },
+                else => try buffer.appendSlice(self.allocator, "null"),
+            }
+
+            try buffer.appendSlice(self.allocator, ",\"result\":[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":");
+
+            // Add end line
+            var line_buf: [32]u8 = undefined;
+            const line_str = std.fmt.bufPrint(&line_buf, "{d}", .{line_count}) catch "0";
+            try buffer.appendSlice(self.allocator, line_str);
+
+            try buffer.appendSlice(self.allocator, ",\"character\":");
+
+            // Add end character
+            var char_buf: [32]u8 = undefined;
+            const char_str = std.fmt.bufPrint(&char_buf, "{d}", .{last_line_len}) catch "0";
+            try buffer.appendSlice(self.allocator, char_str);
+
+            try buffer.appendSlice(self.allocator, "}},\"newText\":\"");
+
+            // Escape the new text for JSON
+            for (new_text) |c| {
+                switch (c) {
+                    '\n' => try buffer.appendSlice(self.allocator, "\\n"),
+                    '\r' => try buffer.appendSlice(self.allocator, "\\r"),
+                    '\t' => try buffer.appendSlice(self.allocator, "\\t"),
+                    '"' => try buffer.appendSlice(self.allocator, "\\\""),
+                    '\\' => try buffer.appendSlice(self.allocator, "\\\\"),
+                    else => try buffer.append(self.allocator, c),
+                }
+            }
+
+            try buffer.appendSlice(self.allocator, "\"}]}");
+
+            try self.transport.writeMessage(buffer.items);
+        } else {
+            try self.sendResult(id, .null);
+        }
     }
 
     fn sendDiagnostics(self: *Server, uri: []const u8) !void {

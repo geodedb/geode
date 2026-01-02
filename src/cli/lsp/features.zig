@@ -261,10 +261,210 @@ pub fn provideDefinition(allocator: Allocator, doc: *const Document, line: u32, 
     return null;
 }
 
+/// Format a GQL document with proper keyword casing, indentation, and spacing.
 pub fn provideFormatting(allocator: Allocator, doc: *const Document) !?[]const u8 {
-    _ = allocator;
-    // TODO: Implement GQL formatting
-    return doc.text;
+    const text = doc.text;
+    if (text.len == 0) return null;
+
+    var result = try std.ArrayList(u8).initCapacity(allocator, text.len);
+    errdefer result.deinit(allocator);
+
+    // Keywords that should start on a new line (clause starters)
+    const line_start_keywords = std.StaticStringMap(void).initComptime(.{
+        .{ "MATCH", {} },
+        .{ "CREATE", {} },
+        .{ "MERGE", {} },
+        .{ "DELETE", {} },
+        .{ "INSERT", {} },
+        .{ "RETURN", {} },
+        .{ "WHERE", {} },
+        .{ "WITH", {} },
+        .{ "SET", {} },
+        .{ "REMOVE", {} },
+        .{ "ORDER", {} },
+        .{ "GROUP", {} },
+        .{ "HAVING", {} },
+        .{ "LIMIT", {} },
+        .{ "SKIP", {} },
+        .{ "OFFSET", {} },
+        .{ "UNION", {} },
+        .{ "INTERSECT", {} },
+        .{ "EXCEPT", {} },
+        .{ "OPTIONAL", {} },
+        .{ "CALL", {} },
+        .{ "UNWIND", {} },
+        .{ "USE", {} },
+        .{ "DROP", {} },
+        .{ "SHOW", {} },
+        .{ "EXPLAIN", {} },
+        .{ "PROFILE", {} },
+    });
+
+    var i: usize = 0;
+    var line_start = true;
+    var in_string = false;
+    var string_char: u8 = 0;
+    var last_was_newline = true;
+    var last_was_space = false;
+
+    while (i < text.len) {
+        const c = text[i];
+
+        // Handle string literals
+        if (!in_string and (c == '\'' or c == '"')) {
+            in_string = true;
+            string_char = c;
+            try result.append(allocator, c);
+            last_was_space = false;
+            last_was_newline = false;
+            i += 1;
+            continue;
+        }
+
+        if (in_string) {
+            try result.append(allocator, c);
+            if (c == string_char and (i == 0 or text[i - 1] != '\\')) {
+                in_string = false;
+            }
+            if (c == '\n') {
+                last_was_newline = true;
+                last_was_space = false;
+            } else {
+                last_was_newline = false;
+                last_was_space = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Handle comments
+        if (i + 1 < text.len) {
+            // Single-line comment
+            if ((c == '-' and text[i + 1] == '-') or (c == '/' and text[i + 1] == '/')) {
+                // Copy until newline
+                while (i < text.len and text[i] != '\n') {
+                    try result.append(allocator, text[i]);
+                    i += 1;
+                }
+                if (i < text.len) {
+                    try result.append(allocator, '\n');
+                    i += 1;
+                    last_was_newline = true;
+                    last_was_space = false;
+                    line_start = true;
+                }
+                continue;
+            }
+            // Multi-line comment
+            if (c == '/' and text[i + 1] == '*') {
+                try result.append(allocator, '/');
+                try result.append(allocator, '*');
+                i += 2;
+                while (i + 1 < text.len) {
+                    if (text[i] == '*' and text[i + 1] == '/') {
+                        try result.append(allocator, '*');
+                        try result.append(allocator, '/');
+                        i += 2;
+                        break;
+                    }
+                    try result.append(allocator, text[i]);
+                    i += 1;
+                }
+                last_was_space = false;
+                last_was_newline = false;
+                continue;
+            }
+        }
+
+        // Handle newlines
+        if (c == '\n') {
+            // Avoid multiple consecutive blank lines
+            if (!last_was_newline or result.items.len == 0) {
+                try result.append(allocator, '\n');
+            }
+            last_was_newline = true;
+            last_was_space = false;
+            line_start = true;
+            i += 1;
+            continue;
+        }
+
+        // Handle whitespace
+        if (std.ascii.isWhitespace(c)) {
+            if (!last_was_space and !last_was_newline and result.items.len > 0) {
+                try result.append(allocator, ' ');
+                last_was_space = true;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Handle identifiers and keywords
+        if (std.ascii.isAlphabetic(c) or c == '_') {
+            const start = i;
+            while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) {
+                i += 1;
+            }
+            const word = text[start..i];
+
+            // Check if it's a keyword
+            var upper_buf: [64]u8 = undefined;
+            const upper_len = @min(word.len, 64);
+            for (word[0..upper_len], 0..) |ch, j| {
+                upper_buf[j] = std.ascii.toUpper(ch);
+            }
+            const upper_word = upper_buf[0..upper_len];
+
+            const is_keyword = for (GQL_KEYWORDS) |kw| {
+                if (std.mem.eql(u8, upper_word, kw)) break true;
+            } else false;
+
+            // Check if this is a clause-starting keyword that needs a newline before it
+            const needs_newline = line_start_keywords.get(upper_word) != null;
+
+            if (needs_newline and !last_was_newline and result.items.len > 0) {
+                // Trim trailing space before newline
+                while (result.items.len > 0 and result.items[result.items.len - 1] == ' ') {
+                    _ = result.pop();
+                }
+                try result.append(allocator, '\n');
+                last_was_newline = true;
+                last_was_space = false;
+            }
+
+            if (is_keyword) {
+                // Output uppercase keyword
+                try result.appendSlice(allocator, upper_word);
+            } else {
+                // Preserve original case for non-keywords
+                try result.appendSlice(allocator, word);
+            }
+
+            last_was_space = false;
+            last_was_newline = false;
+            line_start = false;
+            continue;
+        }
+
+        // Handle other characters (punctuation, operators, etc.)
+        try result.append(allocator, c);
+        last_was_space = false;
+        last_was_newline = (c == '\n');
+        line_start = (c == ';'); // Next token after semicolon can be a new statement
+        i += 1;
+    }
+
+    // Trim trailing whitespace
+    while (result.items.len > 0 and std.ascii.isWhitespace(result.items[result.items.len - 1])) {
+        _ = result.pop();
+    }
+
+    // Ensure file ends with newline
+    if (result.items.len > 0) {
+        try result.append(allocator, '\n');
+    }
+
+    return try result.toOwnedSlice(allocator);
 }
 
 fn getKeywordDocumentation(allocator: Allocator, keyword: []const u8) ![]const u8 {
@@ -321,4 +521,94 @@ fn getTypeDocumentation(allocator: Allocator, typ: []const u8) ![]const u8 {
     } else {
         return try std.fmt.allocPrint(allocator, "**{s}** - GQL type", .{typ});
     }
+}
+
+// ============================================================================
+// Unit Tests for Formatting
+// ============================================================================
+
+test "provideFormatting - keyword uppercasing" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "match (n) return n", 1);
+    defer doc.deinit();
+
+    const result = try provideFormatting(allocator, doc);
+    defer if (result) |r| allocator.free(r);
+
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("MATCH (n)\nRETURN n\n", result.?);
+}
+
+test "provideFormatting - preserves string literals" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "match (n {name: 'match me'}) return n", 1);
+    defer doc.deinit();
+
+    const result = try provideFormatting(allocator, doc);
+    defer if (result) |r| allocator.free(r);
+
+    try std.testing.expect(result != null);
+    // Keywords should be uppercased but 'match me' inside string should be preserved
+    try std.testing.expect(std.mem.indexOf(u8, result.?, "'match me'") != null);
+}
+
+test "provideFormatting - preserves comments" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "-- comment here\nmatch (n) return n", 1);
+    defer doc.deinit();
+
+    const result = try provideFormatting(allocator, doc);
+    defer if (result) |r| allocator.free(r);
+
+    try std.testing.expect(result != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.?, "-- comment here") != null);
+}
+
+test "provideFormatting - multiline comment preserved" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "/* block\ncomment */ match (n) return n", 1);
+    defer doc.deinit();
+
+    const result = try provideFormatting(allocator, doc);
+    defer if (result) |r| allocator.free(r);
+
+    try std.testing.expect(result != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.?, "/* block") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.?, "comment */") != null);
+}
+
+test "provideFormatting - newlines before clause keywords" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "match (n) where n.x > 1 return n", 1);
+    defer doc.deinit();
+
+    const result = try provideFormatting(allocator, doc);
+    defer if (result) |r| allocator.free(r);
+
+    try std.testing.expect(result != null);
+    // WHERE and RETURN should start on new lines
+    try std.testing.expect(std.mem.indexOf(u8, result.?, "\nWHERE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.?, "\nRETURN") != null);
+}
+
+test "provideFormatting - empty document" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "", 1);
+    defer doc.deinit();
+
+    const result = try provideFormatting(allocator, doc);
+    try std.testing.expect(result == null);
+}
+
+test "provideFormatting - variable names preserved" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "match (myNode:Person) return myNode", 1);
+    defer doc.deinit();
+
+    const result = try provideFormatting(allocator, doc);
+    defer if (result) |r| allocator.free(r);
+
+    try std.testing.expect(result != null);
+    // Variable names should preserve original case
+    try std.testing.expect(std.mem.indexOf(u8, result.?, "myNode") != null);
 }
