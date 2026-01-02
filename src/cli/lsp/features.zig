@@ -6,7 +6,6 @@ const Allocator = std.mem.Allocator;
 const protocol = @import("protocol.zig");
 const Document = @import("document.zig").Document;
 const geode = @import("geode");
-const parseGql = geode.parseGql;
 
 // GQL Keywords for completion
 const GQL_KEYWORDS = [_][]const u8{
@@ -54,35 +53,71 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
     var diagnostics = std.ArrayList(protocol.Diagnostic).initCapacity(allocator, 10) catch return error.OutOfMemory;
     errdefer diagnostics.deinit(allocator);
 
-    // Parse the document
-    var result = parseGql(doc.text, allocator) catch |err| {
-        // Parser error - create diagnostic
-        const diag = protocol.Diagnostic{
-            .range = .{
-                .start = .{ .line = 0, .character = 0 },
-                .end = .{ .line = 0, .character = 0 },
-            },
-            .severity = .Error,
-            .source = "geode",
-            .message = try std.fmt.allocPrint(allocator, "Parse error: {}", .{err}),
-        };
-        try diagnostics.append(allocator, diag);
-        return diagnostics.toOwnedSlice(allocator);
-    };
-    defer result.deinit();
+    // Parse the document using outcome to get better error info
+    const outcome = try geode.parseGqlOutcome(doc.text, allocator, .{});
 
-    // Check for parser errors
-    if (result.last_error) |last_err| {
-        const diag = protocol.Diagnostic{
-            .range = .{
-                .start = .{ .line = 0, .character = 0 },
-                .end = .{ .line = 0, .character = 0 },
-            },
-            .severity = .Error,
-            .source = "geode",
-            .message = try allocator.dupe(u8, last_err),
-        };
-        try diagnostics.append(allocator, diag);
+    switch (outcome) {
+        .Err => |err_info| {
+            // Check for double-dash comments first (GB02 warning)
+            if (err_info.has_double_dash_comment) {
+                const warning = protocol.Diagnostic{
+                    .range = .{
+                        .start = .{ .line = 0, .character = 0 },
+                        .end = .{ .line = 0, .character = 0 },
+                    },
+                    .severity = .Warning,
+                    .source = "geode",
+                    .message = try allocator.dupe(u8, "Double-dash (--) comments are disabled per GQL spec (GB02). Use // comments instead."),
+                };
+                try diagnostics.append(allocator, warning);
+            }
+
+            // Then show the parse error at the actual location
+            const diag = protocol.Diagnostic{
+                .range = .{
+                    .start = .{ .line = err_info.line, .character = err_info.column },
+                    .end = .{ .line = err_info.line, .character = err_info.column + 1 },
+                },
+                .severity = .Error,
+                .source = "geode",
+                .message = try allocator.dupe(u8, err_info.msg),
+            };
+            try diagnostics.append(allocator, diag);
+        },
+        .Ok => |result| {
+            defer {
+                var res = result;
+                res.deinit();
+            }
+
+            // Check for double-dash comments (GB02 - show as warning)
+            if (result.has_double_dash_comment) {
+                const diag = protocol.Diagnostic{
+                    .range = .{
+                        .start = .{ .line = 0, .character = 0 },
+                        .end = .{ .line = 0, .character = 0 },
+                    },
+                    .severity = .Warning,
+                    .source = "geode",
+                    .message = try allocator.dupe(u8, "Double-dash (--) comments are disabled per GQL spec (GB02). Use // comments instead."),
+                };
+                try diagnostics.append(allocator, diag);
+            }
+
+            // Check for parser errors
+            if (result.last_error) |last_err| {
+                const diag = protocol.Diagnostic{
+                    .range = .{
+                        .start = .{ .line = 0, .character = 0 },
+                        .end = .{ .line = 0, .character = 0 },
+                    },
+                    .severity = .Error,
+                    .source = "geode",
+                    .message = try allocator.dupe(u8, last_err),
+                };
+                try diagnostics.append(allocator, diag);
+            }
+        },
     }
 
     return diagnostics.toOwnedSlice(allocator);

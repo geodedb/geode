@@ -19,9 +19,23 @@ chmod 750 /var/lib/geode
 chmod 750 /var/log/geode
 chmod 700 /etc/geode/certs
 
+# Reload systemd to recognize the new service
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload
+    echo "Systemd service installed: geode.service"
+    echo ""
+    echo "To enable and start the service:"
+    echo "  sudo systemctl enable geode"
+    echo "  sudo systemctl start geode"
+    echo ""
+    echo "To check status:"
+    echo "  sudo systemctl status geode"
+fi
+
+echo ""
 echo "Geode installed successfully!"
 echo ""
-echo "Quick start:"
-echo "  geode serve --listen 0.0.0.0:8443"
+echo "Quick start (standalone):"
+echo "  geode serve --listen 0.0.0.0:3141"
 echo ""
 echo "For more information, see /usr/share/doc/geode/QUICK_REFERENCE.md"

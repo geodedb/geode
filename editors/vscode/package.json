@@ -36,6 +36,10 @@
   "activationEvents": [
     "onLanguage:gql",
     "onLanguage:cypher",
+    "workspaceContains:**/*.gql",
+    "workspaceContains:**/*.gcypher",
+    "workspaceContains:**/*.pgql",
+    "workspaceContains:**/*.cypher",
     "onCommand:geode.runQuery",
     "onCommand:geode.connectServer"
   ],
@@ -165,20 +169,25 @@
     "keybindings": [
       {
         "command": "geode.runQuery",
+        "key": "f5",
+        "when": "editorTextFocus && (editorLangId == gql || editorLangId == cypher)"
+      },
+      {
+        "command": "geode.runQuery",
         "key": "ctrl+enter",
         "mac": "cmd+enter",
-        "when": "resourceLangId == gql || resourceLangId == cypher"
+        "when": "editorTextFocus && (editorLangId == gql || editorLangId == cypher)"
       },
       {
         "command": "geode.runSelection",
         "key": "ctrl+shift+enter",
         "mac": "cmd+shift+enter",
-        "when": "resourceLangId == gql || resourceLangId == cypher && editorHasSelection"
+        "when": "editorTextFocus && editorHasSelection && (editorLangId == gql || editorLangId == cypher)"
       },
       {
         "command": "geode.formatDocument",
         "key": "shift+alt+f",
-        "when": "resourceLangId == gql || resourceLangId == cypher"
+        "when": "editorTextFocus && (editorLangId == gql || editorLangId == cypher)"
       }
     ],
     "configuration": {
@@ -251,7 +260,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
-    "package": "vsce package",
+    "package": "vsce package --skip-license",
     "publish": "vsce publish"
   },
   "dependencies": {

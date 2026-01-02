@@ -48,15 +48,30 @@ pub const Server = struct {
 
         while (!self.shutdown_requested) {
             const message_text = self.transport.readMessage() catch |err| {
-                self.transport.logMessage("ERROR", "Failed to read message");
-                if (err == error.ReadFailed) break;
+                // EndOfStream means client disconnected gracefully
+                if (err == error.EndOfStream) {
+                    self.transport.logMessage("INFO", "Client disconnected");
+                    break;
+                }
+                // ReadFailed means connection error
+                if (err == error.ReadFailed) {
+                    self.transport.logMessage("ERROR", "Connection lost");
+                    break;
+                }
+                // Log other errors but don't spam
+                if (std.fmt.allocPrint(self.allocator, "Read error: {}", .{err})) |error_msg| {
+                    defer self.allocator.free(error_msg);
+                    self.transport.logMessage("ERROR", error_msg);
+                } else |_| {
+                    self.transport.logMessage("ERROR", "Unknown read error");
+                }
                 continue;
             };
             defer self.allocator.free(message_text);
 
             self.handleMessage(message_text) catch |err| {
                 self.transport.logMessage("ERROR", "Failed to handle message");
-                const error_msg = try std.fmt.allocPrint(self.allocator, "Error: {}", .{err});
+                const error_msg = std.fmt.allocPrint(self.allocator, "Error: {}", .{err}) catch continue;
                 defer self.allocator.free(error_msg);
                 self.transport.logMessage("ERROR", error_msg);
             };
@@ -341,56 +356,61 @@ pub const Server = struct {
             self.allocator.free(diagnostics);
         }
 
-        var notification = std.json.ObjectMap.init(self.allocator);
-        defer notification.deinit();
+        // Build JSON manually as a string to avoid object lifetime issues
+        var buffer = std.ArrayList(u8).initCapacity(self.allocator, 1024) catch return error.OutOfMemory;
+        defer buffer.deinit(self.allocator);
 
-        try notification.put("jsonrpc", .{ .string = "2.0" });
-        try notification.put("method", .{ .string = "textDocument/publishDiagnostics" });
+        try buffer.appendSlice(self.allocator, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"");
+        try buffer.appendSlice(self.allocator, uri);
+        try buffer.appendSlice(self.allocator, "\",\"diagnostics\":[");
 
-        var params = std.json.ObjectMap.init(self.allocator);
-        defer params.deinit();
-
-        try params.put("uri", .{ .string = uri });
-
-        var diag_array = std.json.Array.init(self.allocator);
-        defer diag_array.deinit();
-
+        const alloc = self.allocator;
+        var first = true;
         for (diagnostics) |diag| {
-            var diag_obj = std.json.ObjectMap.init(self.allocator);
-            defer diag_obj.deinit();
+            if (!first) try buffer.append(alloc, ',');
+            first = false;
 
-            var range_obj = std.json.ObjectMap.init(self.allocator);
-            defer range_obj.deinit();
+            try buffer.appendSlice(alloc, "{\"range\":{\"start\":{\"line\":");
+            try std.fmt.format(buffer.writer(alloc), "{d}", .{diag.range.start.line});
+            try buffer.appendSlice(alloc, ",\"character\":");
+            try std.fmt.format(buffer.writer(alloc), "{d}", .{diag.range.start.character});
+            try buffer.appendSlice(alloc, "},\"end\":{\"line\":");
+            try std.fmt.format(buffer.writer(alloc), "{d}", .{diag.range.end.line});
+            try buffer.appendSlice(alloc, ",\"character\":");
+            try std.fmt.format(buffer.writer(alloc), "{d}", .{diag.range.end.character});
+            try buffer.appendSlice(alloc, "}}");
 
-            var start_obj = std.json.ObjectMap.init(self.allocator);
-            defer start_obj.deinit();
-            try start_obj.put("line", .{ .integer = diag.range.start.line });
-            try start_obj.put("character", .{ .integer = diag.range.start.character });
-
-            var end_obj = std.json.ObjectMap.init(self.allocator);
-            defer end_obj.deinit();
-            try end_obj.put("line", .{ .integer = diag.range.end.line });
-            try end_obj.put("character", .{ .integer = diag.range.end.character });
-
-            try range_obj.put("start", .{ .object = start_obj });
-            try range_obj.put("end", .{ .object = end_obj });
-
-            try diag_obj.put("range", .{ .object = range_obj });
             if (diag.severity) |sev| {
-                try diag_obj.put("severity", .{ .integer = @intFromEnum(sev) });
-            }
-            try diag_obj.put("message", .{ .string = diag.message });
-            if (diag.source) |src| {
-                try diag_obj.put("source", .{ .string = src });
+                try buffer.appendSlice(alloc, ",\"severity\":");
+                try std.fmt.format(buffer.writer(alloc), "{d}", .{@intFromEnum(sev)});
             }
 
-            try diag_array.append(.{ .object = diag_obj });
+            try buffer.appendSlice(alloc, ",\"message\":\"");
+            // Escape the message for JSON
+            for (diag.message) |c| {
+                switch (c) {
+                    '"' => try buffer.appendSlice(alloc, "\\\""),
+                    '\\' => try buffer.appendSlice(alloc, "\\\\"),
+                    '\n' => try buffer.appendSlice(alloc, "\\n"),
+                    '\r' => try buffer.appendSlice(alloc, "\\r"),
+                    '\t' => try buffer.appendSlice(alloc, "\\t"),
+                    else => try buffer.append(alloc, c),
+                }
+            }
+            try buffer.appendSlice(alloc, "\"");
+
+            if (diag.source) |src| {
+                try buffer.appendSlice(alloc, ",\"source\":\"");
+                try buffer.appendSlice(alloc, src);
+                try buffer.appendSlice(alloc, "\"");
+            }
+
+            try buffer.append(alloc, '}');
         }
 
-        try params.put("diagnostics", .{ .array = diag_array });
-        try notification.put("params", .{ .object = params });
+        try buffer.appendSlice(alloc, "]}}");
 
-        try self.sendJsonValue(.{ .object = notification });
+        try self.transport.writeMessage(buffer.items);
     }
 
     fn sendResult(self: *Server, id: std.json.Value, result: std.json.Value) !void {

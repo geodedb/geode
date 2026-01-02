@@ -1,0 +1,251 @@
+*geode.txt*  Geode GQL Plugin for Neovim
+
+==============================================================================
+CONTENTS                                                      *geode-contents*
+
+    1. Introduction ............................ |geode-introduction|
+    2. Installation ............................ |geode-installation|
+    3. Configuration ........................... |geode-configuration|
+    4. Commands ................................ |geode-commands|
+    5. Keymaps ................................. |geode-keymaps|
+    6. LSP ..................................... |geode-lsp|
+    7. Snippets ................................ |geode-snippets|
+    8. Functions ............................... |geode-functions|
+
+==============================================================================
+1. INTRODUCTION                                           *geode-introduction*
+
+Geode is a plugin for Neovim that provides comprehensive support for GQL
+(Graph Query Language) and Cypher query development with the Geode database.
+
+Features:
+- Language Server Protocol (LSP) integration
+- Syntax highlighting
+- Code completion
+- Query execution
+- LuaSnip snippets
+- Diagnostics
+
+==============================================================================
+2. INSTALLATION                                           *geode-installation*
+
+Using lazy.nvim: >lua
+    {
+        "geode-db/geode",
+        config = function()
+            require("geode").setup()
+        end,
+        ft = { "gql", "cypher", "gcypher", "pgql" },
+    }
+<
+
+Using packer.nvim: >lua
+    use {
+        "geode-db/geode",
+        config = function()
+            require("geode").setup()
+        end,
+        ft = { "gql", "cypher", "gcypher", "pgql" },
+    }
+<
+
+Manual installation: >bash
+    cd ~/.local/share/nvim/site/pack/plugins/start
+    git clone https://github.com/geode-db/geode.git
+<
+
+Then add to your init.lua: >lua
+    require("geode").setup()
+<
+
+==============================================================================
+3. CONFIGURATION                                         *geode-configuration*
+
+The setup function accepts a configuration table:
+
+>lua
+    require("geode").setup({
+        -- LSP settings
+        lsp = {
+            enabled = true,              -- Enable LSP
+            cmd = { "geode", "lsp" },    -- LSP command
+            filetypes = { "gql", "cypher", "gcypher", "pgql" },
+        },
+
+        -- Server connection
+        server = {
+            host = "localhost",          -- Geode server host
+            port = 3141,                 -- Geode server port
+            auto_connect = false,        -- Auto-connect on startup
+        },
+
+        -- Query execution
+        query = {
+            timeout = 30000,             -- Query timeout (ms)
+            max_results = 1000,          -- Maximum results to display
+            output_format = "json",      -- Output format: json, table
+        },
+
+        -- UI settings
+        ui = {
+            show_diagnostics = true,     -- Show LSP diagnostics
+            virtual_text = true,         -- Show inline diagnostics
+            signs = true,                -- Show sign column markers
+            float_border = "rounded",    -- Border style for floats
+        },
+
+        -- Keymaps (set to false to disable)
+        keymaps = {
+            run_query = "<F5>",          -- Run entire buffer
+            run_selection = "<leader>gr", -- Run visual selection
+            explain_query = "<leader>ge", -- Explain query plan
+            format_buffer = "<leader>gf", -- Format buffer
+            show_docs = "K",             -- Show hover documentation
+        },
+    })
+<
+
+==============================================================================
+4. COMMANDS                                                   *geode-commands*
+
+:GeodeRunQuery                                               *:GeodeRunQuery*
+    Execute the entire buffer as a GQL query.
+
+:GeodeRunSelection                                       *:GeodeRunSelection*
+    Execute the selected text as a GQL query.
+
+:GeodeExplain                                                 *:GeodeExplain*
+    Show the execution plan for the current buffer.
+
+:GeodeConnect [host:port]                                     *:GeodeConnect*
+    Connect to a Geode server. Uses configured host:port if not specified.
+
+:GeodeDisconnect                                           *:GeodeDisconnect*
+    Disconnect from the Geode server.
+
+:GeodeStatus                                                   *:GeodeStatus*
+    Show connection and LSP status.
+
+:GeodeRestartLsp                                           *:GeodeRestartLsp*
+    Restart the Geode LSP server.
+
+:GeodeSetup [options]                                         *:GeodeSetup*
+    Initialize the plugin with optional configuration.
+    Example: :GeodeSetup server.port=3142 lsp.enabled=true
+
+==============================================================================
+5. KEYMAPS                                                     *geode-keymaps*
+
+Default keymaps (can be customized in configuration):
+
+Normal mode:
+    <F5>         Run the entire buffer as a query
+    <leader>ge   Explain the query execution plan
+    <leader>gf   Format the buffer using LSP
+    K            Show hover documentation (LSP)
+    gd           Go to definition (LSP)
+
+Visual mode:
+    <leader>gr   Run selected text as a query
+
+To disable a keymap, set it to false in configuration: >lua
+    require("geode").setup({
+        keymaps = {
+            run_query = false,  -- Disable F5 mapping
+        }
+    })
+<
+
+==============================================================================
+6. LSP                                                             *geode-lsp*
+
+The Geode LSP provides:
+- Syntax error diagnostics
+- Hover documentation
+- Go to definition
+- Code formatting
+- Completion suggestions
+
+Requirements:
+- The `geode` binary must be in your PATH
+- nvim-lspconfig plugin (recommended)
+- nvim-cmp for enhanced completion (optional)
+
+The LSP is automatically started when opening GQL files if `lsp.enabled`
+is true (default).
+
+To manually restart the LSP: >
+    :GeodeRestartLsp
+<
+
+==============================================================================
+7. SNIPPETS                                                   *geode-snippets*
+
+LuaSnip snippets are available for common GQL patterns. To enable: >lua
+    require("geode.snippets").setup()
+<
+
+Available snippets:
+    match       Basic MATCH pattern
+    matchw      MATCH with WHERE clause
+    matchr      MATCH with relationship
+    create      CREATE node
+    creater     CREATE relationship
+    merge       MERGE with ON CREATE/ON MATCH
+    delete      DELETE pattern
+    detach      DETACH DELETE pattern
+    set         SET property
+    remove      REMOVE property
+    count       Count aggregation
+    group       Group by with count
+    vdist       Vector distance function
+    vsim        Vector similarity
+    vknn        Vector KNN search
+    vectorf32   VectorF32 literal
+    path        Variable-length path
+    shortest    Shortest path
+    case        CASE expression
+    foreach     FOREACH loop
+    unwind      UNWIND list
+    call        CALL subquery
+    creategraph CREATE GRAPH
+    dropgraph   DROP GRAPH
+    usegraph    USE GRAPH
+    createindex CREATE INDEX
+    dropindex   DROP INDEX
+    header      Query header comment
+
+==============================================================================
+8. FUNCTIONS                                                 *geode-functions*
+
+geode.setup({opts})                                           *geode.setup()*
+    Initialize the plugin with the given configuration options.
+
+geode.run_query()                                         *geode.run_query()*
+    Execute the entire buffer as a GQL query.
+
+geode.run_selection()                                 *geode.run_selection()*
+    Execute the visual selection as a GQL query.
+
+geode.explain_query()                                 *geode.explain_query()*
+    Show the EXPLAIN plan for the current buffer.
+
+geode.connect_server({addr})                         *geode.connect_server()*
+    Connect to a Geode server. Optional addr format: "host:port"
+
+geode.disconnect_server()                         *geode.disconnect_server()*
+    Disconnect from the Geode server.
+
+geode.show_status()                                     *geode.show_status()*
+    Display connection and LSP status information.
+
+geode.statusline()                                       *geode.statusline()*
+    Returns a string for use in statusline. Shows connection status.
+    Example for lualine: >lua
+        sections = {
+            lualine_x = { require("geode").statusline }
+        }
+<
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:

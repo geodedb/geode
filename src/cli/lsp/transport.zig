@@ -15,6 +15,7 @@ pub const TransportError = error{
     InvalidContentLength,
     ReadFailed,
     WriteFailed,
+    EndOfStream,
 };
 
 // Cross-platform file handle helpers (copied from main.zig pattern)
@@ -60,10 +61,19 @@ pub const Transport = struct {
     pub fn readMessage(self: *Transport) ![]const u8 {
         var content_length: ?usize = null;
         var buf: [1024]u8 = undefined;
+        var first_read = true;
 
         // Read headers
         while (true) {
-            const line = try self.readLine(&buf);
+            const maybe_line = try self.readLine(&buf);
+            if (maybe_line == null) {
+                // EOF on first read means client disconnected
+                if (first_read) return TransportError.EndOfStream;
+                break;
+            }
+            first_read = false;
+
+            const line = maybe_line.?;
             if (line.len == 0) break; // Empty line separates headers from content
 
             if (std.mem.startsWith(u8, line, "Content-Length: ")) {
@@ -88,7 +98,7 @@ pub const Transport = struct {
             const n = try self.stdin.read(content[total_read..]);
             if (n == 0) {
                 self.allocator.free(content);
-                return TransportError.ReadFailed;
+                return TransportError.EndOfStream;
             }
             total_read += n;
         }
@@ -115,11 +125,15 @@ pub const Transport = struct {
         _ = self.stderr.writeAll(msg) catch {};
     }
 
-    fn readLine(self: *Transport, buf: []u8) ![]const u8 {
+    fn readLine(self: *Transport, buf: []u8) !?[]const u8 {
         var i: usize = 0;
         while (i < buf.len) : (i += 1) {
             const n = try self.stdin.read(buf[i .. i + 1]);
-            if (n == 0) return buf[0..i];
+            if (n == 0) {
+                // EOF - return null if no data read, otherwise return what we have
+                if (i == 0) return null;
+                return buf[0..i];
+            }
             if (buf[i] == '\n') {
                 // Remove \r\n or \n
                 const end = if (i > 0 and buf[i - 1] == '\r') i - 1 else i;

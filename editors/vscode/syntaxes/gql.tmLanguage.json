@@ -17,13 +17,24 @@
     "comments": {
       "patterns": [
         {
+          "name": "comment.line.double-dash.gql",
+          "match": "--.*$"
+        },
+        {
           "name": "comment.line.double-slash.gql",
           "match": "//.*$"
         },
         {
           "name": "comment.block.gql",
           "begin": "/\\*",
-          "end": "\\*/"
+          "end": "\\*/",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.begin.gql" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.comment.end.gql" }
+          },
+          "patterns": []
         }
       ]
     },
@@ -33,6 +44,12 @@
           "name": "string.quoted.single.gql",
           "begin": "'",
           "end": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.gql" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.gql" }
+          },
           "patterns": [
             {
               "name": "constant.character.escape.gql",
@@ -44,6 +61,12 @@
           "name": "string.quoted.double.gql",
           "begin": "\"",
           "end": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.gql" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.gql" }
+          },
           "patterns": [
             {
               "name": "constant.character.escape.gql",

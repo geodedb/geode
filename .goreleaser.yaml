@@ -46,13 +46,13 @@ builds:
 
 archives:
   - id: geode-archives
-    builds:
+    ids:
       - geode
     # Use Target directly which contains the full Zig target string
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Target }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     files:
       - README.md
       - LICENSE
@@ -230,7 +230,7 @@ docker_manifests:
 nfpms:
   - id: geode-packages
     package_name: geode
-    builds:
+    ids:
       - geode
     vendor: Spyder
     homepage: https://gitlab.com/devnw/geode/geode
@@ -298,6 +298,24 @@ nfpms:
         file_info:
           mode: 0700
 
+      # Systemd service file
+      - src: deployment/systemd/geode.service
+        dst: /lib/systemd/system/geode.service
+        file_info:
+          mode: 0644
+
+      # Systemd template service (for multi-instance)
+      - src: deployment/systemd/geode@.service
+        dst: /lib/systemd/system/geode@.service
+        file_info:
+          mode: 0644
+
+      # Default configuration directory
+      - dst: /etc/geode
+        type: dir
+        file_info:
+          mode: 0755
+
     overrides:
       deb:
         dependencies:
@@ -317,6 +335,7 @@ nfpms:
     scripts:
       postinstall: scripts/packaging/postinstall.sh
       preremove: scripts/packaging/preremove.sh
+      postremove: scripts/packaging/postremove.sh
 
 # =============================================================================
 # GitLab Release

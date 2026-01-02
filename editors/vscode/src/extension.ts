@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import {
     LanguageClient,
     LanguageClientOptions,
@@ -13,9 +14,19 @@ let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
 let isConnected = false;
 
+const gqlExtensions = new Set(['.gql', '.gcypher', '.pgql']);
+const cypherExtensions = new Set(['.cypher']);
+
 export function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('Geode GQL');
     context.subscriptions.push(outputChannel);
+
+    // Ensure files with GQL-ish extensions don't get hijacked by SQL/Postgres modes
+    // and that the language server activates even when VS Code guesses wrong.
+    context.subscriptions.push(
+        vscode.workspace.onDidOpenTextDocument(ensureGeodeLanguageMode)
+    );
+    vscode.workspace.textDocuments.forEach(ensureGeodeLanguageMode);
 
     // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(
@@ -59,13 +70,39 @@ export function deactivate(): Thenable<void> | undefined {
     return client.stop();
 }
 
+function ensureGeodeLanguageMode(doc: vscode.TextDocument) {
+    if (doc.languageId === 'gql' || doc.languageId === 'cypher') {
+        return;
+    }
+
+    if (doc.uri.scheme !== 'file') {
+        return;
+    }
+
+    const ext = path.extname(doc.fileName).toLowerCase();
+
+    if (gqlExtensions.has(ext)) {
+        void vscode.languages.setTextDocumentLanguage(doc, 'gql').then(() => {
+            outputChannel.appendLine(`Switched language mode to Geode GQL for ${path.basename(doc.fileName)}`);
+        }, () => {
+            // Ignore language switch failures; VS Code may refuse if the document is mid-close.
+        });
+    } else if (cypherExtensions.has(ext)) {
+        void vscode.languages.setTextDocumentLanguage(doc, 'cypher').then(() => {
+            outputChannel.appendLine(`Switched language mode to Geode Cypher for ${path.basename(doc.fileName)}`);
+        }, () => {
+            // Ignore language switch failures; VS Code may refuse if the document is mid-close.
+        });
+    }
+}
+
 // ============================================================================
 // Language Server
 // ============================================================================
 
 function startLanguageServer(context: vscode.ExtensionContext) {
     const config = vscode.workspace.getConfiguration('geode.lsp');
-    const serverPath = config.get<string>('path', 'geode');
+    const serverPath = resolveGeodeBinary(config);
     const serverArgs = config.get<string[]>('args', ['lsp']);
 
     // Server options
@@ -112,6 +149,67 @@ function startLanguageServer(context: vscode.ExtensionContext) {
             }
         });
     });
+}
+
+function resolveGeodeBinary(config: vscode.WorkspaceConfiguration): string {
+    const configured = config.get<string>('path', 'geode');
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+
+    const candidates: string[] = [];
+    const addCandidate = (candidate?: string) => {
+        if (candidate && !candidates.includes(candidate)) {
+            candidates.push(candidate);
+        }
+    };
+
+    if (configured) {
+        if (path.isAbsolute(configured)) {
+            addCandidate(configured);
+        } else {
+            addCandidate(configured); // rely on PATH or workspace-relative lookup
+            for (const folder of workspaceFolders) {
+                addCandidate(path.join(folder.uri.fsPath, configured));
+            }
+        }
+    }
+
+    for (const folder of workspaceFolders) {
+        addCandidate(path.join(folder.uri.fsPath, 'zig-out', 'bin', 'geode'));
+        addCandidate(path.join(folder.uri.fsPath, 'dist', 'bin', 'geode'));
+    }
+
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            outputChannel.appendLine(`Using Geode binary at ${candidate}`);
+            return candidate;
+        }
+    }
+
+    const pathBinary = findInPath(configured || 'geode');
+    if (pathBinary) {
+        outputChannel.appendLine(`Using Geode binary from PATH at ${pathBinary}`);
+        return pathBinary;
+    }
+
+    outputChannel.appendLine(`Geode binary not found at configured path (${configured}); falling back to ${configured || 'geode'} and relying on PATH.`);
+    return configured || 'geode';
+}
+
+function findInPath(binary: string): string | undefined {
+    const searchTargets = process.platform === 'win32' && !binary.endsWith('.exe')
+        ? [binary, `${binary}.exe`]
+        : [binary];
+
+    const parts = (process.env.PATH || '').split(path.delimiter);
+    for (const dir of parts) {
+        for (const target of searchTargets) {
+            const candidate = path.join(dir, target);
+            if (fs.existsSync(candidate)) {
+                return candidate;
+            }
+        }
+    }
+    return undefined;
 }
 
 async function restartLanguageServer(context: vscode.ExtensionContext) {
@@ -177,7 +275,7 @@ async function executeQuery(query: string) {
 
 function runGeodeQuery(query: string, host: string, port: number, timeout: number): Promise<string> {
     return new Promise((resolve, reject) => {
-        const geodeCmd = vscode.workspace.getConfiguration('geode.lsp').get<string>('path', 'geode');
+        const geodeCmd = resolveGeodeBinary(vscode.workspace.getConfiguration('geode.lsp'));
         const args = ['query', '--server', `${host}:${port}`, '--format', 'json', query];
 
         const process = cp.spawn(geodeCmd, args, {

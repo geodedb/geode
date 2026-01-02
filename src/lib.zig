@@ -342,7 +342,7 @@ pub fn parseGqlOptions(src: []const u8, allocator: std.mem.Allocator, opts: Pars
 
 pub const ParseOutcome = union(enum) {
     Ok: ParseResult,
-    Err: struct { msg: []const u8, line: u32, column: u32, token: @import("gql/token.zig").TokenKind },
+    Err: struct { msg: []const u8, line: u32, column: u32, token: @import("gql/token.zig").TokenKind, has_double_dash_comment: bool },
 };
 
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
@@ -355,10 +355,11 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
         const msg = p.last_error orelse "parse error";
         const loc = p.cur.loc;
         const kind = p.cur.kind;
+        const has_dd = lx.has_double_dash_comment;
         arena.deinit();
-        return .{ .Err = .{ .msg = msg, .line = loc.line, .column = loc.column, .token = kind } };
+        return .{ .Err = .{ .msg = msg, .line = loc.line, .column = loc.column, .token = kind, .has_double_dash_comment = has_dd } };
     };
-    return .{ .Ok = .{ .program = program, .arena = arena, .last_error = p.last_error } };
+    return .{ .Ok = .{ .program = program, .arena = arena, .last_error = p.last_error, .has_double_solidus_comment = lx.has_double_solidus_comment, .has_double_dash_comment = lx.has_double_dash_comment } };
 }
 
 // Re-export execution and graph_store for integration tests
