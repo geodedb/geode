@@ -27,9 +27,10 @@ M.config = {
     -- Formatting settings
     format = {
         indent_size = 4,
-        fold_property_maps = true, -- Fold property maps onto multiple lines
-        max_line_length = 80,      -- Max line length before folding
+        fold_property_maps = true,  -- Fold property maps onto multiple lines
+        max_line_length = 80,       -- Max line length before folding
         min_properties_to_fold = 2, -- Min properties to trigger folding
+        format_on_save = true,      -- Auto-format GQL files on save
     },
     -- UI settings
     ui = {
@@ -158,11 +159,33 @@ function M.on_lsp_attach(client, bufnr)
     -- Go to definition
     vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
 
-    -- Format
+    -- Format keymap
     if M.config.keymaps.format_buffer then
         vim.keymap.set("n", M.config.keymaps.format_buffer, function()
             vim.lsp.buf.format({ async = true })
         end, opts)
+    end
+
+    -- Set Geode LSP as the default formatter for this buffer
+    if client.server_capabilities.documentFormattingProvider then
+        vim.bo[bufnr].formatexpr = "v:lua.vim.lsp.formatexpr()"
+
+        -- Format on save if enabled
+        if M.config.format.format_on_save then
+            vim.api.nvim_create_autocmd("BufWritePre", {
+                buffer = bufnr,
+                callback = function()
+                    vim.lsp.buf.format({
+                        async = false,
+                        bufnr = bufnr,
+                        filter = function(c)
+                            return c.name == "geode_lsp"
+                        end,
+                    })
+                end,
+                desc = "Format GQL file on save using Geode LSP",
+            })
+        end
     end
 
     vim.notify("Geode LSP attached", vim.log.levels.INFO)

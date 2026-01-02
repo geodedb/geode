@@ -52,6 +52,9 @@ const GQL_FUNCTIONS = [_][]const u8{
     "startsWith", "endsWith",   "contains", "timestamp", "date",
     "time",       "datetime",   "duration", "coalesce",  "nullIf",
     "distance",   "similarity", "cosine",   "euclidean", "manhattan",
+    "all",        "any",        "none",     "single",    "shortestPath",
+    "allShortestPaths",         "vectorf32", "vectori32",
+    "vector_l2", "vector_cosine", "vector_dot",
 };
 
 // GQL Types for completion
@@ -284,16 +287,19 @@ pub fn provideFormattingWithOptions(allocator: Allocator, doc: *const Document, 
     const text = doc.text;
     if (text.len == 0) return null;
 
-    // First pass: basic formatting (keyword casing, newlines before clauses)
+    // First pass: basic formatting (keyword casing, newlines before clauses, statement separation)
     const basic_formatted = try formatBasic(allocator, text) orelse return null;
     defer allocator.free(basic_formatted);
 
     // Second pass: fold property maps if enabled
-    if (options.fold_property_maps) {
-        return try foldPropertyMaps(allocator, basic_formatted, options);
-    }
+    const folded = if (options.fold_property_maps)
+        try foldPropertyMaps(allocator, basic_formatted, options)
+    else
+        try allocator.dupe(u8, basic_formatted);
+    defer allocator.free(folded);
 
-    return try allocator.dupe(u8, basic_formatted);
+    // Third pass: apply proper indentation (CASE/WHEN, multi-line RETURN, subqueries)
+    return try applyIndentation(allocator, folded, options.indent_size);
 }
 
 /// Fold property maps onto multiple lines for better readability.
@@ -517,6 +523,182 @@ fn foldPropertyMap(allocator: Allocator, result: *std.ArrayList(u8), property_ma
     }
 }
 
+/// Apply proper indentation to formatted GQL code.
+/// Handles CASE/WHEN/ELSE/END, multi-line RETURN items, and subqueries.
+fn applyIndentation(allocator: Allocator, text: []const u8, indent_size: u32) ![]const u8 {
+    var result = try std.ArrayList(u8).initCapacity(allocator, text.len * 2);
+    errdefer result.deinit(allocator);
+
+    const indent_str = "    "; // 4 spaces per level
+    _ = indent_size; // Use fixed 4 spaces for now
+
+    const base_indent: usize = 0;
+    var case_depth: usize = 0;
+    var brace_depth: usize = 0;
+    var paren_depth: usize = 0;
+    var in_return_list = false;
+    var in_string = false;
+    var string_char: u8 = 0;
+
+    // Process line by line
+    var line_start: usize = 0;
+    var pos: usize = 0;
+
+    while (pos <= text.len) {
+        // Find end of current line
+        const is_end = pos == text.len;
+        const is_newline = !is_end and text[pos] == '\n';
+
+        if (is_newline or is_end) {
+            const line = text[line_start..pos];
+            const trimmed = std.mem.trim(u8, line, " \t");
+
+            // Skip empty lines
+            if (trimmed.len == 0) {
+                try result.append(allocator, '\n');
+                line_start = pos + 1;
+                pos += 1;
+                continue;
+            }
+
+            // Check for keywords that affect indentation
+            var upper_buf: [64]u8 = undefined;
+            const check_len = @min(trimmed.len, 10);
+            var first_word_end: usize = 0;
+            for (trimmed[0..check_len], 0..) |c, idx| {
+                if (!std.ascii.isAlphabetic(c) and c != '_') {
+                    first_word_end = idx;
+                    break;
+                }
+                upper_buf[idx] = std.ascii.toUpper(c);
+                first_word_end = idx + 1;
+            }
+            const first_word = upper_buf[0..first_word_end];
+
+            // Adjust indent before writing the line
+            var this_line_indent = base_indent;
+
+            // WHEN/ELSE get extra indent inside CASE
+            if (case_depth > 0 and (std.mem.eql(u8, first_word, "WHEN") or std.mem.eql(u8, first_word, "ELSE"))) {
+                this_line_indent = base_indent + 1;
+            }
+
+            // Continuation lines (lines starting with comma-separated items after RETURN)
+            if (in_return_list and !isClauseKeyword(first_word) and trimmed.len > 0 and trimmed[0] != '-') {
+                this_line_indent = base_indent + 1;
+            }
+
+            // Lines inside braces (subqueries)
+            if (brace_depth > 0 and trimmed[0] != '}') {
+                this_line_indent = base_indent + brace_depth;
+            }
+
+            // Write indentation
+            for (0..this_line_indent) |_| {
+                try result.appendSlice(allocator, indent_str);
+            }
+
+            // Write the line content
+            try result.appendSlice(allocator, trimmed);
+            try result.append(allocator, '\n');
+
+            // Update state for next line
+            var i: usize = 0;
+            in_string = false;
+            while (i < trimmed.len) {
+                const c = trimmed[i];
+
+                // Handle strings
+                if (!in_string and (c == '\'' or c == '"')) {
+                    in_string = true;
+                    string_char = c;
+                    i += 1;
+                    continue;
+                }
+                if (in_string) {
+                    if (c == string_char and (i == 0 or trimmed[i - 1] != '\\')) {
+                        in_string = false;
+                    }
+                    i += 1;
+                    continue;
+                }
+
+                // Track braces and parens
+                if (c == '{') brace_depth += 1;
+                if (c == '}' and brace_depth > 0) brace_depth -= 1;
+                if (c == '(') paren_depth += 1;
+                if (c == ')' and paren_depth > 0) paren_depth -= 1;
+
+                // Check for CASE keyword
+                if (i + 4 <= trimmed.len and std.ascii.eqlIgnoreCase(trimmed[i .. i + 4], "CASE")) {
+                    if (i + 4 >= trimmed.len or !std.ascii.isAlphanumeric(trimmed[i + 4])) {
+                        case_depth += 1;
+                    }
+                }
+
+                // Check for END keyword
+                if (i + 3 <= trimmed.len and std.ascii.eqlIgnoreCase(trimmed[i .. i + 3], "END")) {
+                    if ((i == 0 or !std.ascii.isAlphanumeric(trimmed[i - 1])) and
+                        (i + 3 >= trimmed.len or !std.ascii.isAlphanumeric(trimmed[i + 3])))
+                    {
+                        if (case_depth > 0) case_depth -= 1;
+                    }
+                }
+
+                i += 1;
+            }
+
+            // Track RETURN clause for multi-line items
+            if (std.mem.eql(u8, first_word, "RETURN") or std.mem.eql(u8, first_word, "WITH")) {
+                const last_char = if (trimmed.len > 0) trimmed[trimmed.len - 1] else ' ';
+                in_return_list = (last_char == ',');
+            } else if (isClauseKeyword(first_word)) {
+                in_return_list = false;
+            } else if (in_return_list) {
+                const last_char = if (trimmed.len > 0) trimmed[trimmed.len - 1] else ' ';
+                in_return_list = (last_char == ',');
+            }
+
+            line_start = pos + 1;
+        }
+
+        if (is_end) break;
+        pos += 1;
+    }
+
+    // Trim trailing newlines except for one
+    while (result.items.len > 1 and
+        result.items[result.items.len - 1] == '\n' and
+        result.items[result.items.len - 2] == '\n')
+    {
+        _ = result.pop();
+    }
+
+    return try result.toOwnedSlice(allocator);
+}
+
+/// Suppress unused variable warning
+fn suppressUnused(x: anytype) void {
+    _ = x;
+}
+
+fn isClauseKeyword(word: []const u8) bool {
+    // GQL clause-starting keywords (ISO/IEC 39075:2024)
+    const clause_keywords = [_][]const u8{
+        "MATCH",    "CREATE",    "INSERT", "DELETE",
+        "RETURN",   "WHERE",     "WITH",   "SET",
+        "ORDER",    "GROUP",     "HAVING", "LIMIT",
+        "OFFSET",   "UNION",     "EXCEPT", "CALL",
+        "USE",      "DROP",      "SHOW",   "DETACH",
+        "OPTIONAL", "INTERSECT", "LET",    "FOR",
+        "FILTER",   "NEXT",
+    };
+    for (clause_keywords) |kw| {
+        if (std.mem.eql(u8, word, kw)) return true;
+    }
+    return false;
+}
+
 /// Basic formatting: keyword casing and newlines before clause keywords.
 fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, text.len);
@@ -551,6 +733,7 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
         .{ "SHOW", {} },
         .{ "EXPLAIN", {} },
         .{ "PROFILE", {} },
+        .{ "DETACH", {} },
     });
 
     var i: usize = 0;
@@ -668,12 +851,42 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
             }
             const upper_word = upper_buf[0..upper_len];
 
-            const is_keyword = for (GQL_KEYWORDS) |kw| {
-                if (std.mem.eql(u8, upper_word, kw)) break true;
+            // Check if this word is a known function (case-sensitive check)
+            const is_known_function = for (GQL_FUNCTIONS) |func| {
+                if (std.mem.eql(u8, word, func)) break true;
             } else false;
 
+            // Check if it's a keyword only if it's NOT a known function name
+            // This ensures that functions like count(), all(), any() don't get uppercased
+            // even when they match keyword patterns like "ALL" for "UNION ALL"
+            const is_keyword = if (is_known_function)
+                false
+            else
+                for (GQL_KEYWORDS) |kw| {
+                    if (std.mem.eql(u8, upper_word, kw)) break true;
+                } else false;
+
             // Check if this is a clause-starting keyword that needs a newline before it
-            const needs_newline = line_start_keywords.get(upper_word) != null;
+            var needs_newline = line_start_keywords.get(upper_word) != null;
+
+            // Suppress newline if this is part of a compound keyword (e.g., OPTIONAL MATCH, DETACH DELETE)
+            // Look back in result buffer to see if previous word was a compound prefix
+            if (needs_newline and result.items.len > 0) {
+                // Check for "OPTIONAL " before MATCH
+                if (std.mem.eql(u8, upper_word, "MATCH") and result.items.len >= 9) {
+                    const suffix = result.items[result.items.len - 9 ..];
+                    if (std.mem.eql(u8, suffix, "OPTIONAL ")) {
+                        needs_newline = false;
+                    }
+                }
+                // Check for "DETACH " before DELETE
+                if (std.mem.eql(u8, upper_word, "DELETE") and result.items.len >= 7) {
+                    const suffix = result.items[result.items.len - 7 ..];
+                    if (std.mem.eql(u8, suffix, "DETACH ")) {
+                        needs_newline = false;
+                    }
+                }
+            }
 
             if (needs_newline and !last_was_newline and result.items.len > 0) {
                 // Trim trailing space before newline
@@ -703,7 +916,27 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
         try result.append(allocator, c);
         last_was_space = false;
         last_was_newline = (c == '\n');
-        line_start = (c == ';'); // Next token after semicolon can be a new statement
+
+        // Add blank line after semicolon to separate statements
+        if (c == ';') {
+            try result.append(allocator, '\n');
+            // Skip whitespace and newlines to find next meaningful content
+            var peek = i + 1;
+            while (peek < text.len and (text[peek] == ' ' or text[peek] == '\t' or text[peek] == '\r' or text[peek] == '\n')) {
+                peek += 1;
+            }
+            // Add blank line unless next thing is a comment (comments provide their own separation)
+            // or we've reached end of file
+            if (peek < text.len and
+                !(peek + 1 < text.len and text[peek] == '-' and text[peek + 1] == '-') and
+                !(peek + 1 < text.len and text[peek] == '/' and text[peek + 1] == '/'))
+            {
+                try result.append(allocator, '\n');
+            }
+            last_was_newline = true;
+            line_start = true;
+        }
+
         i += 1;
     }
 

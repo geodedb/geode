@@ -1,13 +1,14 @@
 -- Filetype plugin for GQL files
 -- Sets buffer-local options for GQL/Cypher editing
+-- Formatting is handled by the Geode LSP (geode_lsp)
 
 local opt = vim.opt_local
 
--- Indentation
+-- Indentation (matches Geode LSP default indent_size)
 opt.expandtab = true
-opt.shiftwidth = 2
-opt.softtabstop = 2
-opt.tabstop = 2
+opt.shiftwidth = 4
+opt.softtabstop = 4
+opt.tabstop = 4
 
 -- Text handling
 opt.textwidth = 100

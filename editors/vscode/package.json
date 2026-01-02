@@ -289,6 +289,20 @@
           "description": "Minimum number of properties before folding property maps"
         }
       }
+    },
+    "configurationDefaults": {
+      "[gql]": {
+        "editor.defaultFormatter": "geode-db.geode-gql",
+        "editor.formatOnSave": true,
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      },
+      "[cypher]": {
+        "editor.defaultFormatter": "geode-db.geode-gql",
+        "editor.formatOnSave": true,
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      }
     }
   },
   "scripts": {
