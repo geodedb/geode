@@ -3,7 +3,7 @@ name: "Geode Comprehensive Test Suite"
 description: "Comprehensive test suite for Geode database CLI functionality"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   working_dir: null
   env:
     GEODE_LOG_LEVEL: "info"

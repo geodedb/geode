@@ -9,7 +9,7 @@ import uuid
 import time
 import os
 
-def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode", spec_name=""):
+def run_test(test_case, binary="/home/benji/src/geode/geode/zig-out/bin/geode", spec_name=""):
     """Run a single test case."""
     if test_case.get("skip", False):
         return None, "skipped"

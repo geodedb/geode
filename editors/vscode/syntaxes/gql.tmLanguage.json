@@ -2,6 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "GQL",
   "scopeName": "source.gql",
+  "fileTypes": ["gql", "geode"],
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
@@ -92,19 +93,35 @@
       "patterns": [
         {
           "name": "keyword.control.gql",
-          "match": "\\b(?i:MATCH|CREATE|DELETE|DETACH|MERGE|SET|REMOVE|RETURN|WHERE|ORDER|BY|LIMIT|OFFSET|SKIP|WITH|UNWIND|CALL|YIELD|UNION|ALL|OPTIONAL|FOREACH)\\b"
+          "match": "\\b(?i:CALL|CASE|DELETE|DETACH|ELSE|END|EXPLAIN|FILTER|FINISH|FOREACH|FROM|INSERT|JOIN|LET|LIMIT|LOAD|MATCH|MERGE|OFFSET|OTHERWISE|PROFILE|REMOVE|REPLACE|RETURN|SCAN|SELECT|SET|SHOW|SKIP|THEN|UNWIND|VALUE|VALUES|WHEN|WHERE|WITH)\\b"
         },
         {
           "name": "keyword.operator.logical.gql",
-          "match": "\\b(?i:AND|OR|NOT|XOR|IN|IS|NULL|TRUE|FALSE)\\b"
+          "match": "\\b(?i:AND|CONTAINS|ENDS|EXISTS|FALSE|IN|IS|LIKE|NOT|NULL|OR|STARTS|TRUE|UNKNOWN|XOR)\\b"
         },
         {
           "name": "keyword.control.case.gql",
-          "match": "\\b(?i:CASE|WHEN|THEN|ELSE|END)\\b"
+          "match": "\\b(?i:)\\b"
+        },
+        {
+          "name": "keyword.other.ddl.gql",
+          "match": "\\b(?i:ASSERT|CONSTRAINT|CREATE|DROP|GRAPH|INDEX|KEY|PROPERTY|REQUIRE|SCHEMA|TABLE)\\b"
+        },
+        {
+          "name": "keyword.control.transaction.gql",
+          "match": "\\b(?i:BEGIN|COMMIT|READ|REPEATABLE|ROLLBACK|START|TRANSACTION|WRITE)\\b"
+        },
+        {
+          "name": "keyword.other.path.gql",
+          "match": "\\b(?i:ACYCLIC|SHORTEST|SIMPLE|TRAIL|WALK)\\b"
+        },
+        {
+          "name": "keyword.operator.set.gql",
+          "match": "\\b(?i:EXCEPT|INTERSECT|UNION)\\b"
         },
         {
           "name": "keyword.other.gql",
-          "match": "\\b(?i:AS|DISTINCT|ASC|DESC|GROUP|HAVING|INTERSECT|EXCEPT|INSERT|UPDATE|DROP|USE|GRAPH|CATALOG|SCHEMA|TABLE|VIEW|INDEX|CONSTRAINT|ON|EXISTS|IF|SHOW|DESCRIBE|EXPLAIN)\\b"
+          "match": "\\b(?i:AGGREGATE|ALL|ANY|AS|ASC|AVG|BINDING|BINDINGS|BY|CAST|CATALOG|CLOSE|COUNT|CSV|CURRENT|DESC|DIFFERENT|DISTINCT|DURATION|EDGES|ELEMENT|END_NODE|FIRST|FOR|GROUP|HAVING|HOME|IF|KEYS|LABELED|LABELS|LAST|LIST|LOCAL|MAX|MIN|NEXT|NO|NODE|NULLS|OF|ON|ONLY|OPTIONAL|ORDER|ORDINALITY|PATH|PATHS|PERIODIC|PROPERTIES|RECORD|RELATIONSHIPS|RESET|SESSION|START_NODE|SUM|TO|TYPE|TYPES|USE|USING|ZONE|ZONED)\\b"
         }
       ]
     },
@@ -112,11 +129,11 @@
       "patterns": [
         {
           "name": "support.function.aggregate.gql",
-          "match": "\\b(?i:count|sum|avg|min|max|collect|size)\\b(?=\\s*\\()"
+          "match": "\\b(?i:count|sum|avg|min|max|collect)\\b(?=\\s*\\()"
         },
         {
           "name": "support.function.scalar.gql",
-          "match": "\\b(?i:length|type|id|labels|properties|keys|nodes|relationships|head|last|tail|reverse|range)\\b(?=\\s*\\()"
+          "match": "\\b(?i:head|last|tail|reverse|range|toInteger|toFloat|toString|toBoolean|id|type|labels|properties|keys|nodes|relationships|shortestPath|allShortestPaths|indegree|outdegree)\\b(?=\\s*\\()"
         },
         {
           "name": "support.function.math.gql",
@@ -124,7 +141,7 @@
         },
         {
           "name": "support.function.string.gql",
-          "match": "\\b(?i:toString|toInteger|toFloat|toBoolean|split|substring|replace|toLower|toUpper|trim|lTrim|rTrim|left|right|startsWith|endsWith|contains)\\b(?=\\s*\\()"
+          "match": "\\b(?i:size|length|substring|replace|toLower|toUpper|trim|lTrim|rTrim|left|right|split|startsWith|endsWith|contains)\\b(?=\\s*\\()"
         },
         {
           "name": "support.function.temporal.gql",
@@ -132,11 +149,11 @@
         },
         {
           "name": "support.function.vector.gql",
-          "match": "\\b(?i:distance|similarity|cosine|euclidean|manhattan)\\b(?=\\s*\\()"
+          "match": "\\b(?i:vectorf32|vectori32|vector_l2|vector_cosine|vector_dot|distance|similarity|cosine|euclidean|manhattan)\\b(?=\\s*\\()"
         },
         {
           "name": "support.function.other.gql",
-          "match": "\\b(?i:coalesce|nullIf)\\b(?=\\s*\\()"
+          "match": "\\b(?i:all|any|none|single|coalesce|nullIf)\\b(?=\\s*\\()"
         }
       ]
     },
@@ -152,7 +169,7 @@
       "patterns": [
         {
           "name": "keyword.operator.comparison.gql",
-          "match": "(=|<>|<|>|<=|>=|=~)"
+          "match": "(=|<>|<|>|<=|>=|=~|!~)"
         },
         {
           "name": "keyword.operator.arithmetic.gql",
@@ -161,6 +178,10 @@
         {
           "name": "keyword.operator.concatenation.gql",
           "match": "\\|\\|"
+        },
+        {
+          "name": "keyword.operator.arrow.gql",
+          "match": "(->|<-|=>)"
         }
       ]
     },

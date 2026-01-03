@@ -3,7 +3,7 @@ name: "Geode Graph Algorithms Tests"
 description: "Comprehensive test suite for graph algorithms and traversals"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

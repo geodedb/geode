@@ -3,7 +3,7 @@ name: "Simple Geode Tests"
 description: "Simple tests that don't require server management"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
 
 tests:
   - name: "help-command"

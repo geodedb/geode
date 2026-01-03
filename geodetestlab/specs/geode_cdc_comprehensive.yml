@@ -3,7 +3,7 @@ name: "Geode CDC (Change Data Capture) Comprehensive Test Suite"
 description: "Complete testing of Geode's CDC engine including event capture, diagnostics, guardrails, and streaming"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

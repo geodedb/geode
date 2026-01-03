@@ -3,7 +3,7 @@ name: "Geode FLE (Field-Level Encryption) Rotation & Management Suite"
 description: "Validation of FLE key rotation, policy management, and interaction with CLI commands"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     startup_timeout_ms: 30000

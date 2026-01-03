@@ -6,7 +6,7 @@ import yaml
 import sys
 from pathlib import Path
 
-def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode"):
+def run_test(test_case, binary="/home/benji/src/geode/geode/zig-out/bin/geode"):
     """Run a single test case."""
     args = test_case.get("args", [])
     expect = test_case.get("expect", {})
@@ -47,7 +47,7 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode")
     return True, "PASSED"
 
 def main():
-    specs_dir = Path("/home/benji/src/spyder/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/geode/geode/geodetestlab/specs")
     
     # Define which specs can run without a server
     no_server_specs = [

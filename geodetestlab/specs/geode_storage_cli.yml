@@ -3,7 +3,7 @@ name: "Geode Storage CLI Tests"
 description: "Verify storage subsystem consistency and tools via CLI"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   working_dir: "storage_test_env" # Relative to runner or absolute
   env:
     GEODE_LOG_LEVEL: "info"

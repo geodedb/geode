@@ -3,7 +3,7 @@ name: "Geode CLI-Only Tests (No Server)"
 description: "Test Geode CLI commands that don't require a running server"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   working_dir: null
   env:
     GEODE_LOG_LEVEL: "info"

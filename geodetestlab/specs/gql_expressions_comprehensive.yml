@@ -3,7 +3,7 @@ name: "GQL Expressions Comprehensive Tests"
 description: "Complete ISO/IEC 39075:2024 expression testing covering arithmetic, logical, comparison, functions, and all operators"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

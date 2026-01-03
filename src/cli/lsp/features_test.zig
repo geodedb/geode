@@ -232,9 +232,16 @@ test "provideCompletion - returns keywords" {
     const items = try features.provideCompletion(allocator, doc, 0, 3);
     defer {
         for (items) |item| {
+            // Free insertText if allocated (different from label)
             if (item.insertText) |insert_text| {
                 if (!std.mem.eql(u8, insert_text, item.label)) {
                     allocator.free(insert_text);
+                }
+            }
+            // Free detail if allocated (not for types which use comptime strings)
+            if (item.detail) |detail| {
+                if (item.kind != .Class) {
+                    allocator.free(detail);
                 }
             }
         }
@@ -266,6 +273,11 @@ test "provideCompletion - returns functions" {
             if (item.insertText) |insert_text| {
                 if (!std.mem.eql(u8, insert_text, item.label)) {
                     allocator.free(insert_text);
+                }
+            }
+            if (item.detail) |detail| {
+                if (item.kind != .Class) {
+                    allocator.free(detail);
                 }
             }
         }
@@ -300,6 +312,11 @@ test "provideCompletion - returns types" {
                     allocator.free(insert_text);
                 }
             }
+            if (item.detail) |detail| {
+                if (item.kind != .Class) {
+                    allocator.free(detail);
+                }
+            }
         }
         allocator.free(items);
     }
@@ -329,6 +346,11 @@ test "provideCompletion - includes all major keywords" {
             if (item.insertText) |insert_text| {
                 if (!std.mem.eql(u8, insert_text, item.label)) {
                     allocator.free(insert_text);
+                }
+            }
+            if (item.detail) |detail| {
+                if (item.kind != .Class) {
+                    allocator.free(detail);
                 }
             }
         }
@@ -367,6 +389,11 @@ test "provideCompletion - includes common functions" {
                     allocator.free(insert_text);
                 }
             }
+            if (item.detail) |detail| {
+                if (item.kind != .Class) {
+                    allocator.free(detail);
+                }
+            }
         }
         allocator.free(items);
     }
@@ -399,6 +426,11 @@ test "provideCompletion - includes common types" {
             if (item.insertText) |insert_text| {
                 if (!std.mem.eql(u8, insert_text, item.label)) {
                     allocator.free(insert_text);
+                }
+            }
+            if (item.detail) |detail| {
+                if (item.kind != .Class) {
+                    allocator.free(detail);
                 }
             }
         }

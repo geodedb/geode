@@ -9,7 +9,7 @@ import os
 import re
 from collections import defaultdict
 
-def run_test_fast(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode"):
+def run_test_fast(test_case, binary="/home/benji/src/geode/geode/zig-out/bin/geode"):
     """Run a test with minimal overhead."""
     if test_case.get("skip", False):
         return None, "skipped"
@@ -58,7 +58,7 @@ def run_test_fast(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/ge
     return True, "PASSED"
 
 def main():
-    specs_dir = Path("/home/benji/src/spyder/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/geode/geode/geodetestlab/specs")
 
     total_passed = 0
     total_failed = 0

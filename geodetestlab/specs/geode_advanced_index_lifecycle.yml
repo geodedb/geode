@@ -3,7 +3,7 @@ name: "Geode Advanced Index Lifecycle Test Suite"
 description: "Lifecycle testing of advanced indexes (Interval, JSONB, Domain) including creation, usage, and persistence verification"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

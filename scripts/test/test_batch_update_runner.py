@@ -5,7 +5,7 @@ import subprocess
 import yaml
 from pathlib import Path
 
-def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode"):
+def run_test(test_case, binary="/home/benji/src/geode/geode/zig-out/bin/geode"):
     """Run a single test case using updated test runner logic"""
     if test_case.get("skip", False):
         return None, "skipped"
@@ -97,7 +97,7 @@ def run_test(test_case, binary="/home/benji/src/spyder/geode/zig-out/bin/geode")
 
 
 def main():
-    spec_file = Path("/home/benji/src/spyder/geode/geodetestlab/specs/geode_migrations.yml")
+    spec_file = Path("/home/benji/src/geode/geode/geodetestlab/specs/geode_migrations.yml")
 
     with open(spec_file, "r") as f:
         spec = yaml.safe_load(f)

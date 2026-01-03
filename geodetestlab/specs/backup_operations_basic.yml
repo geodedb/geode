@@ -6,7 +6,7 @@ name: "Backup Operations Basic Tests"
 description: "Testing backup-related commands"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

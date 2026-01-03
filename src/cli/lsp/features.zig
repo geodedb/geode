@@ -1,4 +1,5 @@
 // CANARY: LSP_LANGUAGE_FEATURES
+// CANARY: REQ=REQ-LSP-METADATA-001; FEATURE="MetadataIntegration"; ASPECT=Completions; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-03
 // Language features implementation for GQL/Geode LSP
 
 const std = @import("std");
@@ -7,6 +8,7 @@ const protocol = @import("protocol.zig");
 const Document = @import("document.zig").Document;
 const geode = @import("geode");
 const semantic = @import("semantic.zig");
+const language_metadata = geode.language_metadata;
 
 /// Formatting options for the GQL formatter
 pub const FormattingOptions = struct {
@@ -20,50 +22,12 @@ pub const FormattingOptions = struct {
     min_properties_to_fold: u32 = 2,
 };
 
-// GQL Keywords for completion
-const GQL_KEYWORDS = [_][]const u8{
-    "MATCH",     "CREATE",   "DELETE",     "MERGE",    "SET",
-    "REMOVE",    "RETURN",   "WHERE",      "ORDER",    "BY",
-    "LIMIT",     "OFFSET",   "SKIP",       "WITH",     "UNWIND",
-    "CALL",      "YIELD",    "UNION",      "ALL",      "OPTIONAL",
-    "AS",        "DISTINCT", "AND",        "OR",       "NOT",
-    "XOR",       "IN",       "IS",         "NULL",     "TRUE",
-    "FALSE",     "CASE",     "WHEN",       "THEN",     "ELSE",
-    "END",       "ASC",      "DESC",       "GROUP",    "HAVING",
-    "INTERSECT", "EXCEPT",   "INSERT",     "UPDATE",   "DROP",
-    "USE",       "GRAPH",    "CATALOG",    "SCHEMA",   "TABLE",
-    "VIEW",      "INDEX",    "CONSTRAINT", "ON",       "EXISTS",
-    "IF",        "NOT",      "SHOW",       "DESCRIBE", "EXPLAIN",
-};
-
-// GQL Functions for completion
-const GQL_FUNCTIONS = [_][]const u8{
-    "count",      "sum",        "avg",      "min",       "max",
-    "collect",    "size",       "length",   "type",      "id",
-    "labels",     "properties", "keys",     "nodes",     "relationships",
-    "abs",        "ceil",       "floor",    "round",     "sqrt",
-    "rand",       "sign",       "exp",      "log",       "log10",
-    "sin",        "cos",        "tan",      "asin",      "acos",
-    "atan",       "atan2",      "pi",       "e",         "degrees",
-    "radians",    "toInteger",  "toFloat",  "toString",  "toBoolean",
-    "head",       "last",       "tail",     "reverse",   "range",
-    "split",      "substring",  "replace",  "toLower",   "toUpper",
-    "trim",       "lTrim",      "rTrim",    "left",      "right",
-    "startsWith", "endsWith",   "contains", "timestamp", "date",
-    "time",       "datetime",   "duration", "coalesce",  "nullIf",
-    "distance",   "similarity", "cosine",   "euclidean", "manhattan",
-    "all",        "any",        "none",     "single",    "shortestPath",
-    "allShortestPaths",         "vectorf32", "vectori32",
-    "vector_l2", "vector_cosine", "vector_dot",
-};
-
-// GQL Types for completion
-const GQL_TYPES = [_][]const u8{
-    "INTEGER", "FLOAT",        "STRING",   "BOOLEAN", "DATE",
-    "TIME",    "DATETIME",     "DURATION", "POINT",   "VECTOR",
-    "UUID",    "BYTES",        "JSON",     "LIST",    "MAP",
-    "NODE",    "RELATIONSHIP", "PATH",     "GRAPH",   "ANY",
-};
+// CANARY: REQ=REQ-LSP-METADATA-002; FEATURE="MetadataIntegration"; ASPECT=ComptimeLists; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-03
+// GQL Keywords, Functions, and Types derived from unified language_metadata.zig
+// This ensures the LSP completions stay in sync with the lexer and documentation
+const GQL_KEYWORDS = language_metadata.getKeywordNames();
+const GQL_FUNCTIONS = language_metadata.getFunctionNames();
+const GQL_TYPES = language_metadata.getTypeNames();
 
 pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protocol.Diagnostic {
     var diagnostics = std.ArrayList(protocol.Diagnostic).initCapacity(allocator, 10) catch return error.OutOfMemory;
@@ -177,90 +141,242 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
     return diagnostics.toOwnedSlice(allocator);
 }
 
+// CANARY: REQ=REQ-LSP-METADATA-003; FEATURE="MetadataIntegration"; ASPECT=Hover; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-03
 pub fn provideHover(allocator: Allocator, doc: *const Document, line: u32, character: u32) !?protocol.Hover {
     const offset = doc.getOffset(line, character) orelse return null;
     const word = doc.getWordAt(offset) orelse return null;
 
-    // Check if it's a keyword
-    const upper_word = try std.ascii.allocUpperString(allocator, word);
-    defer allocator.free(upper_word);
-
-    for (GQL_KEYWORDS) |keyword| {
-        if (std.mem.eql(u8, upper_word, keyword)) {
-            const doc_text = try getKeywordDocumentation(allocator, keyword);
-            return protocol.Hover{
-                .contents = .{
-                    .kind = .markdown,
-                    .value = doc_text,
-                },
-            };
-        }
+    // Check if it's a function (case-sensitive) - check before keywords to avoid
+    // false matches like "count" matching keyword "COUNT" instead of function "count"
+    if (language_metadata.findFunction(word)) |fn_info| {
+        const doc_text = try formatFunctionHover(allocator, fn_info);
+        return protocol.Hover{
+            .contents = .{
+                .kind = .markdown,
+                .value = doc_text,
+            },
+        };
     }
 
-    // Check if it's a function
-    for (GQL_FUNCTIONS) |func| {
-        if (std.mem.eql(u8, word, func)) {
-            const doc_text = try getFunctionDocumentation(allocator, func);
-            return protocol.Hover{
-                .contents = .{
-                    .kind = .markdown,
-                    .value = doc_text,
-                },
-            };
-        }
+    // Check if it's a keyword (case-insensitive)
+    if (language_metadata.findKeyword(word)) |kw_info| {
+        const doc_text = try formatKeywordHover(allocator, kw_info);
+        return protocol.Hover{
+            .contents = .{
+                .kind = .markdown,
+                .value = doc_text,
+            },
+        };
     }
 
-    // Check if it's a type
-    for (GQL_TYPES) |typ| {
-        if (std.mem.eql(u8, upper_word, typ)) {
-            const doc_text = try getTypeDocumentation(allocator, typ);
-            return protocol.Hover{
-                .contents = .{
-                    .kind = .markdown,
-                    .value = doc_text,
-                },
-            };
-        }
+    // Check if it's a type (case-insensitive)
+    if (language_metadata.findType(word)) |type_info| {
+        const doc_text = try formatTypeHover(allocator, type_info);
+        return protocol.Hover{
+            .contents = .{
+                .kind = .markdown,
+                .value = doc_text,
+            },
+        };
+    }
+
+    // Check if it's a procedure
+    if (language_metadata.findProcedure(word)) |proc_info| {
+        const doc_text = try formatProcedureHover(allocator, proc_info);
+        return protocol.Hover{
+            .contents = .{
+                .kind = .markdown,
+                .value = doc_text,
+            },
+        };
     }
 
     return null;
 }
 
+/// Format keyword metadata for hover display
+fn formatKeywordHover(allocator: Allocator, info: language_metadata.KeywordInfo) ![]const u8 {
+    const compliance = switch (info.compliance) {
+        .iso_gql => "ISO/IEC 39075:2024",
+        .geode_extension => "Geode Extension",
+        .cypher_compat => "Cypher Compatibility",
+    };
+    const category = @tagName(info.category);
+
+    if (info.extended_doc) |ext| {
+        return try std.fmt.allocPrint(allocator,
+            \\### `{s}` (Keyword)
+            \\
+            \\**Category**: {s}
+            \\**Compliance**: {s}
+            \\
+            \\{s}
+            \\
+            \\---
+            \\{s}
+        , .{ info.name, category, compliance, info.doc, ext });
+    } else {
+        return try std.fmt.allocPrint(allocator,
+            \\### `{s}` (Keyword)
+            \\
+            \\**Category**: {s}
+            \\**Compliance**: {s}
+            \\
+            \\{s}
+        , .{ info.name, category, compliance, info.doc });
+    }
+}
+
+/// Format function metadata for hover display
+fn formatFunctionHover(allocator: Allocator, info: language_metadata.FunctionInfo) ![]const u8 {
+    const category = @tagName(info.category);
+    var params_buf = std.ArrayList(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+    defer params_buf.deinit(allocator);
+
+    // Build parameter list
+    for (info.params, 0..) |param, i| {
+        if (i > 0) try params_buf.appendSlice(allocator, ", ");
+        try params_buf.appendSlice(allocator, param.name);
+        try params_buf.appendSlice(allocator, ": ");
+        try params_buf.appendSlice(allocator, param.type_name);
+        if (param.optional) try params_buf.appendSlice(allocator, "?");
+    }
+
+    if (info.example) |example| {
+        return try std.fmt.allocPrint(allocator,
+            \\### `{s}({s})` → {s}
+            \\
+            \\**Category**: {s}
+            \\
+            \\{s}
+            \\
+            \\**Example**:
+            \\```gql
+            \\{s}
+            \\```
+        , .{ info.name, params_buf.items, info.return_type, category, info.doc, example });
+    } else {
+        return try std.fmt.allocPrint(allocator,
+            \\### `{s}({s})` → {s}
+            \\
+            \\**Category**: {s}
+            \\
+            \\{s}
+        , .{ info.name, params_buf.items, info.return_type, category, info.doc });
+    }
+}
+
+/// Format type metadata for hover display
+fn formatTypeHover(allocator: Allocator, info: language_metadata.TypeInfo) ![]const u8 {
+    const compliance = switch (info.compliance) {
+        .iso_gql => "ISO/IEC 39075:2024",
+        .geode_extension => "Geode Extension",
+        .cypher_compat => "Cypher Compatibility",
+    };
+    if (info.example) |example| {
+        return try std.fmt.allocPrint(allocator,
+            \\### `{s}` (Type)
+            \\
+            \\**Compliance**: {s}
+            \\
+            \\{s}
+            \\
+            \\**Example**: `{s}`
+        , .{ info.name, compliance, info.doc, example });
+    } else {
+        return try std.fmt.allocPrint(allocator,
+            \\### `{s}` (Type)
+            \\
+            \\**Compliance**: {s}
+            \\
+            \\{s}
+        , .{ info.name, compliance, info.doc });
+    }
+}
+
+/// Format procedure metadata for hover display
+fn formatProcedureHover(allocator: Allocator, info: language_metadata.ProcedureInfo) ![]const u8 {
+    const category = @tagName(info.category);
+    var yields_buf = std.ArrayList(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+    defer yields_buf.deinit(allocator);
+
+    // Build yield columns list
+    for (info.columns, 0..) |col, i| {
+        if (i > 0) try yields_buf.appendSlice(allocator, ", ");
+        try yields_buf.appendSlice(allocator, col.name);
+        try yields_buf.appendSlice(allocator, ": ");
+        try yields_buf.appendSlice(allocator, col.type_name);
+    }
+
+    return try std.fmt.allocPrint(allocator,
+        \\### `CALL {s}()` → YIELD {s}
+        \\
+        \\**Category**: {s}
+        \\
+        \\{s}
+    , .{ info.name, yields_buf.items, category, info.doc });
+}
+
+// CANARY: REQ=REQ-LSP-METADATA-004; FEATURE="MetadataIntegration"; ASPECT=Completions; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-03
 pub fn provideCompletion(allocator: Allocator, doc: *const Document, line: u32, character: u32) ![]protocol.CompletionItem {
     _ = doc;
     _ = line;
     _ = character;
 
-    var items = std.ArrayList(protocol.CompletionItem).initCapacity(allocator, 100) catch return error.OutOfMemory;
+    var items = std.ArrayList(protocol.CompletionItem).initCapacity(allocator, 200) catch return error.OutOfMemory;
     errdefer items.deinit(allocator);
 
-    // Add keywords
-    for (GQL_KEYWORDS) |keyword| {
+    // Add keywords with metadata documentation
+    for (language_metadata.keywords) |kw| {
+        const compliance_str = switch (kw.compliance) {
+            .iso_gql => " (ISO GQL)",
+            .geode_extension => " (Geode)",
+            .cypher_compat => " (Cypher)",
+        };
         try items.append(allocator, .{
-            .label = keyword,
+            .label = kw.name,
             .kind = .Keyword,
-            .detail = "GQL Keyword",
-            .insertText = keyword,
+            .detail = try std.fmt.allocPrint(allocator, "{s}{s}", .{ @tagName(kw.category), compliance_str }),
+            .documentation = kw.doc,
+            .insertText = kw.name,
         });
     }
 
-    // Add functions
-    for (GQL_FUNCTIONS) |func| {
+    // Add functions with metadata documentation
+    for (language_metadata.functions) |func| {
         try items.append(allocator, .{
-            .label = func,
+            .label = func.name,
             .kind = .Function,
-            .detail = "GQL Function",
-            .insertText = try std.fmt.allocPrint(allocator, "{s}()", .{func}),
+            .detail = try std.fmt.allocPrint(allocator, "({s}) → {s}", .{ @tagName(func.category), func.return_type }),
+            .documentation = func.doc,
+            .insertText = try std.fmt.allocPrint(allocator, "{s}()", .{func.name}),
         });
     }
 
-    // Add types
-    for (GQL_TYPES) |typ| {
+    // Add types with metadata documentation
+    for (language_metadata.types) |typ| {
+        const compliance_str = switch (typ.compliance) {
+            .iso_gql => "ISO GQL Type",
+            .geode_extension => "Geode Type",
+            .cypher_compat => "Cypher Type",
+        };
         try items.append(allocator, .{
-            .label = typ,
+            .label = typ.name,
             .kind = .Class,
-            .detail = "GQL Type",
-            .insertText = typ,
+            .detail = compliance_str,
+            .documentation = typ.doc,
+            .insertText = typ.name,
+        });
+    }
+
+    // Add procedures with metadata documentation
+    for (language_metadata.procedures) |proc| {
+        try items.append(allocator, .{
+            .label = proc.name,
+            .kind = .Method,
+            .detail = try std.fmt.allocPrint(allocator, "CALL {s}()", .{proc.name}),
+            .documentation = proc.doc,
+            .insertText = try std.fmt.allocPrint(allocator, "CALL {s}() YIELD", .{proc.name}),
         });
     }
 
@@ -999,61 +1115,8 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
     return try result.toOwnedSlice(allocator);
 }
 
-fn getKeywordDocumentation(allocator: Allocator, keyword: []const u8) ![]const u8 {
-    const docs = std.StaticStringMap([]const u8).initComptime(.{
-        .{ "MATCH", "**MATCH** - Specifies a graph pattern to search for in the graph.\n\nExample:\n```gql\nMATCH (n:Person)-[:KNOWS]->(m:Person)\nRETURN n, m\n```" },
-        .{ "CREATE", "**CREATE** - Creates new nodes and relationships in the graph.\n\nExample:\n```gql\nCREATE (n:Person {name: 'Alice', age: 30})\n```" },
-        .{ "RETURN", "**RETURN** - Specifies what values to return from a query.\n\nExample:\n```gql\nMATCH (n:Person)\nRETURN n.name, n.age\n```" },
-        .{ "WHERE", "**WHERE** - Filters results based on conditions.\n\nExample:\n```gql\nMATCH (n:Person)\nWHERE n.age > 25\nRETURN n\n```" },
-        .{ "ORDER", "**ORDER BY** - Sorts results by one or more expressions.\n\nExample:\n```gql\nMATCH (n:Person)\nRETURN n.name\nORDER BY n.age DESC\n```" },
-        .{ "LIMIT", "**LIMIT** - Limits the number of results returned.\n\nExample:\n```gql\nMATCH (n:Person)\nRETURN n\nLIMIT 10\n```" },
-        .{ "DELETE", "**DELETE** - Deletes nodes and relationships.\n\nExample:\n```gql\nMATCH (n:Person {name: 'Alice'})\nDELETE n\n```" },
-        .{ "MERGE", "**MERGE** - Ensures a pattern exists, creating it if necessary.\n\nExample:\n```gql\nMERGE (n:Person {email: 'alice@example.com'})\n```" },
-    });
-
-    // Always return an allocated copy so caller can safely free
-    if (docs.get(keyword)) |doc_text| {
-        return try allocator.dupe(u8, doc_text);
-    } else {
-        return try std.fmt.allocPrint(allocator, "**{s}** - GQL keyword", .{keyword});
-    }
-}
-
-fn getFunctionDocumentation(allocator: Allocator, func: []const u8) ![]const u8 {
-    const docs = std.StaticStringMap([]const u8).initComptime(.{
-        .{ "count", "**count**(*expression*) → INTEGER\n\nReturns the number of values or rows.\n\nExample:\n```gql\nMATCH (n:Person)\nRETURN count(n)\n```" },
-        .{ "sum", "**sum**(*expression*) → NUMBER\n\nReturns the sum of a set of numeric values.\n\nExample:\n```gql\nMATCH (n:Person)\nRETURN sum(n.age)\n```" },
-        .{ "avg", "**avg**(*expression*) → NUMBER\n\nReturns the average of a set of numeric values.\n\nExample:\n```gql\nMATCH (n:Person)\nRETURN avg(n.age)\n```" },
-        .{ "distance", "**distance**(*vector1*, *vector2*, *metric*) → FLOAT\n\nCalculates distance between two vectors using the specified metric (L2, cosine, etc.).\n\nExample:\n```gql\nRETURN distance([1.0, 2.0, 3.0], [4.0, 5.0, 6.0], 'L2')\n```" },
-        .{ "similarity", "**similarity**(*vector1*, *vector2*) → FLOAT\n\nCalculates cosine similarity between two vectors.\n\nExample:\n```gql\nRETURN similarity([1.0, 0.0], [0.5, 0.866])\n```" },
-    });
-
-    // Always return an allocated copy so caller can safely free
-    if (docs.get(func)) |doc_text| {
-        return try allocator.dupe(u8, doc_text);
-    } else {
-        return try std.fmt.allocPrint(allocator, "**{s}**() - GQL function", .{func});
-    }
-}
-
-fn getTypeDocumentation(allocator: Allocator, typ: []const u8) ![]const u8 {
-    const docs = std.StaticStringMap([]const u8).initComptime(.{
-        .{ "INTEGER", "**INTEGER** - 64-bit signed integer type.\n\nExample: `42`, `-1`, `0`" },
-        .{ "FLOAT", "**FLOAT** - 64-bit floating-point type.\n\nExample: `3.14`, `-0.5`, `1.0e10`" },
-        .{ "STRING", "**STRING** - UTF-8 text type.\n\nExample: `'hello'`, `\"world\"`" },
-        .{ "BOOLEAN", "**BOOLEAN** - True or false value.\n\nExample: `TRUE`, `FALSE`" },
-        .{ "VECTOR", "**VECTOR** - Multi-dimensional numeric array for embeddings.\n\nExample: `[1.0, 2.0, 3.0]`\n\nSupports HNSW indexing for similarity search." },
-        .{ "UUID", "**UUID** - Universally unique identifier.\n\nExample: `uuid('550e8400-e29b-41d4-a716-446655440000')`" },
-        .{ "DATETIME", "**DATETIME** - Date and time with timezone support.\n\nExample: `datetime('2025-01-15T10:30:00Z')`" },
-    });
-
-    // Always return an allocated copy so caller can safely free
-    if (docs.get(typ)) |doc_text| {
-        return try allocator.dupe(u8, doc_text);
-    } else {
-        return try std.fmt.allocPrint(allocator, "**{s}** - GQL type", .{typ});
-    }
-}
+// NOTE: Old documentation functions removed in favor of metadata-based formatXXXHover functions
+// See formatKeywordHover, formatFunctionHover, formatTypeHover, formatProcedureHover above
 
 // ============================================================================
 // Unit Tests for Formatting

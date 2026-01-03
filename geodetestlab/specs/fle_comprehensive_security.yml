@@ -34,7 +34,7 @@ description: "End-to-end testing of Field-Level Encryption including key hierarc
 # - Error handling: Invalid arguments and scopes
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

@@ -3,7 +3,7 @@ name: "Geode Enterprise Audit Logging Test Suite"
 description: "Comprehensive testing of Geode's enterprise audit logging including tamper-evident features, multi-platform output, and SIEM integration"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

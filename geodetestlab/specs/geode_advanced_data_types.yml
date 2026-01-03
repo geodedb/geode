@@ -3,7 +3,7 @@ name: "Geode Advanced Data Types Comprehensive Test Suite"
 description: "Complete testing of Geode's 50+ advanced data types including network, cryptographic, geographic, temporal, and vector types"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

@@ -10,6 +10,9 @@ import {
     ErrorAction,
     CloseAction
 } from 'vscode-languageclient/node';
+import { registerSchemaExplorer } from './views/SchemaExplorerProvider';
+import { registerQueryPlanPanel } from './panels/QueryPlanPanel';
+import { registerTimeSeriesPanel } from './panels/TimeSeriesPanel';
 
 let client: LanguageClient | undefined;
 let statusBarItem: vscode.StatusBarItem;
@@ -62,6 +65,15 @@ export function activate(context: vscode.ExtensionContext) {
     if (config.get<boolean>('server.autoConnect', false)) {
         connectServer();
     }
+
+    // Register Schema Explorer TreeView (#76)
+    registerSchemaExplorer(context);
+
+    // Register Query Plan Visualization Panel (#75)
+    registerQueryPlanPanel(context);
+
+    // Register Time Series Analytics Panel (#74)
+    registerTimeSeriesPanel(context);
 
     outputChannel.appendLine('Geode GQL extension activated');
 }

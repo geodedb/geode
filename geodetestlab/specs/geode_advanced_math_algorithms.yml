@@ -3,7 +3,7 @@ name: "Geode Advanced Math Algorithms Tests"
 description: "Advanced mathematical functions, graph algorithms, and complex query patterns"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

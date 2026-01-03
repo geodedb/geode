@@ -5,7 +5,7 @@ import yaml
 from pathlib import Path
 
 def main():
-    specs_dir = Path("/home/benji/src/spyder/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/geode/geode/geodetestlab/specs")
 
     total = 0
     by_spec = {}

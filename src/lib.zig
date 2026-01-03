@@ -12,6 +12,10 @@ pub const gql = struct {
     pub const lexer = @import("gql/lexer.zig");
 };
 
+// CANARY: REQ=REQ-METADATA-LIB-001; FEATURE="MetadataIntegration"; ASPECT=LibExport; STATUS=IMPL; OWNER=lib; UPDATED=2026-01-03
+// Export language metadata for LSP and other consumers
+pub const language_metadata = @import("gql/language_metadata.zig");
+
 // CANARY: REQ=REQ-M5.2-LIB-EXPORT-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesExport; STATUS=IMPL; OWNER=lib; UPDATED=2025-11-13
 // Phase 5 M5.2: Export value_types module for external access
 pub const value_types = @import("value_types.zig");

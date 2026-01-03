@@ -40,6 +40,9 @@ const path = __importStar(require("path"));
 const cp = __importStar(require("child_process"));
 const fs = __importStar(require("fs"));
 const node_1 = require("vscode-languageclient/node");
+const SchemaExplorerProvider_1 = require("./views/SchemaExplorerProvider");
+const QueryPlanPanel_1 = require("./panels/QueryPlanPanel");
+const TimeSeriesPanel_1 = require("./panels/TimeSeriesPanel");
 let client;
 let statusBarItem;
 let outputChannel;
@@ -69,6 +72,12 @@ function activate(context) {
     if (config.get('server.autoConnect', false)) {
         connectServer();
     }
+    // Register Schema Explorer TreeView (#76)
+    (0, SchemaExplorerProvider_1.registerSchemaExplorer)(context);
+    // Register Query Plan Visualization Panel (#75)
+    (0, QueryPlanPanel_1.registerQueryPlanPanel)(context);
+    // Register Time Series Analytics Panel (#74)
+    (0, TimeSeriesPanel_1.registerTimeSeriesPanel)(context);
     outputChannel.appendLine('Geode GQL extension activated');
 }
 function deactivate() {

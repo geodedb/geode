@@ -3,7 +3,7 @@ name: "GQL Catalog Operations Comprehensive Tests"
 description: "Complete ISO/IEC 39075:2024 catalog operations testing covering CREATE/DROP SCHEMA, GRAPH, and GRAPH TYPE"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

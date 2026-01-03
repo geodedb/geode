@@ -6,7 +6,7 @@ name: "Full-Text Search Basic Tests"
 description: "Testing full-text search capabilities with BM25"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

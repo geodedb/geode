@@ -3,7 +3,7 @@ name: "Debug Geode Test"
 description: "Single test for debugging"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
 
 tests:
   - name: "simple-help"

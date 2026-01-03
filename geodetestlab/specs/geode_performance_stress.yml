@@ -3,7 +3,7 @@ name: "Geode Performance & Stress Tests"
 description: "Performance benchmarking and stress testing for Geode database operations"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

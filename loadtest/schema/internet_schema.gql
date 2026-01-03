@@ -1,0 +1,203 @@
+-- Internet-Scale Load Testing Schema
+-- Simulates a social network with content sharing at internet scale
+--
+-- Target Scale:
+--   - 100M+ User nodes
+--   - 500M+ Post nodes
+--   - 50B+ edges (FOLLOWS, LIKES, etc.)
+--
+-- See docs/loadtest/DATA_MODEL.md for complete documentation
+
+-- ============================================================================
+-- CONSTRAINT DEFINITIONS
+-- ============================================================================
+
+-- Unique constraints for User
+CREATE CONSTRAINT user_username_unique FOR (u:User) REQUIRE u.username IS UNIQUE
+CREATE CONSTRAINT user_email_unique FOR (u:User) REQUIRE u.email IS UNIQUE
+
+-- Unique constraints for Topic
+CREATE CONSTRAINT topic_name_unique FOR (t:Topic) REQUIRE t.name IS UNIQUE
+
+-- ============================================================================
+-- INDEX DEFINITIONS
+-- ============================================================================
+
+-- User indexes
+CREATE INDEX idx_user_created FOR (u:User) ON u.created_at
+CREATE INDEX idx_user_last_active FOR (u:User) ON u.last_active
+CREATE INDEX idx_user_verified FOR (u:User) ON u.verified
+
+-- Post indexes
+CREATE INDEX idx_post_created FOR (p:Post) ON p.created_at
+CREATE INDEX idx_post_language FOR (p:Post) ON p.language
+
+-- Topic indexes
+CREATE INDEX idx_topic_trending FOR (t:Topic) ON t.trending_score
+
+-- Message indexes
+CREATE INDEX idx_message_created FOR (m:Message) ON m.created_at
+
+-- Conversation indexes
+CREATE INDEX idx_conversation_last_message FOR (c:Conversation) ON c.last_message_at
+
+-- Group indexes
+CREATE INDEX idx_group_name FOR (g:UserGroup) ON g.name
+
+-- ============================================================================
+-- SAMPLE DATA CREATION
+-- ============================================================================
+
+-- Sample users
+CREATE (u1:User {
+    id: 1,
+    username: 'alice',
+    email: 'alice@example.com',
+    display_name: 'Alice Smith',
+    bio: 'Graph database enthusiast',
+    verified: true,
+    follower_count: 1500,
+    following_count: 200
+})
+
+CREATE (u2:User {
+    id: 2,
+    username: 'bob',
+    email: 'bob@example.com',
+    display_name: 'Bob Johnson',
+    bio: 'Software engineer',
+    verified: false,
+    follower_count: 500,
+    following_count: 150
+})
+
+-- Sample posts
+CREATE (p1:Post {
+    id: 1,
+    content: 'Hello world! First post on the platform.',
+    like_count: 42,
+    reply_count: 5,
+    repost_count: 3,
+    sensitive: false
+})
+
+CREATE (p2:Post {
+    id: 2,
+    content: 'Graph databases are amazing for social networks!',
+    like_count: 128,
+    reply_count: 12,
+    repost_count: 8,
+    sensitive: false
+})
+
+-- Sample topic
+CREATE (t1:Topic {
+    id: 1,
+    name: 'technology',
+    description: 'All things tech',
+    post_count: 50000,
+    trending_score: 0.85
+})
+
+-- Sample relationships
+MATCH (a:User {id: 1}), (b:User {id: 2})
+CREATE (a)-[:FOLLOWS {notifications: true}]->(b)
+
+MATCH (u:User {id: 1}), (p:Post {id: 1})
+CREATE (u)-[:AUTHORED {via: 'web'}]->(p)
+
+MATCH (u:User {id: 2}), (p:Post {id: 2})
+CREATE (u)-[:AUTHORED {via: 'mobile'}]->(p)
+
+MATCH (u:User {id: 2}), (p:Post {id: 1})
+CREATE (u)-[:LIKES]->(p)
+
+MATCH (p:Post {id: 2}), (t:Topic {id: 1})
+CREATE (p)-[:TAGGED_WITH {position: 0}]->(t)
+
+-- ============================================================================
+-- BENCHMARK QUERIES
+-- ============================================================================
+
+-- Q1: Timeline query - Get posts from followed users
+-- MATCH (u:User {id: $userId})-[:FOLLOWS]->(f:User)
+-- MATCH (f)-[:AUTHORED]->(p:Post)
+-- WHERE p.created_at > $since
+-- RETURN p ORDER BY p.created_at DESC LIMIT 50
+
+-- Q2: User profile with recent posts
+-- MATCH (u:User {id: $userId})
+-- OPTIONAL MATCH (u)-[:AUTHORED]->(p:Post)
+-- RETURN u, collect(p)[0..10] AS recent_posts
+
+-- Q3: Post detail with author and metadata
+-- MATCH (p:Post {id: $postId})
+-- MATCH (a:User)-[:AUTHORED]->(p)
+-- OPTIONAL MATCH (p)-[:ATTACHED]->(m:Media)
+-- OPTIONAL MATCH (p)-[:TAGGED_WITH]->(t:Topic)
+-- RETURN p, a, collect(m) AS media, collect(t) AS topics
+
+-- Q4: Mutual followers
+-- MATCH (u1:User {id: $userId1})-[:FOLLOWS]->(mutual:User)<-[:FOLLOWS]-(u2:User {id: $userId2})
+-- RETURN mutual
+
+-- Q5: Trending topics
+-- MATCH (t:Topic)
+-- RETURN t ORDER BY t.trending_score DESC LIMIT 20
+
+-- Q6: Friend-of-friend recommendations
+-- MATCH (u:User {id: $userId})-[:FOLLOWS]->(:User)-[:FOLLOWS]->(rec:User)
+-- WHERE NOT (u)-[:FOLLOWS]->(rec) AND u <> rec
+-- RETURN rec, count(*) AS mutual_count
+-- ORDER BY mutual_count DESC LIMIT 20
+
+-- Q7: User engagement metrics
+-- MATCH (u:User {id: $userId})-[:AUTHORED]->(p:Post)
+-- RETURN sum(p.like_count) AS total_likes,
+--        sum(p.reply_count) AS total_replies,
+--        sum(p.repost_count) AS total_reposts,
+--        count(p) AS post_count
+
+-- Q8: Graph algorithm - PageRank on followers
+-- CALL algo.pageRank.stream({nodeLabels: ['User'], relationshipTypes: ['FOLLOWS']})
+-- YIELD nodeId, score
+-- RETURN nodeId, score ORDER BY score DESC LIMIT 100
+
+-- Q9: Community detection
+-- CALL algo.louvain.stream({nodeLabels: ['User'], relationshipTypes: ['FOLLOWS']})
+-- YIELD nodeId, communityId
+-- RETURN communityId, count(*) AS size
+-- ORDER BY size DESC LIMIT 20
+
+-- Q10: Shortest path between users
+-- MATCH path = shortestPath((u1:User {id: $userId1})-[:FOLLOWS*..6]-(u2:User {id: $userId2}))
+-- RETURN path, length(path) AS distance
+
+-- ============================================================================
+-- SCHEMA DOCUMENTATION
+-- ============================================================================
+
+-- Node Types:
+--   User: Platform users (id, username, email, display_name, bio, verified, follower_count, following_count)
+--   Post: Content items (id, content, like_count, reply_count, repost_count, sensitive, language)
+--   Topic: Tags/categories (id, name, description, post_count, trending_score)
+--   Media: Attachments (id, url, media_type, width, height, file_size)
+--   Conversation: DM threads (id, message_count, participant_count)
+--   Message: Individual messages (id, content, read, edited)
+--   UserGroup: Community groups (id, name, description, privacy, member_count)
+
+-- Edge Types:
+--   FOLLOWS: User -> User (notifications)
+--   AUTHORED: User -> Post (via)
+--   LIKES: User -> Post
+--   REPLIED_TO: Post -> Post (depth)
+--   REPOSTED: User -> Post (quote)
+--   TAGGED_WITH: Post -> Topic (position)
+--   MENTIONS: Post -> User (position)
+--   ATTACHED: Post -> Media (position)
+--   PARTICIPATES_IN: User -> Conversation (muted)
+--   SENT: User -> Message
+--   IN_CONVERSATION: Message -> Conversation
+--   MEMBER_OF: User -> UserGroup (role)
+--   BLOCKS: User -> User (reason)
+--   SIMILAR_TO: Post -> Post (score, algorithm)

@@ -3,7 +3,7 @@ name: "Geode Audit & Security Advanced Test Suite"
 description: "Advanced verification of audit logging integrity, security edge cases, and high-volume throughput."
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

@@ -3,7 +3,7 @@ name: "GQL Pattern Matching Comprehensive Tests"
 description: "Complete ISO/IEC 39075:2024 pattern matching testing covering graph patterns, paths, labels, properties, and variable-length relationships"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

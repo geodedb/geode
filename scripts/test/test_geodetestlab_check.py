@@ -6,7 +6,7 @@ import subprocess
 def test_command(args, stderr_contains):
     """Test a command like geodetestlab does."""
     result = subprocess.run(
-        ["/home/benji/src/spyder/geode/zig-out/bin/geode"] + args,
+        ["/home/benji/src/geode/geode/zig-out/bin/geode"] + args,
         capture_output=True,
         text=True
     )

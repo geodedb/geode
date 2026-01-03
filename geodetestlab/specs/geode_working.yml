@@ -3,7 +3,7 @@ name: "Working Geode Integration Tests"
 description: "Verified working integration tests for Geode CLI"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
 
 tests:
   - name: "help-basic"

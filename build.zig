@@ -964,6 +964,86 @@ pub fn build(b: *std.Build) void {
     const gen_fuzz_step = b.step("gen-fuzz", "Generate fuzz target scaffold");
     gen_fuzz_step.dependOn(&gen_fuzz_run.step);
 
+    // CANARY: REQ=REQ-SYNTAX-GEN-002; FEATURE="VSCodeSyntaxGeneration"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // Syntax generator - generates gql.tmLanguage.json from language_metadata
+    const gen_syntax_exe = b.addExecutable(.{
+        .name = "generate_syntax",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scripts/generate_syntax.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    gen_syntax_exe.root_module.addImport("geode", root_mod);
+    b.installArtifact(gen_syntax_exe);
+    const gen_syntax_run = b.addRunArtifact(gen_syntax_exe);
+    const gen_syntax_step = b.step("generate-syntax", "Generate VSCode syntax highlighting from metadata");
+    gen_syntax_step.dependOn(&gen_syntax_run.step);
+
+    // CANARY: REQ=REQ-SYNTAX-VIM-002; FEATURE="VimSyntaxGeneration"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // Vim syntax generator - generates gql.vim from language_metadata
+    const gen_vim_syntax_exe = b.addExecutable(.{
+        .name = "generate_vim_syntax",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scripts/generate_vim_syntax.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    gen_vim_syntax_exe.root_module.addImport("geode", root_mod);
+    b.installArtifact(gen_vim_syntax_exe);
+    const gen_vim_syntax_run = b.addRunArtifact(gen_vim_syntax_exe);
+    const gen_vim_syntax_step = b.step("generate-vim-syntax", "Generate Vim/Neovim syntax highlighting from metadata");
+    gen_vim_syntax_step.dependOn(&gen_vim_syntax_run.step);
+
+    // CANARY: REQ=REQ-API-DOCS-002; FEATURE="APIDocumentation"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // API documentation generator
+    const gen_api_docs_exe = b.addExecutable(.{
+        .name = "generate_api_docs",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scripts/generate_api_docs.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    gen_api_docs_exe.root_module.addImport("geode", root_mod);
+    b.installArtifact(gen_api_docs_exe);
+    const gen_api_docs_run = b.addRunArtifact(gen_api_docs_exe);
+    const gen_api_docs_step = b.step("generate-api-docs", "Generate API documentation from metadata");
+    gen_api_docs_step.dependOn(&gen_api_docs_run.step);
+
+    // CANARY: REQ=REQ-META-VALIDATE-002; FEATURE="MetadataValidation"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // Metadata sync validation
+    const validate_meta_exe = b.addExecutable(.{
+        .name = "validate_metadata_sync",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scripts/validate_metadata_sync.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    validate_meta_exe.root_module.addImport("geode", root_mod);
+    b.installArtifact(validate_meta_exe);
+    const validate_meta_run = b.addRunArtifact(validate_meta_exe);
+    const validate_meta_step = b.step("validate-metadata", "Validate generated files are in sync with metadata");
+    validate_meta_step.dependOn(&validate_meta_run.step);
+
+    // CANARY: REQ=REQ-FUZZ-DICT-002; FEATURE="FuzzDictionaries"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // Fuzz dictionary generator
+    const gen_fuzz_dict_exe = b.addExecutable(.{
+        .name = "generate_fuzz_dict",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scripts/generate_fuzz_dict.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    gen_fuzz_dict_exe.root_module.addImport("geode", root_mod);
+    b.installArtifact(gen_fuzz_dict_exe);
+    const gen_fuzz_dict_run = b.addRunArtifact(gen_fuzz_dict_exe);
+    const gen_fuzz_dict_step = b.step("generate-fuzz-dict", "Generate fuzzing dictionary from metadata");
+    gen_fuzz_dict_step.dependOn(&gen_fuzz_dict_run.step);
+
     const tools_step = b.step("tools", "Build all auxiliary tools");
     tools_step.dependOn(&doccheck_exe.step);
 
@@ -974,6 +1054,14 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(bench_extract_exe);
     tools_step.dependOn(&bench_extract_exe.step);
+
+    // High-throughput bulk loader for internet-scale data ingestion
+    const bulk_loader_exe = b.addExecutable(.{
+        .name = "geode-bulk-load",
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/bulk_loader.zig"), .target = target, .optimize = optimize }),
+    });
+    b.installArtifact(bulk_loader_exe);
+    tools_step.dependOn(&bulk_loader_exe.step);
 
     // Benchmark regression tool
     const bench_regress_exe = b.addExecutable(.{

@@ -6,7 +6,7 @@ name: "Vector Operations Basic Tests"
 description: "Basic vector type operations and distance metrics"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

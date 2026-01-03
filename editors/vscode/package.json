@@ -85,6 +85,25 @@
         "path": "./snippets/gql.json"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "geode-explorer",
+          "title": "Geode",
+          "icon": "$(database)"
+        }
+      ]
+    },
+    "views": {
+      "geode-explorer": [
+        {
+          "id": "geodeSchemaExplorer",
+          "name": "Schema Explorer",
+          "icon": "$(database)",
+          "contextualTitle": "Geode Schema"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "geode.runQuery",
@@ -139,6 +158,36 @@
         "title": "Run GQL File",
         "category": "Geode",
         "icon": "$(play)"
+      },
+      {
+        "command": "geode.refreshSchema",
+        "title": "Refresh Schema",
+        "category": "Geode",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "geode.showQueryPlan",
+        "title": "Show Query Plan",
+        "category": "Geode",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "geode.showAnalyticsDashboard",
+        "title": "Show Analytics Dashboard",
+        "category": "Geode",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "geode.showPerformanceMetrics",
+        "title": "Show Performance Metrics",
+        "category": "Geode",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "geode.showPathExplorer",
+        "title": "Show Path Explorer",
+        "category": "Geode",
+        "icon": "$(git-compare)"
       }
     ],
     "menus": {

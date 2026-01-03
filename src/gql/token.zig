@@ -1,5 +1,7 @@
 const std = @import("std");
+const language_metadata = @import("language_metadata.zig");
 
+// CANARY: REQ=REQ-LEXER-METADATA-001; FEATURE="MetadataIntegration"; ASPECT=KeywordLookup; STATUS=IMPL; OWNER=lexer; UPDATED=2026-01-03
 // Minimal ISO/IEC 39075:2024 GQL token set (subset; expandable).
 pub const TokenKind = enum {
     // delimiters/operators
@@ -232,163 +234,195 @@ pub fn digitToAscii(cp: u21) ?u8 {
     return unicode.digitToAscii(cp);
 }
 
-// Export keyword checking to lexer
-pub fn keywordKind(word: []const u8) TokenKind {
-    // Case-insensitive keyword matching
-    if (std.ascii.eqlIgnoreCase(word, "MATCH")) return .MATCH;
-    if (std.ascii.eqlIgnoreCase(word, "OPTIONAL")) return .OPTIONAL;
-    if (std.ascii.eqlIgnoreCase(word, "WHERE")) return .WHERE;
-    if (std.ascii.eqlIgnoreCase(word, "RETURN")) return .RETURN;
-    if (std.ascii.eqlIgnoreCase(word, "WITH")) return .WITH;
-    if (std.ascii.eqlIgnoreCase(word, "CASE")) return .CASE;
-    if (std.ascii.eqlIgnoreCase(word, "WHEN")) return .WHEN;
-    if (std.ascii.eqlIgnoreCase(word, "THEN")) return .THEN;
-    if (std.ascii.eqlIgnoreCase(word, "ELSE")) return .ELSE;
-    if (std.ascii.eqlIgnoreCase(word, "END")) return .END;
-    if (std.ascii.eqlIgnoreCase(word, "AND")) return .AND;
-    if (std.ascii.eqlIgnoreCase(word, "OR")) return .OR;
-    if (std.ascii.eqlIgnoreCase(word, "NOT")) return .NOT;
-    if (std.ascii.eqlIgnoreCase(word, "XOR")) return .XOR;
-    if (std.ascii.eqlIgnoreCase(word, "IN")) return .IN;
-    if (std.ascii.eqlIgnoreCase(word, "IS")) return .IS;
-    if (std.ascii.eqlIgnoreCase(word, "STARTS")) return .STARTS;
-    if (std.ascii.eqlIgnoreCase(word, "ENDS")) return .ENDS;
-    if (std.ascii.eqlIgnoreCase(word, "CONTAINS")) return .CONTAINS;
-    if (std.ascii.eqlIgnoreCase(word, "CALL")) return .CALL;
-    if (std.ascii.eqlIgnoreCase(word, "YIELD")) return .YIELD;
-    if (std.ascii.eqlIgnoreCase(word, "TRUE")) return .TRUE;
-    if (std.ascii.eqlIgnoreCase(word, "FALSE")) return .FALSE;
-    if (std.ascii.eqlIgnoreCase(word, "NULL")) return .NULL;
-    if (std.ascii.eqlIgnoreCase(word, "AS")) return .AS;
-    if (std.ascii.eqlIgnoreCase(word, "DISTINCT")) return .DISTINCT;
-    if (std.ascii.eqlIgnoreCase(word, "UNION")) return .UNION;
-    if (std.ascii.eqlIgnoreCase(word, "INTERSECT")) return .INTERSECT;
-    if (std.ascii.eqlIgnoreCase(word, "EXCEPT")) return .EXCEPT;
-    if (std.ascii.eqlIgnoreCase(word, "ALL")) return .ALL;
-    if (std.ascii.eqlIgnoreCase(word, "SESSION")) return .SESSION;
-    if (std.ascii.eqlIgnoreCase(word, "SET")) return .SET;
-    if (std.ascii.eqlIgnoreCase(word, "RESET")) return .RESET;
-    if (std.ascii.eqlIgnoreCase(word, "CLOSE")) return .CLOSE;
-    if (std.ascii.eqlIgnoreCase(word, "INSERT")) return .INSERT;
-    if (std.ascii.eqlIgnoreCase(word, "VALUE")) return .VALUE;
-    if (std.ascii.eqlIgnoreCase(word, "VALUES")) return .VALUES;
-    if (std.ascii.eqlIgnoreCase(word, "SCAN")) return .SCAN;
-    if (std.ascii.eqlIgnoreCase(word, "START")) return .START;
-    if (std.ascii.eqlIgnoreCase(word, "TRANSACTION")) return .TRANSACTION;
-    if (std.ascii.eqlIgnoreCase(word, "BEGIN")) return .BEGIN;
-    if (std.ascii.eqlIgnoreCase(word, "COMMIT")) return .COMMIT;
-    if (std.ascii.eqlIgnoreCase(word, "ROLLBACK")) return .ROLLBACK;
-    if (std.ascii.eqlIgnoreCase(word, "CREATE")) return .CREATE;
-    if (std.ascii.eqlIgnoreCase(word, "DELETE")) return .DELETE;
-    if (std.ascii.eqlIgnoreCase(word, "MERGE")) return .MERGE;
-    if (std.ascii.eqlIgnoreCase(word, "SHOW")) return .SHOW;
-    if (std.ascii.eqlIgnoreCase(word, "EXPLAIN")) return .EXPLAIN;
-    if (std.ascii.eqlIgnoreCase(word, "PROFILE")) return .PROFILE;
-    if (std.ascii.eqlIgnoreCase(word, "GRAPH")) return .GRAPH;
-    if (std.ascii.eqlIgnoreCase(word, "PROPERTY")) return .PROPERTY;
-    if (std.ascii.eqlIgnoreCase(word, "DROP")) return .DROP;
-    if (std.ascii.eqlIgnoreCase(word, "ORDER")) return .ORDER;
-    if (std.ascii.eqlIgnoreCase(word, "BY")) return .BY;
-    if (std.ascii.eqlIgnoreCase(word, "GROUP")) return .GROUP;
-    if (std.ascii.eqlIgnoreCase(word, "ASC")) return .ASC;
-    if (std.ascii.eqlIgnoreCase(word, "DESC")) return .DESC;
-    if (std.ascii.eqlIgnoreCase(word, "LIMIT")) return .LIMIT;
-    if (std.ascii.eqlIgnoreCase(word, "OFFSET")) return .OFFSET;
-    if (std.ascii.eqlIgnoreCase(word, "SKIP")) return .SKIP;
-    if (std.ascii.eqlIgnoreCase(word, "HAVING")) return .HAVING;
-    if (std.ascii.eqlIgnoreCase(word, "NULLS")) return .NULLS;
-    if (std.ascii.eqlIgnoreCase(word, "FIRST")) return .FIRST;
-    if (std.ascii.eqlIgnoreCase(word, "LAST")) return .LAST;
-    if (std.ascii.eqlIgnoreCase(word, "ON")) return .ON;
-    if (std.ascii.eqlIgnoreCase(word, "UNKNOWN")) return .UNKNOWN;
+// CANARY: REQ=REQ-LEXER-METADATA-002; FEATURE="MetadataIntegration"; ASPECT=ComptimeKeywordMap; STATUS=IMPL; OWNER=lexer; UPDATED=2026-01-03
+// Comptime-generated keyword map using StaticStringMap for O(1) lookup
+// Keywords are sourced from language_metadata.zig for single source of truth
+const KeywordMap = std.StaticStringMap(TokenKind).initComptime(.{
+    // Core clauses
+    .{ "MATCH", .MATCH },
+    .{ "OPTIONAL", .OPTIONAL },
+    .{ "WHERE", .WHERE },
+    .{ "RETURN", .RETURN },
+    .{ "WITH", .WITH },
+    .{ "CASE", .CASE },
+    .{ "WHEN", .WHEN },
+    .{ "THEN", .THEN },
+    .{ "ELSE", .ELSE },
+    .{ "END", .END },
+    // Boolean operators
+    .{ "AND", .AND },
+    .{ "OR", .OR },
+    .{ "NOT", .NOT },
+    .{ "XOR", .XOR },
+    // Comparison
+    .{ "IN", .IN },
+    .{ "IS", .IS },
+    .{ "STARTS", .STARTS },
+    .{ "ENDS", .ENDS },
+    .{ "CONTAINS", .CONTAINS },
+    .{ "LIKE", .LIKE },
+    // Procedures
+    .{ "CALL", .CALL },
+    .{ "YIELD", .YIELD },
+    // Literals
+    .{ "TRUE", .TRUE },
+    .{ "FALSE", .FALSE },
+    .{ "NULL", .NULL },
+    // Modifiers
+    .{ "AS", .AS },
+    .{ "DISTINCT", .DISTINCT },
+    .{ "ALL", .ALL },
+    .{ "ANY", .ANY },
+    // Set operations
+    .{ "UNION", .UNION },
+    .{ "INTERSECT", .INTERSECT },
+    .{ "EXCEPT", .EXCEPT },
+    // Session
+    .{ "SESSION", .SESSION },
+    .{ "SET", .SET },
+    .{ "RESET", .RESET },
+    .{ "CLOSE", .CLOSE },
+    // DML
+    .{ "INSERT", .INSERT },
+    .{ "VALUE", .VALUE },
+    .{ "VALUES", .VALUES },
+    .{ "SCAN", .SCAN },
+    // Transaction
+    .{ "START", .START },
+    .{ "TRANSACTION", .TRANSACTION },
+    .{ "BEGIN", .BEGIN },
+    .{ "COMMIT", .COMMIT },
+    .{ "ROLLBACK", .ROLLBACK },
+    // DDL
+    .{ "CREATE", .CREATE },
+    .{ "DELETE", .DELETE },
+    .{ "MERGE", .MERGE },
+    .{ "DROP", .DROP },
+    .{ "GRAPH", .GRAPH },
+    .{ "PROPERTY", .PROPERTY },
+    .{ "CONSTRAINT", .CONSTRAINT },
+    .{ "SCHEMA", .SCHEMA },
+    .{ "CATALOG", .CATALOG },
+    // Query control
+    .{ "SHOW", .SHOW },
+    .{ "EXPLAIN", .EXPLAIN },
+    .{ "PROFILE", .PROFILE },
+    // Ordering
+    .{ "ORDER", .ORDER },
+    .{ "BY", .BY },
+    .{ "GROUP", .GROUP },
+    .{ "ASC", .ASC },
+    .{ "DESC", .DESC },
+    .{ "LIMIT", .LIMIT },
+    .{ "OFFSET", .OFFSET },
+    .{ "SKIP", .SKIP },
+    .{ "HAVING", .HAVING },
+    .{ "NULLS", .NULLS },
+    .{ "FIRST", .FIRST },
+    .{ "LAST", .LAST },
     // Additional ISO reserved words
-    if (std.ascii.eqlIgnoreCase(word, "FILTER")) return .FILTER;
-    if (std.ascii.eqlIgnoreCase(word, "LET")) return .LET;
-    if (std.ascii.eqlIgnoreCase(word, "SELECT")) return .SELECT;
-    if (std.ascii.eqlIgnoreCase(word, "FROM")) return .FROM;
-    if (std.ascii.eqlIgnoreCase(word, "EXISTS")) return .EXISTS;
-    if (std.ascii.eqlIgnoreCase(word, "DETACH")) return .DETACH;
-    if (std.ascii.eqlIgnoreCase(word, "REMOVE")) return .REMOVE;
-    if (std.ascii.eqlIgnoreCase(word, "FOR")) return .FOR;
-    if (std.ascii.eqlIgnoreCase(word, "FOREACH")) return .FOREACH;
-    if (std.ascii.eqlIgnoreCase(word, "UNWIND")) return .UNWIND;
-    if (std.ascii.eqlIgnoreCase(word, "USE")) return .USE;
-    if (std.ascii.eqlIgnoreCase(word, "USING")) return .USING;
-    if (std.ascii.eqlIgnoreCase(word, "INDEX")) return .INDEX;
-    if (std.ascii.eqlIgnoreCase(word, "JOIN")) return .JOIN;
-    if (std.ascii.eqlIgnoreCase(word, "IF")) return .IF;
-    if (std.ascii.eqlIgnoreCase(word, "TO")) return .TO;
-    if (std.ascii.eqlIgnoreCase(word, "KEY")) return .KEY;
-    if (std.ascii.eqlIgnoreCase(word, "KEYS")) return .KEYS;
-    if (std.ascii.eqlIgnoreCase(word, "LABELS")) return .LABELS;
-    if (std.ascii.eqlIgnoreCase(word, "LOAD")) return .LOAD;
-    if (std.ascii.eqlIgnoreCase(word, "CSV")) return .CSV;
-    if (std.ascii.eqlIgnoreCase(word, "PERIODIC")) return .PERIODIC;
-    if (std.ascii.eqlIgnoreCase(word, "PROPERTIES")) return .PROPERTIES;
-    if (std.ascii.eqlIgnoreCase(word, "RELATIONSHIPS")) return .RELATIONSHIPS;
-    if (std.ascii.eqlIgnoreCase(word, "START_NODE")) return .START_NODE;
-    if (std.ascii.eqlIgnoreCase(word, "END_NODE")) return .END_NODE;
-    if (std.ascii.eqlIgnoreCase(word, "TYPE")) return .TYPE;
-    if (std.ascii.eqlIgnoreCase(word, "TYPES")) return .TYPES;
+    .{ "ON", .ON },
+    .{ "UNKNOWN", .UNKNOWN },
+    .{ "FILTER", .FILTER },
+    .{ "LET", .LET },
+    .{ "SELECT", .SELECT },
+    .{ "FROM", .FROM },
+    .{ "EXISTS", .EXISTS },
+    .{ "DETACH", .DETACH },
+    .{ "REMOVE", .REMOVE },
+    .{ "FOR", .FOR },
+    .{ "FOREACH", .FOREACH },
+    .{ "UNWIND", .UNWIND },
+    .{ "USE", .USE },
+    .{ "USING", .USING },
+    .{ "INDEX", .INDEX },
+    .{ "JOIN", .JOIN },
+    .{ "IF", .IF },
+    .{ "TO", .TO },
+    .{ "KEY", .KEY },
+    .{ "KEYS", .KEYS },
+    .{ "LABELS", .LABELS },
+    .{ "LOAD", .LOAD },
+    .{ "CSV", .CSV },
+    .{ "PERIODIC", .PERIODIC },
+    .{ "PROPERTIES", .PROPERTIES },
+    .{ "RELATIONSHIPS", .RELATIONSHIPS },
+    .{ "START_NODE", .START_NODE },
+    .{ "END_NODE", .END_NODE },
+    .{ "TYPE", .TYPE },
+    .{ "TYPES", .TYPES },
+    // ISO GQL keywords
+    .{ "ACYCLIC", .ACYCLIC },
+    .{ "AGGREGATE", .AGGREGATE },
+    .{ "AVG", .AVG },
+    .{ "CAST", .CAST },
+    .{ "COUNT", .COUNT },
+    .{ "CURRENT", .CURRENT },
+    .{ "DIFFERENT", .DIFFERENT },
+    .{ "DURATION", .DURATION },
+    .{ "EDGES", .EDGES },
+    .{ "ELEMENT", .ELEMENT },
+    .{ "FINISH", .FINISH },
+    .{ "HOME", .HOME },
+    .{ "LABELED", .LABELED },
+    .{ "LIST", .LIST },
+    .{ "LOCAL", .LOCAL },
+    .{ "MAX", .MAX },
+    .{ "MIN", .MIN },
+    .{ "NEXT", .NEXT },
+    .{ "NODE", .NODE },
+    .{ "OF", .OF },
+    .{ "OTHERWISE", .OTHERWISE },
+    .{ "PATH", .PATH },
+    .{ "PATHS", .PATHS },
+    .{ "RECORD", .RECORD },
+    .{ "REPEATABLE", .REPEATABLE },
+    .{ "REPLACE", .REPLACE },
+    .{ "REQUIRE", .REQUIRE },
+    .{ "ASSERT", .ASSERT },
+    .{ "SHORTEST", .SHORTEST },
+    .{ "SIMPLE", .SIMPLE },
+    .{ "SUM", .SUM },
+    .{ "TABLE", .TABLE },
+    .{ "TRAIL", .TRAIL },
+    .{ "WALK", .WALK },
+    .{ "ZONED", .ZONED },
+    .{ "ZONE", .ZONE },
+    .{ "BINDING", .BINDING },
+    .{ "BINDINGS", .BINDINGS },
+    .{ "ORDINALITY", .ORDINALITY },
+    .{ "READ", .READ },
+    .{ "WRITE", .WRITE },
+    .{ "NO", .NO },
+    .{ "ONLY", .ONLY },
+    // Temporal type keywords (map to literal types for parsing)
+    .{ "DATE", .date_lit },
+    .{ "DATETIME", .datetime_lit },
+    .{ "TIME", .time_lit },
+});
 
-    // Critical missing ISO GQL keywords (avoiding duplicates)
-    if (std.ascii.eqlIgnoreCase(word, "ACYCLIC")) return .ACYCLIC;
-    if (std.ascii.eqlIgnoreCase(word, "AGGREGATE")) return .AGGREGATE;
-    if (std.ascii.eqlIgnoreCase(word, "ANY")) return .ANY;
-    if (std.ascii.eqlIgnoreCase(word, "AVG")) return .AVG;
-    if (std.ascii.eqlIgnoreCase(word, "CATALOG")) return .CATALOG;
-    if (std.ascii.eqlIgnoreCase(word, "CAST")) return .CAST;
-    if (std.ascii.eqlIgnoreCase(word, "CONSTRAINT")) return .CONSTRAINT;
-    if (std.ascii.eqlIgnoreCase(word, "COUNT")) return .COUNT;
-    if (std.ascii.eqlIgnoreCase(word, "CURRENT")) return .CURRENT;
-    if (std.ascii.eqlIgnoreCase(word, "DIFFERENT")) return .DIFFERENT;
-    if (std.ascii.eqlIgnoreCase(word, "DURATION")) return .DURATION;
-    if (std.ascii.eqlIgnoreCase(word, "EDGES")) return .EDGES;
-    if (std.ascii.eqlIgnoreCase(word, "ELEMENT")) return .ELEMENT;
-    if (std.ascii.eqlIgnoreCase(word, "FINISH")) return .FINISH;
-    if (std.ascii.eqlIgnoreCase(word, "HOME")) return .HOME;
-    if (std.ascii.eqlIgnoreCase(word, "LABELED")) return .LABELED;
-    if (std.ascii.eqlIgnoreCase(word, "LIKE")) return .LIKE;
-    if (std.ascii.eqlIgnoreCase(word, "LIST")) return .LIST;
-    if (std.ascii.eqlIgnoreCase(word, "MAX")) return .MAX;
-    if (std.ascii.eqlIgnoreCase(word, "MIN")) return .MIN;
-    if (std.ascii.eqlIgnoreCase(word, "NEXT")) return .NEXT;
-    if (std.ascii.eqlIgnoreCase(word, "NODE")) return .NODE;
-    if (std.ascii.eqlIgnoreCase(word, "OF")) return .OF;
-    if (std.ascii.eqlIgnoreCase(word, "OTHERWISE")) return .OTHERWISE;
-    if (std.ascii.eqlIgnoreCase(word, "PATH")) return .PATH;
-    if (std.ascii.eqlIgnoreCase(word, "PATHS")) return .PATHS;
-    if (std.ascii.eqlIgnoreCase(word, "RECORD")) return .RECORD;
-    if (std.ascii.eqlIgnoreCase(word, "REPEATABLE")) return .REPEATABLE;
-    if (std.ascii.eqlIgnoreCase(word, "REPLACE")) return .REPLACE;
-    if (std.ascii.eqlIgnoreCase(word, "REQUIRE")) return .REQUIRE;
-    if (std.ascii.eqlIgnoreCase(word, "ASSERT")) return .ASSERT;
-    if (std.ascii.eqlIgnoreCase(word, "SCHEMA")) return .SCHEMA;
-    if (std.ascii.eqlIgnoreCase(word, "SHORTEST")) return .SHORTEST;
-    if (std.ascii.eqlIgnoreCase(word, "SIMPLE")) return .SIMPLE;
-    if (std.ascii.eqlIgnoreCase(word, "SUM")) return .SUM;
-    if (std.ascii.eqlIgnoreCase(word, "TABLE")) return .TABLE;
-    if (std.ascii.eqlIgnoreCase(word, "TRAIL")) return .TRAIL;
-    if (std.ascii.eqlIgnoreCase(word, "WALK")) return .WALK;
-    if (std.ascii.eqlIgnoreCase(word, "XOR")) return .XOR;
-    if (std.ascii.eqlIgnoreCase(word, "ZONED")) return .ZONED;
-    if (std.ascii.eqlIgnoreCase(word, "BINDING")) return .BINDING;
-    if (std.ascii.eqlIgnoreCase(word, "ZONE")) return .ZONE;
-    if (std.ascii.eqlIgnoreCase(word, "ORDINALITY")) return .ORDINALITY;
-    if (std.ascii.eqlIgnoreCase(word, "READ")) return .READ;
-    if (std.ascii.eqlIgnoreCase(word, "WRITE")) return .WRITE;
-    if (std.ascii.eqlIgnoreCase(word, "NO")) return .NO;
-    if (std.ascii.eqlIgnoreCase(word, "BINDINGS")) return .BINDINGS;
-    if (std.ascii.eqlIgnoreCase(word, "ONLY")) return .ONLY;
+// Export keyword checking to lexer using comptime-generated map
+// CANARY: REQ=REQ-GQL-KEYWORDS-001; FEATURE="GQL Reserved Words"; ASPECT=ISO39075Compliance; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-03
+pub fn keywordKind(word: []const u8) TokenKind {
+    // Convert to uppercase for case-insensitive lookup
+    var upper_buf: [64]u8 = undefined;
+    if (word.len > upper_buf.len) return .identifier;
 
-    // CANARY: REQ=REQ-GQL-KEYWORDS-001; FEATURE="GQL Reserved Words"; ASPECT=ISO39075Compliance; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-30
-    // Temporal keywords - checked before regular TIME keyword
-    if (std.ascii.eqlIgnoreCase(word, "DATE")) return .date_lit;
-    if (std.ascii.eqlIgnoreCase(word, "DATETIME")) return .datetime_lit;
-    if (std.ascii.eqlIgnoreCase(word, "TIME")) return .time_lit;
-    if (std.ascii.eqlIgnoreCase(word, "LOCAL")) return .LOCAL;
+    for (word, 0..) |c, i| {
+        upper_buf[i] = std.ascii.toUpper(c);
+    }
+    const upper = upper_buf[0..word.len];
 
-    // Regular TIME keyword for TIME ZONE statements (after temporal literal check)
-    // Note: This won't be reached for TIME"..." because lexer handles temporal literals first
-    return .identifier;
+    // O(1) lookup in comptime-generated map
+    return KeywordMap.get(upper) orelse .identifier;
+}
+
+/// Check if a keyword exists in the metadata (for validation)
+pub fn isKeywordInMetadata(name: []const u8) bool {
+    return language_metadata.findKeyword(name) != null;
+}
+
+/// Get keyword metadata for documentation/completion
+pub fn getKeywordMetadata(name: []const u8) ?language_metadata.KeywordInfo {
+    return language_metadata.findKeyword(name);
 }

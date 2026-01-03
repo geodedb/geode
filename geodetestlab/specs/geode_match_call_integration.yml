@@ -3,7 +3,7 @@ name: "Geode MATCH + CALL Integration Tests"
 description: "Tests for MATCH + CALL pattern with graph algorithms"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

@@ -3,7 +3,7 @@ name: "Geode Session Storage Tests"
 description: "Comprehensive testing of Geode's token-based session storage system with local credential management"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

@@ -3,7 +3,7 @@ name: "GQL Transaction Management Comprehensive Tests"
 description: "Complete ISO/IEC 39075:2024 transaction management testing covering START TRANSACTION, COMMIT, ROLLBACK with all options"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

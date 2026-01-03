@@ -9,7 +9,7 @@ import os
 from collections import defaultdict
 import time
 
-BINARY = "/home/benji/src/spyder/geode/zig-out/bin/geode"
+BINARY = "/home/benji/src/geode/geode/zig-out/bin/geode"
 
 def is_readonly_test(test_case):
     """Check if test is read-only (doesn't modify state)."""
@@ -94,7 +94,7 @@ def run_test(test_case, spec_name):
     return True, "PASSED"
 
 def main():
-    specs_dir = Path("/home/benji/src/spyder/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/geode/geode/geodetestlab/specs")
 
     total_passed = 0
     total_failed = 0

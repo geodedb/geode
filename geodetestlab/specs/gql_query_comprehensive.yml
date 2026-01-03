@@ -3,7 +3,7 @@ name: "GQL Query Operations Comprehensive Tests"
 description: "Complete ISO/IEC 39075:2024 query operations testing covering MATCH, OPTIONAL, FOR, LET, FILTER, and complex patterns"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

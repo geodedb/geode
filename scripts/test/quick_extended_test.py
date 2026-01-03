@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from extended_test_runner import run_test
 
 def main():
-    specs_dir = Path("/home/benji/src/spyder/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/geode/geode/geodetestlab/specs")
 
     # Test just a few specific specs
     test_specs = [

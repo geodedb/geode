@@ -3,7 +3,7 @@ name: "Regex Test"
 description: "Test regex operators"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

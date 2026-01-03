@@ -3,7 +3,7 @@ name: "Multi-Graph Functionality Tests"
 description: "Tests for multi-graph support including graph creation, switching, isolation, and security"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   working_dir: null
   env:
     GEODE_LOG_LEVEL: "info"

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from extended_test_runner import run_test
 
 def main():
-    specs_dir = Path("/home/benji/src/spyder/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/geode/geode/geodetestlab/specs")
 
     # Track failures by pattern
     failure_patterns = defaultdict(list)

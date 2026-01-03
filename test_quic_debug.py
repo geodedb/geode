@@ -2,7 +2,7 @@
 """Debug QUIC connection issue"""
 import asyncio
 import sys
-sys.path.insert(0, '/home/benji/src/spyder/geode/clients/python')
+sys.path.insert(0, '/home/benji/src/geode/geode/clients/python')
 
 from geode_client import Client
 

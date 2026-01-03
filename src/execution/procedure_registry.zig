@@ -154,6 +154,57 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[0] = try allocator.dupe(u8, "nodeId");
         columns[1] = try allocator.dupe(u8, "componentId");
         return try execution.executeSCC(allocator, store, columns);
+    }
+    // CANARY: REQ=REQ-GQL-068; FEATURE="ExposedAlgorithms"; ASPECT=Centrality; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+    // New algorithms exposed via CALL procedures
+    else if (std.mem.eql(u8, proc_name, "algo.harmonic.stream") or
+        std.mem.eql(u8, proc_name, "harmonic"))
+    {
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "nodeId");
+        columns[1] = try allocator.dupe(u8, "harmonic");
+        return try execution.executeHarmonicCentrality(allocator, store, columns);
+    } else if (std.mem.eql(u8, proc_name, "algo.bridgeLeverage.stream") or
+        std.mem.eql(u8, proc_name, "bridgeLeverage"))
+    {
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "nodeId");
+        columns[1] = try allocator.dupe(u8, "bridgeLeverage");
+        return try execution.executeBridgeLeverageCentrality(allocator, store, columns);
+    } else if (std.mem.eql(u8, proc_name, "algo.greyCardinal.stream") or
+        std.mem.eql(u8, proc_name, "greyCardinal"))
+    {
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "nodeId");
+        columns[1] = try allocator.dupe(u8, "composite");
+        return try execution.executeGreyCardinalComposite(allocator, store, columns);
+    } else if (std.mem.eql(u8, proc_name, "algo.leiden.stream") or
+        std.mem.eql(u8, proc_name, "leiden"))
+    {
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "nodeId");
+        columns[1] = try allocator.dupe(u8, "community");
+        return try execution.executeLeidenCommunities(allocator, store, columns);
+    } else if (std.mem.eql(u8, proc_name, "algo.articulationPoints.stream") or
+        std.mem.eql(u8, proc_name, "articulationPoints"))
+    {
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "nodeId");
+        return try execution.executeArticulationPoints(allocator, store, columns);
+    } else if (std.mem.eql(u8, proc_name, "algo.bridges.stream") or
+        std.mem.eql(u8, proc_name, "bridges"))
+    {
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "sourceId");
+        columns[1] = try allocator.dupe(u8, "targetId");
+        return try execution.executeBridges(allocator, store, columns);
+    } else if (std.mem.eql(u8, proc_name, "algo.biconnectedComponents.stream") or
+        std.mem.eql(u8, proc_name, "biconnected"))
+    {
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "nodeId");
+        columns[1] = try allocator.dupe(u8, "componentId");
+        return try execution.executeBiconnectedComponents(allocator, store, columns);
     } else if (std.mem.eql(u8, proc_name, "audit.configure")) {
         // CANARY: REQ=REQ-AUDIT-001; FEATURE="AuditLogging"; ASPECT=Configuration; STATUS=IMPL; OWNER=security; UPDATED=2025-10-19
         // Real audit configuration with comprehensive settings

@@ -6,7 +6,7 @@ name: "SESSION and TRANSACTION Command Tests"
 description: "Verify session management and transaction control implementations"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

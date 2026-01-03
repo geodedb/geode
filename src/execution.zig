@@ -75,6 +75,14 @@ pub const executeLouvainCommunities = centrality_algorithms.executeLouvainCommun
 pub const executeLabelPropagation = centrality_algorithms.executeLabelPropagation;
 pub const executeUnionFind = centrality_algorithms.executeUnionFind;
 pub const executeSCC = centrality_algorithms.executeSCC;
+// CANARY: REQ=REQ-GQL-068; FEATURE="ExposedAlgorithms"; ASPECT=ReExport; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-03
+pub const executeHarmonicCentrality = centrality_algorithms.executeHarmonicCentrality;
+pub const executeBridgeLeverageCentrality = centrality_algorithms.executeBridgeLeverageCentrality;
+pub const executeGreyCardinalComposite = centrality_algorithms.executeGreyCardinalComposite;
+pub const executeLeidenCommunities = centrality_algorithms.executeLeidenCommunities;
+pub const executeArticulationPoints = centrality_algorithms.executeArticulationPoints;
+pub const executeBridges = centrality_algorithms.executeBridges;
+pub const executeBiconnectedComponents = centrality_algorithms.executeBiconnectedComponents;
 
 // Re-export CRUD operation functions for backward compatibility (M1 Phase 4 extraction)
 pub const executeCreateForBatch = crud_operations.executeCreateForBatch;

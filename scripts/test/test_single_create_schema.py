@@ -7,7 +7,7 @@ import sys
 def test_create_schema():
     # Test CREATE SCHEMA with embedded server
     cmd = [
-        "/home/benji/src/spyder/geode/zig-out/bin/geode",
+        "/home/benji/src/geode/geode/zig-out/bin/geode",
         "query",
         "--server 127.0.0.1:3141 --insecure",
         "CREATE SCHEMA test_schema"

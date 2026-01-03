@@ -3,7 +3,7 @@ name: "Geode GQL Keyword Handling Tests"
 description: "Test suite validating keyword handling in GQL queries"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

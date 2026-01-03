@@ -3,7 +3,7 @@ name: "GQL Data Modification Comprehensive Tests"
 description: "Complete ISO/IEC 39075:2024 data modification testing covering INSERT, SET, REMOVE, DELETE operations"
 
 cli:
-  binary: "/home/benji/src/spyder/geode/zig-out/bin/geode"
+  binary: "./zig-out/bin/geode"
   server:
     enabled: true
     port: null

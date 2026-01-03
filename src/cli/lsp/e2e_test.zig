@@ -115,6 +115,12 @@ test "E2E - completion workflow" {
                     allocator.free(text);
                 }
             }
+            // Free detail if allocated (not for types which use comptime strings)
+            if (item.detail) |detail| {
+                if (item.kind != .Class) {
+                    allocator.free(detail);
+                }
+            }
         }
         allocator.free(items);
     }

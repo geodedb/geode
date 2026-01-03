@@ -3,6 +3,7 @@ const ast = @import("gql/ast.zig");
 const eval_funcs = @import("types/evaluator_functions.zig");
 const heap = @import("storage/heap.zig");
 const fle_integration = @import("fle_integration.zig");
+const graph_store = @import("graph_store.zig");
 
 // CANARY: REQ=REQ-M5.3-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=AdapterImport; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.3: Import evaluator_adapter instead of execution.zig to break circular dependency
@@ -2727,6 +2728,74 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 return Value{ .List = labels };
             },
             else => return Value{ .List = try allocator.alloc(Value, 0) }, // Empty list for non-nodes
+        }
+    }
+
+    // CANARY: REQ=REQ-GQL-INDEGREE-001; FEATURE="IndegreeFunction"; ASPECT=NodeDegree; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-03
+    // Handle indegree() function - returns number of incoming edges to a node
+    if (std.mem.eql(u8, function_name, "indegree")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(allocator, args[0].*, env);
+        switch (arg) {
+            .Node => |n| {
+                // Count edges where to_id equals this node's id
+                const store = graph_store.getGlobalStore(allocator);
+                var count: i64 = 0;
+                var edge_iter = store.edges.iterator();
+                while (edge_iter.next()) |entry| {
+                    if (entry.value_ptr.to_id == n.id) {
+                        count += 1;
+                    }
+                }
+                return Value{ .Int = count };
+            },
+            .Int => |node_id| {
+                // Also accept integer node IDs directly
+                const store = graph_store.getGlobalStore(allocator);
+                var count: i64 = 0;
+                var edge_iter = store.edges.iterator();
+                while (edge_iter.next()) |entry| {
+                    if (entry.value_ptr.to_id == @as(u64, @intCast(node_id))) {
+                        count += 1;
+                    }
+                }
+                return Value{ .Int = count };
+            },
+            else => return Value{ .Int = 0 },
+        }
+    }
+
+    // CANARY: REQ=REQ-GQL-OUTDEGREE-001; FEATURE="OutdegreeFunction"; ASPECT=NodeDegree; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-03
+    // Handle outdegree() function - returns number of outgoing edges from a node
+    if (std.mem.eql(u8, function_name, "outdegree")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(allocator, args[0].*, env);
+        switch (arg) {
+            .Node => |n| {
+                // Count edges where from_id equals this node's id
+                const store = graph_store.getGlobalStore(allocator);
+                var count: i64 = 0;
+                var edge_iter = store.edges.iterator();
+                while (edge_iter.next()) |entry| {
+                    if (entry.value_ptr.from_id == n.id) {
+                        count += 1;
+                    }
+                }
+                return Value{ .Int = count };
+            },
+            .Int => |node_id| {
+                // Also accept integer node IDs directly
+                const store = graph_store.getGlobalStore(allocator);
+                var count: i64 = 0;
+                var edge_iter = store.edges.iterator();
+                while (edge_iter.next()) |entry| {
+                    if (entry.value_ptr.from_id == @as(u64, @intCast(node_id))) {
+                        count += 1;
+                    }
+                }
+                return Value{ .Int = count };
+            },
+            else => return Value{ .Int = 0 },
         }
     }
 

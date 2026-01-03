@@ -1,0 +1,37 @@
+# CANARY: REQ=REQ-LOADTEST-METRICS-002; FEATURE="PrometheusConfig"; ASPECT=Config; STATUS=IMPL; OWNER=loadtest; UPDATED=2026-01-03
+# Prometheus configuration for Geode load testing
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files: []
+
+scrape_configs:
+  # Geode metrics collector
+  - job_name: 'geode-metrics'
+    static_configs:
+      - targets: ['localhost:9090']
+    metrics_path: '/metrics'
+
+  # Geode server metrics (if exposed)
+  - job_name: 'geode-server'
+    static_configs:
+      - targets: ['localhost:3141']
+    metrics_path: '/metrics'
+    scrape_timeout: 10s
+
+  # Node exporter for system metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+
+  # Docker container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['localhost:8080']
