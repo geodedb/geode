@@ -833,7 +833,6 @@ pub fn propertyValueToIndexKey(allocator: std.mem.Allocator, value: graph_exec.P
     }
 }
 
-
 /// Evaluate a UNION query with support for UNION, INTERSECT, EXCEPT operations
 /// Supports both ALL and DISTINCT modifiers for each set operation
 pub fn evaluateUnion(

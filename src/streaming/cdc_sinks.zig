@@ -5,7 +5,6 @@
 /// and allow for dependency injection.
 ///
 /// Extracted as part of Phase 1, M1.2 of the modularization effort.
-
 const std = @import("std");
 
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Sinks; STATUS=TESTED; TEST=cdc_tests; OWNER=streaming; UPDATED=2025-11-12

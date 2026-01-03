@@ -31,31 +31,32 @@ pub const Color = struct {
 
 /// Token types for syntax highlighting
 pub const TokenType = enum {
-    keyword,      // GQL keywords (MATCH, RETURN, WHERE, etc.)
-    operator,     // Operators (=, <, >, <=, >=, etc.)
-    string,       // String literals
-    number,       // Numeric literals
-    identifier,   // Variable names, labels
-    comment,      // Comments
-    parenthesis,  // (), {}, []
+    keyword, // GQL keywords (MATCH, RETURN, WHERE, etc.)
+    operator, // Operators (=, <, >, <=, >=, etc.)
+    string, // String literals
+    number, // Numeric literals
+    identifier, // Variable names, labels
+    comment, // Comments
+    parenthesis, // (), {}, []
     meta_command, // \ commands
-    whitespace,   // Whitespace
-    unknown,      // Unknown tokens
+    whitespace, // Whitespace
+    unknown, // Unknown tokens
 };
 
 /// GQL keywords for highlighting
 const gql_keywords = [_][]const u8{
-    "MATCH", "RETURN", "WHERE", "CREATE", "DELETE", "SET", "REMOVE",
-    "WITH", "UNWIND", "MERGE", "CALL", "UNION", "ORDER", "BY",
-    "LIMIT", "SKIP", "DISTINCT", "AS", "AND", "OR", "NOT", "XOR",
-    "IN", "STARTS", "ENDS", "CONTAINS", "IS", "NULL", "TRUE", "FALSE",
-    "CASE", "WHEN", "THEN", "ELSE", "END", "FOREACH", "OPTIONAL",
-    "DETACH", "ON", "USING", "INDEX", "CONSTRAINT", "ASSERT", "EXISTS",
-    "UNIQUE", "DROP", "SHOW", "ALL", "COUNT", "SUM", "AVG", "MIN", "MAX",
-    "COLLECT", "HEAD", "TAIL", "KEYS", "LABELS", "NODES", "RELATIONSHIPS",
-    "TYPE", "ID", "PROPERTIES", "LENGTH", "SIZE", "REVERSE", "SUBSTRING",
-    "REPLACE", "SPLIT", "TRIM", "LTRIM", "RTRIM", "TOLOWER", "TOUPPER",
-    "TOINTEGER", "TOFLOAT", "TOBOOLEAN", "ASC", "DESC", "ASCENDING", "DESCENDING",
+    "MATCH",   "RETURN",   "WHERE",     "CREATE",        "DELETE",    "SET",     "REMOVE",
+    "WITH",    "UNWIND",   "MERGE",     "CALL",          "UNION",     "ORDER",   "BY",
+    "LIMIT",   "SKIP",     "DISTINCT",  "AS",            "AND",       "OR",      "NOT",
+    "XOR",     "IN",       "STARTS",    "ENDS",          "CONTAINS",  "IS",      "NULL",
+    "TRUE",    "FALSE",    "CASE",      "WHEN",          "THEN",      "ELSE",    "END",
+    "FOREACH", "OPTIONAL", "DETACH",    "ON",            "USING",     "INDEX",   "CONSTRAINT",
+    "ASSERT",  "EXISTS",   "UNIQUE",    "DROP",          "SHOW",      "ALL",     "COUNT",
+    "SUM",     "AVG",      "MIN",       "MAX",           "COLLECT",   "HEAD",    "TAIL",
+    "KEYS",    "LABELS",   "NODES",     "RELATIONSHIPS", "TYPE",      "ID",      "PROPERTIES",
+    "LENGTH",  "SIZE",     "REVERSE",   "SUBSTRING",     "REPLACE",   "SPLIT",   "TRIM",
+    "LTRIM",   "RTRIM",    "TOLOWER",   "TOUPPER",       "TOINTEGER", "TOFLOAT", "TOBOOLEAN",
+    "ASC",     "DESC",     "ASCENDING", "DESCENDING",
 };
 
 /// Check if a word is a GQL keyword

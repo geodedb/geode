@@ -1022,10 +1022,9 @@ fn formatBasic(allocator: Allocator, text: []const u8) !?[]const u8 {
             // even when they match keyword patterns like "ALL" for "UNION ALL"
             const is_keyword = if (is_known_function)
                 false
-            else
-                for (GQL_KEYWORDS) |kw| {
-                    if (std.mem.eql(u8, upper_word, kw)) break true;
-                } else false;
+            else for (GQL_KEYWORDS) |kw| {
+                if (std.mem.eql(u8, upper_word, kw)) break true;
+            } else false;
 
             // Check if this is a clause-starting keyword that needs a newline before it
             var needs_newline = line_start_keywords.get(upper_word) != null;

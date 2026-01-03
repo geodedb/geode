@@ -5,7 +5,6 @@
 /// testability and allow for dependency injection.
 ///
 /// Extracted as part of Phase 1, M1.3 of the modularization effort.
-
 const std = @import("std");
 
 // CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE Key Management"; ASPECT=KeyManagement; STATUS=TESTED; TEST=tde_tests; OWNER=security; UPDATED=2025-11-12

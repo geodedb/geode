@@ -508,7 +508,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 // ============================================================================
 
 // Remote server backup execution function
-// Remote server backup execution function  
+// Remote server backup execution function
 fn executeRemoteBackup(_: std.mem.Allocator, _: []const u8, _: []const u8, _: ?[]const u8, _: []const u8, _: bool) !void {
     // TODO: Implement backup protocol when QUIC is available
     std.debug.print("Backup functionality requires QUIC support (not yet implemented)\n", .{});
@@ -750,7 +750,7 @@ const SimplifiedRestoreManager = struct {
     }
 
     fn restoreToPointInTime(_: SimplifiedRestoreManager, _: []const u8, _: i64) !RestoreMetadata {
-        // TODO: Implement when QUIC is available  
+        // TODO: Implement when QUIC is available
         return error.NotImplemented;
     }
 };

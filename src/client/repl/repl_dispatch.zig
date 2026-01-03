@@ -681,7 +681,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                 // Check if the dropped graph name matches current graph
                 if (std.mem.eql(u8, trimmed, current) or
                     (trimmed.len > current.len and std.mem.startsWith(u8, trimmed, current) and
-                    (trimmed[current.len] == ' ' or trimmed[current.len] == ';')))
+                        (trimmed[current.len] == ' ' or trimmed[current.len] == ';')))
                 {
                     dropped_current_graph = true;
                 }

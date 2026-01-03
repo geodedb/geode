@@ -5,10 +5,10 @@ const platform = @import("platform.zig");
 
 /// Configuration for result pagination
 pub const PagerConfig = struct {
-    page_size: usize = 25,  // Default rows per page
-    enabled: bool = true,    // Whether pagination is enabled
-    auto_page: bool = true,  // Auto-enable paging for large results
-    threshold: usize = 50,   // Auto-enable threshold
+    page_size: usize = 25, // Default rows per page
+    enabled: bool = true, // Whether pagination is enabled
+    auto_page: bool = true, // Auto-enable paging for large results
+    threshold: usize = 50, // Auto-enable threshold
 };
 
 pub const Format = enum { table, csv, json };

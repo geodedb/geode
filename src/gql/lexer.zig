@@ -641,9 +641,9 @@ fn decodeUtf8Codepoint(src: []const u8, idx: usize) ?u21 {
 
     // Determine sequence length from first byte
     const len: usize = if (b0 & 0xE0 == 0xC0) 2 // 110xxxxx
-    else if (b0 & 0xF0 == 0xE0) 3 // 1110xxxx
-    else if (b0 & 0xF8 == 0xF0) 4 // 11110xxx
-    else return null; // Invalid start byte (10xxxxxx or 11111xxx)
+        else if (b0 & 0xF0 == 0xE0) 3 // 1110xxxx
+        else if (b0 & 0xF8 == 0xF0) 4 // 11110xxx
+        else return null; // Invalid start byte (10xxxxxx or 11111xxx)
 
     // Check we have enough bytes
     if (idx + len > src.len) return null;

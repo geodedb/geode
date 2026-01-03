@@ -20,13 +20,11 @@ pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
-            "openssl",   "req",    "-x509",    "-newkey",
-            "ec",        "-pkeyopt", "ec_paramgen_curve:prime256v1",
-            "-keyout",   key_path, "-out",     cert_path,
-            "-days",     "365",    "-nodes",   "-subj",
-            try std.fmt.allocPrint(allocator, "/CN={s}", .{hostname}),
-            "-addext",
-            try std.fmt.allocPrint(allocator, "subjectAltName=DNS:{s},DNS:localhost,IP:127.0.0.1,IP:::1", .{hostname}),
+            "openssl", "req",                                                                                                      "-x509",                        "-newkey",
+            "ec",      "-pkeyopt",                                                                                                 "ec_paramgen_curve:prime256v1", "-keyout",
+            key_path,  "-out",                                                                                                     cert_path,                      "-days",
+            "365",     "-nodes",                                                                                                   "-subj",                        try std.fmt.allocPrint(allocator, "/CN={s}", .{hostname}),
+            "-addext", try std.fmt.allocPrint(allocator, "subjectAltName=DNS:{s},DNS:localhost,IP:127.0.0.1,IP:::1", .{hostname}),
         },
     });
     defer allocator.free(result.stdout);

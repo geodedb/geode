@@ -244,17 +244,14 @@ pub const UndoLog = struct {
     pub fn logSetNodeProperty(self: *UndoLog, node_id: u64, key: []const u8, old_value: ?graph_store.PropertyValue) !void {
         if (!self.active) return;
         const key_copy = try self.allocator.dupe(u8, key);
-        const serialized = if (old_value) |ov|
-            blk: {
-                var sp = SerializedProperty.fromPropertyValue(key, ov);
-                sp.key = try self.allocator.dupe(u8, sp.key);
-                if (sp.string_value) |s| {
-                    sp.string_value = try self.allocator.dupe(u8, s);
-                }
-                break :blk sp;
+        const serialized = if (old_value) |ov| blk: {
+            var sp = SerializedProperty.fromPropertyValue(key, ov);
+            sp.key = try self.allocator.dupe(u8, sp.key);
+            if (sp.string_value) |s| {
+                sp.string_value = try self.allocator.dupe(u8, s);
             }
-        else
-            SerializedProperty{ .key = try self.allocator.dupe(u8, key), .value_type = 0 };
+            break :blk sp;
+        } else SerializedProperty{ .key = try self.allocator.dupe(u8, key), .value_type = 0 };
 
         try self.entries.append(self.allocator, .{ .SetNodeProperty = .{
             .node_id = node_id,

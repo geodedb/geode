@@ -5,7 +5,6 @@
 /// for dependency injection.
 ///
 /// Extracted as part of Phase 1, M1.1 of the modularization effort.
-
 const std = @import("std");
 const audit_formatter = @import("audit_formatter.zig");
 

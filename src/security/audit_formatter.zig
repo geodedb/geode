@@ -4,7 +4,6 @@
 /// from the core audit logic to improve testability and modularity.
 ///
 /// Extracted as part of Phase 1, M1.1 of the modularization effort.
-
 const std = @import("std");
 
 // CANARY: REQ=REQ-GQL-031; FEATURE="Security Audit"; ASPECT=AuditFormatting; STATUS=TESTED; TEST=audit_tests; OWNER=security; UPDATED=2025-11-12

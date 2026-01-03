@@ -737,8 +737,8 @@ pub fn executeCreateQuery(
                         .names = names.items,
                         .values = values.items,
                         .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
+                        .param_values = param_values,
+                        .allocator = allocator,
                     };
 
                     const value = try eval.evalExpr(allocator, prop.value, env);
@@ -799,8 +799,8 @@ pub fn executeCreateQuery(
                         .names = names.items,
                         .values = values.items,
                         .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
+                        .param_values = param_values,
+                        .allocator = allocator,
                     };
 
                     // Evaluate the properties expression (should be a map literal)

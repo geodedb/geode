@@ -320,4 +320,3 @@ pub const ServerState = struct {
 // CANARY: REQ=REQ-SERVER-REFACTOR-001B; FEATURE="ServerRefactoring"; ASPECT=SERVER_STATE_STRUCT; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - ServerState struct extraction from main.zig
 // Extracted complete ServerState struct with all dependencies resolved
-

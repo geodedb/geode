@@ -177,9 +177,9 @@ pub const State = struct {
 
     pub fn ensureDefaults(self: *State) !void {
         // Default roles
-        if (self.findRoleIndex("admin") == null) _ = try self.upsertRole("admin", "Administrator role", &[_][]const u8{"admin", "read", "write", "query"});
+        if (self.findRoleIndex("admin") == null) _ = try self.upsertRole("admin", "Administrator role", &[_][]const u8{ "admin", "read", "write", "query" });
         if (self.findRoleIndex("user") == null) _ = try self.upsertRole("user", "Standard user", &[_][]const u8{"read"});
-        if (self.findRoleIndex("analyst") == null) _ = try self.upsertRole("analyst", "Analytics role", &[_][]const u8{"read", "query"});
+        if (self.findRoleIndex("analyst") == null) _ = try self.upsertRole("analyst", "Analytics role", &[_][]const u8{ "read", "query" });
 
         // Default users (use env overrides if available)
         const admin_pw_owned = std.process.getEnvVarOwned(self.allocator, "GEODE_ADMIN_PASSWORD") catch null;

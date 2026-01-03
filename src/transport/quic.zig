@@ -371,7 +371,7 @@ pub const QuicStream = struct {
                     retry_count += 1;
                     if (retry_count > max_retries) {
                         // After max retries, return partial data as error
-                        std.debug.print("[READLINE-TIMEOUT] Gave up after {} retries, pos={} bytes read\n", .{retry_count, pos});
+                        std.debug.print("[READLINE-TIMEOUT] Gave up after {} retries, pos={} bytes read\n", .{ retry_count, pos });
                         return error.UnexpectedEndOfStream;
                     }
                     std.Thread.sleep(5 * std.time.ns_per_ms); // Sleep 5ms before retrying (increased from 1ms)
@@ -402,7 +402,7 @@ pub const QuicStream = struct {
         @memcpy(result, temp_buf[0..pos]);
 
         // Debug: Show what we read
-        std.debug.print("[READLINE-DEBUG] stream_id={} read {} bytes: ", .{self.stream_id, pos});
+        std.debug.print("[READLINE-DEBUG] stream_id={} read {} bytes: ", .{ self.stream_id, pos });
         for (result) |b| {
             if (b >= 32 and b < 127) {
                 std.debug.print("{c}", .{b});

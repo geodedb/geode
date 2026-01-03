@@ -5,7 +5,6 @@
 /// graph queries.
 ///
 /// Extracted as part of Phase 2, M2.1 of the modularization effort.
-
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
@@ -590,7 +589,8 @@ test "Dijkstra - no path" {
     // Add two disconnected nodes
     const n1 = try store.createNode(&[_][]const u8{});
     const n2 = try store.createNode(&[_][]const u8{});
-    _ = n1; _ = n2;
+    _ = n1;
+    _ = n2;
 
     const columns = &[_][]const u8{ "path", "distance" };
     var result = try executeDijkstra(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 2, "weight"); // start_id=1 end_id=2 OK

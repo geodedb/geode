@@ -406,7 +406,7 @@ test "2PC - abort on participant failure" {
 
     var participants = [_]Participant{
         .{ .id = 1 },
-        .{ .id = 2, .state = .failed },  // Pre-fail this participant
+        .{ .id = 2, .state = .failed }, // Pre-fail this participant
         .{ .id = 3 },
     };
 
