@@ -476,7 +476,9 @@ function runGeodeQueryWithProfile(
         // Add connection arguments including password
         args.push(...connectionManager.buildConnectionArgsWithPassword(profile, password));
 
-        args.push(query);
+        // Use stdin for query to avoid issues with queries starting with '--' (comments)
+        // The geode CLI accepts '-' to read query from stdin
+        args.push('-');
 
         outputChannel.appendLine(`Executing: ${geodeCmd} ${args.map(a => a.startsWith('-P') ? '-P ***' : a).join(' ')}`);
 
@@ -515,6 +517,10 @@ function runGeodeQueryWithProfile(
         childProcess.on('error', (err) => {
             reject(err.message);
         });
+
+        // Write query to stdin and close it
+        childProcess.stdin.write(query);
+        childProcess.stdin.end();
     });
 }
 

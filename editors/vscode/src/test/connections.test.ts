@@ -478,6 +478,21 @@ describe('CLI Integration Tests', () => {
         }
     });
 
+    it('geode query via stdin with dash works', function() {
+        if (!isServerRunning()) {
+            this.skip();
+            return;
+        }
+
+        // Test that queries can be sent via stdin using '-'
+        const query = 'RETURN 42 AS answer';
+        const output = execFileSync(geodeBinary, [
+            'query', '--server', '127.0.0.1:3141', '--insecure', '-'
+        ], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], input: query });
+
+        assert.ok(output.includes('42') || output.includes('"answer"'));
+    });
+
     // Conditional test - only runs if server is up
     it('geode query executes successfully when server is running', function() {
         if (!isServerRunning()) {
