@@ -97,6 +97,12 @@
     "views": {
       "geode-explorer": [
         {
+          "id": "geodeConnections",
+          "name": "Connections",
+          "icon": "$(plug)",
+          "contextualTitle": "Geode Connections"
+        },
+        {
           "id": "geodeSchemaExplorer",
           "name": "Schema Explorer",
           "icon": "$(database)",
@@ -188,6 +194,54 @@
         "title": "Show Path Explorer",
         "category": "Geode",
         "icon": "$(git-compare)"
+      },
+      {
+        "command": "geode.connections.add",
+        "title": "Add Connection",
+        "category": "Geode",
+        "icon": "$(add)"
+      },
+      {
+        "command": "geode.connections.edit",
+        "title": "Edit Connection",
+        "category": "Geode",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "geode.connections.delete",
+        "title": "Delete Connection",
+        "category": "Geode",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "geode.connections.connect",
+        "title": "Connect",
+        "category": "Geode",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "geode.connections.disconnect",
+        "title": "Disconnect",
+        "category": "Geode",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "geode.connections.setDefault",
+        "title": "Set as Default",
+        "category": "Geode",
+        "icon": "$(star)"
+      },
+      {
+        "command": "geode.connections.copyDsn",
+        "title": "Copy Connection String",
+        "category": "Geode",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "geode.connections.refresh",
+        "title": "Refresh Connections",
+        "category": "Geode",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -222,6 +276,13 @@
         {
           "command": "geode.runFile",
           "when": "resourceLangId == gql || resourceLangId == cypher"
+        },
+        {
+          "command": "geode.connections.add"
+        },
+        {
+          "command": "geode.connections.disconnect",
+          "when": "geode.hasActiveConnection"
         }
       ],
       "explorer/context": [
@@ -229,6 +290,55 @@
           "command": "geode.runFile",
           "when": "resourceExtname == .gql || resourceExtname == .gcypher || resourceExtname == .pgql || resourceExtname == .cypher",
           "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "geode.connections.add",
+          "when": "view == geodeConnections",
+          "group": "navigation"
+        },
+        {
+          "command": "geode.connections.refresh",
+          "when": "view == geodeConnections",
+          "group": "navigation"
+        },
+        {
+          "command": "geode.connections.disconnect",
+          "when": "view == geodeConnections && geode.hasActiveConnection",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "geode.connections.connect",
+          "when": "view == geodeConnections && viewItem =~ /^connection/",
+          "group": "inline"
+        },
+        {
+          "command": "geode.connections.edit",
+          "when": "view == geodeConnections && viewItem =~ /^connection/",
+          "group": "1_connection@1"
+        },
+        {
+          "command": "geode.connections.setDefault",
+          "when": "view == geodeConnections && viewItem =~ /^connection/ && viewItem !~ /default/",
+          "group": "1_connection@2"
+        },
+        {
+          "command": "geode.connections.copyDsn",
+          "when": "view == geodeConnections && viewItem =~ /^connection/",
+          "group": "2_copy@1"
+        },
+        {
+          "command": "geode.connections.disconnect",
+          "when": "view == geodeConnections && viewItem =~ /connected/",
+          "group": "3_disconnect@1"
+        },
+        {
+          "command": "geode.connections.delete",
+          "when": "view == geodeConnections && viewItem =~ /^connection/",
+          "group": "4_delete@1"
         }
       ]
     },

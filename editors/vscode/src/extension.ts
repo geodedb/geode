@@ -13,18 +13,31 @@ import {
 import { registerSchemaExplorer } from './views/SchemaExplorerProvider';
 import { registerQueryPlanPanel } from './panels/QueryPlanPanel';
 import { registerTimeSeriesPanel } from './panels/TimeSeriesPanel';
+import {
+    ConnectionManager,
+    ConnectionProfile,
+    registerConnectionsView,
+    ConnectionsTreeProvider
+} from './connections';
 
 let client: LanguageClient | undefined;
 let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
+let connectionManager: ConnectionManager;
+let connectionsTreeProvider: ConnectionsTreeProvider;
 let isConnected = false;
 
 const gqlExtensions = new Set(['.gql', '.gcypher', '.pgql']);
 const cypherExtensions = new Set(['.cypher']);
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('Geode GQL');
     context.subscriptions.push(outputChannel);
+
+    // Initialize connection manager
+    connectionManager = new ConnectionManager(context, outputChannel);
+    await connectionManager.initialize();
+    context.subscriptions.push({ dispose: () => connectionManager.dispose() });
 
     // Ensure files with GQL-ish extensions don't get hijacked by SQL/Postgres modes
     // and that the language server activates even when VS Code guesses wrong.
@@ -38,9 +51,31 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.StatusBarAlignment.Right,
         100
     );
-    statusBarItem.command = 'geode.showDocumentation';
+    statusBarItem.command = 'geode.connections.add';
     context.subscriptions.push(statusBarItem);
     updateStatusBar('disconnected');
+
+    // Register connections view and commands
+    connectionsTreeProvider = registerConnectionsView(
+        context,
+        connectionManager,
+        outputChannel,
+        handleConnect,
+        handleDisconnect
+    );
+
+    // Update status bar when active connection changes
+    connectionManager.onDidChangeActiveConnection((profile) => {
+        if (profile && isConnected) {
+            updateStatusBar('connected', profile);
+        } else if (profile) {
+            updateStatusBar('disconnected', profile);
+        } else {
+            updateStatusBar('disconnected');
+        }
+        // Update context for menu visibility
+        vscode.commands.executeCommand('setContext', 'geode.hasActiveConnection', isConnected);
+    });
 
     // Start LSP if enabled
     const config = vscode.workspace.getConfiguration('geode');
@@ -63,7 +98,11 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Auto-connect if configured
     if (config.get<boolean>('server.autoConnect', false)) {
-        connectServer();
+        const defaultConn = connectionManager.getDefaultConnection();
+        if (defaultConn) {
+            const password = await connectionManager.getPassword(defaultConn.id);
+            await handleConnect(defaultConn, password);
+        }
     }
 
     // Register Schema Explorer TreeView (#76)
@@ -334,17 +373,45 @@ async function runFile(uri?: vscode.Uri) {
 }
 
 async function executeQuery(query: string) {
-    const config = vscode.workspace.getConfiguration('geode');
-    const host = config.get<string>('server.host', 'localhost');
-    const port = config.get<number>('server.port', 3141);
-    const timeout = config.get<number>('query.timeout', 30000);
+    // Get active connection or fall back to settings
+    const activeConnection = connectionManager.getActiveConnection();
 
-    outputChannel.appendLine(`\n--- Executing Query ---`);
+    if (!activeConnection) {
+        const result = await vscode.window.showWarningMessage(
+            'No connection configured. Would you like to add one?',
+            'Add Connection',
+            'Cancel'
+        );
+        if (result === 'Add Connection') {
+            await vscode.commands.executeCommand('geode.connections.add');
+        }
+        return;
+    }
+
+    if (!isConnected) {
+        const result = await vscode.window.showWarningMessage(
+            `Not connected to ${activeConnection.name}. Connect now?`,
+            'Connect',
+            'Cancel'
+        );
+        if (result === 'Connect') {
+            const password = await connectionManager.getPassword(activeConnection.id);
+            const success = await handleConnect(activeConnection, password);
+            if (!success) {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+
+    outputChannel.appendLine(`\n--- Executing Query on ${activeConnection.name} ---`);
     outputChannel.appendLine(query);
     outputChannel.appendLine('---');
 
     try {
-        const result = await runGeodeQuery(query, host, port, timeout);
+        const password = await connectionManager.getPassword(activeConnection.id);
+        const result = await runGeodeQueryWithProfile(query, activeConnection, password);
         showQueryResults(result);
     } catch (error) {
         outputChannel.appendLine(`Error: ${error}`);
@@ -392,6 +459,99 @@ function runGeodeQuery(query: string, host: string, port: number, timeout: numbe
             reject(err.message);
         });
     });
+}
+
+/**
+ * Run a query using a connection profile
+ */
+function runGeodeQueryWithProfile(
+    query: string,
+    profile: ConnectionProfile,
+    password?: string
+): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const geodeCmd = resolveGeodeBinary(vscode.workspace.getConfiguration('geode.lsp'));
+        const args = ['query', '--format', 'json'];
+
+        // Add connection arguments
+        args.push(...connectionManager.buildConnectionArgs(profile));
+
+        // Add password via environment variable for security
+        const env = { ...process.env };
+        if (password) {
+            env.GEODE_PASSWORD = password;
+            args.push('--password-stdin');
+        }
+
+        args.push(query);
+
+        const childProcess = cp.spawn(geodeCmd, args, {
+            timeout: profile.queryTimeout,
+            env
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        // Send password to stdin if using password-stdin
+        if (password) {
+            childProcess.stdin.write(password);
+            childProcess.stdin.end();
+        }
+
+        childProcess.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+
+        childProcess.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+
+        childProcess.on('close', (code) => {
+            if (code === 0) {
+                resolve(stdout);
+            } else {
+                reject(stderr || `Process exited with code ${code}`);
+            }
+        });
+
+        childProcess.on('error', (err) => {
+            reject(err.message);
+        });
+    });
+}
+
+/**
+ * Handle connecting to a Geode server
+ */
+async function handleConnect(profile: ConnectionProfile, password?: string): Promise<boolean> {
+    outputChannel.appendLine(`Connecting to ${profile.name} (${profile.host}:${profile.port})...`);
+    updateStatusBar('connecting', profile);
+
+    try {
+        // Test connection with a simple query
+        await runGeodeQueryWithProfile('RETURN 1', profile, password);
+        isConnected = true;
+        updateStatusBar('connected', profile);
+        await vscode.commands.executeCommand('setContext', 'geode.hasActiveConnection', true);
+        vscode.window.showInformationMessage(`Connected to ${profile.name}`);
+        return true;
+    } catch (error) {
+        isConnected = false;
+        updateStatusBar('error', profile);
+        vscode.window.showErrorMessage(`Failed to connect to ${profile.name}: ${error}`);
+        return false;
+    }
+}
+
+/**
+ * Handle disconnecting from the current server
+ */
+function handleDisconnect(): void {
+    isConnected = false;
+    updateStatusBar('disconnected');
+    vscode.commands.executeCommand('setContext', 'geode.hasActiveConnection', false);
+    vscode.window.showInformationMessage('Disconnected from Geode server');
 }
 
 function showQueryResults(result: string) {
@@ -578,25 +738,48 @@ function getDocumentationHtml(): string {
 // Status Bar
 // ============================================================================
 
-function updateStatusBar(status: 'disconnected' | 'connecting' | 'connected' | 'lsp-ready') {
+function updateStatusBar(
+    status: 'disconnected' | 'connecting' | 'connected' | 'lsp-ready' | 'error',
+    profile?: ConnectionProfile
+) {
+    const profileInfo = profile ? ` (${profile.host}:${profile.port})` : '';
+
     switch (status) {
         case 'disconnected':
             statusBarItem.text = '$(database) Geode';
-            statusBarItem.tooltip = 'Geode GQL - Click to view documentation';
+            statusBarItem.tooltip = profile
+                ? `Geode - ${profile.name}${profileInfo}\nClick to manage connections`
+                : 'Geode GQL - Click to manage connections';
             statusBarItem.backgroundColor = undefined;
+            statusBarItem.command = 'geode.connections.add';
             break;
         case 'connecting':
             statusBarItem.text = '$(sync~spin) Geode';
-            statusBarItem.tooltip = 'Connecting to Geode server...';
+            statusBarItem.tooltip = profile
+                ? `Connecting to ${profile.name}${profileInfo}...`
+                : 'Connecting to Geode server...';
+            statusBarItem.backgroundColor = undefined;
             break;
         case 'connected':
             statusBarItem.text = '$(database) Geode $(check)';
-            statusBarItem.tooltip = 'Connected to Geode server';
+            statusBarItem.tooltip = profile
+                ? `Connected to ${profile.name}${profileInfo}\nClick to disconnect`
+                : 'Connected to Geode server';
             statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+            statusBarItem.command = 'geode.connections.disconnect';
             break;
         case 'lsp-ready':
             statusBarItem.text = '$(database) Geode LSP';
             statusBarItem.tooltip = 'Geode Language Server active';
+            statusBarItem.backgroundColor = undefined;
+            break;
+        case 'error':
+            statusBarItem.text = '$(database) Geode $(error)';
+            statusBarItem.tooltip = profile
+                ? `Connection failed: ${profile.name}${profileInfo}\nClick to retry`
+                : 'Connection failed - Click to retry';
+            statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+            statusBarItem.command = 'geode.connections.add';
             break;
     }
     statusBarItem.show();
