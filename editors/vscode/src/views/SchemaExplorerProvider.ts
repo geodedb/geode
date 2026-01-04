@@ -139,66 +139,161 @@ export class SchemaExplorerProvider implements vscode.TreeDataProvider<SchemaTre
 
     private async fetchSchema(): Promise<void> {
         try {
-            // Fetch node labels
-            const nodeLabels = await this.runQuery('CALL db.labels() YIELD label RETURN label');
+            // Fetch available graphs using Geode's SHOW GRAPHS command
+            const graphs = await this.runQuery('SHOW GRAPHS');
 
-            // Fetch relationship types
-            const relTypes = await this.runQuery('CALL db.relationshipTypes() YIELD type RETURN type');
+            // Build schema data from graphs
+            const graphChildren = this.parseGraphs(graphs);
 
-            // Fetch property keys
-            const propertyKeys = await this.runQuery('CALL db.propertyKeys() YIELD propertyKey RETURN propertyKey');
+            // Also try to get node labels from current graph by sampling
+            let nodeLabels: SchemaElement[] = [];
+            let relTypes: SchemaElement[] = [];
 
-            // Fetch indexes
-            const indexes = await this.runQuery('CALL db.indexes() YIELD name, type, labelsOrTypes, properties RETURN name, type, labelsOrTypes, properties');
+            try {
+                // Sample distinct labels from nodes
+                const labelsResult = await this.runQuery('MATCH (n) RETURN DISTINCT labels(n) AS labels LIMIT 100');
+                nodeLabels = this.parseDistinctLabels(labelsResult);
+            } catch {
+                // Labels query not supported, skip
+            }
 
-            // Fetch constraints
-            const constraints = await this.runQuery('CALL db.constraints() YIELD name, type, labelsOrTypes, properties RETURN name, type, labelsOrTypes, properties');
-
-            // Fetch procedures
-            const procedures = await this.runQuery('CALL dbms.procedures() YIELD name, description RETURN name, description');
+            try {
+                // Sample distinct relationship types
+                const relsResult = await this.runQuery('MATCH ()-[r]->() RETURN DISTINCT type(r) AS type LIMIT 100');
+                relTypes = this.parseDistinctRelTypes(relsResult);
+            } catch {
+                // Relationship types query not supported, skip
+            }
 
             this.schemaData = [
                 {
+                    type: 'graphs',
+                    name: 'Graphs',
+                    children: graphChildren.length > 0 ? graphChildren : [{
+                        type: 'graph' as const,
+                        name: '(use SHOW GRAPHS to list)',
+                        metadata: { hint: 'Run SHOW GRAPHS query' }
+                    }]
+                },
+                {
                     type: 'labels',
                     name: 'Node Labels',
-                    children: this.parseLabels(nodeLabels)
+                    children: nodeLabels.length > 0 ? nodeLabels : [{
+                        type: 'label' as const,
+                        name: '(no labels found)',
+                        metadata: { hint: 'Create nodes with labels' }
+                    }]
                 },
                 {
                     type: 'labels',
                     name: 'Relationship Types',
-                    children: this.parseRelTypes(relTypes)
-                },
-                {
-                    type: 'properties',
-                    name: 'Property Keys',
-                    children: this.parsePropertyKeys(propertyKeys)
-                },
-                {
-                    type: 'indexes',
-                    name: 'Indexes',
-                    children: this.parseIndexes(indexes)
-                },
-                {
-                    type: 'constraints',
-                    name: 'Constraints',
-                    children: this.parseConstraints(constraints)
-                },
-                {
-                    type: 'procedures',
-                    name: 'Procedures',
-                    children: this.parseProcedures(procedures)
+                    children: relTypes.length > 0 ? relTypes : [{
+                        type: 'label' as const,
+                        name: '(no relationships found)',
+                        metadata: { hint: 'Create relationships' }
+                    }]
                 }
             ];
         } catch (error) {
-            // If queries fail, show empty schema with error indication
+            // If queries fail, show placeholder with connection info
             this.schemaData = [
                 {
                     type: 'graphs',
-                    name: 'Connection required',
+                    name: 'Click to connect',
                     children: [],
-                    metadata: { status: 'Not connected to server' }
+                    metadata: { status: 'Click refresh after connecting to server' }
                 }
             ];
+        }
+    }
+
+    private parseGraphs(result: string): SchemaElement[] {
+        try {
+            const lines = result.trim().split('\n');
+            const graphs: SchemaElement[] = [];
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const json = JSON.parse(line);
+                    if (json.result?.rows) {
+                        for (const row of json.result.rows) {
+                            const name = row.name || row.graph || Object.values(row)[0];
+                            if (name && typeof name === 'string') {
+                                graphs.push({
+                                    type: 'graph' as const,
+                                    name: name,
+                                    metadata: row
+                                });
+                            }
+                        }
+                    }
+                } catch { /* skip non-JSON lines */ }
+            }
+
+            return graphs;
+        } catch {
+            return [];
+        }
+    }
+
+    private parseDistinctLabels(result: string): SchemaElement[] {
+        try {
+            const lines = result.trim().split('\n');
+            const labelSet = new Set<string>();
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const json = JSON.parse(line);
+                    if (json.result?.rows) {
+                        for (const row of json.result.rows) {
+                            const labels = row.labels;
+                            if (Array.isArray(labels)) {
+                                labels.forEach((l: string) => labelSet.add(l));
+                            }
+                        }
+                    }
+                } catch { /* skip */ }
+            }
+
+            return Array.from(labelSet).sort().map(label => ({
+                type: 'label' as const,
+                name: label,
+                metadata: { nodeLabel: label }
+            }));
+        } catch {
+            return [];
+        }
+    }
+
+    private parseDistinctRelTypes(result: string): SchemaElement[] {
+        try {
+            const lines = result.trim().split('\n');
+            const typeSet = new Set<string>();
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const json = JSON.parse(line);
+                    if (json.result?.rows) {
+                        for (const row of json.result.rows) {
+                            const relType = row.type;
+                            if (typeof relType === 'string') {
+                                typeSet.add(relType);
+                            }
+                        }
+                    }
+                } catch { /* skip */ }
+            }
+
+            return Array.from(typeSet).sort().map(type => ({
+                type: 'label' as const,
+                name: type,
+                metadata: { relationshipType: type }
+            }));
+        } catch {
+            return [];
         }
     }
 

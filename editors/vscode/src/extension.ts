@@ -358,18 +358,226 @@ async function runFile(uri?: vscode.Uri) {
 
     try {
         const document = await vscode.workspace.openTextDocument(fileUri);
-        const query = document.getText();
+        const content = document.getText();
 
-        if (!query.trim()) {
+        if (!content.trim()) {
             vscode.window.showWarningMessage('File is empty');
             return;
         }
 
         outputChannel.appendLine(`\n--- Running File: ${path.basename(fileUri.fsPath)} ---`);
-        await executeQuery(query);
+
+        // Split content into individual statements
+        const statements = splitGqlStatements(content);
+
+        if (statements.length === 0) {
+            vscode.window.showWarningMessage('No valid statements found in file');
+            return;
+        }
+
+        outputChannel.appendLine(`Found ${statements.length} statement(s)`);
+
+        // Execute statements sequentially
+        await executeMultipleStatements(statements);
     } catch (error) {
         vscode.window.showErrorMessage(`Failed to read file: ${error}`);
     }
+}
+
+/**
+ * Split GQL content into individual statements
+ * Handles: semicolons, line comments (--), block comments, and quoted strings
+ */
+function splitGqlStatements(content: string): string[] {
+    const statements: string[] = [];
+    let current = '';
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+    let i = 0;
+
+    while (i < content.length) {
+        const char = content[i];
+        const next = content[i + 1];
+
+        // Handle line comments
+        if (!inSingleQuote && !inDoubleQuote && !inBlockComment && char === '-' && next === '-') {
+            inLineComment = true;
+            current += char;
+            i++;
+            continue;
+        }
+
+        if (inLineComment && char === '\n') {
+            inLineComment = false;
+            current += char;
+            i++;
+            continue;
+        }
+
+        // Handle block comments
+        if (!inSingleQuote && !inDoubleQuote && !inLineComment && char === '/' && next === '*') {
+            inBlockComment = true;
+            current += char;
+            i++;
+            continue;
+        }
+
+        if (inBlockComment && char === '*' && next === '/') {
+            inBlockComment = false;
+            current += char + next;
+            i += 2;
+            continue;
+        }
+
+        // Handle quoted strings
+        if (!inLineComment && !inBlockComment) {
+            if (char === "'" && !inDoubleQuote) {
+                // Check for escaped quote
+                if (i > 0 && content[i - 1] !== '\\') {
+                    inSingleQuote = !inSingleQuote;
+                }
+            } else if (char === '"' && !inSingleQuote) {
+                if (i > 0 && content[i - 1] !== '\\') {
+                    inDoubleQuote = !inDoubleQuote;
+                }
+            }
+        }
+
+        // Statement terminator
+        if (char === ';' && !inSingleQuote && !inDoubleQuote && !inLineComment && !inBlockComment) {
+            const stmt = current.trim();
+            if (stmt && !isOnlyComments(stmt)) {
+                statements.push(stmt);
+            }
+            current = '';
+            i++;
+            continue;
+        }
+
+        current += char;
+        i++;
+    }
+
+    // Handle last statement (may not have trailing semicolon)
+    const lastStmt = current.trim();
+    if (lastStmt && !isOnlyComments(lastStmt)) {
+        statements.push(lastStmt);
+    }
+
+    return statements;
+}
+
+/**
+ * Check if content is only comments (no actual statements)
+ */
+function isOnlyComments(content: string): boolean {
+    // Remove line comments
+    let stripped = content.replace(/--[^\n]*/g, '');
+    // Remove block comments
+    stripped = stripped.replace(/\/\*[\s\S]*?\*\//g, '');
+    // Check if anything remains
+    return stripped.trim().length === 0;
+}
+
+/**
+ * Execute multiple statements sequentially with progress
+ */
+async function executeMultipleStatements(statements: string[]): Promise<void> {
+    const activeConnection = connectionManager.getActiveConnection();
+
+    if (!activeConnection) {
+        const result = await vscode.window.showWarningMessage(
+            'No connection configured. Would you like to add one?',
+            'Add Connection',
+            'Cancel'
+        );
+        if (result === 'Add Connection') {
+            await vscode.commands.executeCommand('geode.connections.add');
+        }
+        return;
+    }
+
+    if (!isConnected) {
+        const result = await vscode.window.showWarningMessage(
+            `Not connected to ${activeConnection.name}. Connect now?`,
+            'Connect',
+            'Cancel'
+        );
+        if (result === 'Connect') {
+            const password = await connectionManager.getPassword(activeConnection.id);
+            const success = await handleConnect(activeConnection, password);
+            if (!success) {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+
+    const password = await connectionManager.getPassword(activeConnection.id);
+    let successCount = 0;
+    let errorCount = 0;
+
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: 'Executing GQL statements',
+        cancellable: true
+    }, async (progress, token) => {
+        for (let i = 0; i < statements.length; i++) {
+            if (token.isCancellationRequested) {
+                outputChannel.appendLine(`\n--- Cancelled at statement ${i + 1}/${statements.length} ---`);
+                break;
+            }
+
+            const stmt = statements[i];
+            progress.report({
+                message: `${i + 1}/${statements.length}`,
+                increment: 100 / statements.length
+            });
+
+            outputChannel.appendLine(`\n[${i + 1}/${statements.length}] ${stmt.substring(0, 50)}${stmt.length > 50 ? '...' : ''}`);
+
+            try {
+                const result = await runGeodeQueryWithProfile(stmt, activeConnection, password);
+                successCount++;
+
+                // Parse and display result briefly
+                try {
+                    const lines = result.trim().split('\n');
+                    for (const line of lines) {
+                        if (line.trim()) {
+                            const json = JSON.parse(line);
+                            if (json.result?.rows?.length > 0) {
+                                outputChannel.appendLine(`  → ${json.result.rows.length} row(s)`);
+                            } else if (json.status_class === '00000') {
+                                outputChannel.appendLine(`  → OK`);
+                            }
+                        }
+                    }
+                } catch {
+                    // Not JSON, show raw
+                    if (result.trim()) {
+                        outputChannel.appendLine(`  → ${result.trim().substring(0, 100)}`);
+                    }
+                }
+            } catch (error) {
+                errorCount++;
+                outputChannel.appendLine(`  ✗ Error: ${error}`);
+            }
+        }
+    });
+
+    outputChannel.appendLine(`\n--- Execution Complete: ${successCount} succeeded, ${errorCount} failed ---`);
+
+    if (errorCount === 0) {
+        vscode.window.showInformationMessage(`Executed ${successCount} statement(s) successfully`);
+    } else {
+        vscode.window.showWarningMessage(`Completed with ${errorCount} error(s). Check output for details.`);
+    }
+
+    outputChannel.show();
 }
 
 async function executeQuery(query: string) {
