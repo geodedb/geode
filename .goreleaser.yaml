@@ -2,10 +2,6 @@ version: 2
 
 project_name: geode
 
-# Increase build timeout - cross-compiling 8 targets takes 70+ minutes
-# Default is 60m which is insufficient for full Zig cross-compilation
-timeout: 120m
-
 # Note: GoReleaser Pro features may be enabled via CI/CD with GORELEASER_KEY
 # This configuration works with both free and Pro versions
 
