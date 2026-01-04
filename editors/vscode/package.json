@@ -266,14 +266,19 @@
       ],
       "editor/context": [
         {
-          "command": "geode.runSelection",
+          "command": "geode.runFile",
           "when": "resourceLangId == gql || resourceLangId == cypher",
-          "group": "1_run"
+          "group": "1_run@1"
+        },
+        {
+          "command": "geode.runSelection",
+          "when": "resourceLangId == gql || resourceLangId == cypher && editorHasSelection",
+          "group": "1_run@2"
         },
         {
           "command": "geode.explainQuery",
           "when": "resourceLangId == gql || resourceLangId == cypher",
-          "group": "1_run"
+          "group": "1_run@3"
         }
       ],
       "commandPalette": [
@@ -319,6 +324,11 @@
           "command": "geode.connections.disconnect",
           "when": "view == geodeConnections && geode.hasActiveConnection",
           "group": "navigation"
+        },
+        {
+          "command": "geode.refreshSchema",
+          "when": "view == geodeSchemaExplorer",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -356,12 +366,12 @@
     },
     "keybindings": [
       {
-        "command": "geode.runQuery",
+        "command": "geode.runFile",
         "key": "f5",
         "when": "editorTextFocus && (editorLangId == gql || editorLangId == cypher)"
       },
       {
-        "command": "geode.runQuery",
+        "command": "geode.runFile",
         "key": "ctrl+enter",
         "mac": "cmd+enter",
         "when": "editorTextFocus && (editorLangId == gql || editorLangId == cypher)"
