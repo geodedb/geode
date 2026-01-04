@@ -48,8 +48,16 @@
     "languages": [
       {
         "id": "gql",
-        "aliases": ["GQL", "Graph Query Language", "ISO GQL"],
-        "extensions": [".gql", ".gcypher", ".pgql"],
+        "aliases": [
+          "GQL",
+          "Graph Query Language",
+          "ISO GQL"
+        ],
+        "extensions": [
+          ".gql",
+          ".gcypher",
+          ".pgql"
+        ],
         "configuration": "./language-configuration.json",
         "icon": {
           "light": "./images/gql-icon.png",
@@ -58,8 +66,12 @@
       },
       {
         "id": "cypher",
-        "aliases": ["Cypher"],
-        "extensions": [".cypher"],
+        "aliases": [
+          "Cypher"
+        ],
+        "extensions": [
+          ".cypher"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -382,12 +394,18 @@
         },
         "geode.lsp.args": {
           "type": "array",
-          "default": ["lsp"],
+          "default": [
+            "lsp"
+          ],
           "description": "Arguments to pass to the LSP server"
         },
         "geode.lsp.trace.server": {
           "type": "string",
-          "enum": ["off", "messages", "verbose"],
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
           "default": "off",
           "description": "Traces the communication between VS Code and the language server"
         },
@@ -428,7 +446,11 @@
         },
         "geode.format.keywordCase": {
           "type": "string",
-          "enum": ["upper", "lower", "preserve"],
+          "enum": [
+            "upper",
+            "lower",
+            "preserve"
+          ],
           "default": "upper",
           "description": "Case for GQL keywords"
         },
@@ -477,9 +499,11 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.75.0",
     "@vscode/vsce": "^2.22.0",
+    "mocha": "^11.7.5",
     "typescript": "^5.0.0"
   }
 }

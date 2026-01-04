@@ -473,31 +473,19 @@ function runGeodeQueryWithProfile(
         const geodeCmd = resolveGeodeBinary(vscode.workspace.getConfiguration('geode.lsp'));
         const args = ['query', '--format', 'json'];
 
-        // Add connection arguments
-        args.push(...connectionManager.buildConnectionArgs(profile));
-
-        // Add password via environment variable for security
-        const env = { ...process.env };
-        if (password) {
-            env.GEODE_PASSWORD = password;
-            args.push('--password-stdin');
-        }
+        // Add connection arguments including password
+        args.push(...connectionManager.buildConnectionArgsWithPassword(profile, password));
 
         args.push(query);
 
+        outputChannel.appendLine(`Executing: ${geodeCmd} ${args.map(a => a.startsWith('-P') ? '-P ***' : a).join(' ')}`);
+
         const childProcess = cp.spawn(geodeCmd, args, {
-            timeout: profile.queryTimeout,
-            env
+            timeout: profile.queryTimeout
         });
 
         let stdout = '';
         let stderr = '';
-
-        // Send password to stdin if using password-stdin
-        if (password) {
-            childProcess.stdin.write(password);
-            childProcess.stdin.end();
-        }
 
         childProcess.stdout.on('data', (data) => {
             stdout += data.toString();
@@ -508,10 +496,19 @@ function runGeodeQueryWithProfile(
         });
 
         childProcess.on('close', (code) => {
+            // Log stderr for debugging (contains debug output from CLI)
+            if (stderr) {
+                outputChannel.appendLine(`CLI stderr: ${stderr}`);
+            }
+
             if (code === 0) {
                 resolve(stdout);
             } else {
-                reject(stderr || `Process exited with code ${code}`);
+                // Extract error message from stderr, filtering debug lines
+                const errorLines = stderr.split('\n')
+                    .filter(line => !line.startsWith('debug('))
+                    .join('\n').trim();
+                reject(errorLines || `Process exited with code ${code}`);
             }
         });
 

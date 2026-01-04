@@ -223,34 +223,44 @@ export class ConnectionManager {
 
     /**
      * Build the connection arguments for the geode CLI
+     *
+     * Supported CLI flags:
+     *   --server <addr:port>   Server address
+     *   --insecure             Skip TLS certificate verification
+     *   --timeout <secs>       Connection timeout in seconds
+     *   -U, --user <username>  Authenticate as user
+     *   -P, --password <pass>  Authentication password
      */
     buildConnectionArgs(profile: ConnectionProfile): string[] {
         const args: string[] = [];
 
         args.push('--server', `${profile.host}:${profile.port}`);
 
-        if (profile.database) {
-            args.push('--database', profile.database);
-        }
-
-        if (profile.username) {
-            args.push('--user', profile.username);
-        }
-
         if (profile.insecure) {
             args.push('--insecure');
         }
 
-        if (profile.certPath) {
-            args.push('--cert', profile.certPath);
+        if (profile.timeout) {
+            // Convert ms to seconds
+            args.push('--timeout', Math.ceil(profile.timeout / 1000).toString());
         }
 
-        if (profile.keyPath) {
-            args.push('--key', profile.keyPath);
+        if (profile.username) {
+            args.push('-U', profile.username);
         }
 
-        if (profile.caPath) {
-            args.push('--ca', profile.caPath);
+        return args;
+    }
+
+    /**
+     * Build connection arguments including password
+     * Password is passed via -P flag
+     */
+    buildConnectionArgsWithPassword(profile: ConnectionProfile, password?: string): string[] {
+        const args = this.buildConnectionArgs(profile);
+
+        if (password) {
+            args.push('-P', password);
         }
 
         return args;

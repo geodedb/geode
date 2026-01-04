@@ -13,17 +13,30 @@ export class ConnectionTreeItem extends vscode.TreeItem {
         super(profile.name, vscode.TreeItemCollapsibleState.None);
 
         this.id = profile.id;
-        this.description = `${profile.host}:${profile.port}`;
+        this.description = this.buildDescription();
         this.tooltip = this.buildTooltip();
         this.contextValue = this.buildContextValue();
         this.iconPath = this.getIcon();
 
-        // Click to connect
-        this.command = {
-            command: 'geode.connections.connect',
-            title: 'Connect',
-            arguments: [profile.id]
-        };
+        // Only set click command if not already connected
+        // This prevents repeated connection attempts
+        if (!this.isConnected) {
+            this.command = {
+                command: 'geode.connections.connect',
+                title: 'Connect',
+                arguments: [profile.id]
+            };
+        }
+    }
+
+    private buildDescription(): string {
+        let desc = `${this.profile.host}:${this.profile.port}`;
+        if (this.isConnected) {
+            desc += ' (connected)';
+        } else if (this.isActive) {
+            desc += ' (selected)';
+        }
+        return desc;
     }
 
     private buildTooltip(): string {
