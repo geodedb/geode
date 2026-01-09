@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const quic = @import("transport/quic");
 
 /// Two-Phase Commit transaction states
 pub const TransactionState = enum {
@@ -112,32 +113,349 @@ pub const TwoPhaseResponse = struct {
     timestamp: i64,
 };
 
-/// Send a 2PC message to a participant endpoint
-fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
-    // Implementation uses network transport layer
-    // In production, this would:
-    // 1. Serialize message to wire format
-    // 2. Open connection to endpoint (or reuse from pool)
-    // 3. Send message with timeout
-    // 4. Wait for response with timeout
-    // 5. Deserialize and return response
-    _ = endpoint;
-    _ = timeout_ms;
+/// Connection pool for 2PC participant connections
+pub const TwoPhaseTransport = struct {
+    allocator: Allocator,
+    connections: std.StringHashMap(ConnectionEntry),
+    mutex: std.Thread.Mutex,
 
-    // For now, return success response
-    // Real implementation would use network_transport.zig
-    return TwoPhaseResponse{
-        .msg_type = switch (msg.msg_type) {
-            .prepare => .prepare_response,
-            .commit => .commit_response,
-            .abort => .abort_response,
-            else => .prepare_response,
-        },
-        .transaction_id = msg.transaction_id,
-        .participant_id = "participant",
-        .vote = .vote_commit,
-        .timestamp = std.time.timestamp(),
+    pub const ConnectionEntry = struct {
+        client: quic.QuicClient,
+        stream: ?*quic.QuicClientStream,
+        last_used: i64,
+        endpoint: []const u8,
     };
+
+    pub fn init(allocator: Allocator) TwoPhaseTransport {
+        return .{
+            .allocator = allocator,
+            .connections = std.StringHashMap(ConnectionEntry).init(allocator),
+            .mutex = std.Thread.Mutex{},
+        };
+    }
+
+    pub fn deinit(self: *TwoPhaseTransport) void {
+        var it = self.connections.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.stream) |stream| {
+                stream.close();
+            }
+            entry.value_ptr.client.deinit();
+            self.allocator.free(entry.value_ptr.endpoint);
+        }
+        self.connections.deinit();
+    }
+
+    /// Get or create a connection to endpoint (format: "host:port")
+    pub fn getConnection(self: *TwoPhaseTransport, endpoint: []const u8) !*ConnectionEntry {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.connections.getPtr(endpoint)) |entry| {
+            entry.last_used = std.time.timestamp();
+            return entry;
+        }
+
+        // Parse endpoint into host and port
+        const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
+        const host = endpoint[0..colon_pos];
+        const port_str = endpoint[colon_pos + 1 ..];
+        const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidPort;
+
+        // Create new connection
+        var client = quic.QuicClient.init(self.allocator);
+        client.connectInsecure(host, port, true) catch |err| {
+            std.debug.print("2PC_TRANSPORT: Failed to connect to {s}: {}\n", .{ endpoint, err });
+            return error.ConnectionFailed;
+        };
+
+        // Wait for handshake
+        client.waitForHandshake(5) catch |err| {
+            client.deinit();
+            std.debug.print("2PC_TRANSPORT: Handshake failed for {s}: {}\n", .{ endpoint, err });
+            return error.HandshakeFailed;
+        };
+
+        const entry = ConnectionEntry{
+            .client = client,
+            .stream = null,
+            .last_used = std.time.timestamp(),
+            .endpoint = try self.allocator.dupe(u8, endpoint),
+        };
+
+        try self.connections.put(endpoint, entry);
+        return self.connections.getPtr(endpoint).?;
+    }
+
+    /// Send a 2PC message and receive response
+    pub fn sendMessage(self: *TwoPhaseTransport, endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
+        _ = timeout_ms; // TODO: Implement proper timeout handling
+
+        const conn = try self.getConnection(endpoint);
+
+        // Get or create stream
+        if (conn.stream == null) {
+            conn.stream = try conn.client.openStream(true);
+        }
+        const stream = conn.stream.?;
+
+        // Serialize message to JSON
+        const json_msg = try serializeTwoPhaseMessage(self.allocator, msg);
+        defer self.allocator.free(json_msg);
+
+        // Send message
+        try stream.writeAll(json_msg);
+
+        // Poll for response
+        try conn.client.poll(100);
+
+        // Read response line
+        const response_line = stream.readLine(4096) catch |err| {
+            std.debug.print("2PC_TRANSPORT: Failed to read response from {s}: {}\n", .{ endpoint, err });
+            return error.ReadFailed;
+        };
+        defer self.allocator.free(response_line);
+
+        // Parse response
+        return try parseTwoPhaseResponse(self.allocator, response_line);
+    }
+};
+
+/// Global transport instance for 2PC messaging
+var global_transport: ?*TwoPhaseTransport = null;
+var transport_allocator: ?Allocator = null;
+
+/// Initialize the global 2PC transport
+pub fn initTransport(allocator: Allocator) !void {
+    if (global_transport != null) return;
+    transport_allocator = allocator;
+    global_transport = try allocator.create(TwoPhaseTransport);
+    global_transport.?.* = TwoPhaseTransport.init(allocator);
+}
+
+/// Deinitialize the global 2PC transport
+pub fn deinitTransport() void {
+    if (global_transport) |transport| {
+        transport.deinit();
+        if (transport_allocator) |allocator| {
+            allocator.destroy(transport);
+        }
+        global_transport = null;
+        transport_allocator = null;
+    }
+}
+
+/// Serialize TwoPhaseMessage to JSON (newline-terminated)
+fn serializeTwoPhaseMessage(allocator: Allocator, msg: TwoPhaseMessage) ![]u8 {
+    var buffer = std.ArrayList(u8).init(allocator);
+    errdefer buffer.deinit();
+
+    const writer = buffer.writer();
+    try writer.print("{{\"msg_type\":\"{s}\",\"txn_id\":\"{s}\",\"coord_id\":\"{s}\",\"ts\":{d},\"ops\":[", .{
+        @tagName(msg.msg_type),
+        msg.transaction_id,
+        msg.coordinator_id,
+        msg.timestamp,
+    });
+
+    // Serialize operations
+    for (msg.operations, 0..) |op, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeOperation(writer, op);
+    }
+
+    try writer.writeAll("]}\n");
+    return buffer.toOwnedSlice();
+}
+
+/// Serialize a single operation to JSON
+fn serializeOperation(writer: anytype, op: Operation) !void {
+    switch (op) {
+        .create_node => |node_op| {
+            try writer.print("{{\"type\":\"create_node\",\"node_id\":{d},\"label\":\"{s}\",\"props\":\"{s}\"}}", .{
+                node_op.node_id,
+                node_op.label,
+                node_op.properties,
+            });
+        },
+        .update_node => |node_op| {
+            try writer.print("{{\"type\":\"update_node\",\"node_id\":{d},\"label\":\"{s}\",\"props\":\"{s}\"}}", .{
+                node_op.node_id,
+                node_op.label,
+                node_op.properties,
+            });
+        },
+        .delete_node => |node_op| {
+            try writer.print("{{\"type\":\"delete_node\",\"node_id\":{d},\"label\":\"{s}\",\"props\":\"{s}\"}}", .{
+                node_op.node_id,
+                node_op.label,
+                node_op.properties,
+            });
+        },
+        .create_edge => |edge_op| {
+            try writer.print("{{\"type\":\"create_edge\",\"edge_id\":{d},\"src\":{d},\"tgt\":{d},\"type\":\"{s}\",\"props\":\"{s}\"}}", .{
+                edge_op.edge_id,
+                edge_op.source_id,
+                edge_op.target_id,
+                edge_op.edge_type,
+                edge_op.properties,
+            });
+        },
+        .update_edge => |edge_op| {
+            try writer.print("{{\"type\":\"update_edge\",\"edge_id\":{d},\"src\":{d},\"tgt\":{d},\"type\":\"{s}\",\"props\":\"{s}\"}}", .{
+                edge_op.edge_id,
+                edge_op.source_id,
+                edge_op.target_id,
+                edge_op.edge_type,
+                edge_op.properties,
+            });
+        },
+        .delete_edge => |edge_op| {
+            try writer.print("{{\"type\":\"delete_edge\",\"edge_id\":{d},\"src\":{d},\"tgt\":{d},\"type\":\"{s}\",\"props\":\"{s}\"}}", .{
+                edge_op.edge_id,
+                edge_op.source_id,
+                edge_op.target_id,
+                edge_op.edge_type,
+                edge_op.properties,
+            });
+        },
+    }
+}
+
+/// Parse TwoPhaseResponse from JSON line
+fn parseTwoPhaseResponse(allocator: Allocator, json_line: []const u8) !TwoPhaseResponse {
+    // Trim trailing newline if present
+    const line = std.mem.trimRight(u8, json_line, "\n\r");
+
+    // Simple JSON parsing - extract key fields
+    const msg_type_str = extractJsonString(line, "msg_type") orelse return error.InvalidResponse;
+    const txn_id = extractJsonString(line, "txn_id") orelse return error.InvalidResponse;
+    const participant_id = extractJsonString(line, "participant_id") orelse "unknown";
+    const vote_str = extractJsonString(line, "vote") orelse return error.InvalidResponse;
+    const timestamp = extractJsonInt(line, "ts") orelse std.time.timestamp();
+
+    // Parse message type
+    const msg_type: MessageType = if (std.mem.eql(u8, msg_type_str, "prepare_response"))
+        .prepare_response
+    else if (std.mem.eql(u8, msg_type_str, "commit_response"))
+        .commit_response
+    else if (std.mem.eql(u8, msg_type_str, "abort_response"))
+        .abort_response
+    else
+        return error.InvalidMessageType;
+
+    // Parse vote
+    const vote: PrepareResponse = if (std.mem.eql(u8, vote_str, "vote_commit"))
+        .vote_commit
+    else if (std.mem.eql(u8, vote_str, "vote_abort"))
+        .vote_abort
+    else
+        .timeout;
+
+    // Dupe strings so they outlive the parse
+    const txn_id_copy = try allocator.dupe(u8, txn_id);
+    const participant_id_copy = try allocator.dupe(u8, participant_id);
+
+    return TwoPhaseResponse{
+        .msg_type = msg_type,
+        .transaction_id = txn_id_copy,
+        .participant_id = participant_id_copy,
+        .vote = vote,
+        .timestamp = timestamp,
+    };
+}
+
+/// Extract a string value from JSON by key name
+fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
+    // Find "key":"
+    const search_pattern = std.fmt.allocPrint(std.heap.page_allocator, "\"{s}\":\"", .{key}) catch return null;
+    defer std.heap.page_allocator.free(search_pattern);
+
+    const start_idx = std.mem.indexOf(u8, json, search_pattern) orelse return null;
+    const value_start = start_idx + search_pattern.len;
+
+    // Find closing quote
+    const value_end = std.mem.indexOfPos(u8, json, value_start, "\"") orelse return null;
+
+    return json[value_start..value_end];
+}
+
+/// Extract an integer value from JSON by key name
+fn extractJsonInt(json: []const u8, key: []const u8) ?i64 {
+    // Find "key":
+    const search_pattern = std.fmt.allocPrint(std.heap.page_allocator, "\"{s}\":", .{key}) catch return null;
+    defer std.heap.page_allocator.free(search_pattern);
+
+    const start_idx = std.mem.indexOf(u8, json, search_pattern) orelse return null;
+    const value_start = start_idx + search_pattern.len;
+
+    // Find end of number (comma, }, or whitespace)
+    var value_end = value_start;
+    while (value_end < json.len) : (value_end += 1) {
+        const c = json[value_end];
+        if (c == ',' or c == '}' or c == ' ' or c == '\n') break;
+    }
+
+    return std.fmt.parseInt(i64, json[value_start..value_end], 10) catch null;
+}
+
+// CANARY: REQ=REQ-DIST-2PC-TRANSPORT-001; FEATURE="Two-Phase Commit Network Transport"; ASPECT=QUICMessaging; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-09
+/// Send a 2PC message to a participant endpoint using QUIC transport
+fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
+    // Use global transport if available, otherwise fall back to creating a one-shot connection
+    if (global_transport) |transport| {
+        return transport.sendMessage(endpoint, msg, timeout_ms);
+    }
+
+    // One-shot connection for when transport not initialized
+    // Parse endpoint into host and port
+    const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
+    const host = endpoint[0..colon_pos];
+    const port_str = endpoint[colon_pos + 1 ..];
+    const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidPort;
+
+    // Create allocator for this operation
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Create QUIC client and connect
+    var client = quic.QuicClient.init(allocator);
+    defer client.deinit();
+
+    client.connectInsecure(host, port, true) catch |err| {
+        std.debug.print("2PC_TRANSPORT: One-shot connect failed to {s}: {}\n", .{ endpoint, err });
+        return error.ConnectionFailed;
+    };
+
+    // Wait for handshake with timeout
+    const handshake_timeout: u32 = @intCast(@min(timeout_ms / 1000, 5));
+    client.waitForHandshake(if (handshake_timeout == 0) 1 else handshake_timeout) catch |err| {
+        std.debug.print("2PC_TRANSPORT: Handshake failed: {}\n", .{err});
+        return error.HandshakeFailed;
+    };
+
+    // Open stream
+    const stream = try client.openStream(true);
+    defer stream.close();
+
+    // Serialize and send message
+    const json_msg = try serializeTwoPhaseMessage(allocator, msg);
+    defer allocator.free(json_msg);
+
+    try stream.writeAll(json_msg);
+
+    // Poll and read response
+    try client.poll(100);
+
+    const response_line = stream.readLine(4096) catch |err| {
+        std.debug.print("2PC_TRANSPORT: Read response failed: {}\n", .{err});
+        return error.ReadFailed;
+    };
+    defer allocator.free(response_line);
+
+    // Parse and return response
+    return try parseTwoPhaseResponse(allocator, response_line);
 }
 
 /// Apply an undo operation to rollback a change

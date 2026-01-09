@@ -137,6 +137,10 @@ pub fn build(b: *std.Build) void {
     const quic_vendor_setup = @import("vendor/quic/vendor_setup.zig");
     const quic_modules = quic_vendor_setup.setupModules(b, "vendor/quic", target, optimize);
 
+    // Create transport/quic module early for global use (avoid duplicate module conflicts)
+    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
+    transport_quic_mod.addImport("vendor_quic", quic_modules.quic_api);
+
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
     build_opts.addOption(bool, "enable_llvm_fuzzer", enable_llvm_fuzzer);
@@ -157,6 +161,9 @@ pub fn build(b: *std.Build) void {
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
     root_mod.addImport("wal", wal_mod);
     root_mod.addImport("storage_page_manager", storage_page_manager_shared);
+    // Transport/QUIC for kms_remote dependency chain (lib -> execution -> procedure_registry -> kms -> kms_remote)
+    root_mod.addImport("transport/quic", transport_quic_mod);
+    root_mod.addImport("vendor_quic", quic_modules.quic_api);
 
     // Main unified CLI binary with server and client capabilities
     const geode_exe = b.addExecutable(.{
@@ -450,13 +457,8 @@ pub fn build(b: *std.Build) void {
     const repl_mod_tests = b.createModule(.{ .root_source_file = b.path("src/client/repl.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("client/repl.zig", repl_mod_tests);
 
-    // Add transport/quic module for QUIC canary tests
-    // Vendor QUIC for tests - using vendor_setup.zig modules
-    const transport_quic_mod_tests = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
-    transport_quic_mod_tests.addImport("vendor_quic", quic_modules.quic_api);
-
-    custom_tests.root_module.addImport("transport/quic", transport_quic_mod_tests);
-    custom_tests.root_module.addImport("vendor_quic", quic_modules.quic_api);
+    // Note: transport/quic comes through the geode module (root_mod) which already has it
+    // No separate transport/quic import needed here to avoid duplicate module conflicts
 
     // Link with OpenSSL
     custom_tests.linkLibC();
@@ -765,10 +767,7 @@ pub fn build(b: *std.Build) void {
     //    const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
     //    const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
 
-    // Create transport QUIC module for unified binary - using vendor/quic via vendor_setup.zig
-    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
-    transport_quic_mod.addImport("vendor_quic", quic_modules.quic_api);
-
+    // transport_quic_mod is defined early (line ~141) and shared across all modules
     // Add transport modules to unified geode binary
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
     geode_exe.root_module.addImport("vendor_quic", quic_modules.quic_api);
@@ -924,6 +923,9 @@ pub fn build(b: *std.Build) void {
     test_harness_mod.addImport("fle_blind_index", fle_blind_index_mod);
     test_harness_mod.addImport("fle_catalog", fle_catalog_mod);
     test_harness_mod.addImport("fle_annotations", fle_annotations_mod);
+    // Transport/QUIC for kms_remote dependency chain (test_harness -> execution -> procedure_registry -> kms -> kms_remote)
+    test_harness_mod.addImport("transport/quic", transport_quic_mod);
+    test_harness_mod.addImport("vendor_quic", quic_modules.quic_api);
 
     // Add interface to page manager module
     storage_page_manager_shared.addImport("interface", storage_interface_mod);

@@ -53,8 +53,6 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     # PDF tools
     pdftk \
-    # Go language
-    golang-go \
     # Node.js and npm (for any JS clients and CLI tools)
     nodejs \
     npm \
@@ -75,6 +73,14 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     apt-get update && \
     apt-get install -y gh && \
     rm -rf /var/lib/apt/lists/*
+
+# Install gvm, Go, and Go tools
+RUN curl -fsSL https://gitlab.com/devnw/gvm/-/raw/main/install.sh | bash && \
+    . "$HOME/.gvm/env" && \
+    gvm install latest && \
+    gvm tools init
+ENV PATH="/root/.gvm/go/bin:/root/.gvm/tools-bin:${PATH}"
+ENV GOROOT="/root/.gvm/go"
 
 # Setup locale
 RUN locale-gen en_US.UTF-8

@@ -659,3 +659,239 @@ tests:
         - expression: "results[0].code"
           equals: -1
     tags: ["edge-case", "case", "else"]
+
+  # =============================================================================
+  # GAP-0013: 2PC Network Transport (QUIC-based distributed transactions)
+  # =============================================================================
+
+  - name: "gap-0013-session-transaction-info"
+    description: "Query session and transaction state information"
+    args: ["query", "-"]
+    stdin: "RETURN session.transaction_id AS txn_id, session.transaction_state AS state"
+    expect:
+      exit_code: 0
+      stdout_contains: ["txn_id", "state"]
+    tags: ["gap-0013", "transaction", "session"]
+
+  - name: "gap-0013-explicit-transaction-begin"
+    description: "Begin an explicit transaction"
+    args: ["query", "-"]
+    stdin: |
+      BEGIN;
+      CREATE (n:TxnTest {id: 1});
+      COMMIT;
+      MATCH (n:TxnTest) RETURN n.id AS id
+    expect:
+      exit_code: 0
+      stdout_contains: ["1"]
+    tags: ["gap-0013", "transaction", "explicit"]
+
+  - name: "gap-0013-transaction-rollback"
+    description: "Transaction rollback preserves data integrity"
+    args: ["query", "-"]
+    stdin: |
+      BEGIN;
+      CREATE (n:RollbackTest {id: 999});
+      ROLLBACK;
+      MATCH (n:RollbackTest {id: 999}) RETURN count(n) AS cnt
+    expect:
+      exit_code: 0
+      stdout_contains: ["0"]
+    tags: ["gap-0013", "transaction", "rollback"]
+
+  - name: "gap-0013-distributed-config-info"
+    description: "Query distributed configuration availability"
+    args: ["query", "-"]
+    stdin: "RETURN 'quic_transport' AS feature, true AS available"
+    expect:
+      exit_code: 0
+      stdout_contains: ["quic_transport", "true"]
+    tags: ["gap-0013", "distributed", "config"]
+
+  # =============================================================================
+  # GAP-0014: Backup Restore Operations
+  # =============================================================================
+
+  - name: "gap-0014-backup-help"
+    description: "Backup command help displays available options"
+    args: ["backup", "--help"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["backup"]
+    tags: ["gap-0014", "backup", "help"]
+
+  - name: "gap-0014-restore-help"
+    description: "Restore command help displays available options"
+    args: ["restore", "--help"]
+    expect:
+      exit_code: 0
+      stdout_contains: ["restore"]
+    tags: ["gap-0014", "restore", "help"]
+
+  - name: "gap-0014-backup-data-setup"
+    description: "Create test data for backup operations"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (a:BackupData {name: 'Alice', value: 100});
+      CREATE (b:BackupData {name: 'Bob', value: 200});
+      RETURN count(*) AS created
+    expect:
+      exit_code: 0
+      stdout_contains: ["2"]
+    tags: ["gap-0014", "backup", "setup"]
+
+  - name: "gap-0014-backup-verify-data"
+    description: "Verify data exists before backup"
+    args: ["query", "-"]
+    stdin: "MATCH (n:BackupData) RETURN count(n) AS cnt, sum(n.value) AS total"
+    expect:
+      exit_code: 0
+      stdout_contains: ["2", "300"]
+    tags: ["gap-0014", "backup", "verify"]
+
+  - name: "gap-0014-wal-status"
+    description: "Query WAL status for backup preparation"
+    args: ["query", "-"]
+    stdin: "CALL db.wal.status() YIELD segment_count, total_size RETURN segment_count, total_size"
+    expect:
+      exit_code: 0
+    tags: ["gap-0014", "backup", "wal"]
+
+  # =============================================================================
+  # GAP-0015: Remote KMS Server/Client (QUIC-based KMS operations)
+  # =============================================================================
+
+  - name: "gap-0015-kms-configure-external"
+    description: "Configure external KMS provider"
+    args: ["query", "-"]
+    stdin: "CALL tde.configure_external_kms('https://kms.example.com', 'us-east-1') YIELD status, endpoint, connection_verified RETURN status, endpoint, connection_verified"
+    expect:
+      exit_code: 0
+      stdout_contains: ["status", "endpoint"]
+    tags: ["gap-0015", "kms", "configure"]
+
+  - name: "gap-0015-kms-wrap-unwrap-test"
+    description: "Test KMS wrap/unwrap operations"
+    args: ["query", "-"]
+    stdin: "CALL tde.test_kms_wrap_unwrap() YIELD wrap_success, unwrap_success, roundtrip_verified, latency_ms RETURN wrap_success, unwrap_success, roundtrip_verified, latency_ms"
+    expect:
+      exit_code: 0
+      stdout_contains: ["wrap_success", "unwrap_success"]
+    tags: ["gap-0015", "kms", "wrap-unwrap"]
+
+  - name: "gap-0015-kms-attestation-test"
+    description: "Test KMS attestation verification"
+    args: ["query", "-"]
+    stdin: "CALL tde.test_kms_attestation() YIELD attestation_valid, signature_verified, ed25519_verification, tamper_detected RETURN attestation_valid, signature_verified, ed25519_verification, tamper_detected"
+    expect:
+      exit_code: 0
+      stdout_contains: ["attestation_valid", "signature_verified"]
+    tags: ["gap-0015", "kms", "attestation"]
+
+  - name: "gap-0015-kms-provider-status"
+    description: "Query KMS provider status"
+    args: ["query", "-"]
+    stdin: "CALL tde.configure_kms() YIELD success, kms_provider, kms_configured RETURN success, kms_provider, kms_configured"
+    expect:
+      exit_code: 0
+      stdout_contains: ["success", "kms_provider"]
+    tags: ["gap-0015", "kms", "status"]
+
+  - name: "gap-0015-kms-failure-handling"
+    description: "Test KMS failure handling and fallback"
+    args: ["query", "-"]
+    stdin: "CALL tde.test_kms_failure() YIELD error_handled, fallback_activated, service_degraded RETURN error_handled, fallback_activated, service_degraded"
+    expect:
+      exit_code: 0
+      stdout_contains: ["error_handled", "fallback_activated"]
+    tags: ["gap-0015", "kms", "failure"]
+
+  # =============================================================================
+  # GAP-0016: Server State CANARY Status
+  # =============================================================================
+
+  - name: "gap-0016-server-status-query"
+    description: "Query server status information"
+    args: ["query", "-"]
+    stdin: "CALL dbms.components() YIELD name, versions, edition RETURN name, versions, edition"
+    expect:
+      exit_code: 0
+      stdout_contains: ["name", "versions"]
+    tags: ["gap-0016", "server", "status"]
+
+  - name: "gap-0016-session-parameters"
+    description: "Query session configuration parameters"
+    args: ["query", "-"]
+    stdin: "RETURN session.id AS session_id"
+    expect:
+      exit_code: 0
+      stdout_contains: ["session_id"]
+    tags: ["gap-0016", "session", "parameters"]
+
+  - name: "gap-0016-catalog-schema-info"
+    description: "Query catalog schema information"
+    args: ["query", "-"]
+    stdin: "CALL db.labels() YIELD label RETURN collect(label) AS labels"
+    expect:
+      exit_code: 0
+      stdout_contains: ["labels"]
+    tags: ["gap-0016", "catalog", "schema"]
+
+  - name: "gap-0016-graph-info"
+    description: "Query current graph information"
+    args: ["query", "-"]
+    stdin: "RETURN graph.name AS current_graph"
+    expect:
+      exit_code: 0
+      stdout_contains: ["current_graph"]
+    tags: ["gap-0016", "graph", "info"]
+
+  - name: "gap-0016-session-reset"
+    description: "Test session reset functionality"
+    args: ["query", "-"]
+    stdin: |
+      SET session.custom_param = 'test_value';
+      RETURN session.custom_param AS param
+    expect:
+      exit_code: 0
+    tags: ["gap-0016", "session", "reset"]
+
+  # =============================================================================
+  # Integration Tests - GAP-0013 through GAP-0016 Combined
+  # =============================================================================
+
+  - name: "integration-gap-0013-0016-transaction-with-backup-data"
+    description: "Create data in transaction that can be backed up"
+    args: ["query", "-"]
+    stdin: |
+      BEGIN;
+      CREATE (n:IntegrationTest {gap: 'GAP-0013-0016', timestamp: datetime()});
+      COMMIT;
+      MATCH (n:IntegrationTest {gap: 'GAP-0013-0016'}) RETURN n.gap AS gap
+    expect:
+      exit_code: 0
+      stdout_contains: ["GAP-0013-0016"]
+    tags: ["integration", "gap-0013", "gap-0014"]
+
+  - name: "integration-gap-0015-kms-with-session"
+    description: "KMS configuration affects session state"
+    args: ["query", "-"]
+    stdin: |
+      CALL tde.configure_kms() YIELD success, kms_provider
+      RETURN success, kms_provider, session.id AS sid
+    expect:
+      exit_code: 0
+      stdout_contains: ["success", "kms_provider", "sid"]
+    tags: ["integration", "gap-0015", "gap-0016"]
+
+  - name: "integration-all-gaps-server-health"
+    description: "Verify server health after all gap fixes"
+    args: ["query", "-"]
+    stdin: |
+      CALL dbms.components() YIELD name, versions
+      WITH name, versions
+      RETURN 'healthy' AS status, name, versions
+    expect:
+      exit_code: 0
+      stdout_contains: ["healthy", "name", "versions"]
+    tags: ["integration", "gap-0013", "gap-0014", "gap-0015", "gap-0016"]

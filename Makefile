@@ -20,29 +20,24 @@ else
 	WINE_CMD := wine64
 endif
 
-# --- Go client settings (strict vendor mode) ---
-GO ?= go
-GQL_CLIENT_DIR ?= clients/go/gql
-# Force vendor even if someone tries to override; strip any -mod flag the caller passed
-export GOFLAGS := -mod=vendor $(filter-out -mod=%,$(GOFLAGS))
-export GOWORK ?= off
-GO_BUILD_FLAGS ?= -trimpath
-GO_TEST_FLAGS  ?= -v -count=1 -timeout=90s
+# Note: Go, Python, and Rust clients have moved to separate repositories:
+#   - Go: geode-client-go
+#   - Python: geode-client-python
+#   - Rust: geode-client-rust
 
-.PHONY: go-prep go-vendor-sync go-vendor-check go-matrix
-.PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset go-build go-test go-clean go-example fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl
+.PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl
 .PHONY: goreleaser goreleaser-test goreleaser-snapshot goreleaser-check
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
-.PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-python client-test-go client-test-rust client-test-zig rust-build-docker rust-test-docker
+.PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
 .PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
 .PHONY: geodetestlab geodetestlab-spec geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
 .PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
-.PHONY: client-test-harness client-test-setup client-test-basic client-test-all client-test-html client-test-coverage client-test-comprehensive
+# Note: client-test-harness moved to separate repository (geode-test-harness)
 .PHONY: deps deps-check
 
 # Default target - build everything including cross-compilation checks (non-blocking)
-all: sub build go-build test cross-test no-feature-flags status-generate client-test-comprehensive geodetestlab
+all: sub build test cross-test no-feature-flags status-generate geodetestlab
 
 # Help target - show all available targets
 help:
@@ -51,11 +46,11 @@ help:
 	@echo ""
 	@echo "Build targets:"
 	@echo "  make all         - Build everything (default)"
-	@echo "  make build       - Build debug version (Zig + Go)"
-	@echo "  make release     - Build release version (Zig + Go)"
+	@echo "  make build       - Build debug version (Zig)"
+	@echo "  make release     - Build release version (Zig)"
 	@echo "  make tools       - Build all tools"
 	@echo "  make clean       - Clean build artifacts"
-	@echo "  make fmt         - Format all code"
+	@echo "  make fmt         - Format Zig code"
 	@echo ""
 	@echo "Release targets:"
 	@echo "  make goreleaser         - Run GoReleaser (create release)"
@@ -64,15 +59,14 @@ help:
 	@echo "  make goreleaser-check   - Validate GoReleaser config"
 	@echo ""
 	@echo "Test targets:"
-	@echo "  make test        - Run all tests (Zig + Go + QUIC + clients)"
+	@echo "  make test        - Run all tests (Zig + QUIC)"
 	@echo "  make quic-test   - Run QUIC protocol tests"
-	@echo "  make client-test-python - Test Python client"
-	@echo "  make client-test-go     - Test Go client"
-	@echo "  make client-test-rust   - Test Rust client"
 	@echo "  make client-test-zig    - Test Zig client"
 	@echo "  make integration-test   - Run integration tests"
 	@echo "  make fuzz        - Run fuzz tests"
 	@echo "  make bench       - Run benchmarks"
+	@echo ""
+	@echo "Note: Go, Python, Rust clients moved to separate repos"
 	@echo ""
 	@echo "Cross-compilation targets:"
 	@echo "  make cross-compile      - Build for all platforms"
@@ -125,23 +119,11 @@ deps-check:
 		echo "Please install Zig from https://ziglang.org/download/"; \
 		exit 1; \
 	fi
-	@echo -n "Checking Rust... "
-	@if command -v rustc >/dev/null 2>&1; then \
-		echo "✓ $(shell rustc --version | cut -d' ' -f2)"; \
-	else \
-		echo "⚠ missing (optional for Rust client)"; \
-	fi
-	@echo -n "Checking Go... "
-	@if command -v go >/dev/null 2>&1; then \
-		echo "✓ $(shell go version | cut -d' ' -f3)"; \
-	else \
-		echo "⚠ missing (optional for Go client)"; \
-	fi
 	@echo -n "Checking Python... "
 	@if command -v python3 >/dev/null 2>&1; then \
 		echo "✓ $(shell python3 --version | cut -d' ' -f2)"; \
 	else \
-		echo "⚠ missing (optional for Python client)"; \
+		echo "⚠ missing (optional for test runner)"; \
 	fi
 	@echo -n "Checking OpenSSL... "
 	@if command -v openssl >/dev/null 2>&1; then \
@@ -153,6 +135,8 @@ deps-check:
 	fi
 	@echo ""
 	@echo "✓ All required dependencies are installed"
+	@echo ""
+	@echo "Note: Go, Python, Rust clients have moved to separate repositories"
 
 wine-info:
 ifeq ($(WINE_AVAILABLE),1)
@@ -181,24 +165,6 @@ check-openssl:
 
 sub:
 	git submodule update --init --recursive
-
-# --- Go vendoring: sync + enforce vendor usage ---
-go-prep: go-vendor-sync go-vendor-check
-
-go-vendor-sync:
-	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
-		echo "-> syncing vendor in $(GQL_CLIENT_DIR)"; \
-		cd "$(GQL_CLIENT_DIR)" && \
-		$(GO) mod tidy && $(GO) mod vendor && $(GO) mod verify; \
-	else \
-		echo "Go client moved to separate repository (geode-client-go)"; \
-	fi
-
-go-vendor-check:
-	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
-		echo "-> verifying vendor is used (GOFLAGS=$(GOFLAGS))"; \
-		cd "$(GQL_CLIENT_DIR)" && $(GO) list -mod=vendor -m all 2>/dev/null || echo "(note) 'go list -m all' may not resolve under vendor; proceeding with vendor-only builds"; \
-	fi
 
 build:
 	$(ZIG) build $(ZIG_FLAGS)
@@ -231,13 +197,8 @@ goreleaser-check:
 test:
 	@echo "Running Zig tests..."
 	$(ZIG) build test $(ZIG_FLAGS)
-	@echo "Running Go tests..."
-	$(MAKE) go-test
 	@echo "Running QUIC protocol tests..."
 	@$(MAKE) quic-test || echo "⚠ QUIC tests skipped (may require server)"
-	@echo "Running client tests..."
-	@$(MAKE) client-test-python || echo "⚠ Python client tests skipped"
-	@$(MAKE) client-test-go || echo "⚠ Go client tests skipped"
 	@echo "✓ Core tests completed"
 
 # QUIC test target (uses vendor QUIC implementation)
@@ -248,61 +209,7 @@ quic-test: build
 	fi
 	@echo "✓ QUIC tests completed"
 
-# Client test targets
-client-test-python: build
-	@echo "Testing Python client..."
-	@if [ -f "test_quic_protocol.py" ] && [ -x "scripts/test_client_with_server.sh" ]; then \
-		scripts/test_client_with_server.sh test_quic_protocol.py; \
-	elif [ -f "clients/python/test_client.py" ] && [ -x "scripts/test_client_with_server.sh" ]; then \
-		cd clients/python && ../../scripts/test_client_with_server.sh test_client.py; \
-	else \
-		echo "Python client tests not found or test runner not available"; \
-	fi
-
-client-test-go: go-build
-	@echo "Testing Go client..."
-	@if [ -d "clients/go" ]; then \
-		cd clients/go && $(GO) test $(GO_TEST_FLAGS) ./... 2>/dev/null || \
-		echo "Go client test requires server running"; \
-	else \
-		echo "Go client directory not found"; \
-	fi
-
-client-test-rust: build
-	@echo "Testing Rust client..."
-	@if [ -d "clients/rust" ] && command -v cargo >/dev/null 2>&1; then \
-		cd clients/rust && cargo test 2>/dev/null || \
-		echo "Rust client test requires server running"; \
-	else \
-		echo "Rust client not available (cargo not found or client not present)"; \
-	fi
-
-# Build Rust client using Docker container (bypasses Nix/BoringSSL build issues)
-rust-build-docker:
-	@echo "Building Rust client in Docker container..."
-	@if [ -d "clients/rust" ] && command -v docker >/dev/null 2>&1; then \
-		cd clients/rust && ./build-docker.sh; \
-	else \
-		echo "Docker not available or Rust client directory not found"; \
-		exit 1; \
-	fi
-
-# Test Rust client with Docker build
-rust-test-docker: rust-build-docker build
-	@echo "Testing Rust client (Docker build)..."
-	@echo "Starting Geode server for integration tests..."
-	@./zig-out/bin/geode serve --listen 127.0.0.1:8443 2>&1 &
-	@SERVER_PID=$$!; \
-	sleep 3; \
-	echo "Running Rust client tests..."; \
-	cd clients/rust && cargo test --release 2>&1 || { \
-		echo "Rust client tests failed"; \
-		kill $$SERVER_PID 2>/dev/null || true; \
-		exit 1; \
-	}; \
-	kill $$SERVER_PID 2>/dev/null || true; \
-	echo "Rust client tests completed"
-
+# Client test target (Go, Python, Rust clients moved to separate repos)
 client-test-zig: build
 	@echo "Testing Zig client..."
 	@if [ -d "clients/zig" ]; then \
@@ -310,47 +217,6 @@ client-test-zig: build
 		echo "Zig client test requires server running"; \
 	else \
 		echo "Zig client directory not found"; \
-	fi
-
-# Build Go client library (strict vendor)
-# Note: Go client moved to separate repository (geode-client-go)
-go-build: go-prep
-	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
-		echo "Building Go client library..."; \
-		cd "$(GQL_CLIENT_DIR)" && $(GO) build $(GO_BUILD_FLAGS) ./...; \
-		if [ -d "$(GQL_CLIENT_DIR)/example" ]; then \
-			echo "Building Go example..."; \
-			mkdir -p zig-out/bin; \
-			cd "$(GQL_CLIENT_DIR)/example" && $(GO) build $(GO_BUILD_FLAGS) -o ../../../../zig-out/bin/gql-example .; \
-		fi; \
-	else \
-		echo "Go client moved to separate repository (geode-client-go)"; \
-	fi
-
-# Run Go client tests (strict vendor)
-# Note: Go client moved to separate repository (geode-client-go)
-go-test: go-prep
-	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
-		echo "Running Go client tests..."; \
-		cd "$(GQL_CLIENT_DIR)" && CI=$${CI:-true} $(GO) test $(GO_TEST_FLAGS) ./...; \
-	else \
-		echo "Go client moved to separate repository (geode-client-go)"; \
-	fi
-
-# Clean Go client artifacts
-go-clean:
-	@if [ -d "$(GQL_CLIENT_DIR)" ]; then \
-		echo "Cleaning Go client artifacts..."; \
-		cd "$(GQL_CLIENT_DIR)" && $(GO) clean || true; \
-	fi
-
-# Run Go client example
-go-example: build go-build
-	@if [ -f "./zig-out/bin/gql-example" ]; then \
-		echo "Running Go client example (process mode)..."; \
-		./zig-out/bin/gql-example -mode process -v; \
-	else \
-		echo "Go example not found, run 'make go-build' first"; \
 	fi
 
 # Run comprehensive integration tests
@@ -454,7 +320,7 @@ load-dataset: build
 	fi
 
 # Geodetestlab test suite targets
-geodetestlab: build geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25 client-test-comprehensive
+geodetestlab: build geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
 	@echo "All geodetestlab tests complete"
 
 # Run a specific geodetestlab spec file
@@ -595,40 +461,8 @@ geodetestlab-trends:
 		exit 1; \
 	fi
 
-# ============================================================================
-# Client Library Test Harness
-# ============================================================================
-# Comprehensive multi-language test suite for Python, Go, Rust, and Zig clients
-
-CLIENT_TEST_DIR := clients/test-harness
-
-client-test-setup:
-	@echo "==> Setting up client test harness..."
-	@cd $(CLIENT_TEST_DIR) && $(MAKE) setup
-
-client-test-basic: client-test-setup
-	@echo "==> Running basic client library tests..."
-	@cd $(CLIENT_TEST_DIR) && $(MAKE) test
-
-client-test-all: client-test-setup
-	@echo "==> Running all client library test suites..."
-	@cd $(CLIENT_TEST_DIR) && $(MAKE) test-all
-
-client-test-comprehensive:
-	@echo "==> Running comprehensive client library test suites..."
-	@echo "Note: Some clients may have moved to separate repositories"
-	@cd $(CLIENT_TEST_DIR) && $(MAKE) test-comprehensive || echo "⚠ Some client tests failed (clients may be in separate repos)"
-
-client-test-html: client-test-setup
-	@echo "==> Running client tests with HTML dashboard..."
-	@cd $(CLIENT_TEST_DIR) && $(MAKE) test-all-html
-
-client-test-coverage: client-test-setup
-	@echo "==> Running client tests with coverage analysis..."
-	@cd $(CLIENT_TEST_DIR) && $(MAKE) test-with-coverage
-
-client-test-harness: client-test-coverage
-	@echo "==> Client test harness: PASSED"
+# Note: Client test harness moved to separate repository (geode-test-harness)
+# See: https://gitlab.com/devnw/geode-test-harness
 
 fuzz:
 	$(ZIG) build fuzz $(ZIG_FLAGS)
@@ -725,11 +559,11 @@ canary-verify: canary
 .PHONY: verify-all verify-fast ci-verify
 
 # Full, strict E2E verification. Fails on vendoring issues immediately.
-verify-all: clean sub quic-init fmt go-prep build test integration-test dataset-integration-test geodetestlab client-test-harness cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
+verify-all: clean sub quic-init fmt build test integration-test dataset-integration-test geodetestlab cross-compile-strict no-feature-flags status-generate governance-check docker-ci
 	@echo "==> E2E verification: PASSED"
 
 # Faster dev loop (no fuzz/bench/docker/governance)
-verify-fast: go-prep build test geodetestlab-comprehensive client-test-basic cross-compile-required cross-go-clients
+verify-fast: build test geodetestlab-comprehensive cross-compile-required
 	@echo "==> Fast verification: PASSED"
 
 # CI-friendly alias
@@ -769,10 +603,6 @@ fmt:
 	$(ZIG) fmt src/
 	$(ZIG) fmt tests/
 	$(ZIG) fmt build.zig
-	@echo "Formatting Go code..."
-	@if [ -d "clients/go/gql" ]; then \
-		cd clients/go/gql && go fmt ./...; \
-	fi
 
 # Clean build artifacts
 clean:
@@ -780,11 +610,10 @@ clean:
 	rm -rf zig-out
 	rm -rf .zig-cache
 	rm -rf zig-cache
-	$(MAKE) go-clean
 
-# Run build, test, fuzz, bench, strict cross, clients, governance, docker
-ci: clean go-prep build test geodetestlab fuzz bench cross-compile-strict cross-go-clients test-cross-clients no-feature-flags status-generate governance-check docker-ci
-	@echo "CI pipeline completed successfully (v0.17.1)"
+# Run build, test, fuzz, bench, strict cross, governance, docker
+ci: clean build test geodetestlab fuzz bench cross-compile-strict no-feature-flags status-generate governance-check docker-ci
+	@echo "CI pipeline completed successfully (v0.18.0)"
 
 # Strict cross-compilation for CI (fails on any error)
 cross-compile-strict: cross-compile-required
@@ -842,8 +671,8 @@ transport-parity-smokes: build
 	@echo "✓ Transport parity smokes completed (non-fatal mode)"
 
 # Cross-compilation targets (required 64-bit targets only)
-cross-compile: cross-compile-required cross-compile-optional cross-clients
-	@echo "Cross-compilation checks complete (including client libraries)"
+cross-compile: cross-compile-required cross-compile-optional cross-zig-clients
+	@echo "Cross-compilation checks complete (including Zig client libraries)"
 
 # Required 64-bit cross-compilation targets (must all pass)
 cross-compile-required: cross-linux-x86_64 cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64
@@ -859,7 +688,6 @@ cross-linux-x86_64:
 	@echo "Cross-compiling for Linux x86_64..."
 	$(ZIG) build -Dtarget=x86_64-linux -p zig-out/linux-x86_64 $(ZIG_FLAGS)
 	@echo "✓ Linux x86_64 build successful"
-	@$(MAKE) cross-go-linux-x86_64
 
 # Cross-compile for Windows x86_64
 cross-windows:
@@ -869,7 +697,6 @@ cross-windows:
 	@test -f zig-out/windows-x86_64/bin/geodec.exe || (echo "Failed to build geodec.exe" && exit 1)
 	@test -f zig-out/windows-x86_64/bin/gql.exe || (echo "Failed to build gql.exe" && exit 1)
 	@echo "✓ Windows x86_64 build successful"
-	@$(MAKE) cross-go-windows-x86_64
 
 # Cross-compile for Linux ARM (32-bit)
 cross-linux-arm:
@@ -882,7 +709,6 @@ cross-linux-arm64:
 	@echo "Cross-compiling for Linux ARM64..."
 	$(ZIG) build -Dtarget=aarch64-linux-gnu -p zig-out/linux-arm64 $(ZIG_FLAGS)
 	@echo "✓ Linux ARM64 build successful"
-	@$(MAKE) cross-go-linux-arm64
 
 # Cross-compile for Linux RISC-V 64-bit
 cross-linux-riscv64:
@@ -900,7 +726,6 @@ cross-macos-x86_64:
 	else \
 		echo "Skipping macOS x86_64 cross-compile on x86_64 macOS"; \
 	fi
-	@$(MAKE) cross-go-darwin-x86_64
 
 # Cross-compile for macOS ARM64 (Apple Silicon)
 cross-macos-arm64:
@@ -912,7 +737,6 @@ cross-macos-arm64:
 	else \
 		echo "Skipping macOS ARM64 cross-compile on ARM64 macOS"; \
 	fi
-	@$(MAKE) cross-go-darwin-arm64
 
 # Cross-compile for Windows ARM64
 cross-windows-arm64:
@@ -1182,17 +1006,11 @@ dev-test:
 	@echo "Running tests in development container..."
 	@docker exec -it geode-dev make test
 
-# Run client tests inside dev container
-dev-test-clients:
-	@echo "Running client tests in development container..."
-	@docker exec -it geode-dev make client-test-all
+# Note: Client test harness moved to separate repository (geode-test-harness)
+# dev-test-clients target removed
 
-# Client cross-compilation targets
-.PHONY: cross-clients cross-zig-clients cross-go-clients test-cross-clients
-
-# Cross-compile all clients
-cross-clients: cross-zig-clients cross-go-clients
-	@echo "✓ All client libraries cross-compiled successfully"
+# Client cross-compilation targets (Zig only - Go/Python/Rust clients moved to separate repos)
+.PHONY: cross-zig-clients
 
 # Cross-compile Zig clients for all platforms
 cross-zig-clients:
@@ -1200,102 +1018,11 @@ cross-zig-clients:
 	$(ZIG) build cross-clients $(ZIG_FLAGS)
 	@echo "✓ Zig clients built for all platforms"
 
-# Cross-compile Go clients for all platforms
-cross-go-clients: cross-go-windows-x86_64 cross-go-linux-x86_64 cross-go-linux-arm64 cross-go-darwin-x86_64 cross-go-darwin-arm64
-	@echo "✓ Go clients built for all platforms"
-
-# --- Cross-compile Go client example (pure Go, CGO disabled) ---
-define go_build_cross
-	@if [ -d "$(GQL_CLIENT_DIR)/example" ]; then \
-		echo "Building Go client example for $(1)/$(2)..."; \
-		mkdir -p zig-out/$(3)/bin zig-out/clients/$(3); \
-		cd "$(GQL_CLIENT_DIR)/example" && \
-		CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) $(GO) build $(GO_BUILD_FLAGS) \
-			-o ../../../../zig-out/$(3)/bin/gql-example$(4) .; \
-		ln -sf ../../$(3)/bin/gql-example$(4) ../../../../zig-out/clients/$(3)/gql-example$(4); \
-		echo "✓ Go client example built for $(3)"; \
-	fi
-endef
-
-# Existing target names preserved, but now depend on go-prep and place a client symlink
-cross-go-windows-x86_64: go-prep
-	$(call go_build_cross,windows,amd64,windows-x86_64,.exe)
-
-cross-go-linux-x86_64: go-prep
-	$(call go_build_cross,linux,amd64,linux-x86_64,)
-
-cross-go-linux-arm64: go-prep
-	$(call go_build_cross,linux,arm64,linux-arm64,)
-
-cross-go-darwin-x86_64: go-prep
-	$(call go_build_cross,darwin,amd64,macos-x86_64,)
-
-cross-go-darwin-arm64: go-prep
-	$(call go_build_cross,darwin,arm64,macos-arm64,)
-
-# Test cross-compiled clients
-test-cross-clients:
-	@echo "Testing cross-compiled clients..."
-	@# Test native Zig client builds
-	$(ZIG) build test-clients $(ZIG_FLAGS)
-
-	@# Test cross-compiled binaries with QEMU if available
-	@echo "Testing cross-compiled binaries with QEMU (if available)..."
-
-	@# Test Linux ARM64 binaries with qemu-aarch64
-	@if command -v qemu-aarch64 >/dev/null 2>&1 && [ -f "zig-out/clients/linux-arm64/geode-zig-example-linux-arm64" ]; then \
-		echo "Testing Linux ARM64 Zig client with QEMU..."; \
-		qemu-aarch64 -L /usr/aarch64-linux-gnu zig-out/clients/linux-arm64/geode-zig-example-linux-arm64 2>&1 | head -5 || true; \
-		echo "✓ Linux ARM64 Zig client executed with QEMU"; \
-	else \
-		echo "⚠ qemu-aarch64 not available or binary not found, skipping Linux ARM64 test"; \
-	fi
-
-	@# Test Windows x86_64 binaries with Wine if available
-	@if [ -n "$(WINE_CMD)" ] && [ -f "zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe" ]; then \
-		echo "Testing Windows x86_64 Zig client with Wine ($(WINE_CMD))..."; \
-		WINEDEBUG=-all $(WINE_CMD) zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe 2>&1 | head -5 || true; \
-		echo "✓ Windows x86_64 Zig client executed with Wine"; \
-	else \
-		echo "⚠ Wine not available or binary not found, skipping Windows x86_64 test"; \
-	fi
-
-	@# Test Windows x86_64 Go client with Wine
-	@if [ -n "$(WINE_CMD)" ] && [ -f "zig-out/clients/windows-x86_64/gql-example.exe" ]; then \
-		echo "Testing Windows x86_64 Go client with Wine ($(WINE_CMD))..."; \
-		WINEDEBUG=-all $(WINE_CMD) zig-out/clients/windows-x86_64/gql-example.exe -h 2>&1 | head -5 || true; \
-		echo "✓ Windows x86_64 Go client executed with Wine"; \
-	else \
-		echo "⚠ Wine not available or Go binary not found, skipping Windows Go test"; \
-	fi
-
-	@# Test Linux ARM64 Go client with QEMU
-	@if command -v qemu-aarch64 >/dev/null 2>&1 && [ -f "zig-out/clients/linux-arm64/gql-example" ]; then \
-		echo "Testing Linux ARM64 Go client with QEMU..."; \
-		qemu-aarch64 -L /usr/aarch64-linux-gnu zig-out/clients/linux-arm64/gql-example -h 2>&1 | head -5 || true; \
-		echo "✓ Linux ARM64 Go client executed with QEMU"; \
-	else \
-		echo "⚠ qemu-aarch64 not available or Go binary not found, skipping Linux ARM64 Go test"; \
-	fi
-
-	@# Compilation tests for platforms where we can't run the binaries
-	@if [ -d "clients/go/gql/example" ]; then \
-		echo "Verifying Go cross-compilation for all targets..."; \
-		cd clients/go/gql/example && \
-		CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o /dev/null . && \
-		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null . && \
-		CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o /dev/null . && \
-		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /dev/null . && \
-		echo "✓ Go cross-compilation verification passed"; \
-	fi
-
-	@echo "✓ All client cross-compilation tests completed"
-
-# Test cross-compiled clients with QEMU emulation
+# Test cross-compiled Zig clients with QEMU emulation
 .PHONY: qemu-test-clients
 
-qemu-test-clients: cross-clients
-	@echo "=== Testing Cross-Compiled Clients with QEMU ==="
+qemu-test-clients: cross-zig-clients
+	@echo "=== Testing Cross-Compiled Zig Clients with QEMU ==="
 	@echo ""
 
 	@# Check for required QEMU user-mode emulators
@@ -1326,11 +1053,6 @@ qemu-test-clients: cross-clients
 				zig-out/clients/linux-arm64/geode-zig-example-linux-arm64 2>&1 | head -10 || \
 				echo "Note: Client may fail to connect as server is not running"; \
 		fi; \
-		if [ -f "zig-out/clients/linux-arm64/gql-example" ]; then \
-			echo "Running Go client on ARM64..."; \
-			qemu-aarch64 -L /usr/aarch64-linux-gnu \
-				zig-out/clients/linux-arm64/gql-example -h 2>&1 | head -10 || true; \
-		fi; \
 		echo ""; \
 	fi
 
@@ -1343,11 +1065,6 @@ qemu-test-clients: cross-clients
 				zig-out/clients/windows-x86_64/geode-zig-example-windows-x86_64.exe 2>&1 | head -10 || \
 				echo "Note: Client may fail to connect as server is not running"; \
 		fi; \
-		if [ -f "zig-out/clients/windows-x86_64/gql-example.exe" ]; then \
-			echo "Running Go client on Windows/Wine..."; \
-			WINEDEBUG=-all $(WINE_CMD) \
-				zig-out/clients/windows-x86_64/gql-example.exe -h 2>&1 | head -10 || true; \
-		fi; \
 		echo ""; \
 	fi
 
@@ -1357,10 +1074,6 @@ qemu-test-clients: cross-clients
 		echo "Running native Zig client..."; \
 		zig-out/clients/linux-x86_64/geode-zig-example-linux-x86_64 2>&1 | head -10 || \
 			echo "Note: Client may fail to connect as server is not running"; \
-	fi
-	@if [ -f "zig-out/clients/linux-x86_64/gql-example" ]; then \
-		echo "Running native Go client..."; \
-		zig-out/clients/linux-x86_64/gql-example -h 2>&1 | head -10 || true; \
 	fi
 	@echo ""
 
@@ -1441,7 +1154,7 @@ docker-ci:
 DOCKER_INTEGRATION_DIR := docker-integration
 DOCKER_COMPOSE_INTEGRATION := docker compose -f $(DOCKER_INTEGRATION_DIR)/docker-compose.integration.yml
 
-# Build all Docker integration images
+# Build Docker integration images (Go, Python, Rust clients moved to separate repos)
 docker-integration-build:
 	@echo "==== Building Docker Integration Images ===="
 	@if ! command -v docker >/dev/null 2>&1; then \
@@ -1451,15 +1164,13 @@ docker-integration-build:
 	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.server -t geode-integration-server:latest .
 	@echo "Building GeodeTestLab image..."
 	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.geodetestlab -t geode-integration-testlab:latest .
-	@echo "Building Go client image..."
-	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-go -t geode-integration-client-go:latest .
-	@echo "Building Python client image..."
-	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-python -t geode-integration-client-python:latest .
-	@echo "Building Rust client image..."
-	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-rust -t geode-integration-client-rust:latest .
 	@echo "Building Zig client image..."
-	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-zig -t geode-integration-client-zig:latest .
-	@echo "==== All integration images built ===="
+	@if [ -f "$(DOCKER_INTEGRATION_DIR)/Dockerfile.client-zig" ]; then \
+		docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-zig -t geode-integration-client-zig:latest .; \
+	else \
+		echo "⚠ Zig client Dockerfile not found, skipping"; \
+	fi
+	@echo "==== Integration images built (note: Go/Python/Rust clients moved to separate repos) ===="
 
 # Start Docker integration environment
 docker-integration-up: docker-integration-build
@@ -1471,11 +1182,11 @@ docker-integration-up: docker-integration-build
 	$(DOCKER_COMPOSE_INTEGRATION) run --rm migration-runner
 	@echo "==== Integration environment ready ===="
 
-# Run full integration test suite
+# Run full integration test suite (Go, Python, Rust clients moved to separate repos)
 docker-integration-test: docker-integration-up
 	@echo "==== Running Docker Integration Tests ===="
 	@echo "Starting client test containers..."
-	$(DOCKER_COMPOSE_INTEGRATION) up -d client-go client-python client-rust client-zig geodetestlab
+	$(DOCKER_COMPOSE_INTEGRATION) up -d client-zig geodetestlab
 	@echo "Running results collector..."
 	$(DOCKER_COMPOSE_INTEGRATION) run --rm results-collector
 	@echo "==== Integration tests complete ===="
@@ -1495,16 +1206,7 @@ docker-integration-results:
 docker-integration-logs:
 	$(DOCKER_COMPOSE_INTEGRATION) logs -f
 
-# View specific client logs
-docker-integration-logs-go:
-	$(DOCKER_COMPOSE_INTEGRATION) logs -f client-go
-
-docker-integration-logs-python:
-	$(DOCKER_COMPOSE_INTEGRATION) logs -f client-python
-
-docker-integration-logs-rust:
-	$(DOCKER_COMPOSE_INTEGRATION) logs -f client-rust
-
+# View specific client/server logs
 docker-integration-logs-zig:
 	$(DOCKER_COMPOSE_INTEGRATION) logs -f client-zig
 

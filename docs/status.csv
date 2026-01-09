@@ -1,4 +1,5 @@
 REQ,Feature,Aspect,Status,Test,Bench,Owner,Updated,File
+<req-id>,<feature>,<aspect>,<status>,,,<owner>,<date>,tests/unit_gap_0013_0016_fixes.zig
 REQ-AGG-COLLECT-001,AggregationFunctions,COLLECT,IMPL,,,aggregation,2025-12-22,src/execution/aggregation_evaluation.zig
 REQ-AGG-COLLECT-002,AggregationFunctions,COLLECT_STORE,IMPL,,,aggregation,2025-12-22,src/execution/aggregation_evaluation.zig
 REQ-AGG-COLLECT-003,AggregationFunctions,COLLECT_NULL_SKIP,IMPL,,,aggregation,2025-12-28,src/execution/aggregation_evaluation.zig
@@ -96,6 +97,9 @@ REQ-AUTH-SESSION-009,AutoLoadSessionToken,IMPL,IMPL,TestCANARY_REQ_AUTH_SESSION_
 REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,2025-10-14,src/cli/main.zig
 REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,2025-10-14,src/cli/main.zig
 REQ-BACKUP-REMOTE-001,RemoteBackup,QUICProtocol,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
+REQ-BACKUP-RESTORE-001,Backup Restore,RemoteRestore,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
+REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
+REQ-BACKUP-RESTORE-003,Backup Restore Manager,LocalRestoreImpl,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-BM25-INDEX-OPTIMIZER-001,BM25 IndexOptimizer Integration,CostEstimation,TESTED,TestCANARY_REQ_BM25_INDEX_OPTIMIZER_001_CostEstimation,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
 REQ-BM25-INDEX-OPTIMIZER-002,BM25 IndexOptimizer Integration,FulltextOptimization,TESTED,TestCANARY_REQ_BM25_INDEX_OPTIMIZER_002_FulltextOptimization,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
 REQ-BM25-INDEX-OPTIMIZER-003,BM25 IndexOptimizer Integration,StatisticsIntegration,TESTED,TestCANARY_REQ_BM25_INDEX_OPTIMIZER_003_StatisticsIntegration,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
@@ -181,6 +185,7 @@ REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,IMPL,,,distributed,2026-01-0
 REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,IMPL,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,IMPL,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,IMPL,,,distributed,2026-01-08,src/distributed/twophase.zig
+REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,IMPL,,,distributed,2026-01-09,src/distributed/twophase.zig
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-LB-001,Load Balancing,ShardSelection,IMPL,,,distributed,2026-01-08,src/distributed/enhanced_query_transport.zig
@@ -261,6 +266,7 @@ REQ-FLE-TEST-004,FieldLevelEncryption,TESTING,IMPL,,,security,2025-10-15,geodete
 REQ-FLE-TEST-005,FieldLevelEncryption,TESTING,IMPL,,,security,2025-10-15,geodetestlab/specs/encryption/encryption_rbac.yml
 REQ-FUZZ-DICT-001,FuzzDictionaries,MetadataDerived,IMPL,,,tooling,2026-01-03,scripts/generate_fuzz_dict.zig
 REQ-FUZZ-DICT-002,FuzzDictionaries,BuildTarget,IMPL,,,tooling,2026-01-03,build.zig
+REQ-GAP-0013-0016-TESTS-001,GapAnalysisJan2026Fixes,UnitTests,IMPL,,,testing,2026-01-09,tests/unit_gap_0013_0016_fixes.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,IMPL,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GPU-VK-001,Vulkan FFI,Foundation,IMPLEMENTED,,,gpu,2025-10-26,src/gpu/vulkan_ffi.zig
 REQ-GQL-###,Name,...,MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED,...,...,...,YYYY-MM-DD,tools/canaryscan/README.md
@@ -1586,6 +1592,7 @@ REQ-HNSW-INDEX-OPTIMIZER-INTEGRATION-001,HNSW IndexOptimizer Integration,Product
 REQ-INDEX-001,IndexManagement,Catalog,IMPLEMENTED,,,storage,2025-10-14,src/schema/catalog.zig
 REQ-INDEX-002,IndexManagement,ScopedCreation,IMPLEMENTED,,,storage,2025-10-14,src/execution/statement_dispatcher.zig
 REQ-INDEX-003,IndexManagement,ScopedDeletion,IMPLEMENTED,,,storage,2025-10-14,src/execution/statement_dispatcher.zig
+REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,NETWORK,IMPL,,,security,2026-01-09,src/security/kms_remote.zig
 REQ-LEXER-METADATA-001,MetadataIntegration,KeywordLookup,IMPL,,,lexer,2026-01-03,src/gql/token.zig
 REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,IMPL,,,lexer,2026-01-03,src/gql/token.zig
 REQ-LIST-COMP-MAP-001,ListComprehension,MapExpression,IMPL,,,parser,2025-12-23,src/gql/ast.zig
@@ -1854,6 +1861,7 @@ REQ-QUIC-CONN-CLEANUP-004,ConnectionMemoryManagement,ProperCleanup,IMPL,,,cli,20
 REQ-QUIC-CONN-CLEANUP-005,ConnectionMemoryManagement,GracefulDisconnect,IMPL,,,cli,2025-12-28,src/cli/main.zig
 REQ-QUIC-STREAM-CLEANUP-001,StreamMemoryManagement,DoubleFreePrevention,IMPL,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-STREAM-CLEANUP-002,StreamMemoryManagement,DoubleFreePrevention,IMPL,,,cli,2025-12-27,src/cli/main.zig
+REQ-REMOTE-KMS-SERVER-001,Remote KMS Server,QUICTransport,IMPL,,,security,2026-01-09,src/security/kms_remote.zig
 REQ-REPL-ADVANCED-001,REPL Advanced Features,Testing,TESTED,test_repl_advanced_features,,repl,2025-11-17,src/client/repl/test_repl_advanced_features.zig
 REQ-REPL-FORMAT-001,REPL Output Formatting,RegressionTesting,TESTED,repl_formatting_regression_test,,repl,2025-10-05,tests/repl_formatting_regression_test.sh
 REQ-REPL-FORMAT-002,REPL Output Formatting Fixes,UnitTesting,TESTED,test_repl_formatting_fixes,,repl,2025-11-17,tests/test_repl_formatting_fixes.zig
@@ -1896,7 +1904,7 @@ REQ-RLS-EXPR-004,RLSExpressionCompilation,BytecodeVM,IMPL,,,security,2025-12-30,
 REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,IMPL,,,security,2025-12-30,src/security/rls_core.zig
 REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,IMPL,test_s3_backup_mock,,storage,2025-10-05,tests/test_s3_backup.zig
 REQ-SERVER-BACKUP-001,Server Backup API,UnitTests,TESTED,TestServer_BackupAPIUnit,,server,2025-10-05,tests/test_server_backup_api_unit.zig
-REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,PARTIAL,,,refactor,2025-11-12,src/server/server_state.zig
+REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,IMPL,,,refactor,2026-01-09,src/server/server_state.zig
 REQ-SERVER-REFACTOR-001B,ServerRefactoring,SERVER_STATE_STRUCT,IMPL,,,refactor,2025-11-14,src/server/server_state.zig
 REQ-SERVER-REFACTOR-002,ServerRefactoring,BACKUP_MANAGER,IMPL,,,refactor,2025-11-12,src/server/backup_manager.zig
 REQ-SERVER-REFACTOR-003,ServerRefactoring,INDEX_CATALOG,IMPL,,,refactor,2025-11-12,src/server/index_catalog.zig

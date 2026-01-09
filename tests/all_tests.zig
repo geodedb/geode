@@ -61,6 +61,7 @@ const _advanced_types_operators = @import("advanced_types_operators.zig");
 
 // Gap Analysis Fix Tests (January 2026)
 const _gap_analysis_fixes = @import("test_gap_analysis_fixes.zig");
+const _unit_gap_0013_0016 = @import("unit_gap_0013_0016_fixes.zig");
 
 // v0.18 feature tests
 const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");

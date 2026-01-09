@@ -167,43 +167,12 @@ release:
     - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-alpha\.\d+|-beta\.\d+|-rc\.\d+)?$/'
 
 # =============================================================================
-# Optional: Client Tests (Manual)
+# Note: Client libraries have moved to separate repositories:
+#   - Go: https://gitlab.com/devnw/geode-client-go
+#   - Python: https://gitlab.com/devnw/geode-client-python
+#   - Rust: (separate repo)
+#   - Test Harness: https://gitlab.com/devnw/geode-test-harness
 # =============================================================================
-
-.test-template:
-  stage: test
-  rules:
-    - if: '$CI_COMMIT_BRANCH'
-      when: manual
-      allow_failure: true
-    - if: '$CI_COMMIT_TAG'
-      when: never
-
-test-go-client:
-  extends: .test-template
-  image: registry.gitlab.com/devnw/ci-catalog/go:1.24
-  script:
-    - cd clients/go/geode
-    - go mod download
-    - go build ./...
-    - go test -v -race ./... || true
-
-test-rust-client:
-  extends: .test-template
-  image: registry.gitlab.com/devnw/ci-catalog/rust:stable
-  script:
-    - cd clients/rust
-    - cargo build --release
-    - cargo test --release || true
-
-test-python-client:
-  extends: .test-template
-  image: registry.gitlab.com/devnw/ci-catalog/python:3.12
-  script:
-    - cd clients/python
-    - pip install -r requirements.txt
-    - pip install -e .
-    - python -c "from geode_client import Client; print('Python client OK')"
 
 # =============================================================================
 # Editor Extensions

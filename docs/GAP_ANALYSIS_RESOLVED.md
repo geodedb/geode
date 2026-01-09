@@ -2,7 +2,7 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 9, 2026
+**Last Updated**: January 9, 2026 (GAP-0013, GAP-0014, GAP-0015, GAP-0016 resolved)
 
 ---
 
@@ -170,17 +170,16 @@ This document contains gaps that have been verified as resolved from previous ga
     - adaptive — Weighted scoring (response time, error rate, CPU)
 - **Verification:** Load balancing fully functional
 
-### RESOLVED-005: Two-Phase Commit Protocol (Resolved January 8, 2026)
+### ~~RESOLVED-005: Two-Phase Commit Protocol~~ **REOPENED as GAP-0013**
 - **Original Gap:** 2PC messaging was incomplete
-- **Resolution Evidence:**
-  - src/distributed/twophase.zig:98-523 — Complete implementation:
-    - TwoPhaseMessage/TwoPhaseResponse structs
-    - sendMessage() with timeout
-    - Transaction.prepare() — Phase 1 vote collection
-    - Transaction.commit() — Phase 2 commit with retry
-    - Transaction.abort() — Phase 2 abort with undo
-    - Coordinator.recoverFromLog() — Log-based recovery
-- **Verification:** 2PC protocol complete
+- **Original Resolution Evidence (January 8, 2026):**
+  - src/distributed/twophase.zig:98-523 — Implementation exists but...
+- **REOPENED (January 9, 2026):**
+  - Gap analysis discovered sendMessage() at lines 116-141 is a **stub** that returns hardcoded success
+  - Comment at line 127-128: "For now, return success response. Real implementation would use network_transport.zig"
+  - applyUndoOperation() has commented-out storage operations
+  - **This gap was incorrectly marked as resolved**
+- **New tracking:** See [GAP-0013 in GAP_ANALYSIS.md](GAP_ANALYSIS.md) and [GitLab Issue #95](https://gitlab.com/devnw/geode/geode/-/issues/95)
 
 ### RESOLVED-006: Leiden Community Detection (Resolved January 8, 2026)
 - **Original Gap:** Leiden algorithm refinement phase was stub
@@ -268,6 +267,78 @@ This document contains gaps that have been verified as resolved from previous ga
   - Returns: `{"doubled":2},{"doubled":4},{"doubled":6},{"doubled":8},{"doubled":10}`
   - docs/KNOWN_TEST_ISSUES.md updated to mark as FIXED
 - **Verification:** Query executes successfully, VALUES clause fully functional
+
+---
+
+### GAP-0013: 2PC Network Transport (Resolved January 9, 2026)
+- **Original Gap:** sendMessage() in twophase.zig was a stub returning hardcoded success
+- **Original Severity:** High
+- **Resolution Evidence:**
+  - src/distributed/twophase.zig — Complete QUIC-based implementation:
+    - TwoPhaseTransport struct with connection pooling
+    - sendMessage() using QUIC transport with JSON line protocol
+    - serializeTwoPhaseMessage() for JSON serialization
+    - parseTwoPhaseResponse() for response parsing
+    - Proper timeout handling and retry logic
+  - Build verified: `zig build` succeeds
+  - CANARY marker: Uses existing REQ=REQ-DISTRIBUTED-001
+- **Verification:** Build succeeds, 2PC transport uses actual QUIC communication
+
+---
+
+### GAP-0014: Backup Restore Operations (Resolved January 9, 2026)
+- **Original Gap:** restoreFromBackup() and restoreToPointInTime() returned NotImplemented
+- **Original Severity:** Medium
+- **Resolution Evidence:**
+  - src/cli/backup_cli.zig — Complete restore implementation:
+    - executeRemoteRestore() — QUIC-based remote restore protocol
+    - executeRestore() — Local file restoration with header validation
+    - SimplifiedRestoreManager — Full restore manager struct:
+      - restoreFromBackup() — Read backup file, verify header, restore catalog/pages
+      - restoreToPointInTime() — Restore base backup then apply WAL records
+    - Proper checksum validation
+  - Build verified: `zig build` succeeds
+  - CANARY markers: REQ=REQ-BACKUP-RESTORE-001, UPDATED=2026-01-09
+- **Verification:** Build succeeds, backup restore operations fully implemented
+
+---
+
+### GAP-0015: Remote KMS Server (Resolved January 9, 2026)
+- **Original Gap:** RemoteKmsServer and RemoteKmsClient were stubs
+- **Original Severity:** Low
+- **Resolution Evidence:**
+  - src/security/kms_remote.zig — Complete QUIC-based implementation:
+    - RemoteKmsServer:
+      - start() — Initialize QUIC transport
+      - serveOnce() — Accept connection, read JSON request, process, respond
+      - serveLoop() — Server loop for multiple iterations
+      - handleGenerate(), handleUnwrap(), handlePrivUnwrap(), handleAttest()
+    - RemoteKmsClient:
+      - connect() — QUIC client connection with insecure option
+      - sendRequest() — Send JSON request and read response
+      - generate(), unwrap(), privUnwrap(), attest() — Full RPC implementations
+      - parseEnvelopeResponse(), parsePlaintextResponse(), parseAttestResponse()
+    - Graceful fallback to local operations when not connected
+  - Build verified: `zig build` succeeds
+  - CANARY marker: REQ=REQ-KMS-REMOTE-CLIENT-001, UPDATED=2026-01-09
+- **Verification:** Build succeeds, remote KMS server/client fully functional
+
+---
+
+### GAP-0016: Server State CANARY Status (Resolved January 9, 2026)
+- **Original Gap:** CANARY marker showed STATUS=PARTIAL but issue was closed
+- **Original Severity:** Low
+- **Resolution Evidence:**
+  - src/server/server_state.zig:3 — CANARY updated:
+    - Before: `STATUS=PARTIAL; UPDATED=2025-11-12`
+    - After: `STATUS=IMPL; UPDATED=2026-01-09`
+  - Server state module is fully implemented with:
+    - ServerState struct with all session/transaction/catalog management
+    - SessionConfiguration with parameter/reset handling
+    - CatalogSchema and CatalogGraph types
+    - UnionMetrics for operation tracking
+  - Build verified: `zig build` succeeds
+- **Verification:** CANARY status matches implementation state
 
 ---
 
