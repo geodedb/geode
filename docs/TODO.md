@@ -1,7 +1,7 @@
 # TODO - Current Development Priorities
 
 > **Status**: Updated October 27, 2025 01:50 - **Vulkan/CUDA Build System Integration Complete**
-> **Test Coverage**: **1644/1688 tests passing** (97.4% pass rate, 9 failures remaining, 46 skipped)
+> **Test Coverage**: See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current status. Run `make geodetestlab-comprehensive` for latest results.
 > **Build Status**: ✅ Passes `make verify-all` with **0 compiler errors** - **393/393 Zig tests passing**
 > **CANARY Status**: 1016+ tracked requirements
 > **Phase Completion**: ✅ **ALL 7 FEATURE PHASES COMPLETE** (Phases 2-7 + Phase 1)

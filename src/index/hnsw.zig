@@ -4,6 +4,7 @@ pub const DistanceMetric = enum {
     l2,
     cosine,
     dot,
+    jaccard,
 };
 
 // CANARY: PERF_PHASE3_HNSW_PREALLOC - Pre-allocate HNSW neighbor lists
@@ -124,6 +125,27 @@ pub const Hnsw = struct {
                 const similarity = dot_product / (@sqrt(norm_a) * @sqrt(norm_b));
                 return 1.0 - similarity;
             },
+            // CANARY: REQ=REQ-GQL-HNSW-JACCARD-001; FEATURE="Jaccard Distance in HNSW"; ASPECT=IndexMetric; STATUS=IMPL; OWNER=index; UPDATED=2026-01-08
+            .jaccard => {
+                var intersection: u64 = 0;
+                var union_size: u64 = 0;
+
+                for (a, b) |av, bv| {
+                    const a_present = av != 0.0;
+                    const b_present = bv != 0.0;
+
+                    if (a_present and b_present) {
+                        intersection += 1;
+                        union_size += 1;
+                    } else if (a_present or b_present) {
+                        union_size += 1;
+                    }
+                }
+
+                if (union_size == 0) return 0.0; // Both empty, distance is 0
+                const similarity = @as(f64, @floatFromInt(intersection)) / @as(f64, @floatFromInt(union_size));
+                return 1.0 - similarity; // Convert similarity to distance
+            },
         }
     }
 
@@ -188,6 +210,21 @@ pub const Hnsw = struct {
                 }
                 const dot_product: f32 = @reduce(.Add, sum_vec);
                 return -dot_product; // Negative for max-heap behavior
+            },
+            .jaccard => {
+                // Jaccard distance for floating point vectors
+                // Treat non-zero elements as set membership
+                var intersection: f32 = 0;
+                var union_count: f32 = 0;
+                for (a, b) |a_val, b_val| {
+                    const a_present = if (a_val != 0) @as(f32, 1) else @as(f32, 0);
+                    const b_present = if (b_val != 0) @as(f32, 1) else @as(f32, 0);
+                    intersection += a_present * b_present;
+                    union_count += @max(a_present, b_present);
+                }
+                if (union_count == 0) return 0.0;
+                const similarity = intersection / union_count;
+                return 1.0 - similarity; // Convert to distance
             },
         }
     }

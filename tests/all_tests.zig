@@ -59,6 +59,9 @@ const _runtime_advanced_types = @import("runtime_advanced_types.zig");
 const _index_integration = @import("index_integration_persistence.zig");
 const _advanced_types_operators = @import("advanced_types_operators.zig");
 
+// Gap Analysis Fix Tests (January 2026)
+const _gap_analysis_fixes = @import("test_gap_analysis_fixes.zig");
+
 // v0.18 feature tests
 const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");
 const _e2e_s3_backup_restore = @import("e2e_s3_backup_restore.zig");

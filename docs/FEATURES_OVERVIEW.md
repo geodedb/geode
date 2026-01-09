@@ -13,7 +13,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 - ✅ **Phase 6**: Materialized Views (3 refresh strategies)
 - ✅ **Phase 7**: Graph Algorithms (20-90% performance gains)
 
-**Total**: ~13,554+ lines of production code | 95.1% test coverage (1620/1703 tests)
+**Total**: ~13,554+ lines of production code | See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test status
 **Details**: See [completion_reports/](./completion_reports/) for comprehensive phase documentation
 
 ## 🎯 Core Features

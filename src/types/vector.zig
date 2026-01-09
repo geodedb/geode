@@ -395,6 +395,38 @@ pub const VectorI32 = struct {
         return count;
     }
 
+    /// Jaccard similarity coefficient between two vectors (treated as sets)
+    /// Returns value between 0.0 (no overlap) and 1.0 (identical)
+    /// CANARY: REQ=REQ-GQL-VECTOR-JACCARD-001; FEATURE="Jaccard Distance"; ASPECT=VectorMetric; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_VECTOR_JACCARD; OWNER=types; UPDATED=2026-01-08
+    pub fn jaccardSimilarity(self: VectorI32, other: VectorI32) !f64 {
+        if (self.dim != other.dim) return error.DimensionMismatch;
+
+        var intersection: u64 = 0;
+        var union_size: u64 = 0;
+
+        // Count intersection and union treating non-zero elements as set membership
+        for (0..self.dim) |i| {
+            const a_present = self.data[i] != 0;
+            const b_present = other.data[i] != 0;
+
+            if (a_present and b_present) {
+                intersection += 1;
+                union_size += 1;
+            } else if (a_present or b_present) {
+                union_size += 1;
+            }
+        }
+
+        if (union_size == 0) return 1.0; // Both empty vectors are considered identical
+        return @as(f64, @floatFromInt(intersection)) / @as(f64, @floatFromInt(union_size));
+    }
+
+    /// Jaccard distance between two vectors (1 - Jaccard similarity)
+    /// Returns value between 0.0 (identical) and 1.0 (no overlap)
+    pub fn jaccardDistance(self: VectorI32, other: VectorI32) !f64 {
+        return 1.0 - try self.jaccardSimilarity(other);
+    }
+
     /// Dot product of two vectors
     pub fn dotProduct(self: VectorI32, other: VectorI32) !i64 {
         if (self.dim != other.dim) return error.DimensionMismatch;

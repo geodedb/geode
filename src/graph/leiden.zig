@@ -240,18 +240,103 @@ pub const LeidenDetector = struct {
         return moved;
     }
 
+    // CANARY: REQ=REQ-GRAPH-LEIDEN-AGG-001; FEATURE="Leiden Network Aggregation"; ASPECT=Aggregation; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-08
     fn aggregateNetwork(
         self: *LeidenDetector,
         node_info: *std.AutoHashMap(u64, NodeInfo),
         communities: *std.AutoHashMap(u64, *Community),
         graph: Graph,
     ) !void {
-        _ = self;
-        _ = node_info;
-        _ = communities;
-        _ = graph;
         // Network aggregation creates super-nodes from communities
-        // This is simplified for the initial implementation
+        // Each community becomes a single node in the aggregated graph
+
+        // Calculate inter-community and intra-community weights
+        var inter_weights = std.AutoHashMap(struct { u64, u64 }, f64).init(self.allocator);
+        defer inter_weights.deinit();
+
+        for (graph.edges) |edge| {
+            const source_info = node_info.get(edge.source) orelse continue;
+            const target_info = node_info.get(edge.target) orelse continue;
+
+            const source_comm = source_info.community;
+            const target_comm = target_info.community;
+
+            // Update community weights
+            if (communities.getPtr(source_comm)) |comm_ptr| {
+                comm_ptr.*.total_weight += edge.weight;
+                if (source_comm == target_comm) {
+                    comm_ptr.*.internal_weight += edge.weight;
+                }
+            }
+
+            // Track inter-community edge weights
+            if (source_comm != target_comm) {
+                const key = if (source_comm < target_comm)
+                    .{ source_comm, target_comm }
+                else
+                    .{ target_comm, source_comm };
+
+                const current = inter_weights.get(key) orelse 0;
+                try inter_weights.put(key, current + edge.weight);
+            }
+        }
+
+        // Merge communities that are strongly connected
+        const merge_threshold: f64 = 0.1; // Communities with > 10% of edges going to another should merge
+        var it = inter_weights.iterator();
+        while (it.next()) |entry| {
+            const comm1_id = entry.key_ptr[0];
+            const comm2_id = entry.key_ptr[1];
+            const weight = entry.value_ptr.*;
+
+            const comm1 = communities.get(comm1_id) orelse continue;
+            const comm2 = communities.get(comm2_id) orelse continue;
+
+            // Calculate merge potential
+            const total = comm1.total_weight + comm2.total_weight;
+            if (total > 0 and weight / total > merge_threshold) {
+                // Consider merging - check modularity gain
+                const gain = self.calculateModularityGain(
+                    comm1.total_weight,
+                    weight,
+                    comm2,
+                    graph,
+                );
+
+                if (gain > self.min_modularity_gain) {
+                    // Merge comm2 into comm1
+                    try self.mergeCommunities(comm1_id, comm2_id, node_info, communities);
+                }
+            }
+        }
+    }
+
+    fn mergeCommunities(
+        self: *LeidenDetector,
+        target_comm_id: u64,
+        source_comm_id: u64,
+        node_info: *std.AutoHashMap(u64, NodeInfo),
+        communities: *std.AutoHashMap(u64, *Community),
+    ) !void {
+        const source_comm = communities.get(source_comm_id) orelse return;
+        const target_comm = communities.getPtr(target_comm_id) orelse return;
+
+        // Move all nodes from source to target
+        for (source_comm.nodes.items) |node| {
+            try target_comm.*.nodes.append(node);
+            if (node_info.getPtr(node)) |info| {
+                info.community = target_comm_id;
+            }
+        }
+
+        // Update weights
+        target_comm.*.internal_weight += source_comm.internal_weight;
+        target_comm.*.total_weight += source_comm.total_weight;
+
+        // Remove source community
+        source_comm.nodes.deinit();
+        self.allocator.destroy(source_comm);
+        _ = communities.remove(source_comm_id);
     }
 
     fn refinePartition(
@@ -332,6 +417,7 @@ pub const LeidenDetector = struct {
         return visited.count() == community.nodes.items.len;
     }
 
+    // CANARY: REQ=REQ-GRAPH-LEIDEN-SPLIT-001; FEATURE="Leiden Split Community"; ASPECT=Graph; STATUS=IMPL; TEST=TestCANARY_Leiden; OWNER=graph; UPDATED=2025-10-16
     fn splitCommunity(
         self: *LeidenDetector,
         community: *Community,
@@ -339,13 +425,130 @@ pub const LeidenDetector = struct {
         communities: *std.AutoHashMap(u64, *Community),
         graph: Graph,
     ) !void {
-        _ = self;
-        _ = community;
-        _ = node_info;
-        _ = communities;
-        _ = graph;
-        // Split disconnected community into connected components
-        // Simplified for initial implementation
+        // Build adjacency list for nodes within this community
+        var community_nodes = std.AutoHashMap(u64, void).init(self.allocator);
+        defer community_nodes.deinit();
+        for (community.nodes.items) |node| {
+            try community_nodes.put(node, {});
+        }
+
+        // Find connected components using BFS
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+
+        var components = std.ArrayList(std.ArrayList(u64)).init(self.allocator);
+        defer {
+            for (components.items) |*comp| {
+                comp.deinit();
+            }
+            components.deinit();
+        }
+
+        // Find all connected components
+        for (community.nodes.items) |start_node| {
+            if (visited.contains(start_node)) continue;
+
+            // BFS to find all nodes in this component
+            var component = std.ArrayList(u64).init(self.allocator);
+            var queue = std.ArrayList(u64).init(self.allocator);
+            defer queue.deinit();
+
+            try queue.append(start_node);
+            try visited.put(start_node, {});
+
+            while (queue.items.len > 0) {
+                const current = queue.orderedRemove(0);
+                try component.append(current);
+
+                // Find neighbors within community
+                for (graph.edges) |edge| {
+                    var neighbor: ?u64 = null;
+                    if (edge.source == current and community_nodes.contains(edge.target)) {
+                        neighbor = edge.target;
+                    } else if (edge.target == current and community_nodes.contains(edge.source)) {
+                        neighbor = edge.source;
+                    }
+
+                    if (neighbor) |n| {
+                        if (!visited.contains(n)) {
+                            try visited.put(n, {});
+                            try queue.append(n);
+                        }
+                    }
+                }
+            }
+
+            try components.append(component);
+        }
+
+        // If only one component, community is already connected
+        if (components.items.len <= 1) return;
+
+        // First component stays in original community
+        community.nodes.clearRetainingCapacity();
+        for (components.items[0].items) |node| {
+            try community.nodes.append(node);
+        }
+
+        // Create new communities for remaining components
+        for (components.items[1..]) |component| {
+            // Generate new community ID from first node in component
+            const new_id = component.items[0];
+
+            var new_comm = try self.allocator.create(Community);
+            new_comm.* = .{
+                .id = new_id,
+                .nodes = std.ArrayList(u64).init(self.allocator),
+                .internal_weight = 0,
+                .total_weight = 0,
+            };
+
+            // Move nodes to new community
+            for (component.items) |node| {
+                try new_comm.nodes.append(node);
+
+                // Update node_info to point to new community
+                if (node_info.getPtr(node)) |info| {
+                    info.community = new_id;
+                }
+            }
+
+            // Calculate internal weight for new community
+            for (graph.edges) |edge| {
+                var source_in = false;
+                var target_in = false;
+                for (component.items) |node| {
+                    if (edge.source == node) source_in = true;
+                    if (edge.target == node) target_in = true;
+                }
+                if (source_in and target_in) {
+                    new_comm.internal_weight += edge.weight;
+                }
+                if (source_in or target_in) {
+                    new_comm.total_weight += edge.weight;
+                }
+            }
+
+            try communities.put(new_id, new_comm);
+        }
+
+        // Recalculate weights for original community
+        community.internal_weight = 0;
+        community.total_weight = 0;
+        for (graph.edges) |edge| {
+            var source_in = false;
+            var target_in = false;
+            for (community.nodes.items) |node| {
+                if (edge.source == node) source_in = true;
+                if (edge.target == node) target_in = true;
+            }
+            if (source_in and target_in) {
+                community.internal_weight += edge.weight;
+            }
+            if (source_in or target_in) {
+                community.total_weight += edge.weight;
+            }
+        }
     }
 
     fn calculateModularity(

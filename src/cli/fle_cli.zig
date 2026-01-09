@@ -5,6 +5,9 @@ const fle_commands = geode.fle_commands;
 
 /// FLE command handler
 pub fn cmdFLE(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Ensure global catalog is cleaned up when command exits
+    defer geode.fle_integration.catalog_mod.resetGlobalCatalog(allocator);
+
     if (start_idx + 1 >= argv.len) {
         printFLEUsage();
         return;

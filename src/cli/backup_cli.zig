@@ -2,10 +2,10 @@ const std = @import("std");
 const geode = @import("geode");
 // Import backup types directly from storage/backup module
 const backup_types = @import("storage/backup");
-// TODO: Import QUIC when available
-// const quic = geode.quic;
+// QUIC transport for remote backup operations
+const quic = @import("transport/quic");
 
-// CANARY: REQ=REQ-M4.3-BACKUP-CLI-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
+// CANARY: REQ=REQ-M4.3-BACKUP-CLI-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
 // Phase 4 M4.3: Extract backup/restore/migrate commands from cli/main.zig
 
 // Exit codes for consistency with main CLI
@@ -507,12 +507,162 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 // Helper Functions for Backup/Restore Execution
 // ============================================================================
 
-// Remote server backup execution function
-// Remote server backup execution function
-fn executeRemoteBackup(_: std.mem.Allocator, _: []const u8, _: []const u8, _: ?[]const u8, _: []const u8, _: bool) !void {
-    // TODO: Implement backup protocol when QUIC is available
-    std.debug.print("Backup functionality requires QUIC support (not yet implemented)\n", .{});
-    return error.NotImplemented;
+// CANARY: REQ=REQ-BACKUP-REMOTE-001; FEATURE="RemoteBackup"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// Remote server backup execution function using QUIC protocol
+fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
+    // Parse server address
+    const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidAddress;
+    const host = server[0..colon_idx];
+    const port = try std.fmt.parseInt(u16, server[colon_idx + 1 ..], 10);
+
+    // Create QUIC client
+    var client = quic.QuicClient.init(allocator);
+    defer client.deinit();
+
+    // Connect to remote server (insecure mode for now)
+    _ = client.connectInsecure(host, port, true) catch |err| {
+        std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
+        return err;
+    };
+
+    // Wait for handshake
+    _ = client.waitForHandshake(10) catch |err| {
+        std.debug.print("Error: QUIC handshake failed: {}\n", .{err});
+        return err;
+    };
+
+    // Get stream
+    var stream = client.getStream() catch |err| {
+        std.debug.print("Error: Failed to create stream: {}\n", .{err});
+        return err;
+    };
+    defer stream.deinit();
+
+    // Send HELLO message
+    const hello_msg = "{\"type\":\"HELLO\",\"client_name\":\"geode-backup\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\"}\n";
+    stream.writeAll(hello_msg) catch |err| {
+        std.debug.print("Error: Failed to send HELLO: {}\n", .{err});
+        return err;
+    };
+
+    // Wait for HELLO response
+    const hello_response = readLineWithPoll(&client, stream, 4096, 5000) catch |err| {
+        std.debug.print("Error: Failed to receive HELLO response: {}\n", .{err});
+        return err;
+    };
+    defer allocator.free(hello_response);
+
+    // Check for errors in HELLO response
+    if (std.mem.indexOf(u8, hello_response, "\"type\":\"ERROR\"") != null) {
+        std.debug.print("Error from server: {s}\n", .{hello_response});
+        return error.ServerError;
+    }
+
+    // Build BACKUP request message
+    var backup_msg_buf: [512]u8 = undefined;
+    const backup_msg = if (parent_id) |pid|
+        try std.fmt.bufPrint(&backup_msg_buf, "{{\"type\":\"BACKUP\",\"backup_type\":\"{s}\",\"parent_id\":\"{s}\",\"compress\":{}}}\n", .{ mode, pid, compress })
+    else
+        try std.fmt.bufPrint(&backup_msg_buf, "{{\"type\":\"BACKUP\",\"backup_type\":\"{s}\",\"compress\":{}}}\n", .{ mode, compress });
+
+    // Send BACKUP request
+    stream.writeAll(backup_msg) catch |err| {
+        std.debug.print("Error: Failed to send BACKUP request: {}\n", .{err});
+        return err;
+    };
+
+    // Receive backup response (metadata)
+    const metadata_response = readLineWithPoll(&client, stream, 8192, 30000) catch |err| {
+        std.debug.print("Error: Failed to receive backup metadata: {}\n", .{err});
+        return err;
+    };
+    defer allocator.free(metadata_response);
+
+    // Check for errors
+    if (std.mem.indexOf(u8, metadata_response, "\"type\":\"ERROR\"") != null) {
+        std.debug.print("Backup error: {s}\n", .{metadata_response});
+        return error.BackupFailed;
+    }
+
+    // Parse metadata to get backup size
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, metadata_response, .{}) catch |err| {
+        std.debug.print("Error: Invalid backup metadata: {}\n", .{err});
+        return err;
+    };
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return error.InvalidBackupMetadata;
+    const result = parsed.value.object.get("result") orelse return error.InvalidBackupMetadata;
+    if (result != .object) return error.InvalidBackupMetadata;
+
+    const size_bytes_val = result.object.get("size_bytes") orelse return error.InvalidBackupMetadata;
+    const backup_size: u64 = if (size_bytes_val == .integer) @intCast(size_bytes_val.integer) else return error.InvalidBackupMetadata;
+
+    std.debug.print("Receiving backup ({} bytes) from {s}...\n", .{ backup_size, server });
+
+    // Create destination file
+    const output_file = try std.fs.cwd().createFile(dest, .{});
+    defer output_file.close();
+
+    // Receive backup data chunks
+    var bytes_received: u64 = 0;
+    var chunk_buf: [65536]u8 = undefined;
+
+    while (bytes_received < backup_size) {
+        const remaining = backup_size - bytes_received;
+        const chunk_size = @min(remaining, chunk_buf.len);
+
+        // Request next chunk
+        const pull_msg = "{\"type\":\"PULL\",\"page_size\":65536}\n";
+        stream.writeAll(pull_msg) catch |err| {
+            std.debug.print("Error: Failed to request data chunk: {}\n", .{err});
+            return err;
+        };
+
+        // Read chunk
+        const bytes_read = stream.read(chunk_buf[0..chunk_size]) catch |err| {
+            if (err == error.WouldBlock) {
+                client.poll(50) catch {};
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+                continue;
+            }
+            std.debug.print("Error: Failed to receive backup data: {}\n", .{err});
+            return err;
+        };
+
+        if (bytes_read == 0) {
+            client.poll(50) catch {};
+            continue;
+        }
+
+        // Write to file
+        try output_file.writeAll(chunk_buf[0..bytes_read]);
+        bytes_received += bytes_read;
+
+        // Progress indicator (every 10%)
+        const progress = (bytes_received * 100) / backup_size;
+        if (progress % 10 == 0) {
+            std.debug.print("  Progress: {}%\n", .{progress});
+        }
+    }
+
+    std.debug.print("Backup completed: {s} ({} bytes)\n", .{ dest, bytes_received });
+}
+
+fn readLineWithPoll(client: *quic.QuicClient, stream: *quic.QuicClientStream, max_size: usize, timeout_ms: u64) ![]u8 {
+    const start = std.time.milliTimestamp();
+    while (true) {
+        const line = stream.readLine(max_size) catch |err| {
+            if (err == error.WouldBlock or err == error.EndOfStream) {
+                if (std.time.milliTimestamp() - start >= timeout_ms) return err;
+                client.poll(50) catch {};
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        return line;
+    }
 }
 
 fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {

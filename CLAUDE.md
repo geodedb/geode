@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Geode is an **enterprise-ready graph database** with industry-leading compliance and performance:
 
-- **✅ 95.1% Test Coverage** (1620/1703 geodetestlab tests)
+- **✅ ~97% Test Coverage** (see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) for current status)
 - **✅ 98.6% GQL Compliance** (69/70 ISO/IEC 39075:2024 tests)
 - **✅ 1016 CANARY Markers** tracking governance compliance
 - **✅ Enterprise Features** complete (TDE, audit, vector search, cloud backup, enhanced RLS)

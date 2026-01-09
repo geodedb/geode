@@ -1380,6 +1380,8 @@ pub const VariableLengthPath = struct {
 // Expands variable-length paths using BFS
 // Returns all paths from start_node that match the length constraints and relationship type filter
 // rel_direction: 'r' for right (forward), 'l' for left (reverse), 'u' for undirected (both)
+// path_mode: controls path traversal semantics (walk/trail/acyclic/simple)
+// CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathExpansion; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-08
 pub fn expandVariableLengthPaths(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
@@ -1388,6 +1390,21 @@ pub fn expandVariableLengthPaths(
     max_len: ?u32,
     rel_type: ?[]const u8,
     rel_direction: u8,
+) !std.ArrayList(VariableLengthPath) {
+    // Default to acyclic for backward compatibility
+    return expandVariableLengthPathsWithMode(allocator, store, start_node_id, min_len, max_len, rel_type, rel_direction, .acyclic);
+}
+
+// Extended version with path mode parameter for ISO GQL path mode support
+pub fn expandVariableLengthPathsWithMode(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    start_node_id: u64,
+    min_len: u32,
+    max_len: ?u32,
+    rel_type: ?[]const u8,
+    rel_direction: u8,
+    path_mode: ast.PathMode,
 ) !std.ArrayList(VariableLengthPath) {
     var result_paths = std.ArrayList(VariableLengthPath).initCapacity(allocator, 0) catch unreachable;
 
@@ -1480,15 +1497,46 @@ pub fn expandVariableLengthPaths(
                 if (!std.mem.eql(u8, edge.label, rt)) continue;
             }
 
-            // Check for cycles: don't revisit nodes already in path
-            var is_cycle = false;
-            for (current_path.nodes.items) |visited_node| {
-                if (visited_node == edge.to_id) {
-                    is_cycle = true;
-                    break;
-                }
+            // Path mode filtering based on ISO/IEC 39075:2024 semantics
+            var should_skip = false;
+            switch (path_mode) {
+                .walk => {
+                    // WALK: No restrictions - can revisit nodes and edges
+                },
+                .trail => {
+                    // TRAIL: Cannot revisit edges (edges must be unique)
+                    for (current_path.edges.items) |visited_edge| {
+                        if (visited_edge == edge.id) {
+                            should_skip = true;
+                            break;
+                        }
+                    }
+                },
+                .acyclic => {
+                    // ACYCLIC: Cannot revisit any node (no cycles at all)
+                    for (current_path.nodes.items) |visited_node| {
+                        if (visited_node == edge.to_id) {
+                            should_skip = true;
+                            break;
+                        }
+                    }
+                },
+                .simple => {
+                    // SIMPLE: Cannot revisit nodes except start can equal end
+                    // Only allow cycle back to start node if this would complete the path
+                    if (edge.to_id == start_node_id) {
+                        // Allow closing the loop to start node
+                    } else {
+                        for (current_path.nodes.items) |visited_node| {
+                            if (visited_node == edge.to_id) {
+                                should_skip = true;
+                                break;
+                            }
+                        }
+                    }
+                },
             }
-            if (is_cycle) continue;
+            if (should_skip) continue;
 
             // Expand path with this edge
             var new_path = try current_path.clone(allocator);
@@ -1526,15 +1574,45 @@ pub fn expandVariableLengthPaths(
             // For reverse traversal, next node is edge.from_id (source of the edge)
             const next_node_id = edge.from_id;
 
-            // Check for cycles: don't revisit nodes already in path
-            var is_cycle = false;
-            for (current_path.nodes.items) |visited_node| {
-                if (visited_node == next_node_id) {
-                    is_cycle = true;
-                    break;
-                }
+            // Path mode filtering based on ISO/IEC 39075:2024 semantics
+            var should_skip = false;
+            switch (path_mode) {
+                .walk => {
+                    // WALK: No restrictions - can revisit nodes and edges
+                },
+                .trail => {
+                    // TRAIL: Cannot revisit edges (edges must be unique)
+                    for (current_path.edges.items) |visited_edge| {
+                        if (visited_edge == edge.id) {
+                            should_skip = true;
+                            break;
+                        }
+                    }
+                },
+                .acyclic => {
+                    // ACYCLIC: Cannot revisit any node (no cycles at all)
+                    for (current_path.nodes.items) |visited_node| {
+                        if (visited_node == next_node_id) {
+                            should_skip = true;
+                            break;
+                        }
+                    }
+                },
+                .simple => {
+                    // SIMPLE: Cannot revisit nodes except start can equal end
+                    if (next_node_id == start_node_id) {
+                        // Allow closing the loop to start node
+                    } else {
+                        for (current_path.nodes.items) |visited_node| {
+                            if (visited_node == next_node_id) {
+                                should_skip = true;
+                                break;
+                            }
+                        }
+                    }
+                },
             }
-            if (is_cycle) continue;
+            if (should_skip) continue;
 
             // Expand path with this edge
             var new_path = try current_path.clone(allocator);

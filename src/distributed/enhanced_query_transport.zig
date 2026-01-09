@@ -520,6 +520,129 @@ pub const EnhancedQueryTransport = struct {
         _ = query_text;
         return 1000; // Default estimate
     }
+
+    // CANARY: REQ=REQ-DIST-LB-001; FEATURE="Load Balancing"; ASPECT=ShardSelection; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-08
+    /// Select the best shard for a query using the configured load balancing strategy
+    pub fn selectShardForQuery(self: *EnhancedQueryTransport, available_shards: []const u64, query_key: ?[]const u8) !u64 {
+        if (available_shards.len == 0) return error.NoShardsAvailable;
+        if (available_shards.len == 1) return available_shards[0];
+
+        return switch (self.config.load_balancing_strategy) {
+            .round_robin => self.selectRoundRobin(available_shards),
+            .least_connections => self.selectLeastConnections(available_shards),
+            .hash_based => self.selectHashBased(available_shards, query_key),
+            .adaptive => self.selectAdaptive(available_shards),
+        };
+    }
+
+    // Round-robin load balancing
+    var round_robin_counter: usize = 0;
+    fn selectRoundRobin(self: *EnhancedQueryTransport, shards: []const u64) u64 {
+        _ = self;
+        const idx = @atomicRmw(usize, &round_robin_counter, .Add, 1, .seq_cst) % shards.len;
+        return shards[idx];
+    }
+
+    // Least connections - select shard with lowest active query count
+    fn selectLeastConnections(self: *EnhancedQueryTransport, shards: []const u64) u64 {
+        var best_shard: u64 = shards[0];
+        var min_queries: u64 = std.math.maxInt(u64);
+
+        for (shards) |shard_id| {
+            if (self.statistics.shard_utilization.get(shard_id)) |util| {
+                // Use queries_executed as proxy for current load (in production would track active queries)
+                if (util.queries_executed < min_queries) {
+                    min_queries = util.queries_executed;
+                    best_shard = shard_id;
+                }
+            } else {
+                // Prefer shards with no utilization data (new shards)
+                return shard_id;
+            }
+        }
+
+        return best_shard;
+    }
+
+    // Hash-based - consistent selection based on query key
+    fn selectHashBased(self: *EnhancedQueryTransport, shards: []const u64, key: ?[]const u8) u64 {
+        _ = self;
+        if (key) |k| {
+            var hash: u64 = 0;
+            for (k) |c| {
+                hash = hash *% 31 +% c;
+            }
+            return shards[hash % shards.len];
+        }
+        // Fallback to first shard if no key provided
+        return shards[0];
+    }
+
+    // Adaptive - consider response time, error rate, and current load
+    fn selectAdaptive(self: *EnhancedQueryTransport, shards: []const u64) u64 {
+        var best_shard: u64 = shards[0];
+        var best_score: f64 = std.math.inf(f64);
+
+        for (shards) |shard_id| {
+            if (self.statistics.shard_utilization.get(shard_id)) |util| {
+                // Calculate weighted score (lower is better)
+                // Weights: response_time=0.4, error_rate=0.4, cpu_usage=0.2
+                const response_score = util.avg_response_time_ms * 0.4;
+                const error_score = @as(f64, util.error_rate) * 1000.0 * 0.4; // Scale error rate
+                const load_score = @as(f64, util.cpu_usage_percent) * 0.2;
+
+                const total_score = response_score + error_score + load_score;
+
+                if (total_score < best_score) {
+                    best_score = total_score;
+                    best_shard = shard_id;
+                }
+            } else {
+                // Prefer shards with no metrics (new, untested shards get a chance)
+                return shard_id;
+            }
+        }
+
+        return best_shard;
+    }
+
+    /// Get multiple shards for parallel execution with load balancing
+    pub fn selectShardsForParallelQuery(
+        self: *EnhancedQueryTransport,
+        all_shards: []const u64,
+        max_shards: usize,
+    ) ![]u64 {
+        if (all_shards.len == 0) return error.NoShardsAvailable;
+
+        const count = @min(all_shards.len, max_shards);
+        var selected = try self.allocator.alloc(u64, count);
+
+        // Sort shards by adaptive score and select top N
+        var scored_shards = try self.allocator.alloc(struct { id: u64, score: f64 }, all_shards.len);
+        defer self.allocator.free(scored_shards);
+
+        for (all_shards, 0..) |shard_id, i| {
+            var score: f64 = 0;
+            if (self.statistics.shard_utilization.get(shard_id)) |util| {
+                score = util.avg_response_time_ms + @as(f64, util.error_rate) * 1000.0;
+            }
+            scored_shards[i] = .{ .id = shard_id, .score = score };
+        }
+
+        // Sort by score (lower is better)
+        std.mem.sort(@TypeOf(scored_shards[0]), scored_shards, {}, struct {
+            fn lessThan(_: void, a: @TypeOf(scored_shards[0]), b: @TypeOf(scored_shards[0])) bool {
+                return a.score < b.score;
+            }
+        }.lessThan);
+
+        // Select top N shards
+        for (scored_shards[0..count], 0..) |s, i| {
+            selected[i] = s.id;
+        }
+
+        return selected;
+    }
 };
 
 // Supporting data structures and type definitions

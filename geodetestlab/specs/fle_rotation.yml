@@ -21,14 +21,10 @@ tests:
     description: "Verify initial rotation status for default tenant"
     args: ["fle", "show-rotation", "default"]
     expect:
-
-      # Expect text output or JSON depending on implementation.
-      # Since we implemented placeholders that currently error with NotImplemented in fle_commands,
-      # we expect exit code 1 or specific error text until fully backed.
-      # UPDATE: fle_cli delegates to fle_commands which prints "require globalCatalog" and returns error.NotImplemented
-      # So we expect failure for now, validating the command plumbing works.
-      exit_code: 1
-      stderr_contains: "FLE commands require globalCatalog implementation"
+      # FLE commands are now implemented (GAP-0004 resolved January 2026)
+      # Returns status showing no encrypted schemas registered initially
+      exit_code: 0
+      stdout_contains: ["FLE Key Rotation Status", "default"]
     tags: ["fle", "rotation", "status"]
 
   # ===============================
@@ -39,8 +35,10 @@ tests:
     description: "Show encryption policy for Person schema"
     args: ["fle", "show-policy", "Person"]
     expect:
-      exit_code: 1
-      stderr_contains: "FLE commands require globalCatalog implementation"
+      # FLE commands are now implemented (GAP-0004 resolved January 2026)
+      # Returns status showing schema not found in FLE catalog
+      exit_code: 0
+      stdout_contains: ["FLE Policy Status", "Person"]
     tags: ["fle", "policy"]
 
   - name: "fle-grant-plaintext"

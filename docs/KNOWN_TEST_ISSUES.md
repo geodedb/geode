@@ -2,15 +2,45 @@
 
 This document tracks tests that are skipped in the geodetestlab test suite due to unimplemented features or test infrastructure issues.
 
-## Test Suite Status (December 2025)
+> **Note**: This is the authoritative source for test status. Run `make geodetestlab-comprehensive` for current results. Other documentation files reference this document rather than containing their own test numbers.
 
-- **Pass Rate**: 97.1% (1233/1300 non-skipped tests)
-- **Total Tests**: 1420
-- **Passed**: 1233
-- **Failed**: 67
-- **Skipped**: 120
+## Test Suite Status (January 2026)
+
+**Last Updated**: January 9, 2026
+
+> Numbers below are from the last documented test run. Run tests locally for current results.
+
+- **Pass Rate**: ~97% (varies by test run)
+- **Skipped**: ~120 tests (intentionally skipped due to known limitations documented below)
 
 ## Recently Fixed Issues
+
+### WITH + Aggregation + WHERE ✅ FIXED (January 2026)
+- `with-aggregation`: WITH clause with aggregation and WHERE filter now works correctly
+- Test verified: `MATCH (n:Person) WITH n.age AS age, count(*) AS count WHERE count > 0 RETURN age, count`
+
+### CASE Expressions in MATCH ✅ FIXED (January 2026)
+- `case-when-then`, `case-with-default`: CASE expressions now work in MATCH context
+- Test verified: `MATCH (n:Person) RETURN n.name, CASE WHEN n.age < 30 THEN 'young' ELSE 'senior' END AS category`
+
+### DateTime Property Access ✅ FIXED (January 2026)
+- `datetime-operations`: DateTime property access now works
+- Test verified: `RETURN datetime('2024-01-15T14:30:00').year AS year, datetime('2024-01-15T14:30:00').month AS month`
+
+### List Functions head()/tail() ✅ FIXED (January 2026)
+- `list-functions`: head(), tail(), last() list functions now work correctly
+- Test verified: `WITH [1, 2, 3, 4, 5] AS list RETURN head(list) AS first, tail(list) AS rest, size(list) AS length`
+- Returns: `{"first":1,"rest":[2,3,4,5],"length":5}`
+
+### Regex Matching (=~) ✅ FIXED (January 2026)
+- `where-with-regex`: Regex matching with =~ operator now works
+- Test verified: `MATCH (n:Person) WHERE n.name =~ 'A.*' RETURN n.name`
+- Supports: anchors (^, $), wildcards (., .*), character classes ([...]), optional (?), escapes (\)
+
+### VALUES Clause ✅ FIXED (January 2026)
+- `values-list`, `values-with-match`: VALUES clause now fully implemented
+- Test verified: `VALUES (1), (2), (3), (4), (5) AS (number) RETURN number * 2 AS doubled`
+- Returns: `{"doubled":2},{"doubled":4},{"doubled":6},{"doubled":8},{"doubled":10}`
 
 ### Setup Data Persistence ✅ FIXED (December 2025)
 
@@ -25,16 +55,24 @@ The test harness was modified to ensure setup data persists across all tests wit
 
 The following features are skipped because they are not yet implemented:
 
-#### geode_regression_tests.yml (11 tests skipped)
-- `with-aggregation`: WITH clause mixing aggregation and non-aggregation expressions with WHERE causes server hang
-- `case-when-then`, `case-with-default`: CASE expressions in MATCH context cause server hang
-- `pattern-comprehension`: Pattern comprehension list syntax `[(p)-[:KNOWS]->(friend) | friend.name]` not implemented
-- `map-projection`: Map projection syntax `n {.name, .age}` not implemented
-- `list-functions`: `head()`, `tail()` list functions not implemented
-- `datetime-operations`: DateTime property access (`dt.year`, `dt.month`, etc.) not implemented
-- `where-with-regex`: Regex matching (`=~`) not fully implemented
+#### geode_regression_tests.yml (3 tests skipped)
+- `pattern-comprehension`: Pattern comprehension list syntax `[(p)-[:KNOWS]->(friend) | friend.name]` not implemented (Cypher extension, not ISO GQL)
+- `map-projection`: Map projection syntax `n {.name, .age}` not implemented (Cypher extension, not ISO GQL)
 - `path-node-update`: Variable-length path with SET not fully implemented
-- `values-list`, `values-with-match`: VALUES clause not fully implemented
+
+### 2. Recursive CTEs (WITH RECURSIVE)
+
+Recursive Common Table Expressions are **not currently supported**. The syntax is recognized by the parser but execution is not implemented.
+
+**Workarounds:**
+- Use variable-length path patterns: `MATCH (a)-[*1..10]->(b) RETURN a, b`
+- Use SHORTEST path mode: `MATCH SHORTEST (a)-[:KNOWS*]->(b) RETURN a, b`
+- For hierarchical data, use multiple MATCH patterns with explicit depth limits
+
+**Affected operations:**
+- Transitive closure queries
+- Hierarchical queries with arbitrary depth
+- Path finding with complex conditions
 
 ### 3. Remaining Test Failures (67 tests)
 
@@ -58,17 +96,20 @@ The remaining failures are in these spec files:
 
 ## Priority for Fixes
 
-### High Priority
-1. **WITH + aggregation + WHERE** - Core query chaining feature
+### Completed ✅
+1. **WITH + aggregation + WHERE** - Fixed January 2026
+2. **CASE expressions in MATCH** - Fixed January 2026
+3. **DateTime property access** - Fixed January 2026
+4. **List functions (head/tail)** - Fixed January 2026
+5. **Regex matching (=~)** - Fixed January 2026
+6. **VALUES clause** - Fixed January 2026
 
-### Medium Priority
-2. **CASE expressions in MATCH** - Important for conditional logic
-3. **DateTime property access** - Common temporal operations
+### Medium Priority (Remaining)
+1. **Recursive CTEs** - Complex feature, use workarounds documented above
 
 ### Low Priority (Cypher extensions, not ISO GQL)
-4. Pattern comprehension (Cypher syntax)
-5. Map projection (Cypher syntax)
-6. List functions (`head()`, `tail()`)
+2. Pattern comprehension (Cypher syntax)
+3. Map projection (Cypher syntax)
 
 ## Notes
 
@@ -83,4 +124,4 @@ When fixing a feature, update this document by:
 2. Running `make geodetestlab-comprehensive` to verify the fix
 3. Removing the entry from this document
 
-*Last Updated: December 2025*
+*Last Updated: January 9, 2026*

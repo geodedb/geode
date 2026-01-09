@@ -168,6 +168,9 @@ fn regexMatchClass(ch: u8, pat: []const u8, idx: *usize) bool {
     return if (neg) !hit else hit;
 }
 
+// CANARY: REQ=REQ-GQL-REGEX-FIX-001; FEATURE="RegexMatching"; ASPECT=OverflowPrevention; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+// Fixed integer overflow in greedy matching loops by using k+1 start and pre-decrement
+// Added support for [class]* quantifier pattern
 fn regexRec(s: []const u8, p: []const u8, si0: usize, pi0: usize, allow_suffix_end: bool) bool {
     var si = si0;
     var pi = pi0;
@@ -175,8 +178,14 @@ fn regexRec(s: []const u8, p: []const u8, si0: usize, pi0: usize, allow_suffix_e
         const pc = p[pi];
         if (pc == '.') {
             if (pi + 1 < p.len and p[pi + 1] == '*') {
-                var k: usize = s.len;
-                while (k + 1 > si) : (k -= 1) if (regexRec(s, p, k, pi + 2, allow_suffix_end)) return true;
+                // Match .* - zero or more of any character (greedy)
+                // Try matching from longest to shortest to handle greedy semantics
+                // Use k+1 starting point to avoid underflow when decrementing
+                var k: usize = s.len + 1;
+                while (k > si) {
+                    k -= 1;
+                    if (regexRec(s, p, k, pi + 2, allow_suffix_end)) return true;
+                }
                 return false;
             }
             if (si >= s.len) return false;
@@ -187,15 +196,36 @@ fn regexRec(s: []const u8, p: []const u8, si0: usize, pi0: usize, allow_suffix_e
             var i: usize = pi + 1;
             while (i < p.len and p[i] != ']') : (i += 1) {}
             if (i >= p.len) return false;
+            const class_end = i + 1; // Position after ']'
+
+            // Check for quantifiers after character class
+            if (class_end < p.len and p[class_end] == '*') {
+                // [class]* - match zero or more characters from class (greedy)
+                // Find how far we can extend matching the class
+                var match_end = si;
+                while (match_end < s.len) {
+                    var check_idx: usize = pi + 1;
+                    if (!regexMatchClass(s[match_end], p, &check_idx)) break;
+                    match_end += 1;
+                }
+                // Try matching from longest to shortest
+                var k: usize = match_end + 1;
+                while (k > si) {
+                    k -= 1;
+                    if (regexRec(s, p, k, class_end + 1, allow_suffix_end)) return true;
+                }
+                return false;
+            }
+
             if (si >= s.len) return false;
             var idx: usize = pi + 1;
             if (!regexMatchClass(s[si], p, &idx)) return false;
-            if (i + 1 < p.len and p[i + 1] == '?') {
-                if (regexRec(s, p, si, i + 2, allow_suffix_end)) return true;
+            if (class_end < p.len and p[class_end] == '?') {
+                if (regexRec(s, p, si, class_end + 1, allow_suffix_end)) return true;
             }
             si += 1;
-            const opt_inc: usize = if (i + 1 < p.len and p[i + 1] == '?') @as(usize, 1) else 0;
-            pi = i + 1 + opt_inc;
+            const opt_inc: usize = if (class_end < p.len and p[class_end] == '?') @as(usize, 1) else 0;
+            pi = class_end + opt_inc;
             continue;
         } else if (pc == '\\') {
             var idx: usize = pi + 1;
@@ -3446,6 +3476,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             else => return Value{ .Int = 0 },
         }
     } else if (std.mem.eql(u8, function_name, "head")) {
+        // CANARY: REQ=REQ-GQL-HEAD-001; FEATURE="ListFunctions"; ASPECT=HeadElement; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
         // Return the first element of a list
         switch (first_arg) {
             .List => |l| {
@@ -3455,6 +3486,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             else => return Value{ .Null = {} },
         }
     } else if (std.mem.eql(u8, function_name, "tail")) {
+        // CANARY: REQ=REQ-GQL-TAIL-001; FEATURE="ListFunctions"; ASPECT=TailElements; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
         // Return all elements except the first
         switch (first_arg) {
             .List => |l| {

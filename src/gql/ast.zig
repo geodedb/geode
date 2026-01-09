@@ -134,6 +134,20 @@ pub const RelPattern = struct {
 
 pub const Hop = struct { left: NodePattern, rel: RelPattern, right: NodePattern };
 
+// CANARY: REQ=REQ-GQL-PATH-MODES-001; FEATURE="GQL Path Mode Execution"; ASPECT=AST; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-08
+/// Path mode specifiers per ISO/IEC 39075:2024
+/// Controls path traversal semantics for variable-length paths
+pub const PathMode = enum {
+    /// Default - no restrictions on path traversal
+    walk,
+    /// TRAIL - edges cannot repeat (each edge visited at most once)
+    trail,
+    /// ACYCLIC - no repeated nodes allowed (no cycles)
+    acyclic,
+    /// SIMPLE - no repeated nodes except start/end may be same
+    simple,
+};
+
 pub const Chain = struct {
     name: ?[]const u8 = null,
     hops: []Hop,
@@ -148,6 +162,9 @@ pub const Chain = struct {
     // Flag to indicate this chain is from an OPTIONAL MATCH clause
     // Optional chains should be treated as left outer joins during execution
     is_optional: bool = false,
+    // CANARY: REQ=REQ-GQL-PATH-MODES-002; FEATURE="GQL Path Mode AST"; ASPECT=Chain; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-08
+    // Path mode specifier for variable-length path traversal semantics
+    path_mode: PathMode = .walk,
 };
 
 pub const GraphPattern = struct { chains: []Chain };

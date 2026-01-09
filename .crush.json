@@ -14,13 +14,19 @@
   "providers": {
     "ollama": {
       "name": "Ollama",
-      "base_url": "http://192.168.0.178:11434/v1/",
+      "base_url": "http://10.0.0.180:11434/v1/",
       "type": "openai",
       "models": [
         {
           "name": "GPT‑OSS 120B",
           "id": "gpt-oss:120b",
           "context_window": 128000,
+          "default_max_tokens": 2000
+        },
+        {
+          "name": "nemotron-3-nano",
+          "id": "nemotron-3-nano:latest",
+          "context_window": 1048576,
           "default_max_tokens": 2000
         }
       ]

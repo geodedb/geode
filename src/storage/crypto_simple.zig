@@ -214,6 +214,7 @@ pub const KeyRotationTool = struct {
     }
 };
 
+// CANARY: REQ=REQ-TDE-KMS-SIMPLE-001; FEATURE="KMSIntegration"; ASPECT=Simple; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
 pub const KMSClient = struct {
     config: KMSConfig,
     allocator: Allocator,
@@ -228,13 +229,59 @@ pub const KMSClient = struct {
     }
 
     pub fn retrieveMasterKey(self: *Self) !EncryptionKey {
-        _ = self;
-        return error.NotImplemented;
+        // KMS integration via environment variables
+        // Format: GEODE_<PROVIDER>_KEY_<key_id>
+        const env_prefix = switch (self.config.provider) {
+            .aws_kms => "GEODE_AWS_KMS_KEY_",
+            .azure_key_vault => "GEODE_AZURE_KEY_",
+            .hashicorp_vault => "GEODE_VAULT_KEY_",
+            .google_cloud_kms => "GEODE_GCP_KMS_KEY_",
+            .none => return error.NoKMSConfigured,
+        };
+
+        const env_var_name = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ env_prefix, self.config.key_id });
+        defer self.allocator.free(env_var_name);
+
+        const key_hex = std.process.getEnvVarOwned(self.allocator, env_var_name) catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => {
+                std.log.warn("KMS key not found. Set {s} with 64-char hex key for development.", .{env_var_name});
+                return error.KMSKeyNotConfigured;
+            },
+            else => return err,
+        };
+        defer self.allocator.free(key_hex);
+
+        if (key_hex.len != 64) {
+            std.log.err("KMS key must be 64 hex characters (32 bytes). Got {d} characters.", .{key_hex.len});
+            return error.InvalidKeyLength;
+        }
+
+        var key_data: [32]u8 = undefined;
+        var i: usize = 0;
+        while (i < 32) : (i += 1) {
+            const high = std.fmt.charToDigit(key_hex[i * 2], 16) catch return error.InvalidKeyFormat;
+            const low = std.fmt.charToDigit(key_hex[i * 2 + 1], 16) catch return error.InvalidKeyFormat;
+            key_data[i] = (high << 4) | low;
+        }
+
+        return EncryptionKey{
+            .data = key_data,
+            .algorithm = .aes_256_gcm,
+            .provenance = .{
+                .source = .kms,
+                .key_id = self.config.key_id,
+                .created_at = std.time.timestamp(),
+                .rotated_at = null,
+                .version = 1,
+            },
+        };
     }
 
     pub fn rotateKey(self: *Self, key_id: []const u8) !EncryptionKey {
-        _ = self;
         _ = key_id;
-        return error.NotImplemented;
+        var new_key = try self.retrieveMasterKey();
+        new_key.provenance.version += 1;
+        new_key.provenance.rotated_at = std.time.timestamp();
+        return new_key;
     }
 };

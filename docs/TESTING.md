@@ -2,13 +2,14 @@
 
 ## Overview
 
-Geode maintains comprehensive test coverage across multiple testing frameworks and methodologies. As of v0.19.0-dev, the project achieves **99.4% test coverage** (179/180 tests passing) in the geodetestlab integration test suite.
+Geode maintains comprehensive test coverage across multiple testing frameworks and methodologies.
+
+> **Note**: Test coverage numbers change with each test run. For current results, run `make geodetestlab-comprehensive` or check `docs/status.csv`. Numbers in documentation are point-in-time snapshots.
 
 ## Test Coverage Summary
 
 ### geodetestlab Integration Tests
-- **Total Tests**: 180
-- **Passing**: 179 (99.4%)
+- **Status**: See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test status
 - **Coverage by Category**:
   - Authentication & Authorization: 100%
   - User Management: 100%

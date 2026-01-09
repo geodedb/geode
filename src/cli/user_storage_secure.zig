@@ -1,9 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLIUserManagement"; ASPECT=SecureStorage; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-26
+// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLIUserManagement"; ASPECT=SecureStorage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
 // Secure encrypted user storage for CLI commands
-// Uses AES-256-GCM encryption with Argon2id password hashing and HMAC tamper protection
+// Uses AES-256-GCM authenticated encryption with Argon2id password hashing
 
 pub const User = struct {
     username: []const u8,
@@ -344,38 +344,55 @@ pub const UserStorage = struct {
         try file.writeAll(encrypted_data);
     }
 
+    // AES-256-GCM encryption constants
+    const AesGcm = std.crypto.aead.aes_gcm.Aes256Gcm;
+    const nonce_len = AesGcm.nonce_length; // 12 bytes
+    const tag_len = AesGcm.tag_length; // 16 bytes
+
     fn encryptData(self: *Self, data: []const u8) ![]u8 {
-        // Simple XOR encryption + HMAC (in production, use AES-256-GCM)
-        var result = try self.allocator.alloc(u8, data.len + 32);
+        // AES-256-GCM authenticated encryption
+        // Output format: [nonce (12 bytes)] [auth_tag (16 bytes)] [ciphertext]
+        const total_len = nonce_len + tag_len + data.len;
+        var result = try self.allocator.alloc(u8, total_len);
+        errdefer self.allocator.free(result);
 
-        // Generate nonce
-        std.crypto.random.bytes(result[0..32]);
-        const nonce = result[0..32];
+        // Generate random nonce
+        var nonce: [nonce_len]u8 = undefined;
+        std.crypto.random.bytes(&nonce);
+        @memcpy(result[0..nonce_len], &nonce);
 
-        // XOR with key stream
-        for (data, 0..) |byte, i| {
-            const key_byte = self.encryption_key[i % 32] ^ nonce[i % 32];
-            result[32 + i] = byte ^ key_byte;
-        }
+        // Encrypt with authentication
+        var ciphertext = result[nonce_len + tag_len ..];
+        var tag: [tag_len]u8 = undefined;
+
+        AesGcm.encrypt(ciphertext, &tag, data, "", nonce, self.encryption_key);
+
+        // Copy tag after nonce
+        @memcpy(result[nonce_len .. nonce_len + tag_len], &tag);
 
         return result;
     }
 
     fn decryptData(self: *Self, encrypted: []const u8) ![]u8 {
-        if (encrypted.len < 32) return error.InvalidData;
+        // AES-256-GCM authenticated decryption
+        // Input format: [nonce (12 bytes)] [auth_tag (16 bytes)] [ciphertext]
+        const min_len = nonce_len + tag_len;
+        if (encrypted.len < min_len) return error.InvalidData;
 
-        const nonce = encrypted[0..32];
-        const ciphertext = encrypted[32..];
+        const nonce = encrypted[0..nonce_len].*;
+        const tag = encrypted[nonce_len .. nonce_len + tag_len].*;
+        const ciphertext = encrypted[nonce_len + tag_len ..];
 
-        var result = try self.allocator.alloc(u8, ciphertext.len);
+        var plaintext = try self.allocator.alloc(u8, ciphertext.len);
+        errdefer self.allocator.free(plaintext);
 
-        // XOR with key stream
-        for (ciphertext, 0..) |byte, i| {
-            const key_byte = self.encryption_key[i % 32] ^ nonce[i % 32];
-            result[i] = byte ^ key_byte;
-        }
+        // Decrypt and verify authentication tag
+        AesGcm.decrypt(plaintext, ciphertext, tag, "", nonce, self.encryption_key) catch {
+            self.allocator.free(plaintext);
+            return error.AuthenticationFailed;
+        };
 
-        return result;
+        return plaintext;
     }
 };
 

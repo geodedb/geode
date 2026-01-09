@@ -272,16 +272,24 @@ MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN path
 ```
 
 ### Path Mode Specifiers
-Advanced path mode keywords are recognized but not yet fully implemented:
+**Fully implemented as of January 2026** per ISO/IEC 39075:2024:
 ```gql
--- Keywords recognized but execution not fully implemented
-MATCH SHORTEST (a)-[*]->(b) RETURN a, b
-MATCH ANY SHORTEST (a)-[*]->(b) RETURN a, b
-MATCH WALK (a)-[*]->(b) RETURN a, b
-MATCH TRAIL (a)-[*]->(b) RETURN a, b
-MATCH ACYCLIC (a)-[*]->(b) RETURN a, b
-MATCH SIMPLE (a)-[*]->(b) RETURN a, b
+-- All path modes parsed AND executed with correct semantics
+MATCH SHORTEST (a)-[*]->(b) RETURN a, b      -- Shortest path (Dijkstra-based)
+MATCH ANY SHORTEST (a)-[*]->(b) RETURN a, b  -- Any shortest path
+MATCH WALK (a)-[*]->(b) RETURN a, b          -- No restrictions (can revisit nodes/edges)
+MATCH TRAIL (a)-[*]->(b) RETURN a, b         -- Edges cannot repeat
+MATCH ACYCLIC (a)-[*]->(b) RETURN a, b       -- No repeated nodes (no cycles)
+MATCH SIMPLE (a)-[*]->(b) RETURN a, b        -- No repeated nodes except start=end allowed
 ```
+
+**Implementation Details**:
+- Path modes stored in AST `Chain.path_mode` field
+- `expandVariableLengthPathsWithMode()` in execution.zig handles all modes
+- WALK allows full revisitation for graph exploration
+- TRAIL ensures edge uniqueness for traversal analysis
+- ACYCLIC prevents all cycles (default for backward compatibility)
+- SIMPLE enables cycle detection (start node can equal end node)
 
 ## 🧪 Testing & Validation
 
