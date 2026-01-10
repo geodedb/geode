@@ -15,6 +15,8 @@ cli:
     timeout_ms: 15000
     tls_verify: false
     format: "json"
+    server_address: "127.0.0.1:3141"
+    default_flags: ["--server", "${server_address}", "--insecure"]
 
 secrets:
   admin_password:

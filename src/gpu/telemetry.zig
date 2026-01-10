@@ -104,15 +104,123 @@ pub const EventTimer = struct {
     }
 };
 
+// GAP-0061: GPU Telemetry Metrics Implementation
+// CANARY: REQ=REQ-GPU-TELEMETRY-001; FEATURE="GPUTelemetryMetrics"; ASPECT=OccupancyBandwidth; STATUS=IMPL; OWNER=gpu; UPDATED=2026-01-10
+
+/// GPU kernel configuration for occupancy calculation
+pub const KernelConfig = struct {
+    block_size: u32 = 256,
+    shared_mem_bytes: u32 = 0,
+    registers_per_thread: u32 = 32,
+    bytes_transferred: u64 = 0,
+};
+
+/// GPU device properties for accurate occupancy estimation
+pub const DeviceProps = struct {
+    max_threads_per_sm: u32 = 2048,
+    max_blocks_per_sm: u32 = 32,
+    max_shared_mem_per_sm: u32 = 98304, // 96 KB typical for modern GPUs
+    max_registers_per_sm: u32 = 65536,
+    sm_count: u32 = 1,
+    memory_clock_mhz: u32 = 5000,
+    memory_bus_width: u32 = 256, // bits
+};
+
 pub fn recordKernelMetrics(kernel_name: []const u8, device_id: u32, elapsed_ms: f64) GPUPerfMetrics {
-    // Real metrics from CUDA events; occupancy and bandwidth still placeholders (require cuOccupancy APIs)
+    // Basic metrics without additional info - uses defaults
+    return recordKernelMetricsExt(kernel_name, device_id, elapsed_ms, .{}, .{});
+}
+
+/// Extended kernel metrics with occupancy and bandwidth calculations
+pub fn recordKernelMetricsExt(
+    kernel_name: []const u8,
+    device_id: u32,
+    elapsed_ms: f64,
+    config: KernelConfig,
+    device: DeviceProps,
+) GPUPerfMetrics {
+    // Calculate theoretical occupancy based on kernel configuration
+    const occupancy = calculateOccupancy(config, device);
+
+    // Calculate bandwidth in GB/s from bytes transferred and elapsed time
+    const bandwidth = calculateBandwidth(config.bytes_transferred, elapsed_ms);
+
     return GPUPerfMetrics{
         .kernel_ms = elapsed_ms,
-        .occupancy_pct = 0.0, // TODO: requires cuOccupancyMaxActiveBlocksPerMultiprocessor
-        .bandwidth_gbps = 0.0, // TODO: calculate from bytes transferred / elapsed_ms
+        .occupancy_pct = occupancy,
+        .bandwidth_gbps = bandwidth,
         .device_id = device_id,
         .kernel_name = kernel_name,
     };
+}
+
+/// Calculate theoretical occupancy percentage based on kernel config and device limits
+fn calculateOccupancy(config: KernelConfig, device: DeviceProps) f64 {
+    if (config.block_size == 0) return 0.0;
+
+    // Calculate max blocks per SM based on different limiting factors
+    const threads_per_block = config.block_size;
+
+    // Limit 1: Threads per SM
+    const max_blocks_by_threads = device.max_threads_per_sm / threads_per_block;
+
+    // Limit 2: Registers per SM
+    const regs_per_block = threads_per_block * config.registers_per_thread;
+    const max_blocks_by_regs = if (regs_per_block > 0)
+        device.max_registers_per_sm / regs_per_block
+    else
+        device.max_blocks_per_sm;
+
+    // Limit 3: Shared memory per SM
+    const max_blocks_by_smem = if (config.shared_mem_bytes > 0)
+        device.max_shared_mem_per_sm / config.shared_mem_bytes
+    else
+        device.max_blocks_per_sm;
+
+    // Limit 4: Hardware block limit
+    const max_blocks_hw = device.max_blocks_per_sm;
+
+    // Take minimum of all limits
+    var max_active_blocks = @min(max_blocks_by_threads, max_blocks_by_regs);
+    max_active_blocks = @min(max_active_blocks, max_blocks_by_smem);
+    max_active_blocks = @min(max_active_blocks, max_blocks_hw);
+
+    // Calculate occupancy as percentage of max theoretical threads
+    const active_threads = max_active_blocks * threads_per_block;
+    const occupancy_pct = @as(f64, @floatFromInt(active_threads)) /
+        @as(f64, @floatFromInt(device.max_threads_per_sm)) * 100.0;
+
+    return @min(100.0, occupancy_pct);
+}
+
+/// Calculate achieved bandwidth in GB/s
+fn calculateBandwidth(bytes_transferred: u64, elapsed_ms: f64) f64 {
+    if (elapsed_ms <= 0.0 or bytes_transferred == 0) return 0.0;
+
+    // Convert: bytes / ms -> GB/s
+    // GB/s = bytes / (ms * 1e-3) / (1e9)
+    // GB/s = bytes / (ms * 1e6)
+    const elapsed_s = elapsed_ms / 1000.0;
+    const gb = @as(f64, @floatFromInt(bytes_transferred)) / (1024.0 * 1024.0 * 1024.0);
+    return gb / elapsed_s;
+}
+
+/// Get theoretical peak bandwidth for a device in GB/s
+pub fn getPeakBandwidth(device: DeviceProps) f64 {
+    // Peak bandwidth = memory_clock * bus_width * 2 (DDR) / 8 (bits to bytes) / 1e9 (to GB)
+    // For GDDR6: double data rate
+    const clock_hz = @as(f64, @floatFromInt(device.memory_clock_mhz)) * 1e6;
+    const bus_bytes = @as(f64, @floatFromInt(device.memory_bus_width)) / 8.0;
+    const ddr_factor: f64 = 2.0; // Double data rate
+
+    return (clock_hz * bus_bytes * ddr_factor) / (1024.0 * 1024.0 * 1024.0);
+}
+
+/// Calculate bandwidth efficiency percentage
+pub fn getBandwidthEfficiency(achieved_gbps: f64, device: DeviceProps) f64 {
+    const peak = getPeakBandwidth(device);
+    if (peak <= 0.0) return 0.0;
+    return @min(100.0, (achieved_gbps / peak) * 100.0);
 }
 
 pub fn createDiagnostics(gpu_used: bool, metrics: ?GPUPerfMetrics, fallback: ?[]const u8) GPUDiagnostics {

@@ -63,6 +63,8 @@ pub const Query = struct {
     where_clause: ?Expr,
     filter_clause: ?Expr = null, // FILTER clause (ISO/IEC 39075:2024)
     with_clause: ?WithClause,
+    /// GAP-0082: CTEs defined via WITH [RECURSIVE] clause before the main query
+    cte_list: ?CTEList = null,
     set_clauses: []SetClause = &.{},
     remove_clauses: []RemoveClause = &.{},
     delete_items: []DeleteItem = &.{},
@@ -178,6 +180,37 @@ pub const WithClause = struct {
     order_by: ?*OrderBy = null,
     limit: ?u64 = null,
     offset: ?u64 = null,
+};
+
+/// GAP-0082: Common Table Expression (CTE) for WITH [RECURSIVE] clauses
+/// CANARY: REQ=REQ-GQL-CTE-001; FEATURE="CommonTableExpression"; ASPECT=AST; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-10
+pub const CommonTableExpression = struct {
+    name: []const u8,
+    is_recursive: bool,
+    /// Column names if explicitly specified: WITH cte_name(col1, col2) AS (...)
+    column_names: ?[]const []const u8 = null,
+    /// The CTE body - either a simple query or a union for recursive
+    body: CTEBody,
+
+    pub const CTEBody = union(enum) {
+        /// Simple query: WITH cte AS (SELECT ...)
+        simple: *Query,
+        /// Recursive query: WITH RECURSIVE cte AS (anchor UNION [ALL] recursive)
+        recursive: RecursiveCTE,
+    };
+
+    pub const RecursiveCTE = struct {
+        anchor: *Query,
+        recursive_term: *Query,
+        union_all: bool, // true for UNION ALL, false for UNION
+    };
+};
+
+/// GAP-0082: CTEList holds all CTEs defined in a WITH clause
+pub const CTEList = struct {
+    ctes: []CommonTableExpression,
+    /// Whether any CTE in the list is recursive (for easy checking)
+    has_recursive: bool,
 };
 
 pub const LetBinding = struct { variable: []const u8, value: Expr };

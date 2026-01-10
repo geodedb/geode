@@ -265,12 +265,14 @@ pub const gpu = struct {
 };
 
 // Audit modules for CLI integration
+// GAP-0075: Added syslog export for CLI audit integration
 pub const audit = struct {
     pub const config = @import("audit/config.zig");
     pub const logger = @import("audit/logger.zig");
     pub const system_logger = @import("log/logger.zig");
     pub const events = @import("audit/events.zig");
     pub const time = @import("audit/time.zig");
+    pub const syslog = @import("audit/syslog.zig");
 };
 
 // Runtime-flag gated scaffold stub re-exports for acceptance tests

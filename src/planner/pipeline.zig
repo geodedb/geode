@@ -196,7 +196,7 @@ pub fn plannerPathCacheInsert(
 
 // Real phase timing integration wrapper (coarse) - times internal logical phases of planQuery.
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerPhaseRealTimingIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration; OWNER=planner; UPDATED=2025-09-21
-pub fn planQueryRealTimed(q: planner_root.ast.Query, opts: planner_root.PlannerOptions) !struct { plan: planner_root.Plan, timings: phase_timing_mod.PhaseTimings } {
+pub fn planQueryRealTimed(q: planner_root.ast.Query, opts: planner_root.PlannerOptions) !struct { plan: planner_root.Plan, timings: phase_timing_mod.PhaseTimings, cost_estimate: f64 } {
     var timings: phase_timing_mod.PhaseTimings = .{};
     var pt = phase_timing_mod.PhaseTimer.init(&timings);
     // Treat pre-validation (rewrite), group-by validation (cardinality placeholder), final selection (cost_eval)
@@ -207,9 +207,58 @@ pub fn planQueryRealTimed(q: planner_root.ast.Query, opts: planner_root.PlannerO
     const plan = try planner_root.planQuery(q, opts);
     pt.end();
     pt.begin(.cost_eval);
-    // Placeholder for cost evaluation (not implemented yet)
+    // GAP-0080: Actual cost evaluation using cost model
+    // CANARY: REQ=REQ-GQL-COST-001; FEATURE="CostEvaluationPhase"; ASPECT=PlanCost; STATUS=IMPL; UPDATED=2026-01-10
+    const cost_estimate = evaluatePlanCost(q, opts);
     pt.end();
-    return .{ .plan = plan, .timings = pt.snapshot() };
+    return .{ .plan = plan, .timings = pt.snapshot(), .cost_estimate = cost_estimate };
+}
+
+/// GAP-0080: Evaluate plan cost using cost factors
+/// Returns estimated total cost based on query structure
+fn evaluatePlanCost(q: planner_root.ast.Query, opts: planner_root.PlannerOptions) f64 {
+    _ = opts;
+    const factors = cost_model.CostFactors{};
+
+    // Estimate cost components
+    var total_cost: f64 = 0;
+
+    // Base scan cost: depends on number of patterns
+    const pattern_count = q.match.chains.len;
+    total_cost += @as(f64, @floatFromInt(if (pattern_count > 0) pattern_count else 1)) * factors.scan_base;
+
+    // Join cost: each additional pattern beyond first adds join overhead
+    if (pattern_count > 1) {
+        total_cost += @as(f64, @floatFromInt(pattern_count - 1)) * factors.join_base;
+    }
+
+    // Filter cost: WHERE clause complexity
+    if (q.where.items.len > 0) {
+        total_cost += @as(f64, @floatFromInt(q.where.items.len)) * factors.filter_base;
+    }
+
+    // Projection cost: RETURN items
+    if (q.ret.items.len > 0) {
+        total_cost += @as(f64, @floatFromInt(q.ret.items.len)) * factors.project_base;
+    }
+
+    // Aggregation cost: GROUP BY presence (inferred from aggregate functions)
+    // Simple heuristic: if return items likely contain aggregates, add aggregate cost
+    if (q.ret.items.len > 0 and q.where.items.len > 0) {
+        total_cost += factors.aggregate_base;
+    }
+
+    // Sort cost: ORDER BY presence
+    if (q.order.items.len > 0) {
+        total_cost += @as(f64, @floatFromInt(q.order.items.len)) * factors.sort_base;
+    }
+
+    // Limit cost: SKIP/LIMIT presence
+    if (q.skip > 0 or q.limit != null) {
+        total_cost += factors.limit_base;
+    }
+
+    return total_cost;
 }
 
 // Integrate cost-based enumerator selection into pipeline: build a synthetic logical plan tree

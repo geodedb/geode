@@ -37,6 +37,63 @@ pub const CDCConfiguration = struct {
     flush_interval_ms: u64 = 1000, // Flush interval in ms
 };
 
+/// Transaction context for CDC event correlation
+/// GAP-0073: Provides transaction ID for CDC event tracking
+/// CANARY: REQ=REQ-GQL-CDC-TXID-001; FEATURE="CDCTransactionTracking"; ASPECT=Consistency; STATUS=IMPL; UPDATED=2026-01-10
+pub const TransactionContext = struct {
+    /// Current transaction ID (0 = no active transaction)
+    transaction_id: u64 = 0,
+    /// Transaction start timestamp
+    start_ts: i64 = 0,
+    /// Transaction isolation level
+    isolation_level: enum { read_uncommitted, read_committed, repeatable_read, serializable } = .read_committed,
+
+    /// Begin a new transaction
+    pub fn begin(self: *TransactionContext) void {
+        self.transaction_id = generateTransactionId();
+        self.start_ts = std.time.milliTimestamp();
+    }
+
+    /// Commit the current transaction
+    pub fn commit(self: *TransactionContext) void {
+        self.transaction_id = 0;
+        self.start_ts = 0;
+    }
+
+    /// Rollback the current transaction
+    pub fn rollback(self: *TransactionContext) void {
+        self.transaction_id = 0;
+        self.start_ts = 0;
+    }
+
+    /// Check if a transaction is active
+    pub fn isActive(self: *const TransactionContext) bool {
+        return self.transaction_id != 0;
+    }
+};
+
+/// Thread-local transaction context
+threadlocal var current_transaction: TransactionContext = .{};
+
+/// Get the current transaction context for this thread
+pub fn getCurrentTransaction() *TransactionContext {
+    return &current_transaction;
+}
+
+/// Get current transaction ID (0 if no active transaction)
+pub fn getCurrentTransactionId() u64 {
+    return current_transaction.transaction_id;
+}
+
+/// Generate unique transaction ID using timestamp + random component
+fn generateTransactionId() u64 {
+    const ts: u64 = @intCast(std.time.milliTimestamp());
+    var rand_bytes: [4]u8 = undefined;
+    std.crypto.random.bytes(&rand_bytes);
+    const rand: u32 = std.mem.readInt(u32, &rand_bytes, .little);
+    return (ts << 20) | (@as(u64, rand) & 0xFFFFF);
+}
+
 pub const SinkType = enum {
     memory,
     file,
@@ -139,6 +196,8 @@ pub const CDCEngine = struct {
         }
     }
 
+    /// Capture a change event with automatic transaction ID from current context
+    /// GAP-0073: Transaction ID now properly wired from TransactionContext
     pub fn captureChange(
         self: *Self,
         change_type: ChangeType,
@@ -148,6 +207,21 @@ pub const CDCEngine = struct {
         before: ?[]const u8,
         after: ?[]const u8,
     ) !void {
+        return self.captureChangeWithTxId(change_type, graph_id, object_type, object_id, before, after, getCurrentTransactionId());
+    }
+
+    /// Capture a change event with explicit transaction ID
+    /// GAP-0073: Allows explicit transaction ID for distributed scenarios
+    pub fn captureChangeWithTxId(
+        self: *Self,
+        change_type: ChangeType,
+        graph_id: u32,
+        object_type: anytype,
+        object_id: u64,
+        before: ?[]const u8,
+        after: ?[]const u8,
+        transaction_id: u64,
+    ) !void {
         if (!self.config.enabled) {
             return;
         }
@@ -156,7 +230,7 @@ pub const CDCEngine = struct {
         const event = ChangeEvent{
             .sequence_number = seq,
             .timestamp = std.time.milliTimestamp(),
-            .transaction_id = 0, // TODO: get from transaction manager
+            .transaction_id = transaction_id, // GAP-0073: Now from transaction context
             .change_type = change_type,
             .graph_id = graph_id,
             .object_type = object_type,

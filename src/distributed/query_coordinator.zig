@@ -4,15 +4,20 @@ const planner = @import("../planner.zig");
 const exec = @import("../exec.zig");
 const federation = @import("federation.zig");
 const raft = @import("raft.zig");
+// GAP-0077: Import CBO for statistics integration
+const cbo = @import("../planner/cbo.zig");
 
 /// Distributed query coordinator
 /// Handles scatter-gather pattern for federated queries
+/// GAP-0077: Now uses statistics registry for row estimates
+/// CANARY: REQ=REQ-DIST-STATS-001; FEATURE="DistributedStatsIntegration"; ASPECT=QueryPlanning; STATUS=IMPL; UPDATED=2026-01-10
 pub const QueryCoordinator = struct {
     allocator: std.mem.Allocator,
     config: federation.FederationConfig,
     shard_map: ShardMap,
     node_registry: NodeRegistry,
     metrics: CoordinatorMetrics,
+    stats_registry: ?*cbo.StatsRegistry = null, // GAP-0077: Optional statistics registry
 
     const Self = @This();
 
@@ -75,12 +80,19 @@ pub const QueryCoordinator = struct {
         // Determine which shards need to participate
         const participating_shards = try self.shard_map.getShardsForQuery(query);
 
+        // GAP-0077: Extract table name from query for statistics lookup
+        const table_name = self.extractTableFromQuery(query);
+
         // Generate shard-specific query fragments
         for (participating_shards) |shard_id| {
+            // GAP-0077: Use statistics for row estimate if available
+            // CANARY: REQ=REQ-DIST-STATS-002; FEATURE="ShardRowEstimate"; ASPECT=QueryPlanning; STATUS=IMPL; UPDATED=2026-01-10
+            const estimated_rows = self.estimateRowsForShard(table_name, shard_id, participating_shards.len);
+
             const fragment = QueryFragment{
                 .shard_id = shard_id,
                 .query_text = try self.allocator.dupe(u8, query),
-                .estimated_rows = 10000, // TODO: Use statistics
+                .estimated_rows = estimated_rows,
             };
             try plan.fragments.append(fragment);
         }
@@ -332,6 +344,62 @@ pub const QueryCoordinator = struct {
             names[i] = try self.allocator.dupe(u8, key.column);
         }
         return names;
+    }
+
+    /// GAP-0077: Extract table name from query for statistics lookup
+    /// CANARY: REQ=REQ-DIST-STATS-003; FEATURE="TableNameExtraction"; ASPECT=QueryParsing; STATUS=IMPL; UPDATED=2026-01-10
+    fn extractTableFromQuery(self: *Self, query: []const u8) ?[]const u8 {
+        _ = self;
+        // Simple heuristic: look for MATCH (x:TableName) or FROM TableName patterns
+        // For GQL: look for label pattern like (n:Person)
+        if (std.mem.indexOf(u8, query, ":")) |colon_idx| {
+            // Find the start of the label (after colon)
+            const after_colon = query[colon_idx + 1 ..];
+            // Find the end (space, ), or })
+            var end_idx: usize = 0;
+            for (after_colon, 0..) |c, i| {
+                if (c == ')' or c == ' ' or c == '}' or c == '{' or c == ']') {
+                    end_idx = i;
+                    break;
+                }
+                end_idx = i + 1;
+            }
+            if (end_idx > 0) {
+                return after_colon[0..end_idx];
+            }
+        }
+        return null;
+    }
+
+    /// GAP-0077: Estimate rows for a shard using statistics
+    /// CANARY: REQ=REQ-DIST-STATS-004; FEATURE="ShardRowEstimation"; ASPECT=Statistics; STATUS=IMPL; UPDATED=2026-01-10
+    fn estimateRowsForShard(self: *Self, table_name: ?[]const u8, shard_id: u64, total_shards: usize) u64 {
+        _ = shard_id;
+
+        // Default estimate if no statistics available
+        const default_estimate: u64 = 10000;
+
+        // If no table name extracted, use default
+        const table = table_name orelse return default_estimate / @max(1, total_shards);
+
+        // Try to get statistics from registry
+        if (self.stats_registry) |registry| {
+            if (registry.getTableStats(table)) |stats| {
+                // Distribute rows evenly across participating shards
+                const total_rows = stats.row_count;
+                const rows_per_shard = total_rows / @max(1, total_shards);
+                // Add 10% buffer for estimation variance
+                return rows_per_shard + rows_per_shard / 10;
+            }
+        }
+
+        // Fall back to default if no statistics
+        return default_estimate / @max(1, total_shards);
+    }
+
+    /// GAP-0077: Set the statistics registry for this coordinator
+    pub fn setStatsRegistry(self: *Self, registry: *cbo.StatsRegistry) void {
+        self.stats_registry = registry;
     }
 };
 

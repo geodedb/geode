@@ -290,42 +290,209 @@ pub const Parser = struct {
         // initialize alias set arraylist
         self.path_aliases = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
         var list = std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-        var recursive_mode = false;
-        // Minimal recognition of leading WITH RECURSIVE (no full CTE parsing yet)
-        // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle; OWNER=engine; UPDATED=2025-09-26
+
+        // GAP-0082: Parse CTEs if WITH keyword present at program start
+        // CANARY: REQ=REQ-GQL-CTE-002; FEATURE="CTEParsing"; ASPECT=ParserProgram; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-10
+        var cte_list: ?ast.CTEList = null;
         if (self.cur.kind == .WITH) {
-            // Peek if next token is identifier RECURSIVE (case-insensitive)
+            // Check if this is a CTE (WITH name AS (...)) vs projection (WITH expr AS alias)
+            // CTEs have: WITH identifier AS ( or WITH RECURSIVE identifier AS (
+            // Projections have: WITH function(...) AS alias or WITH expr AS alias
             var tmp = self.lx.*;
-            const maybe = tmp.next(); // token after WITH
-            if (maybe.kind == .identifier and std.ascii.eqlIgnoreCase(maybe.lexeme, "RECURSIVE")) {
-                // Consume WITH and the RECURSIVE identifier, but skip full CTE parsing for now (stub)
-                self.advance(); // WITH
-                self.advance(); // RECURSIVE
-                recursive_mode = true;
-                // For now we expect immediate query start (MATCH/RETURN etc.)
+            const next_tok = tmp.next();
+            const is_recursive = next_tok.kind == .identifier and std.ascii.eqlIgnoreCase(next_tok.lexeme, "RECURSIVE");
+            const check_tok = if (is_recursive) tmp.next() else next_tok;
+
+            // Check for CTE pattern: identifier AS ( (not just identifier followed by AS)
+            // We need to distinguish:
+            //   CTE: WITH cte_name AS (SELECT...) - identifier followed by AS then (
+            //   Projection: WITH date('...') AS d - function call followed by AS then identifier
+            const is_cte = check_tok.kind == .identifier and blk: {
+                const peek = tmp.next();
+                if (peek.kind == .AS) {
+                    // Check if AS is followed by ( which indicates CTE body
+                    const after_as = tmp.next();
+                    break :blk after_as.kind == .l_paren;
+                } else if (peek.kind == .l_paren) {
+                    // Could be CTE with column list: WITH name(col1, col2) AS (...)
+                    // Skip to closing paren and check for AS (
+                    var depth: u32 = 1;
+                    while (depth > 0) {
+                        const inner_tok = tmp.next();
+                        if (inner_tok.kind == .l_paren) depth += 1;
+                        if (inner_tok.kind == .r_paren) depth -= 1;
+                        if (inner_tok.kind == .eof) break :blk false;
+                    }
+                    const after_paren = tmp.next();
+                    if (after_paren.kind == .AS) {
+                        const after_as = tmp.next();
+                        break :blk after_as.kind == .l_paren;
+                    }
+                    break :blk false;
+                } else {
+                    break :blk false;
+                }
+            };
+
+            if (is_cte) {
+                cte_list = try self.parseCTEList();
             }
         }
+
         while (self.cur.kind != .eof) {
             const st = try self.parseStatement();
-            // If we recognized WITH RECURSIVE, propagate flag onto contained queries
-            if (recursive_mode) switch (st) {
-                .Query => |q| {
-                    // set flag; need to patch the copy before appending
-                    var q_mut = q;
-                    q_mut.has_recursive_cte = true;
-                    try list.append(self.arena.allocator(), .{ .Query = q_mut });
-                    if (self.cur.kind == .semicolon) self.advance();
-                    continue;
-                },
-                .Union, .Intersect, .Except => {
-                    // Future: mark nested queries; leave unset for now (recognition limited to simple Query)
-                },
-                else => {},
-            };
+            // If we parsed CTEs, attach them to Query statements
+            if (cte_list) |ctes| {
+                switch (st) {
+                    .Query => |q| {
+                        var q_mut = q;
+                        q_mut.cte_list = ctes;
+                        q_mut.has_recursive_cte = ctes.has_recursive;
+                        try list.append(self.arena.allocator(), .{ .Query = q_mut });
+                        if (self.cur.kind == .semicolon) self.advance();
+                        // Clear cte_list after attaching to first query
+                        cte_list = null;
+                        continue;
+                    },
+                    .Union => |u| {
+                        // Attach to union's first query
+                        var u_mut = u;
+                        var first_mut = u_mut.first;
+                        first_mut.cte_list = ctes;
+                        first_mut.has_recursive_cte = ctes.has_recursive;
+                        u_mut.first = first_mut;
+                        try list.append(self.arena.allocator(), .{ .Union = u_mut });
+                        if (self.cur.kind == .semicolon) self.advance();
+                        cte_list = null;
+                        continue;
+                    },
+                    else => {},
+                }
+            }
             try list.append(self.arena.allocator(), st);
             if (self.cur.kind == .semicolon) self.advance();
         }
         return .{ .statements = try list.toOwnedSlice(self.arena.allocator()) };
+    }
+
+    /// GAP-0082: Parse WITH [RECURSIVE] cte_name [(col1, col2)] AS (query) [, cte_name2 AS (query2)]
+    /// CANARY: REQ=REQ-GQL-CTE-003; FEATURE="CTEListParsing"; ASPECT=Parser; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-10
+    fn parseCTEList(self: *Parser) ParserError!ast.CTEList {
+        _ = self.expect(.WITH) catch return error.UnexpectedToken;
+
+        var is_recursive = false;
+        // Check for RECURSIVE keyword
+        if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "RECURSIVE")) {
+            is_recursive = true;
+            self.advance();
+        }
+
+        var ctes = std.ArrayList(ast.CommonTableExpression).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        const any_recursive = is_recursive;
+
+        // Parse first CTE
+        const first_cte = try self.parseSingleCTE(is_recursive);
+        try ctes.append(self.arena.allocator(), first_cte);
+
+        // Parse additional CTEs separated by commas
+        while (self.cur.kind == .comma) {
+            self.advance(); // consume comma
+            const cte = try self.parseSingleCTE(is_recursive);
+            try ctes.append(self.arena.allocator(), cte);
+        }
+
+        return ast.CTEList{
+            .ctes = try ctes.toOwnedSlice(self.arena.allocator()),
+            .has_recursive = any_recursive,
+        };
+    }
+
+    /// Parse a single CTE: name [(col1, col2)] AS (query)
+    fn parseSingleCTE(self: *Parser, is_recursive_context: bool) ParserError!ast.CommonTableExpression {
+        // Parse CTE name
+        if (self.cur.kind != .identifier) return error.UnexpectedToken;
+        const cte_name = self.cur.lexeme;
+        self.advance();
+
+        // Optional column list: (col1, col2, ...)
+        var column_names: ?[]const []const u8 = null;
+        if (self.cur.kind == .l_paren) {
+            self.advance();
+            var cols = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            if (self.cur.kind == .identifier) {
+                try cols.append(self.arena.allocator(), self.cur.lexeme);
+                self.advance();
+                while (self.cur.kind == .comma) {
+                    self.advance();
+                    if (self.cur.kind != .identifier) return error.UnexpectedToken;
+                    try cols.append(self.arena.allocator(), self.cur.lexeme);
+                    self.advance();
+                }
+            }
+            _ = self.expect(.r_paren) catch return error.UnexpectedToken;
+            if (cols.items.len > 0) {
+                column_names = try cols.toOwnedSlice(self.arena.allocator());
+            }
+        }
+
+        // Expect AS
+        _ = self.expect(.AS) catch return error.UnexpectedToken;
+
+        // Expect opening paren for CTE body
+        _ = self.expect(.l_paren) catch return error.UnexpectedToken;
+
+        // Parse the CTE body - this could be a simple query or anchor UNION recursive
+        // For recursive CTEs, we need to detect UNION within the body
+        const body = try self.parseCTEBody(is_recursive_context, cte_name);
+
+        // Expect closing paren
+        _ = self.expect(.r_paren) catch return error.UnexpectedToken;
+
+        return ast.CommonTableExpression{
+            .name = cte_name,
+            .is_recursive = is_recursive_context and body == .recursive,
+            .column_names = column_names,
+            .body = body,
+        };
+    }
+
+    /// Parse CTE body - detect if it's anchor UNION recursive or simple query
+    fn parseCTEBody(self: *Parser, is_recursive_context: bool, cte_name: []const u8) ParserError!ast.CommonTableExpression.CTEBody {
+        // Parse first query (could be anchor or full query)
+        const first_query = try self.parseQueryForCTE();
+        const first_ptr = try self.arena.allocator().create(ast.Query);
+        first_ptr.* = first_query;
+
+        // Check for UNION (indicates recursive CTE structure)
+        if (is_recursive_context and self.cur.kind == .UNION) {
+            self.advance(); // consume UNION
+            const union_all = self.cur.kind == .ALL;
+            if (union_all) self.advance();
+
+            // Parse recursive term
+            const recursive_query = try self.parseQueryForCTE();
+            const recursive_ptr = try self.arena.allocator().create(ast.Query);
+            recursive_ptr.* = recursive_query;
+            // Mark recursive term as referencing the CTE
+            _ = cte_name; // CTE reference will be resolved during execution
+
+            return .{
+                .recursive = .{
+                    .anchor = first_ptr,
+                    .recursive_term = recursive_ptr,
+                    .union_all = union_all,
+                },
+            };
+        }
+
+        return .{ .simple = first_ptr };
+    }
+
+    /// Parse a query within CTE context (limited - no outer set operations)
+    fn parseQueryForCTE(self: *Parser) ParserError!ast.Query {
+        // Use existing query parsing but without set operations at the top level
+        // (set operations within CTE body are handled by parseCTEBody for UNION)
+        return self.parseQuery();
     }
 
     fn parseStatement(self: *Parser) ParserError!ast.Statement {

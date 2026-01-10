@@ -120,7 +120,9 @@ var rotation_state = RotationState{};
 /// Current key provider
 var current_provider: KeyProvider = .StaticEnv;
 
-/// Loads encryption key from GEODE_TDE_KEY (32 bytes hex) - placeholder validation only.
+/// Loads encryption key from GEODE_TDE_KEY (32 bytes hex) with secure key ID derivation.
+/// GAP-0085: Key ID derived using HKDF to prevent collision and avoid key material exposure
+/// CANARY: REQ=REQ-GQL-TDE-KEYID-001; FEATURE="SecureKeyIdDerivation"; ASPECT=Security; STATUS=IMPL; UPDATED=2026-01-10
 pub fn loadKey(allocator: std.mem.Allocator, enabled: bool) !KeyStatus {
     if (!enabled) return error.FeatureDisabled;
     const key_opt = std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
@@ -129,13 +131,42 @@ pub fn loadKey(allocator: std.mem.Allocator, enabled: bool) !KeyStatus {
     };
     defer allocator.free(key_opt);
     if (key_opt.len != 64) return error.InvalidKey; // expecting hex-encoded 32 bytes
-    var ks = KeyStatus{ .loaded = true };
-    // Derive key_id as first 32 bytes of hex (not cryptographically secure placeholder)
+
+    // Parse hex key
+    var raw_key: [KeyBytes]u8 = undefined;
     var i: usize = 0;
-    while (i < 32 and i * 2 + 1 < key_opt.len) : (i += 1) {
-        ks.key_id[i] = key_opt[i * 2];
+    while (i < KeyBytes) : (i += 1) {
+        const hi = std.fmt.charToDigit(key_opt[i * 2], 16) catch return error.InvalidKey;
+        const lo = std.fmt.charToDigit(key_opt[i * 2 + 1], 16) catch return error.InvalidKey;
+        raw_key[i] = @as(u8, @intCast(hi * 16 + lo));
     }
+
+    // Derive key_id using HKDF-SHA256 with info="geode-tde-key-id"
+    // This ensures: (1) no key material in ID, (2) collision-resistant, (3) deterministic
+    var ks = KeyStatus{ .loaded = true };
+    deriveKeyId(&raw_key, &ks.key_id);
+
     return ks;
+}
+
+/// Derive key ID using HKDF-Extract + HKDF-Expand with SHA-256
+/// GAP-0085: Secure key identifier derivation without exposing key material
+fn deriveKeyId(key: *const [KeyBytes]u8, out: *[32]u8) void {
+    const Sha256 = std.crypto.hash.sha2.Sha256;
+    const Hmac = std.crypto.auth.hmac.Hmac(Sha256);
+
+    // HKDF-Extract: PRK = HMAC(salt, IKM)
+    // Use fixed salt for consistent key IDs
+    const salt = "geode-tde-key-id-salt-v1";
+    var prk: [32]u8 = undefined;
+    Hmac.create(&prk, key, salt);
+
+    // HKDF-Expand: OKM = HMAC(PRK, info || 0x01)
+    const info = "geode-tde-key-id-info-v1";
+    var expand_input: [info.len + 1]u8 = undefined;
+    @memcpy(expand_input[0..info.len], info);
+    expand_input[info.len] = 0x01;
+    Hmac.create(out, &expand_input, &prk);
 }
 
 /// Derive key from hex string

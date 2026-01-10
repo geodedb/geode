@@ -606,20 +606,206 @@ pub const RecursiveQueryProcessor = struct {
         };
     }
 
+    // GAP-0058: CTE Disk Spilling Implementation
+    // CANARY: REQ=REQ-CTE-SPILL-001; FEATURE="CTEDiskSpilling"; ASPECT=MemoryManagement; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
     fn spillToDisk(self: *RecursiveQueryProcessor, execution: *RecursiveExecution) !void {
         _ = self;
 
         if (!execution.result_accumulator.spilled_to_disk) {
-            // Create temporary file
+            // Create temporary file with unique name
             const temp_dir = std.fs.cwd();
-            const temp_file = try temp_dir.createFile("recursive_temp.dat", .{});
+            var rand_buf: [8]u8 = undefined;
+            std.crypto.random.bytes(&rand_buf);
+            var filename_buf: [64]u8 = undefined;
+            const filename = std.fmt.bufPrint(&filename_buf, "recursive_cte_{x}.dat", .{std.mem.readInt(u64, &rand_buf, .little)}) catch "recursive_temp.dat";
+            const temp_file = try temp_dir.createFile(filename, .{});
             execution.result_accumulator.temp_file = temp_file;
             execution.result_accumulator.spilled_to_disk = true;
         }
 
-        // Write current results to disk
-        // TODO: Implement disk spilling
+        const file = execution.result_accumulator.temp_file orelse return error.NoTempFile;
+
+        // Write rows to disk in a simple binary format
+        // Format: [row_count: u64][row data...]
+        // Each row: [value_count: u32][values...][depth: u32][has_path: u8][path_len: u32][path bytes...][cycle: u8]
+        const writer = file.writer();
+
+        const rows = execution.result_accumulator.rows.items;
+        const row_count: u64 = rows.len;
+        try writer.writeInt(u64, row_count, .little);
+
+        var bytes_written: u64 = 8;
+
+        for (rows) |row| {
+            // Write number of values
+            const value_count: u32 = @intCast(row.values.len);
+            try writer.writeInt(u32, value_count, .little);
+            bytes_written += 4;
+
+            // Write each value
+            for (row.values) |value| {
+                const val_bytes = try serializeValue(value);
+                try writer.writeAll(val_bytes);
+                bytes_written += val_bytes.len;
+            }
+
+            // Write depth
+            try writer.writeInt(u32, row.depth, .little);
+            bytes_written += 4;
+
+            // Write path (optional)
+            if (row.path) |path| {
+                try writer.writeByte(1); // has_path = true
+                const path_len: u32 = @intCast(path.len);
+                try writer.writeInt(u32, path_len, .little);
+                try writer.writeAll(path);
+                bytes_written += 1 + 4 + path.len;
+            } else {
+                try writer.writeByte(0); // has_path = false
+                bytes_written += 1;
+            }
+
+            // Write cycle_detected flag
+            try writer.writeByte(if (row.cycle_detected) 1 else 0);
+            bytes_written += 1;
+        }
+
+        // Clear in-memory rows to reclaim memory
+        execution.result_accumulator.rows.clearRetainingCapacity();
+        execution.result_accumulator.memory_used = 0;
+
         execution.statistics.spill_count += 1;
+        execution.statistics.memory_peak_bytes = @max(execution.statistics.memory_peak_bytes, bytes_written);
+    }
+
+    /// Serialize a value to bytes for disk storage
+    fn serializeValue(value: eval.Value) ![]const u8 {
+        // Simple serialization: type tag + data
+        // For now, convert to string representation
+        var buf: [256]u8 = undefined;
+        const result = switch (value) {
+            .Null => "N",
+            .Bool => |b| if (b) "T" else "F",
+            .Int => |i| std.fmt.bufPrint(&buf, "I{d}", .{i}) catch "I0",
+            .Float => |f| std.fmt.bufPrint(&buf, "D{d}", .{f}) catch "D0",
+            .String => |s| blk: {
+                const formatted = std.fmt.bufPrint(&buf, "S{d}:{s}", .{ s.len, s }) catch "S0:";
+                break :blk formatted;
+            },
+            else => "U", // Unknown/other types
+        };
+        return result;
+    }
+
+    /// Read spilled rows back from disk
+    fn readSpilledRows(self: *RecursiveQueryProcessor, execution: *RecursiveExecution) ![]RecursiveExecution.WorkingTable.Row {
+        _ = self;
+
+        const file = execution.result_accumulator.temp_file orelse return &[_]RecursiveExecution.WorkingTable.Row{};
+
+        // Seek to beginning
+        try file.seekTo(0);
+        const reader = file.reader();
+
+        // Read row count
+        const row_count = try reader.readInt(u64, .little);
+
+        var rows = try std.ArrayList(RecursiveExecution.WorkingTable.Row).initCapacity(
+            execution.allocator,
+            @intCast(row_count),
+        );
+
+        var i: u64 = 0;
+        while (i < row_count) : (i += 1) {
+            // Read value count
+            const value_count = try reader.readInt(u32, .little);
+
+            // Read values
+            var values = try execution.allocator.alloc(eval.Value, value_count);
+            for (values) |*v| {
+                v.* = try deserializeValue(reader, execution.allocator);
+            }
+
+            // Read depth
+            const depth = try reader.readInt(u32, .little);
+
+            // Read path
+            const has_path = try reader.readByte();
+            const path: ?[]const u8 = if (has_path == 1) blk: {
+                const path_len = try reader.readInt(u32, .little);
+                const path_buf = try execution.allocator.alloc(u8, path_len);
+                _ = try reader.readAll(path_buf);
+                break :blk path_buf;
+            } else null;
+
+            // Read cycle flag
+            const cycle_detected = (try reader.readByte()) == 1;
+
+            try rows.append(RecursiveExecution.WorkingTable.Row{
+                .values = values,
+                .depth = depth,
+                .path = path,
+                .cycle_detected = cycle_detected,
+            });
+        }
+
+        return rows.toOwnedSlice();
+    }
+
+    /// Deserialize a value from disk
+    fn deserializeValue(reader: anytype, allocator: Allocator) !eval.Value {
+        var type_buf: [1]u8 = undefined;
+        _ = try reader.readAll(&type_buf);
+
+        return switch (type_buf[0]) {
+            'N' => eval.Value.Null,
+            'T' => eval.Value{ .Bool = true },
+            'F' => eval.Value{ .Bool = false },
+            'I' => blk: {
+                // Read integer
+                var num_buf: [32]u8 = undefined;
+                var idx: usize = 0;
+                while (idx < 32) : (idx += 1) {
+                    var byte: [1]u8 = undefined;
+                    _ = reader.readAll(&byte) catch break;
+                    if (byte[0] < '0' or byte[0] > '9') {
+                        if (byte[0] != '-' or idx > 0) break;
+                    }
+                    num_buf[idx] = byte[0];
+                }
+                const int_val = std.fmt.parseInt(i64, num_buf[0..idx], 10) catch 0;
+                break :blk eval.Value{ .Int = int_val };
+            },
+            'D' => blk: {
+                // Read float
+                var num_buf: [64]u8 = undefined;
+                var idx: usize = 0;
+                while (idx < 64) : (idx += 1) {
+                    var byte: [1]u8 = undefined;
+                    _ = reader.readAll(&byte) catch break;
+                    if (!std.ascii.isDigit(byte[0]) and byte[0] != '.' and byte[0] != '-' and byte[0] != 'e' and byte[0] != 'E') break;
+                    num_buf[idx] = byte[0];
+                }
+                const float_val = std.fmt.parseFloat(f64, num_buf[0..idx]) catch 0.0;
+                break :blk eval.Value{ .Float = float_val };
+            },
+            'S' => blk: {
+                // Read string length and content
+                var len_buf: [16]u8 = undefined;
+                var idx: usize = 0;
+                while (idx < 16) : (idx += 1) {
+                    var byte: [1]u8 = undefined;
+                    _ = reader.readAll(&byte) catch break;
+                    if (byte[0] == ':') break;
+                    len_buf[idx] = byte[0];
+                }
+                const str_len = std.fmt.parseInt(usize, len_buf[0..idx], 10) catch 0;
+                const str_buf = try allocator.alloc(u8, str_len);
+                _ = try reader.readAll(str_buf);
+                break :blk eval.Value{ .String = str_buf };
+            },
+            else => eval.Value.Null,
+        };
     }
 
     fn finalizeResults(self: *RecursiveQueryProcessor, execution: *RecursiveExecution, cte: *RecursiveCTE) !exec.QueryResult {

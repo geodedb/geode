@@ -182,12 +182,11 @@ pub const KeyRegistry = struct {
         self.remote_kms_port = port;
     }
 
+    /// Load or generate active data key using cryptographically secure random source
+    /// CANARY: REQ=REQ-KEY-ROTATION-001; FEATURE="SecureKeyGeneration"; ASPECT=Security; STATUS=IMPL; UPDATED=2026-01-10
     pub fn loadActiveDataKey(self: *KeyRegistry) !DataKeyRef {
         if (self.active) |k| return k;
-        // For now generate a random key; future: load from KMS / persisted keystore
-        // Deterministic seed placeholder; future: secure random source / KMS
-        var prng = std.rand.DefaultPrng.init(0x4B45594B455931); // 'KEYKEY1'
-        const r = prng.random();
+        // Generate key material using cryptographically secure random source
         var key: DataKeyRef = .{
             .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
             .created_unix_epoch = std.time.timestamp(),
@@ -195,17 +194,19 @@ pub const KeyRegistry = struct {
             .envelope_json = null,
             .is_wrapped = false,
         };
-        r.bytes(&key.material);
+        // Use std.crypto.random for secure key generation
+        std.crypto.random.bytes(&key.material);
         try self.history.append(key);
         self.active = key;
         return key;
     }
 
+    /// Rotate key immediately using cryptographically secure random source
+    /// CANARY: REQ=REQ-KEY-ROTATION-002; FEATURE="SecureKeyRotation"; ASPECT=Security; STATUS=IMPL; UPDATED=2026-01-10
     pub fn rotateNow(self: *KeyRegistry, policy: RotationPolicy) !RotationEvent {
         _ = policy; // placeholder until policy used
         const old = self.active;
-        var prng = std.rand.DefaultPrng.init(0x4B45594B455932); // 'KEYKEY2'
-        const r = prng.random();
+        // Generate new key material using cryptographically secure random source
         var key: DataKeyRef = .{
             .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
             .created_unix_epoch = std.time.timestamp(),
@@ -213,19 +214,22 @@ pub const KeyRegistry = struct {
             .envelope_json = null,
             .is_wrapped = false,
         };
-        r.bytes(&key.material);
+        // Use std.crypto.random for secure key generation
+        std.crypto.random.bytes(&key.material);
         try self.history.append(key);
         self.active = key;
         return .{ .old_id = if (old) |o| o.id else 0, .new_id = key.id, .ts = std.time.timestamp(), .method = .manual };
     }
 
+    /// Rotate key with KMS wrapping using cryptographically secure random source
+    /// CANARY: REQ=REQ-KEY-ROTATION-003; FEATURE="SecureKmsKeyRotation"; ASPECT=Security; STATUS=IMPL; UPDATED=2026-01-10
     pub fn rotateWithKms(self: *KeyRegistry) !RotationEvent {
         if (self.kms_seed == null) return error.KmsNotConfigured;
         const old = self.active;
-        var prng = std.rand.DefaultPrng.init(self.kms_seed.? ^ @as(u64, @intCast(self.history.items.len + 1)) * 0x9E3779B97F4A7C15);
+        // Generate plaintext key material using cryptographically secure random
         var plaintext: [32]u8 = undefined;
-        prng.random().bytes(&plaintext);
-        // simulate KMS wrap using external_kms_client deterministic seed (kms_seed)
+        std.crypto.random.bytes(&plaintext);
+        // Wrap key using KMS client
         const kms = @import("external_kms_client.zig");
         var client = kms.Client.init(self.allocator.*, self.kms_seed.?);
         const env = try client.wrap(plaintext);

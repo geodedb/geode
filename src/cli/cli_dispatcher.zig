@@ -5,6 +5,9 @@ const audit_cli = @import("audit_cli");
 const geode = @import("geode");
 const log = std.log.scoped(.cli);
 
+// GAP-0075: Syslog audit logging integration
+// CANARY: REQ=REQ-AUDIT-SYSLOG-001; FEATURE="SyslogAuditIntegration"; ASPECT=AuditLogging; STATUS=IMPL; UPDATED=2026-01-10
+
 // CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-001; FEATURE="CLI Modularization"; ASPECT=CommandDispatch; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.4: CLI Dispatcher module - central command routing, flag parsing, and audit configuration
 
@@ -69,6 +72,10 @@ const SimpleAuditEvent = struct {
 // Global audit logger instances
 var global_audit_file: ?std.fs.File = null;
 var global_windows_eventlog_handle: ?std.os.windows.HANDLE = null;
+// GAP-0075: Global syslog configuration for audit logging
+var global_syslog_host: ?[]const u8 = null;
+var global_syslog_port: u16 = 514;
+var global_syslog_allocator: ?std.mem.Allocator = null;
 
 // Windows Event Log API declarations for cross-platform compatibility
 const windows = std.os.windows;
@@ -407,7 +414,6 @@ pub fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
 }
 
 pub fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditConfig) !void {
-    _ = allocator; // May be used later for syslog implementation
     if (!cli_config.enabled) return;
 
     // Initialize file logging if enabled
@@ -436,9 +442,13 @@ pub fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditC
         }
     }
 
-    // TODO: Implement syslog logging if enabled
+    // GAP-0075: Initialize syslog logging if enabled
+    // CANARY: REQ=REQ-AUDIT-SYSLOG-002; FEATURE="SyslogSenderInit"; ASPECT=AuditLogging; STATUS=IMPL; UPDATED=2026-01-10
     if (cli_config.syslog_enabled) {
-        log.warn("Syslog audit logging not yet implemented", .{});
+        global_syslog_host = cli_config.syslog_host orelse "127.0.0.1";
+        global_syslog_port = cli_config.syslog_port;
+        global_syslog_allocator = allocator;
+        log.info("Syslog audit logging enabled: {s}:{d}", .{ global_syslog_host.?, global_syslog_port });
     }
 
     // Initialize Windows Event Log if enabled and on Windows
@@ -481,12 +491,74 @@ pub fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const 
         };
     }
 
+    // GAP-0075: Log to syslog if enabled
+    // CANARY: REQ=REQ-AUDIT-SYSLOG-003; FEATURE="SyslogEventSend"; ASPECT=AuditLogging; STATUS=IMPL; UPDATED=2026-01-10
+    if (global_syslog_host) |host| {
+        sendSyslogMessage(host, global_syslog_port, category, action, outcome);
+    }
+
     // Log to Windows Event Log if enabled and on Windows
     if (builtin.os.tag == .windows) {
         if (global_windows_eventlog_handle) |event_handle| {
             logToWindowsEventLog(event_handle, category, action, outcome);
         }
     }
+}
+
+// GAP-0075: Send audit event to syslog server via UDP (RFC 5424)
+// CANARY: REQ=REQ-AUDIT-SYSLOG-004; FEATURE="SyslogUdpSend"; ASPECT=AuditLogging; STATUS=IMPL; UPDATED=2026-01-10
+fn sendSyslogMessage(host: []const u8, port: u16, category: []const u8, action: []const u8, outcome: []const u8) void {
+    // Skip if host contains placeholder (test mode)
+    if (std.mem.indexOf(u8, host, "{{") != null) return;
+
+    // RFC 5424 PRI: facility (LOCAL0=16) * 8 + severity (INFO=6)
+    const severity: u8 = if (std.mem.eql(u8, outcome, "success")) 6 else if (std.mem.eql(u8, outcome, "failure") or std.mem.eql(u8, outcome, "error")) 4 else 5;
+    const pri = 16 * 8 + severity; // LOCAL0 facility
+
+    // Get timestamp
+    const ts = std.time.timestamp();
+
+    // Format RFC 5424 message: <PRI>1 TIMESTAMP HOST APP PROCID MSGID - MSG
+    var buf: [1024]u8 = undefined;
+    const message = std.fmt.bufPrint(&buf, "<{d}>1 - localhost geode-cli - AUDIT - category={s} action={s} outcome={s} actor=geode-cli ts={d}", .{
+        pri,
+        category,
+        action,
+        outcome,
+        ts,
+    }) catch return;
+
+    // Send via UDP
+    const socket = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0) catch return;
+    defer std.posix.close(socket);
+
+    // Parse IP address
+    var addr_bytes: [4]u8 = undefined;
+    var segments: [4][]const u8 = undefined;
+    var segment_count: usize = 0;
+    var start: usize = 0;
+    for (host, 0..) |c, i| {
+        if (c == '.') {
+            if (segment_count < 4) {
+                segments[segment_count] = host[start..i];
+                segment_count += 1;
+            }
+            start = i + 1;
+        }
+    }
+    if (segment_count < 4 and start < host.len) {
+        segments[segment_count] = host[start..];
+        segment_count += 1;
+    }
+
+    if (segment_count != 4) return; // Invalid IP
+
+    for (segments[0..4], 0..) |seg, i| {
+        addr_bytes[i] = std.fmt.parseInt(u8, seg, 10) catch return;
+    }
+
+    const addr = std.net.Address.initIp4(addr_bytes, port);
+    _ = std.posix.sendto(socket, message, 0, &addr.any, addr.getOsSockLen()) catch return;
 }
 
 // CANARY: REQ=REQ-AUDIT-CLI-004; FEATURE="Windows Event Log Integration"; ASPECT=EventLogging; STATUS=IMPL; TEST=TestCANARY_REQ_AUDIT_CLI_004_WindowsEventLog; OWNER=audit; UPDATED=2025-09-30

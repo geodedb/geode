@@ -378,41 +378,143 @@ pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !key_manager
     return key_manager.deriveWalKey(allocator, wal_segment);
 }
 
-/// Test key escrow and recovery mechanisms
+/// Shamir's Secret Sharing over GF(256) using irreducible polynomial x^8 + x^4 + x^3 + x + 1
+/// GAP-0070: Proper polynomial-based threshold secret sharing
+/// CANARY: REQ=REQ-GQL-TDE-SSS-001; FEATURE="ShamirSecretSharing"; ASPECT=KeyEscrow; STATUS=IMPL; UPDATED=2026-01-10
+const ShamirSSS = struct {
+    /// GF(256) multiplication using Russian peasant algorithm
+    fn gf256Mul(a: u8, b: u8) u8 {
+        var p: u8 = 0;
+        var aa = a;
+        var bb = b;
+        var i: u8 = 0;
+        while (i < 8) : (i += 1) {
+            if ((bb & 1) != 0) p ^= aa;
+            const hi_bit = aa & 0x80;
+            aa <<= 1;
+            if (hi_bit != 0) aa ^= 0x1B; // x^8 + x^4 + x^3 + x + 1
+            bb >>= 1;
+        }
+        return p;
+    }
+
+    /// GF(256) modular inverse using extended Euclidean algorithm
+    fn gf256Inv(a: u8) u8 {
+        if (a == 0) return 0;
+        var t: u8 = 0;
+        var newt: u8 = 1;
+        var r: u16 = 0x11B; // x^8 + x^4 + x^3 + x + 1
+        var newr: u16 = a;
+
+        while (newr != 0) {
+            const quotient = @divTrunc(r, newr);
+            const temp_t = t;
+            t = newt;
+            newt = temp_t ^ @as(u8, @truncate(quotient *% newt));
+            const temp_r = r;
+            r = newr;
+            newr = temp_r ^ (quotient * newr);
+        }
+        return t;
+    }
+
+    /// GF(256) division
+    fn gf256Div(a: u8, b: u8) u8 {
+        return gf256Mul(a, gf256Inv(b));
+    }
+
+    /// Evaluate polynomial at x using Horner's method in GF(256)
+    fn evalPolynomial(coeffs: []const u8, x: u8) u8 {
+        var result: u8 = 0;
+        var i: usize = coeffs.len;
+        while (i > 0) : (i -= 1) {
+            result = gf256Mul(result, x) ^ coeffs[i - 1];
+        }
+        return result;
+    }
+
+    /// Create n shares with threshold k for a single byte
+    fn createSharesByte(secret_byte: u8, k: usize, n: usize, coeffs: []u8, shares_out: []u8) void {
+        // coeffs[0] = secret, coeffs[1..k] = random coefficients
+        coeffs[0] = secret_byte;
+
+        // Evaluate polynomial at x = 1, 2, ..., n
+        for (0..n) |i| {
+            const x: u8 = @intCast(i + 1);
+            shares_out[i] = evalPolynomial(coeffs[0..k], x);
+        }
+    }
+
+    /// Lagrange interpolation to recover secret at x=0
+    fn recoverByte(xs: []const u8, ys: []const u8, k: usize) u8 {
+        var secret: u8 = 0;
+        for (0..k) |i| {
+            var num: u8 = 1;
+            var den: u8 = 1;
+            for (0..k) |j| {
+                if (i != j) {
+                    num = gf256Mul(num, xs[j]); // (0 - x_j) = x_j in GF(256)
+                    den = gf256Mul(den, xs[i] ^ xs[j]); // (x_i - x_j)
+                }
+            }
+            const lagrange = gf256Div(num, den);
+            secret ^= gf256Mul(ys[i], lagrange);
+        }
+        return secret;
+    }
+};
+
+/// Test key escrow and recovery mechanisms using proper Shamir's Secret Sharing
+/// GAP-0070: Implements polynomial interpolation over GF(256)
 pub fn testKeyEscrow(allocator: std.mem.Allocator) !struct {
     escrow_successful: bool,
     recovery_tested: bool,
     shares_created: u32,
     threshold: u32,
 } {
-    // Implement Shamir's Secret Sharing simulation
-    const secret: [32]u8 = [_]u8{0x42} ** 32; // Master key to escrow
+    // Master key to escrow
+    const secret: [32]u8 = [_]u8{0x42} ** 32;
     const total_shares: u32 = 5;
     const threshold: u32 = 3;
 
-    // Create shares (simplified - real implementation would use proper SSS)
+    // Create shares using proper Shamir's Secret Sharing
     var shares = try allocator.alloc([33]u8, total_shares);
     defer allocator.free(shares);
 
-    for (shares, 0..) |*share, i| {
-        share[0] = @intCast(i + 1); // Share ID
-        std.crypto.random.bytes(share[1..33]);
+    // Temporary storage for polynomial coefficients
+    var coeffs: [3]u8 = undefined; // threshold coefficients
 
-        // XOR with secret for simple sharing
-        for (share[1..33], secret) |*s, k| {
-            s.* ^= k;
+    // Generate shares for each byte of the secret
+    for (0..32) |byte_idx| {
+        // Random coefficients for polynomial (coeffs[0] will be set to secret byte)
+        std.crypto.random.bytes(coeffs[1..threshold]);
+
+        // Create share values for this byte
+        var share_bytes: [5]u8 = undefined;
+        ShamirSSS.createSharesByte(secret[byte_idx], threshold, total_shares, &coeffs, &share_bytes);
+
+        // Store in shares array
+        for (0..total_shares) |share_idx| {
+            if (byte_idx == 0) {
+                shares[share_idx][0] = @intCast(share_idx + 1); // Share ID (x-coordinate)
+            }
+            shares[share_idx][byte_idx + 1] = share_bytes[share_idx];
         }
     }
 
-    // Test recovery with threshold shares
-    var recovered: [32]u8 = [_]u8{0} ** 32;
+    // Test recovery with any 'threshold' shares (use shares 0, 2, 4 to prove any subset works)
+    var recovered: [32]u8 = undefined;
+    const selected_indices = [_]usize{ 0, 2, 4 }; // Any k shares should work
 
-    // Use first 'threshold' shares for recovery
-    var i: usize = 0;
-    while (i < threshold) : (i += 1) {
-        for (&recovered, shares[i][1..33]) |*r, s| {
-            r.* ^= s;
+    // Recover each byte
+    for (0..32) |byte_idx| {
+        var xs: [3]u8 = undefined;
+        var ys: [3]u8 = undefined;
+        for (0..threshold) |i| {
+            xs[i] = shares[selected_indices[i]][0]; // x-coordinate (share ID)
+            ys[i] = shares[selected_indices[i]][byte_idx + 1]; // y-coordinate (share value)
         }
+        recovered[byte_idx] = ShamirSSS.recoverByte(&xs, &ys, threshold);
     }
 
     // Verify recovery

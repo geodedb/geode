@@ -44,7 +44,7 @@ pub const Permission = enum {
 
 pub const User = struct {
     username: []const u8,
-    password_hash: [75]u8, // $argon2id$ + 64 hex chars + $ = 75 bytes
+    password_hash: [108]u8, // $argon2id$ + salt_hex(32) + $ + hash_hex(64) + $ = 108 bytes
     email: []const u8,
     role: Role,
     created_at: i64,
@@ -98,10 +98,11 @@ pub fn deinitUserStore() void {
     }
 }
 
-/// Hash password using Argon2id
+/// Hash password using Argon2id with cryptographically random salt
 /// Argon2id is the recommended password hashing algorithm (combines Argon2i and Argon2d)
 /// Resistant to both side-channel and GPU cracking attacks
-pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![75]u8 {
+/// CANARY: REQ=REQ-AUTH-SALT-001; FEATURE="SecurePasswordSalt"; ASPECT=Security; STATUS=IMPL; UPDATED=2026-01-10
+pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![108]u8 {
     // Argon2id parameters (OWASP recommendations for server-side hashing)
     // - time_cost: Number of iterations (3 is recommended minimum)
     // - memory_cost: Memory in KiB (65536 = 64 MiB, recommended for server)
@@ -112,10 +113,10 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![75]u8 
         .p = 4, // parallelism (threads)
     };
 
-    // Generate a deterministic salt from a fixed seed for this simplified implementation
-    // PRODUCTION NOTE: Each user should have a unique random 16-byte salt stored with their hash
+    // Generate a cryptographically random 16-byte salt
+    // Each user gets a unique salt preventing rainbow table attacks
     var salt: [16]u8 = undefined;
-    @memcpy(&salt, "geode_salt_v1_16"); // 16-byte salt
+    crypto.random.bytes(&salt);
 
     // Hash the password with Argon2id - produces 32-byte output
     var hash: [32]u8 = undefined;
@@ -133,17 +134,32 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![75]u8 
         return error.OutOfMemory;
     };
 
-    // Encode as: $argon2id$ + 64 hex chars + $ = 75 bytes total
-    var result: [75]u8 = undefined;
+    // Encode as: $argon2id$ + salt_hex(32) + $ + hash_hex(64) + $ = 108 bytes total
+    // Format: $argon2id$<salt_hex>$<hash_hex>$
+    // 10 + 32 + 1 + 64 + 1 = 108 bytes
+    var result: [108]u8 = undefined;
     const hex_chars = "0123456789abcdef";
-    _ = std.fmt.bufPrint(result[0..11], "$argon2id$", .{}) catch unreachable;
+
+    // Write header: $argon2id$
+    _ = std.fmt.bufPrint(result[0..10], "$argon2id$", .{}) catch unreachable;
     var idx: usize = 10;
+
+    // Write salt as 32 hex chars
+    for (salt) |b| {
+        result[idx] = hex_chars[b >> 4];
+        result[idx + 1] = hex_chars[b & 0x0F];
+        idx += 2;
+    }
+    result[idx] = '$';
+    idx += 1;
+
+    // Write hash as 64 hex chars
     for (hash) |b| {
         result[idx] = hex_chars[b >> 4];
         result[idx + 1] = hex_chars[b & 0x0F];
         idx += 2;
     }
-    result[74] = '$';
+    result[idx] = '$';
 
     return result;
 }
@@ -153,15 +169,60 @@ var verify_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var verify_gpa_init = false;
 
 /// Verify password against stored hash using Argon2id
-pub fn verifyPassword(password: []const u8, hash: [75]u8) bool {
+/// Extracts the unique salt from the stored hash and uses it for verification
+/// CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=IMPL; UPDATED=2026-01-10
+pub fn verifyPassword(password: []const u8, stored_hash: [108]u8) bool {
     // P2-3: Use static GPA for temporary hash computation
     if (!verify_gpa_init) {
         verify_gpa_init = true;
     }
-    const computed = hashPassword(verify_gpa.allocator(), password) catch return false;
+    const allocator = verify_gpa.allocator();
+
+    // Extract salt from stored hash (bytes 10-41 are hex-encoded salt)
+    // Format: $argon2id$<salt_hex(32)>$<hash_hex(64)>$
+    var salt: [16]u8 = undefined;
+    const salt_hex = stored_hash[10..42];
+    for (0..16) |i| {
+        const hi = hexCharToVal(salt_hex[i * 2]) orelse return false;
+        const lo = hexCharToVal(salt_hex[i * 2 + 1]) orelse return false;
+        salt[i] = (hi << 4) | lo;
+    }
+
+    // Compute hash with extracted salt
+    const params = crypto.pwhash.argon2.Params{
+        .t = 3,
+        .m = 65536,
+        .p = 4,
+    };
+
+    var computed_hash: [32]u8 = undefined;
+    crypto.pwhash.argon2.kdf(
+        allocator,
+        &computed_hash,
+        password,
+        &salt,
+        params,
+        .argon2id,
+    ) catch return false;
+
+    // Extract stored hash portion (bytes 43-106 are hex-encoded hash)
+    var stored_hash_bytes: [32]u8 = undefined;
+    const hash_hex = stored_hash[43..107];
+    for (0..32) |i| {
+        const hi = hexCharToVal(hash_hex[i * 2]) orelse return false;
+        const lo = hexCharToVal(hash_hex[i * 2 + 1]) orelse return false;
+        stored_hash_bytes[i] = (hi << 4) | lo;
+    }
 
     // Constant-time comparison to prevent timing attacks
-    return crypto.timing_safe.eql([75]u8, computed, hash);
+    return crypto.timing_safe.eql([32]u8, computed_hash, stored_hash_bytes);
+}
+
+fn hexCharToVal(c: u8) ?u8 {
+    if (c >= '0' and c <= '9') return c - '0';
+    if (c >= 'a' and c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' and c <= 'F') return c - 'A' + 10;
+    return null;
 }
 
 /// Create a new user

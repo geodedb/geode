@@ -165,12 +165,15 @@ pub const pagerank_kernel_cuda_c =
     \\ }
 ;
 
-// Simplified PTX for PageRank (fallback)
+// GAP-0071: Full PTX implementation for PageRank (fallback when nvcc unavailable)
+// CANARY: REQ=REQ-GPU-PAGERANK-001; FEATURE="GPUPageRank"; ASPECT=PTXKernel; STATUS=IMPL; OWNER=gpu; UPDATED=2026-01-10
 pub const pagerank_kernel_ptx_simple =
     \\  .version 6.0
     \\  .target sm_30
     \\  .address_size 64
-    \\  
+    \\
+    \\  // PageRank iteration kernel - pull-based algorithm for PTX simplicity
+    \\  // Each thread computes the new rank for one vertex by summing contributions from incoming edges
     \\  .visible .entry pagerank_iteration_kernel(
     \\      .param .u64 .ptr .global .align 8 row_offsets,
     \\      .param .u64 .ptr .global .align 8 col_indices,
@@ -180,30 +183,90 @@ pub const pagerank_kernel_ptx_simple =
     \\      .param .f32 damping
     \\  )
     \\  {
-    \\      .reg .pred %p<4>;
-    \\      .reg .b32 %r<8>;
-    \\      .reg .f32 %f<8>;
-    \\      .reg .b64 %rd<8>;
-    \\      
+    \\      .reg .pred %p<8>;
+    \\      .reg .b32 %r<24>;
+    \\      .reg .f32 %f<16>;
+    \\      .reg .b64 %rd<24>;
+    \\
+    \\      // Calculate global thread ID: vid = blockIdx.x * blockDim.x + threadIdx.x
     \\      mov.u32 %r1, %tid.x;
     \\      mov.u32 %r2, %ctaid.x;
     \\      mov.u32 %r3, %ntid.x;
-    \\      mad.lo.s32 %r4, %r2, %r3, %r1;
-    \\      
+    \\      mad.lo.s32 %r4, %r2, %r3, %r1;         // %r4 = vid
+    \\
+    \\      // Bounds check: if (vid >= num_vertices) return
     \\      ld.param.u32 %r5, [num_vertices];
     \\      setp.ge.u32 %p1, %r4, %r5;
     \\      @%p1 bra EXIT;
-    \\      
-    \\      // Simplified: just copy ranks (placeholder)
-    \\      ld.param.u64 %rd1, [ranks_in];
-    \\      ld.param.u64 %rd2, [ranks_out];
-    \\      cvt.u64.u32 %rd3, %r4;
-    \\      shl.b64 %rd4, %rd3, 2;
-    \\      add.u64 %rd5, %rd1, %rd4;
-    \\      add.u64 %rd6, %rd2, %rd4;
-    \\      ld.global.f32 %f1, [%rd5];
-    \\      st.global.f32 [%rd6], %f1;
-    \\      
+    \\
+    \\      // Load parameters
+    \\      ld.param.u64 %rd1, [row_offsets];
+    \\      ld.param.u64 %rd2, [col_indices];
+    \\      ld.param.u64 %rd3, [ranks_in];
+    \\      ld.param.u64 %rd4, [ranks_out];
+    \\      ld.param.f32 %f1, [damping];
+    \\
+    \\      // Get row start and end: row_offsets[vid] and row_offsets[vid+1]
+    \\      cvt.u64.u32 %rd5, %r4;
+    \\      shl.b64 %rd6, %rd5, 2;                 // offset = vid * 4 (sizeof u32)
+    \\      add.u64 %rd7, %rd1, %rd6;              // &row_offsets[vid]
+    \\      ld.global.u32 %r6, [%rd7];             // row_start
+    \\      add.u64 %rd8, %rd7, 4;                 // &row_offsets[vid+1]
+    \\      ld.global.u32 %r7, [%rd8];             // row_end
+    \\
+    \\      // Initialize sum with base rank: (1-damping)/N
+    \\      mov.f32 %f2, 1.0;
+    \\      sub.f32 %f3, %f2, %f1;                 // 1 - damping
+    \\      cvt.rn.f32.u32 %f4, %r5;              // float(num_vertices)
+    \\      div.rn.f32 %f5, %f3, %f4;              // base_rank = (1-damping)/N
+    \\      mov.f32 %f6, %f5;                      // sum = base_rank
+    \\
+    \\      // Loop over incoming edges: for i = row_start to row_end
+    \\      mov.u32 %r8, %r6;                      // i = row_start
+    \\  LOOP_START:
+    \\      setp.ge.u32 %p2, %r8, %r7;            // i >= row_end?
+    \\      @%p2 bra LOOP_END;
+    \\
+    \\      // Get neighbor = col_indices[i]
+    \\      cvt.u64.u32 %rd9, %r8;
+    \\      shl.b64 %rd10, %rd9, 2;               // offset = i * 4
+    \\      add.u64 %rd11, %rd2, %rd10;           // &col_indices[i]
+    \\      ld.global.u32 %r9, [%rd11];           // neighbor
+    \\
+    \\      // Get neighbor's rank: ranks_in[neighbor]
+    \\      cvt.u64.u32 %rd12, %r9;
+    \\      shl.b64 %rd13, %rd12, 2;              // offset = neighbor * 4
+    \\      add.u64 %rd14, %rd3, %rd13;           // &ranks_in[neighbor]
+    \\      ld.global.f32 %f7, [%rd14];           // neighbor_rank
+    \\
+    \\      // Get neighbor's out-degree from row_offsets
+    \\      add.u64 %rd15, %rd1, %rd13;           // &row_offsets[neighbor]
+    \\      ld.global.u32 %r10, [%rd15];          // neighbor row_start
+    \\      add.u64 %rd16, %rd15, 4;              // &row_offsets[neighbor+1]
+    \\      ld.global.u32 %r11, [%rd16];          // neighbor row_end
+    \\      sub.u32 %r12, %r11, %r10;             // out_degree = row_end - row_start
+    \\
+    \\      // Skip if out_degree is 0 (avoid division by zero)
+    \\      setp.eq.u32 %p3, %r12, 0;
+    \\      @%p3 bra LOOP_INC;
+    \\
+    \\      // contribution = damping * neighbor_rank / out_degree
+    \\      mul.f32 %f8, %f1, %f7;                // damping * neighbor_rank
+    \\      cvt.rn.f32.u32 %f9, %r12;             // float(out_degree)
+    \\      div.rn.f32 %f10, %f8, %f9;            // contribution
+    \\
+    \\      // sum += contribution
+    \\      add.f32 %f6, %f6, %f10;
+    \\
+    \\  LOOP_INC:
+    \\      add.u32 %r8, %r8, 1;                   // i++
+    \\      bra LOOP_START;
+    \\
+    \\  LOOP_END:
+    \\      // Store result: ranks_out[vid] = sum
+    \\      add.u64 %rd17, %rd4, %rd6;             // &ranks_out[vid]
+    \\      st.global.f32 [%rd17], %f6;
+    \\
     \\  EXIT:
     \\      ret;
     \\  }
@@ -309,33 +372,90 @@ pub const setops_kernel_cuda_c =
     \\ }
 ;
 
-// Simplified PTX for set operations
+// GAP-0071: Full PTX implementation for bitonic sort kernel (fallback when nvcc unavailable)
+// CANARY: REQ=REQ-GPU-SORT-001; FEATURE="GPUSort"; ASPECT=PTXKernel; STATUS=IMPL; OWNER=gpu; UPDATED=2026-01-10
 pub const setops_kernel_ptx_simple =
     \\  .version 6.0
     \\  .target sm_30
     \\  .address_size 64
-    \\  
-    \\  // Simplified sort: just copy data (placeholder)
+    \\
+    \\  // Bitonic sort single step - one compare-exchange per thread per call
+    \\  // Must be called multiple times for full sort (log^2(n) kernel calls)
+    \\  // Parameters: k = stage size, j = step within stage
     \\  .visible .entry bitonic_sort_kernel(
     \\      .param .u64 .ptr .global .align 8 data,
-    \\      .param .u32 n
+    \\      .param .u32 n,
+    \\      .param .u32 k,
+    \\      .param .u32 j
     \\  )
     \\  {
-    \\      .reg .pred %p<4>;
-    \\      .reg .b32 %r<8>;
-    \\      .reg .b64 %rd<8>;
-    \\      
+    \\      .reg .pred %p<8>;
+    \\      .reg .b32 %r<24>;
+    \\      .reg .b64 %rd<16>;
+    \\
+    \\      // Calculate global thread ID: tid = blockIdx.x * blockDim.x + threadIdx.x
     \\      mov.u32 %r1, %tid.x;
     \\      mov.u32 %r2, %ctaid.x;
     \\      mov.u32 %r3, %ntid.x;
-    \\      mad.lo.s32 %r4, %r2, %r3, %r1;
-    \\      
+    \\      mad.lo.s32 %r4, %r2, %r3, %r1;         // tid
+    \\
+    \\      // Bounds check
     \\      ld.param.u32 %r5, [n];
     \\      setp.ge.u32 %p1, %r4, %r5;
     \\      @%p1 bra EXIT;
-    \\      
-    \\      // Placeholder: data already "sorted"
-    \\      
+    \\
+    \\      // Load stage parameters
+    \\      ld.param.u32 %r6, [k];                 // k (stage size)
+    \\      ld.param.u32 %r7, [j];                 // j (step within stage)
+    \\
+    \\      // Calculate partner index: ixj = tid XOR j
+    \\      xor.b32 %r8, %r4, %r7;                 // ixj = tid ^ j
+    \\
+    \\      // Only proceed if ixj > tid (avoid duplicate swaps)
+    \\      setp.le.u32 %p2, %r8, %r4;
+    \\      @%p2 bra EXIT;
+    \\
+    \\      // Check both indices in bounds
+    \\      setp.ge.u32 %p3, %r8, %r5;
+    \\      @%p3 bra EXIT;
+    \\
+    \\      // Load data pointer
+    \\      ld.param.u64 %rd1, [data];
+    \\
+    \\      // Load data[tid]
+    \\      cvt.u64.u32 %rd2, %r4;
+    \\      shl.b64 %rd3, %rd2, 2;                 // tid * 4
+    \\      add.u64 %rd4, %rd1, %rd3;
+    \\      ld.global.u32 %r10, [%rd4];            // val_tid = data[tid]
+    \\
+    \\      // Load data[ixj]
+    \\      cvt.u64.u32 %rd5, %r8;
+    \\      shl.b64 %rd6, %rd5, 2;                 // ixj * 4
+    \\      add.u64 %rd7, %rd1, %rd6;
+    \\      ld.global.u32 %r11, [%rd7];            // val_ixj = data[ixj]
+    \\
+    \\      // Determine sort direction: ascending if (tid & k) == 0
+    \\      and.b32 %r12, %r4, %r6;               // tid & k
+    \\      setp.eq.u32 %p4, %r12, 0;             // ascending = ((tid & k) == 0)
+    \\
+    \\      // Compare and potentially swap
+    \\      // If ascending: swap if val_tid > val_ixj
+    \\      // If descending: swap if val_tid < val_ixj
+    \\      setp.gt.u32 %p5, %r10, %r11;          // val_tid > val_ixj?
+    \\      setp.lt.u32 %p6, %r10, %r11;          // val_tid < val_ixj?
+    \\
+    \\      // need_swap = (ascending && val_tid > val_ixj) || (!ascending && val_tid < val_ixj)
+    \\      and.pred %p5, %p4, %p5;               // ascending && gt
+    \\      not.pred %p7, %p4;                     // !ascending
+    \\      and.pred %p6, %p7, %p6;               // !ascending && lt
+    \\      or.pred %p5, %p5, %p6;                // need_swap
+    \\
+    \\      @!%p5 bra EXIT;                       // No swap needed
+    \\
+    \\      // Perform swap
+    \\      st.global.u32 [%rd4], %r11;           // data[tid] = val_ixj
+    \\      st.global.u32 [%rd7], %r10;           // data[ixj] = val_tid
+    \\
     \\  EXIT:
     \\      ret;
     \\  }

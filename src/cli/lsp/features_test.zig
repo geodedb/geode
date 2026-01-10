@@ -452,14 +452,29 @@ test "provideCompletion - includes common types" {
     }
 }
 
-test "provideDefinition - returns null (not implemented)" {
+test "provideDefinition - finds variable definition in pattern" {
     const allocator = testing.allocator;
     const text = "MATCH (n) RETURN n";
 
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
+    // Position 17 is at 'n' in "RETURN n" - should find definition at position 7 (n in "(n)")
     const location = try features.provideDefinition(allocator, doc, 0, 17);
+    try testing.expect(location != null);
+    try testing.expectEqual(@as(u32, 0), location.?.range.start.line);
+    try testing.expectEqual(@as(u32, 7), location.?.range.start.character);
+}
+
+test "provideDefinition - returns null for keywords" {
+    const allocator = testing.allocator;
+    const text = "MATCH (n) RETURN n";
+
+    var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
+    defer doc.deinit();
+
+    // Position 0 is at 'M' in "MATCH" - keywords should return null
+    const location = try features.provideDefinition(allocator, doc, 0, 0);
     try testing.expect(location == null);
 }
 
