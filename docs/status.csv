@@ -1,5 +1,9 @@
 REQ,Feature,Aspect,Status,Test,Bench,Owner,Updated,File
 <req-id>,<feature>,<aspect>,<status>,,,<owner>,<date>,tests/unit_gap_0013_0016_fixes.zig
+REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
+REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
+REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
+REQ-2PC-STORAGE-001,2PC Storage Interface,Interface,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,,,distributed,2026-01-09,src/distributed/twophase.zig
 REQ-AGG-COLLECT-001,AggregationFunctions,COLLECT,IMPL,,,aggregation,2025-12-22,src/execution/aggregation_evaluation.zig
 REQ-AGG-COLLECT-002,AggregationFunctions,COLLECT_STORE,IMPL,,,aggregation,2025-12-22,src/execution/aggregation_evaluation.zig
@@ -151,6 +155,8 @@ REQ-CLI-BACKUP-001,CLI Backup System,UnitTests,TESTED,TestCLI_BackupUnit,,cli,20
 REQ-CLI-BACKUP-002,CLI Backup Integration,IntegrationTests,TESTED,TestCLI_BackupIntegration,,cli,2025-10-05,tests/test_cli_backup_integration.zig
 REQ-CLI-BACKUP-INTEGRATION-001,Remote Backup/Restore Operations,IntegrationTesting,IMPL,TestCANARY_REQ_CLI_BACKUP_INTEGRATION_001,,claude,2025-10-05,tests/test_server_backup_api_integration.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,TestCANARY_REQ_CLI_EXIT_001_ExitCodes,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
+REQ-CLI-POLICY-CMD-001,Policy CLI Commands,PolicyManagement,IMPL,,,security,2026-01-10,src/security/user_manager.zig
+REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,IMPL,,,security,2026-01-10,src/security/user_manager.zig
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,TestCANARY_REQ_CLI_ROUTE_001_OptionRouting,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedBinary,IMPL,TestCANARY_REQ_CLI_SUBPROCESS_ELIMINATION_001_UnifiedBinary,,cli,2025-10-05,src/cli/main.zig
 REQ-CLI-SUBPROCESS-ELIMINATION-TEST-001,CLI Subprocess Elimination Tests,UnitTests,IMPL,TestCANARY_REQ_CLI_SUBPROCESS_ELIMINATION_TEST_001_UnitTests,,cli,2025-10-05,tests/test_cli_subprocess_elimination.zig
@@ -159,6 +165,7 @@ REQ-CLI-SUBPROCESS-INTEGRATION-002,CLI Subprocess Elimination,IntegrationTesting
 REQ-CLI-SUBPROCESS-INTEGRATION-003,CLI Subprocess Elimination,IntegrationTesting,IMPL,TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_003,,claude,2025-10-05,tests/test_cli_subprocess_elimination_integration_minimal.zig
 REQ-CLI-SUBPROCESS-UNIT-001,CLI Subprocess Elimination,UnitTesting,IMPL,TestCANARY_REQ_CLI_SUBPROCESS_UNIT_001,,claude,2025-10-05,tests/test_cli_subprocess_elimination_unit.zig
 REQ-CLI-SUBPROCESS-UNIT-002,CLI Subprocess Elimination,UnitTesting,IMPL,TestCANARY_REQ_CLI_SUBPROCESS_UNIT_002,,claude,2025-10-05,tests/test_cli_subprocess_elimination_unit_simple.zig
+REQ-CLI-USER-CMD-001,User CLI Commands,UserManagement,IMPL,,,security,2026-01-10,src/security/user_manager.zig
 REQ-CLI-WD-001,CLI Working Directory Handling,TestInfrastructure,TESTED,TestCANARY_REQ_CLI_WD_001_WorkingDirectory,,cli,2025-10-04,tests/cli_working_directory_regression_test.sh
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,IntegrationTests,TESTED,TestCANARY_ClientEnvVar_Integration,,clients,2025-10-04,tests/test_environment_variables_integration.zig
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,VariableResolution,IMPL,TestCANARY_ClientCli_EnvVarResolution,,clients,2025-10-04,src/client/main.zig
@@ -206,6 +213,7 @@ REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,IMPL,,,distributed,2026-0
 REQ-DIST-CLUSTER-002,DistributedCluster,Replication,IMPL,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,IMPL,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-004,DistributedCluster,Topology,IMPL,,,distributed,2026-01-09,src/distributed/cluster.zig
+REQ-DIST-CONN-001,Distributed Query Connection,ConnectionInit,IMPL,,,distributed,2026-01-10,src/distributed/query_transport.zig
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-LB-001,Load Balancing,ShardSelection,IMPL,,,distributed,2026-01-08,src/distributed/enhanced_query_transport.zig
@@ -220,6 +228,7 @@ REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,IMPL,Tes
 REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,IMPL,TestCANARY_REQ_DIST_QUERY_TRANSPORT_002_RemoteExecution,,dist,2025-10-05,src/distributed/query_transport.zig
 REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
+REQ-DIST-REGISTRY-001,Node Registry,NodeLookup,IMPL,,,distributed,2026-01-10,src/distributed/query_transport.zig
 REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DISTRIBUTED-INDEX-OPTIMIZER-001,Distributed IndexOptimizer,FederationAwareCostEstimation,TESTED,TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001_FederationAwareCostEstimation,,distributed,2025-10-05,tests/test_index_optimizer_distributed.zig
 REQ-DISTRIBUTED-INDEX-OPTIMIZER-001,Distributed IndexOptimizer,FederationAwareCostEstimation,IMPL,TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001,,distributed,2025-10-05,src/server/index_optimizer.zig
@@ -1894,6 +1903,8 @@ REQ-PERF-PHASE5-P1-001,PageRankOptimization,TESTING,IMPL,,,performance,2025-11-1
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,LOCK_FREE_HISTOGRAM,IMPL,,,performance,2025-11-16,src/monitoring/metrics.zig
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,TESTING,IMPL,,,performance,2025-11-16,benchmarks/phase5_8_metrics_atomic.zig
 REQ-PERF-PHASE5-P2-001,StructOptimization,TESTING,ASSESSMENT,,,performance,2025-11-16,benchmarks/phase5_9_struct_by_value.zig
+REQ-PITR-LOAD-001,PITR Data Loading,DataRestore,IMPL,,,backup,2026-01-10,src/server/query_executor.zig
+REQ-PITR-LOAD-002,PITR Data Loading,StateRestore,IMPL,,,backup,2026-01-10,src/server/query_executor.zig
 REQ-PITR-WAL-001,Point-in-Time Recovery,WALReplay,IMPL,,,backup,2026-01-09,src/cli/backup_cli.zig
 REQ-PLANNER-CARD-001,Cardinality Estimator,RealImplementation,IMPL,test_cardinality_scan_estimation,,planner,2025-10-05,tests/test_cardinality_estimator.zig
 REQ-QP-FILTER-001,QueryPlannerOptimization,FilterMerging,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
@@ -1909,8 +1920,14 @@ REQ-QUIC-CONN-CLEANUP-005,ConnectionMemoryManagement,GracefulDisconnect,IMPL,,,c
 REQ-QUIC-MUTATIONS-001,QUIC Mutation Execution,ServerHandler,IMPL,,,engine,2026-01-09,src/server/quic_connection_handler.zig
 REQ-QUIC-STREAM-CLEANUP-001,StreamMemoryManagement,DoubleFreePrevention,IMPL,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-STREAM-CLEANUP-002,StreamMemoryManagement,DoubleFreePrevention,IMPL,,,cli,2025-12-27,src/cli/main.zig
+REQ-RECURSIVE-CTE-001,Recursive CTE Core Functions,QueryAnalysis,IMPL,,,planner,2026-01-10,src/planner/recursive.zig
 REQ-RECURSIVE-CTE-001,RecursiveCTE,PathFinding,IMPL,,,planner,2026-01-09,src/planner/recursive.zig
+REQ-RECURSIVE-CTE-002,Distinct Union Processing,SetOperations,IMPL,,,planner,2026-01-10,src/planner/recursive.zig
 REQ-RECURSIVE-CTE-002,RecursiveCTE,TransitiveClosure,IMPL,,,planner,2026-01-09,src/planner/recursive.zig
+REQ-RECURSIVE-CTE-003,Path Building,PathTracking,IMPL,,,planner,2026-01-10,src/planner/recursive.zig
+REQ-RECURSIVE-CTE-004,DFS Cycle Detection,CycleDetection,IMPL,,,planner,2026-01-10,src/planner/recursive.zig
+REQ-RECURSIVE-CTE-005,Union-Find Cycle Detection,CycleDetection,IMPL,,,planner,2026-01-10,src/planner/recursive.zig
+REQ-RECURSIVE-CTE-006,Topological Sort Cycle Detection,CycleDetection,IMPL,,,planner,2026-01-10,src/planner/recursive.zig
 REQ-REMOTE-KMS-SERVER-001,Remote KMS Server,QUICTransport,IMPL,,,security,2026-01-09,src/security/kms_remote.zig
 REQ-REPL-ADVANCED-001,REPL Advanced Features,Testing,TESTED,test_repl_advanced_features,,repl,2025-11-17,src/client/repl/test_repl_advanced_features.zig
 REQ-REPL-FORMAT-001,REPL Output Formatting,RegressionTesting,TESTED,repl_formatting_regression_test,,repl,2025-10-05,tests/repl_formatting_regression_test.sh
@@ -1953,6 +1970,7 @@ REQ-RLS-EXPR-003,RLSExpressionCompilation,ExpressionCompiler,IMPL,,,security,202
 REQ-RLS-EXPR-004,RLSExpressionCompilation,BytecodeVM,IMPL,,,security,2025-12-30,src/security/rls_core.zig
 REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,IMPL,,,security,2025-12-30,src/security/rls_core.zig
 REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,IMPL,test_s3_backup_mock,,storage,2025-10-05,tests/test_s3_backup.zig
+REQ-SECURITY-PERM-001,Permission Check Integration,Authorization,IMPL,,,security,2026-01-10,src/server/query_executor.zig
 REQ-SERVER-BACKUP-001,Server Backup API,UnitTests,TESTED,TestServer_BackupAPIUnit,,server,2025-10-05,tests/test_server_backup_api_unit.zig
 REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,IMPL,,,refactor,2026-01-09,src/server/server_state.zig
 REQ-SERVER-REFACTOR-001B,ServerRefactoring,SERVER_STATE_STRUCT,IMPL,,,refactor,2025-11-14,src/server/server_state.zig
@@ -2108,4 +2126,6 @@ REQ-VECTOR-INDEX-POPULATION-001,Vector Index Population,VectorIndexPopulation,TE
 REQ-VECTOR-INDEX-POPULATION-002,Vector Index Population,PropertyValueIntegration,TESTED,TestCANARY_REQ_VECTOR_INDEX_POPULATION_002_PropertyValueSwitch,,index,2025-10-05,tests/test_vector_index_population.zig
 REQ-VECTOR-INDEX-POPULATION-003,Vector Index Population,JSONSerialization,TESTED,TestCANARY_REQ_VECTOR_INDEX_POPULATION_003_JSONFormat,,index,2025-10-05,tests/test_vector_index_population.zig
 REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001,Vector Index Population Integration,IntegrationTesting,IMPL,TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001,,claude,2025-01-05,tests/test_vector_index_population_integration.zig
+REQ-WHERE-EVAL-001,WHERE Condition Evaluation,Filtering,IMPL,,,engine,2026-01-10,src/server/graph/exec.zig
+REQ-WITH-WHERE-001,WITH WHERE Filtering,QueryExecution,IMPL,,,engine,2026-01-10,src/server/graph/exec.zig
 REQ-XXX-NNN,Feature Name,Category,TESTED,TestName,,team,YYYY-MM-DD,CONTRIBUTING.md

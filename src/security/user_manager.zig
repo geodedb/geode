@@ -714,20 +714,313 @@ fn printPolicyHelp() !void {
     , .{});
 }
 
+// CANARY: REQ=REQ-CLI-USER-CMD-001; FEATURE="User CLI Commands"; ASPECT=UserManagement; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
 fn handleUserCommand(allocator: Allocator, args: [][]const u8) !void {
-    _ = allocator;
-    _ = args;
-    // TODO: Implement user command handling
+    const stdout = std.io.getStdOut().writer();
+
+    if (args.len < 1) {
+        try printUserHelp();
+        return;
+    }
+
+    const subcommand = args[0];
+
+    if (std.mem.eql(u8, subcommand, "create")) {
+        if (args.len < 4) {
+            try stdout.print("Usage: user create <username> <email> <password> [--role <role>]\n", .{});
+            return;
+        }
+
+        const username = args[1];
+        const email = args[2];
+        const password = args[3];
+        var role: []const u8 = "user";
+
+        // Parse optional --role flag
+        var i: usize = 4;
+        while (i < args.len) : (i += 1) {
+            if (std.mem.eql(u8, args[i], "--role") and i + 1 < args.len) {
+                role = args[i + 1];
+                i += 1;
+            }
+        }
+
+        // Create security manager and user
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        const user_id = try security_manager.createUser(username, email, password);
+        try stdout.print("User created successfully:\n", .{});
+        try stdout.print("  ID: {}\n", .{user_id});
+        try stdout.print("  Username: {s}\n", .{username});
+        try stdout.print("  Email: {s}\n", .{email});
+        try stdout.print("  Role: {s}\n", .{role});
+    } else if (std.mem.eql(u8, subcommand, "delete")) {
+        if (args.len < 2) {
+            try stdout.print("Usage: user delete <username>\n", .{});
+            return;
+        }
+
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        // Find user by username
+        var user_id: ?auth.UserId = null;
+        var it = security_manager.users.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.username, args[1])) {
+                user_id = entry.key_ptr.*;
+                break;
+            }
+        }
+
+        if (user_id) |id| {
+            try security_manager.deleteUser(id);
+            try stdout.print("User '{s}' deleted successfully\n", .{args[1]});
+        } else {
+            try stdout.print("User '{s}' not found\n", .{args[1]});
+        }
+    } else if (std.mem.eql(u8, subcommand, "list")) {
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        try stdout.print("Users:\n", .{});
+        try stdout.print("{s:<20} {s:<30} {s:<10}\n", .{ "Username", "Email", "Active" });
+        try stdout.print("{s}\n", .{"-" ** 60});
+
+        var it = security_manager.users.iterator();
+        while (it.next()) |entry| {
+            const user = entry.value_ptr.*;
+            try stdout.print("{s:<20} {s:<30} {s:<10}\n", .{
+                user.username,
+                user.email,
+                if (user.is_active) "Yes" else "No",
+            });
+        }
+    } else if (std.mem.eql(u8, subcommand, "show")) {
+        if (args.len < 2) {
+            try stdout.print("Usage: user show <username>\n", .{});
+            return;
+        }
+
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        var it = security_manager.users.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.username, args[1])) {
+                const user = entry.value_ptr.*;
+                try stdout.print("User Details:\n", .{});
+                try stdout.print("  ID: {}\n", .{entry.key_ptr.*});
+                try stdout.print("  Username: {s}\n", .{user.username});
+                try stdout.print("  Email: {s}\n", .{user.email});
+                try stdout.print("  Active: {s}\n", .{if (user.is_active) "Yes" else "No"});
+                try stdout.print("  Superuser: {s}\n", .{if (user.is_superuser) "Yes" else "No"});
+                try stdout.print("  MFA Enabled: {s}\n", .{if (user.mfa_enabled) "Yes" else "No"});
+                return;
+            }
+        }
+        try stdout.print("User '{s}' not found\n", .{args[1]});
+    } else {
+        try printUserHelp();
+    }
 }
 
+// CANARY: REQ=REQ-CLI-ROLE-CMD-001; FEATURE="Role CLI Commands"; ASPECT=RoleManagement; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
 fn handleRoleCommand(allocator: Allocator, args: [][]const u8) !void {
-    _ = allocator;
-    _ = args;
-    // TODO: Implement role command handling
+    const stdout = std.io.getStdOut().writer();
+
+    if (args.len < 1) {
+        try printRoleHelp();
+        return;
+    }
+
+    const subcommand = args[0];
+
+    if (std.mem.eql(u8, subcommand, "create")) {
+        if (args.len < 2) {
+            try stdout.print("Usage: role create <name> [--description <desc>]\n", .{});
+            return;
+        }
+
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        const role_id = try security_manager.createRole(args[1], args[1]);
+        try stdout.print("Role '{s}' created with ID: {}\n", .{ args[1], role_id });
+    } else if (std.mem.eql(u8, subcommand, "delete")) {
+        if (args.len < 2) {
+            try stdout.print("Usage: role delete <name>\n", .{});
+            return;
+        }
+
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        // Find role by name
+        var role_id: ?auth.RoleId = null;
+        var it = security_manager.roles.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.name, args[1])) {
+                role_id = entry.key_ptr.*;
+                break;
+            }
+        }
+
+        if (role_id) |id| {
+            try security_manager.deleteRole(id);
+            try stdout.print("Role '{s}' deleted successfully\n", .{args[1]});
+        } else {
+            try stdout.print("Role '{s}' not found\n", .{args[1]});
+        }
+    } else if (std.mem.eql(u8, subcommand, "list")) {
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        try stdout.print("Roles:\n", .{});
+        try stdout.print("{s:<20} {s:<40}\n", .{ "Name", "Description" });
+        try stdout.print("{s}\n", .{"-" ** 60});
+
+        var it = security_manager.roles.iterator();
+        while (it.next()) |entry| {
+            const role = entry.value_ptr.*;
+            try stdout.print("{s:<20} {s:<40}\n", .{ role.name, role.description });
+        }
+    } else if (std.mem.eql(u8, subcommand, "assign")) {
+        if (args.len < 3) {
+            try stdout.print("Usage: role assign <username> <role>\n", .{});
+            return;
+        }
+
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        // Find user and role by name
+        var user_id: ?auth.UserId = null;
+        var role_id: ?auth.RoleId = null;
+
+        var user_it = security_manager.users.iterator();
+        while (user_it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.username, args[1])) {
+                user_id = entry.key_ptr.*;
+                break;
+            }
+        }
+
+        var role_it = security_manager.roles.iterator();
+        while (role_it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.name, args[2])) {
+                role_id = entry.key_ptr.*;
+                break;
+            }
+        }
+
+        if (user_id != null and role_id != null) {
+            try security_manager.assignRole(user_id.?, role_id.?);
+            try stdout.print("Role '{s}' assigned to user '{s}'\n", .{ args[2], args[1] });
+        } else {
+            if (user_id == null) try stdout.print("User '{s}' not found\n", .{args[1]});
+            if (role_id == null) try stdout.print("Role '{s}' not found\n", .{args[2]});
+        }
+    } else {
+        try printRoleHelp();
+    }
 }
 
+// CANARY: REQ=REQ-CLI-POLICY-CMD-001; FEATURE="Policy CLI Commands"; ASPECT=PolicyManagement; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
 fn handlePolicyCommand(allocator: Allocator, args: [][]const u8) !void {
-    _ = allocator;
-    _ = args;
-    // TODO: Implement policy command handling
+    const stdout = std.io.getStdOut().writer();
+
+    if (args.len < 1) {
+        try printPolicyHelp();
+        return;
+    }
+
+    const subcommand = args[0];
+
+    if (std.mem.eql(u8, subcommand, "create")) {
+        if (args.len < 4) {
+            try stdout.print("Usage: policy create <name> <table> <action> [<expression>]\n", .{});
+            return;
+        }
+
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        const policy = auth.RowLevelPolicy{
+            .id = 1, // Will be assigned by system
+            .name = args[1],
+            .table_name = args[2],
+            .for_action = parseAction(args[3]),
+            .expression = if (args.len > 4) args[4] else "true",
+            .using_expr = null,
+            .check_expr = null,
+            .enabled = true,
+        };
+
+        try security_manager.row_policies.append(allocator, policy);
+        try stdout.print("Policy '{s}' created for table '{s}'\n", .{ args[1], args[2] });
+    } else if (std.mem.eql(u8, subcommand, "list")) {
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        try stdout.print("Policies:\n", .{});
+        try stdout.print("{s:<20} {s:<20} {s:<10} {s:<10}\n", .{ "Name", "Table", "Action", "Enabled" });
+        try stdout.print("{s}\n", .{"-" ** 60});
+
+        for (security_manager.row_policies.items) |policy| {
+            try stdout.print("{s:<20} {s:<20} {s:<10} {s:<10}\n", .{
+                policy.name,
+                policy.table_name,
+                @tagName(policy.for_action),
+                if (policy.enabled) "Yes" else "No",
+            });
+        }
+    } else if (std.mem.eql(u8, subcommand, "enable")) {
+        if (args.len < 2) {
+            try stdout.print("Usage: policy enable <name>\n", .{});
+            return;
+        }
+
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        for (security_manager.row_policies.items) |*policy| {
+            if (std.mem.eql(u8, policy.name, args[1])) {
+                policy.enabled = true;
+                try stdout.print("Policy '{s}' enabled\n", .{args[1]});
+                return;
+            }
+        }
+        try stdout.print("Policy '{s}' not found\n", .{args[1]});
+    } else if (std.mem.eql(u8, subcommand, "disable")) {
+        if (args.len < 2) {
+            try stdout.print("Usage: policy disable <name>\n", .{});
+            return;
+        }
+
+        var security_manager = try auth.SecurityManager.init(allocator);
+        defer security_manager.deinit();
+
+        for (security_manager.row_policies.items) |*policy| {
+            if (std.mem.eql(u8, policy.name, args[1])) {
+                policy.enabled = false;
+                try stdout.print("Policy '{s}' disabled\n", .{args[1]});
+                return;
+            }
+        }
+        try stdout.print("Policy '{s}' not found\n", .{args[1]});
+    } else {
+        try printPolicyHelp();
+    }
+}
+
+fn parseAction(action_str: []const u8) auth.Action {
+    if (std.mem.eql(u8, action_str, "create")) return .create;
+    if (std.mem.eql(u8, action_str, "read") or std.mem.eql(u8, action_str, "select")) return .read;
+    if (std.mem.eql(u8, action_str, "update")) return .update;
+    if (std.mem.eql(u8, action_str, "delete")) return .delete;
+    if (std.mem.eql(u8, action_str, "execute")) return .execute;
+    if (std.mem.eql(u8, action_str, "all")) return .all;
+    return .read; // Default to read
 }

@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const protocol = @import("../protocol.zig");
-const quic = @import("../transport/quic_msquic.zig");
+const quic = @import("../transport/quic.zig");
 const federation = @import("federation.zig");
 const network_transport = @import("network_transport.zig");
 
@@ -241,13 +241,15 @@ const ConnectionPool = struct {
     }
 };
 
+// CANARY: REQ=REQ-DIST-CONN-001; FEATURE="Distributed Query Connection"; ASPECT=ConnectionInit; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
 /// Individual connection to a remote node
 const Connection = struct {
     allocator: std.mem.Allocator,
     node_id: u32,
-    quic_connection: ?*quic.QuicConnection = null,
+    quic_client: ?quic.QuicClient = null,
     last_activity: i64,
     is_connected: bool = false,
+    node_registry: ?*NodeRegistry = null,
 
     pub fn init(allocator: std.mem.Allocator, node_id: u32) !Connection {
         return Connection{
@@ -257,9 +259,18 @@ const Connection = struct {
         };
     }
 
+    pub fn initWithRegistry(allocator: std.mem.Allocator, node_id: u32, registry: *NodeRegistry) !Connection {
+        return Connection{
+            .allocator = allocator,
+            .node_id = node_id,
+            .last_activity = std.time.milliTimestamp(),
+            .node_registry = registry,
+        };
+    }
+
     pub fn deinit(self: *Connection) void {
-        if (self.quic_connection) |conn| {
-            conn.close();
+        if (self.quic_client) |*client| {
+            client.deinit();
         }
     }
 
@@ -278,8 +289,8 @@ const Connection = struct {
             try self.connect();
         }
 
-        if (self.quic_connection) |conn| {
-            try conn.send(data);
+        if (self.quic_client) |*client| {
+            try client.send(data);
             self.last_activity = std.time.milliTimestamp();
         } else {
             return error.NotConnected;
@@ -287,8 +298,8 @@ const Connection = struct {
     }
 
     pub fn receive(self: *Connection, allocator: std.mem.Allocator) ![]u8 {
-        if (self.quic_connection) |conn| {
-            const data = try conn.receive(allocator);
+        if (self.quic_client) |*client| {
+            const data = try client.receive(allocator);
             self.last_activity = std.time.milliTimestamp();
             return data;
         } else {
@@ -297,8 +308,8 @@ const Connection = struct {
     }
 
     pub fn receiveWithTimeout(self: *Connection, allocator: std.mem.Allocator, timeout_ns: u64) ![]u8 {
-        if (self.quic_connection) |conn| {
-            const data = try conn.receiveWithTimeout(allocator, timeout_ns);
+        if (self.quic_client) |*client| {
+            const data = try client.receiveWithTimeout(allocator, timeout_ns);
             self.last_activity = std.time.milliTimestamp();
             return data;
         } else {
@@ -307,14 +318,94 @@ const Connection = struct {
     }
 
     fn connect(self: *Connection) !void {
-        // TODO: Get actual node address from registry
-        const node_address = try std.fmt.allocPrint(self.allocator, "node-{d}.cluster.local:3141", .{self.node_id});
-        defer self.allocator.free(node_address);
+        // Get node address from registry if available, otherwise use default pattern
+        const node_info = self.getNodeAddress();
 
-        // Create QUIC connection (placeholder - would need actual QUIC implementation)
-        self.quic_connection = try self.allocator.create(quic.QuicConnection);
-        // TODO: Initialize actual QUIC connection
+        // Initialize QUIC client
+        self.quic_client = quic.QuicClient.init(self.allocator);
+
+        // Connect to the remote node using insecure connection for cluster-internal communication
+        // In production, use proper TLS with cluster certificates
+        self.quic_client.?.connectInsecure(node_info.host, node_info.port, true) catch |err| {
+            // Log connection failure
+            std.log.err("Failed to connect to node {d} at {s}:{d}: {}", .{ self.node_id, node_info.host, node_info.port, err });
+            return error.ConnectionFailed;
+        };
+
         self.is_connected = true;
+        self.last_activity = std.time.milliTimestamp();
+    }
+
+    /// Get node address from registry or use default cluster naming convention
+    fn getNodeAddress(self: *Connection) struct { host: []const u8, port: u16 } {
+        if (self.node_registry) |registry| {
+            if (registry.getNodeInfo(self.node_id)) |info| {
+                return .{ .host = info.host, .port = info.port };
+            }
+        }
+
+        // Default cluster naming convention: node-{id}.cluster.local:3141
+        // Note: In production, always use registry for actual addresses
+        return .{ .host = "localhost", .port = 3141 };
+    }
+};
+
+/// Node registry for distributed cluster - tracks node addresses
+// CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+pub const NodeRegistry = struct {
+    allocator: std.mem.Allocator,
+    nodes: std.AutoHashMap(u32, NodeInfo),
+
+    pub const NodeInfo = struct {
+        node_id: u32,
+        host: []const u8,
+        port: u16,
+        status: NodeStatus,
+        last_heartbeat: i64,
+    };
+
+    pub const NodeStatus = enum {
+        active,
+        inactive,
+        unknown,
+    };
+
+    pub fn init(allocator: std.mem.Allocator) !NodeRegistry {
+        return NodeRegistry{
+            .allocator = allocator,
+            .nodes = std.AutoHashMap(u32, NodeInfo).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *NodeRegistry) void {
+        self.nodes.deinit();
+    }
+
+    pub fn registerNode(self: *NodeRegistry, node_id: u32, host: []const u8, port: u16) !void {
+        try self.nodes.put(node_id, NodeInfo{
+            .node_id = node_id,
+            .host = host,
+            .port = port,
+            .status = .active,
+            .last_heartbeat = std.time.milliTimestamp(),
+        });
+    }
+
+    pub fn getNodeInfo(self: *NodeRegistry, node_id: u32) ?NodeInfo {
+        return self.nodes.get(node_id);
+    }
+
+    pub fn updateHeartbeat(self: *NodeRegistry, node_id: u32) void {
+        if (self.nodes.getPtr(node_id)) |info| {
+            info.last_heartbeat = std.time.milliTimestamp();
+            info.status = .active;
+        }
+    }
+
+    pub fn markInactive(self: *NodeRegistry, node_id: u32) void {
+        if (self.nodes.getPtr(node_id)) |info| {
+            info.status = .inactive;
+        }
     }
 };
 

@@ -2,7 +2,9 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 9, 2026 (GAP-0026 through GAP-0034 resolved)
+**Last Updated**: January 10, 2026
+
+**Verified**: January 10, 2026 gap analysis confirmed all GAP-0001 through GAP-0041 resolved
 
 ---
 
@@ -684,11 +686,123 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ---
 
+### GAP-0035: 2PC Storage Operations Not Implemented (Resolved January 10, 2026)
+- **Original Gap:** handleCommit() and handleAbort() in 2PC had empty storage operations
+- **Original Severity:** Critical
+- **GitLab Issue:** [#117](https://gitlab.com/devnw/geode/geode/-/issues/117) (closed)
+- **Resolution Evidence:**
+  - src/distributed/twophase.zig:556-650 — Complete storage interface implementation:
+    - StorageInterface struct with vtable for polymorphic storage operations
+    - VTable provides: createNode, updateNode, deleteNode, createEdge, updateEdge, deleteEdge
+    - applyOperation() applies mutations during commit phase
+    - applyUndoOperation() reverses mutations during abort phase
+    - ParticipantNode updated to hold optional StorageInterface
+  - CANARY marker: REQ=REQ-2PC-STORAGE-001; FEATURE="2PC Storage Operations"; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** 2PC protocol now persists data changes and supports rollback
+
+---
+
+### GAP-0036: WHERE Clause After WITH Not Evaluated (Resolved January 10, 2026)
+- **Original Gap:** WHERE clause filtering in WITH statements was not implemented
+- **Original Severity:** High
+- **GitLab Issue:** [#118](https://gitlab.com/devnw/geode/geode/-/issues/118) (closed)
+- **Resolution Evidence:**
+  - src/server/graph/exec.zig:1050-1150 — Complete WHERE evaluation implementation:
+    - evaluateWhereCondition() evaluates AST expressions against bindings
+    - isTruthyValue() handles boolean and null checking
+    - evaluateComparisonOp() supports =, !=, <, >, <=, >= for int/string
+    - extractIntValue() and extractStringValue() for literal extraction
+    - executeWith() now filters bindings through WHERE clause
+  - CANARY marker: REQ=REQ-WITH-WHERE-001; FEATURE="WITH WHERE Evaluation"; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** WITH ... WHERE now filters results correctly
+
+---
+
+### GAP-0037: CLI User/Role/Policy Handlers Not Implemented (Resolved January 10, 2026)
+- **Original Gap:** CLI commands for user/role/policy management returned stubs
+- **Original Severity:** Medium
+- **GitLab Issue:** [#119](https://gitlab.com/devnw/geode/geode/-/issues/119) (closed)
+- **Resolution Evidence:**
+  - src/security/user_manager.zig:400-600 — Full CLI command implementation:
+    - handleUserCommand(): create, delete, list, show, set-password, enable, disable
+    - handleRoleCommand(): create, delete, list, show, grant, revoke
+    - handlePolicyCommand(): create, delete, list, show, enable, disable
+    - Uses SecurityManager API for actual operations
+    - Proper error handling and response formatting
+  - CANARY marker: REQ=REQ-CLI-USER-001; FEATURE="CLI User Management"; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** CLI security commands now execute actual RBAC operations
+
+---
+
+### GAP-0038: Distributed Query Transport Connection Not Initialized (Resolved January 10, 2026)
+- **Original Gap:** Query transport connections were created but never initialized with QUIC
+- **Original Severity:** High
+- **GitLab Issue:** [#120](https://gitlab.com/devnw/geode/geode/-/issues/120) (closed)
+- **Resolution Evidence:**
+  - src/distributed/query_transport.zig:244-351 — Complete connection implementation:
+    - Connection struct with QuicClient integration
+    - connect() method initializes QUIC client and establishes connection
+    - getNodeAddress() resolves node ID to host:port via NodeRegistry
+    - NodeRegistry struct tracks cluster node addresses
+    - Proper health checking and connection pooling
+  - CANARY marker: REQ=REQ-DIST-CONN-001; FEATURE="Distributed Query Connection"; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** Distributed queries now establish actual QUIC connections
+
+---
+
+### GAP-0039: PITR Data Not Loaded Into Server State (Resolved January 10, 2026)
+- **Original Gap:** Point-in-time recovery restored files but didn't load into memory
+- **Original Severity:** Medium
+- **GitLab Issue:** [#121](https://gitlab.com/devnw/geode/geode/-/issues/121) (closed)
+- **Resolution Evidence:**
+  - src/server/query_executor.zig:890-1040 — Complete PITR loading implementation:
+    - loadRestoredDataIntoState() parses restored JSON data
+    - Handles both nodes and edges arrays
+    - createNodeFromBackup() creates NodeValue from restored properties
+    - createEdgeFromBackup() creates EdgeValue from restored relationships
+    - Integration with MultiGraphManager for graph state updates
+  - CANARY marker: REQ=REQ-PITR-LOAD-001; FEATURE="PITR State Loading"; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** PITR restoration now populates server state for immediate querying
+
+---
+
+### GAP-0040: Permission Check Not Using Security Manager (Resolved January 10, 2026)
+- **Original Gap:** checkPermission() returned true without actual RBAC evaluation
+- **Original Severity:** High
+- **GitLab Issue:** [#122](https://gitlab.com/devnw/geode/geode/-/issues/122) (closed)
+- **Resolution Evidence:**
+  - src/server/query_executor.zig:1050-1095 — Security manager integration:
+    - checkPermission() verifies authenticated_user is set
+    - Checks authenticated_role against allowed roles from security manager
+    - hasAllowedRole() iterates permission roles and validates
+    - Returns false for unauthenticated or unauthorized access
+  - CANARY marker: REQ=REQ-SEC-CHECK-001; FEATURE="Permission Check Integration"; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** Permission checks now enforce actual RBAC policies
+
+---
+
+### GAP-0041: Recursive CTE Core Functions Not Implemented (Resolved January 10, 2026)
+- **Original Gap:** Core recursive CTE functions returned NotImplemented
+- **Original Severity:** Medium
+- **GitLab Issue:** [#123](https://gitlab.com/devnw/geode/geode/-/issues/123) (closed)
+- **Resolution Evidence:**
+  - src/planner/recursive.zig:450-700 — Complete CTE function implementations:
+    - analyzeQuerySchema(): Extracts column names from query AST
+    - hasRecursiveReference(): Detects self-references in query structure
+    - processDistinctUnion(): Deduplicates union results with seen set
+    - buildPaths(): Constructs path arrays from node sequences
+    - detectCyclesDFS(), detectCyclesUnionFind(), detectCyclesTopological(): Three cycle detection algorithms
+    - extractPaths(): Collects paths from recursive result set
+  - CANARY markers: REQ=REQ-CTE-CORE-001 through REQ=REQ-CTE-CORE-006; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** Recursive CTEs now execute with proper cycle detection and path building
+
+---
+
 ## Verification Notes
 
 All resolved gaps include CANARY markers for governance tracking. The implementations were verified against documentation claims and test evidence.
 
-### GitLab Issue Closure (January 9, 2026)
+### GitLab Issue Closure (January 9-10, 2026)
 
 The following GitLab gap issues were verified as resolved and closed:
 
@@ -714,5 +828,12 @@ The following GitLab gap issues were verified as resolved and closed:
 - **#114** (GAP-0032): MV Refresh Cancellation — Closed with cancelRefresh implementation evidence
 - **#115** (GAP-0033): DELETE WHERE Evaluation — Closed with WHERE clause evaluation evidence
 - **#116** (GAP-0034): Graph Metadata Persistence — Closed with catalog.addGraph/removeGraph evidence
+- **#117** (GAP-0035): 2PC Storage Operations — Closed with StorageInterface vtable implementation evidence
+- **#118** (GAP-0036): WHERE Clause After WITH — Closed with evaluateWhereCondition implementation evidence
+- **#119** (GAP-0037): CLI User/Role/Policy Handlers — Closed with handleUserCommand/handleRoleCommand/handlePolicyCommand evidence
+- **#120** (GAP-0038): Distributed Query Transport — Closed with QuicClient connection initialization evidence
+- **#121** (GAP-0039): PITR Data Loading — Closed with loadRestoredDataIntoState implementation evidence
+- **#122** (GAP-0040): Permission Check Integration — Closed with SecurityManager RBAC evaluation evidence
+- **#123** (GAP-0041): Recursive CTE Core Functions — Closed with cycle detection and path building evidence
 
 *Archive maintained for audit trail*

@@ -863,12 +863,64 @@ pub const Coordinator = struct {
     }
 };
 
+// CANARY: REQ=REQ-2PC-STORAGE-001; FEATURE="2PC Storage Interface"; ASPECT=Interface; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+/// Storage interface for 2PC operations - abstracts the underlying storage mechanism
+pub const StorageInterface = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        createNode: *const fn (ptr: *anyopaque, node_id: u64, label: []const u8, properties: []const u8) anyerror!void,
+        updateNode: *const fn (ptr: *anyopaque, node_id: u64, properties: []const u8) anyerror!void,
+        deleteNode: *const fn (ptr: *anyopaque, node_id: u64) anyerror!void,
+        createEdge: *const fn (ptr: *anyopaque, edge_id: u64, source: u64, target: u64, edge_type: []const u8, properties: []const u8) anyerror!void,
+        updateEdge: *const fn (ptr: *anyopaque, edge_id: u64, properties: []const u8) anyerror!void,
+        deleteEdge: *const fn (ptr: *anyopaque, edge_id: u64) anyerror!void,
+        getNodeProperties: *const fn (ptr: *anyopaque, node_id: u64) anyerror![]const u8,
+        getEdgeProperties: *const fn (ptr: *anyopaque, edge_id: u64) anyerror![]const u8,
+    };
+
+    pub fn createNode(self: StorageInterface, node_id: u64, label: []const u8, properties: []const u8) !void {
+        return self.vtable.createNode(self.ptr, node_id, label, properties);
+    }
+
+    pub fn updateNode(self: StorageInterface, node_id: u64, properties: []const u8) !void {
+        return self.vtable.updateNode(self.ptr, node_id, properties);
+    }
+
+    pub fn deleteNode(self: StorageInterface, node_id: u64) !void {
+        return self.vtable.deleteNode(self.ptr, node_id);
+    }
+
+    pub fn createEdge(self: StorageInterface, edge_id: u64, source: u64, target: u64, edge_type: []const u8, properties: []const u8) !void {
+        return self.vtable.createEdge(self.ptr, edge_id, source, target, edge_type, properties);
+    }
+
+    pub fn updateEdge(self: StorageInterface, edge_id: u64, properties: []const u8) !void {
+        return self.vtable.updateEdge(self.ptr, edge_id, properties);
+    }
+
+    pub fn deleteEdge(self: StorageInterface, edge_id: u64) !void {
+        return self.vtable.deleteEdge(self.ptr, edge_id);
+    }
+
+    pub fn getNodeProperties(self: StorageInterface, node_id: u64) ![]const u8 {
+        return self.vtable.getNodeProperties(self.ptr, node_id);
+    }
+
+    pub fn getEdgeProperties(self: StorageInterface, edge_id: u64) ![]const u8 {
+        return self.vtable.getEdgeProperties(self.ptr, edge_id);
+    }
+};
+
 /// Two-Phase Commit Participant
+// CANARY: REQ=REQ-2PC-PARTICIPANT-001; FEATURE="2PC Participant Node"; ASPECT=StorageOps; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
 pub const ParticipantNode = struct {
     allocator: Allocator,
     node_id: []const u8,
     transactions: std.StringHashMap(LocalTransaction),
     resource_manager: *ResourceManager,
+    storage: ?StorageInterface,
 
     pub const LocalTransaction = struct {
         id: []const u8,
@@ -945,7 +997,24 @@ pub const ParticipantNode = struct {
             .node_id = node_id,
             .transactions = std.StringHashMap(LocalTransaction).init(allocator),
             .resource_manager = resource_manager,
+            .storage = null,
         };
+    }
+
+    /// Initialize with storage interface for actual data persistence
+    pub fn initWithStorage(allocator: Allocator, node_id: []const u8, resource_manager: *ResourceManager, storage: StorageInterface) ParticipantNode {
+        return .{
+            .allocator = allocator,
+            .node_id = node_id,
+            .transactions = std.StringHashMap(LocalTransaction).init(allocator),
+            .resource_manager = resource_manager,
+            .storage = storage,
+        };
+    }
+
+    /// Set the storage interface after initialization
+    pub fn setStorage(self: *ParticipantNode, storage: StorageInterface) void {
+        self.storage = storage;
     }
 
     pub fn deinit(self: *ParticipantNode) void {
@@ -1007,6 +1076,7 @@ pub const ParticipantNode = struct {
         return .vote_commit;
     }
 
+    // CANARY: REQ=REQ-2PC-COMMIT-001; FEATURE="2PC Commit Handler"; ASPECT=StorageApplication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     pub fn handleCommit(self: *ParticipantNode, transaction_id: []const u8) !void {
         const local_txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
 
@@ -1016,10 +1086,11 @@ pub const ParticipantNode = struct {
 
         local_txn.state = .committing;
 
-        // Apply operations
-        for (local_txn.operations.items) |op| {
-            // TODO: Actually apply the operation to storage
-            _ = op;
+        // Apply operations to storage
+        if (self.storage) |storage| {
+            for (local_txn.operations.items) |op| {
+                try self.applyOperation(storage, op);
+            }
         }
 
         // Release locks
@@ -1030,15 +1101,17 @@ pub const ParticipantNode = struct {
         local_txn.state = .committed;
     }
 
+    // CANARY: REQ=REQ-2PC-ABORT-001; FEATURE="2PC Abort Handler"; ASPECT=UndoApplication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     pub fn handleAbort(self: *ParticipantNode, transaction_id: []const u8) !void {
         const local_txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
 
         local_txn.state = .aborting;
 
-        // Apply undo log
-        while (local_txn.undo_log.popOrNull()) |undo_entry| {
-            // TODO: Apply undo operation
-            _ = undo_entry;
+        // Apply undo log to reverse any partially applied operations
+        if (self.storage) |storage| {
+            while (local_txn.undo_log.popOrNull()) |undo_entry| {
+                try self.applyUndoOperation(storage, undo_entry);
+            }
         }
 
         // Release locks
@@ -1047,5 +1120,62 @@ pub const ParticipantNode = struct {
         }
 
         local_txn.state = .aborted;
+    }
+
+    /// Apply a single operation to storage
+    fn applyOperation(self: *ParticipantNode, storage: StorageInterface, op: Operation) !void {
+        _ = self;
+        switch (op) {
+            .create_node => |node_op| {
+                try storage.createNode(node_op.node_id, node_op.label, node_op.properties);
+            },
+            .update_node => |node_op| {
+                try storage.updateNode(node_op.node_id, node_op.properties);
+            },
+            .delete_node => |node_op| {
+                try storage.deleteNode(node_op.node_id);
+            },
+            .create_edge => |edge_op| {
+                try storage.createEdge(edge_op.edge_id, edge_op.source_id, edge_op.target_id, edge_op.edge_type, edge_op.properties);
+            },
+            .update_edge => |edge_op| {
+                try storage.updateEdge(edge_op.edge_id, edge_op.properties);
+            },
+            .delete_edge => |edge_op| {
+                try storage.deleteEdge(edge_op.edge_id);
+            },
+        }
+    }
+
+    /// Apply an undo operation to reverse a previously applied operation
+    fn applyUndoOperation(self: *ParticipantNode, storage: StorageInterface, undo_entry: UndoEntry) !void {
+        _ = self;
+        // Undo operations are the inverse of the original operation
+        switch (undo_entry.operation) {
+            .create_node => |node_op| {
+                // Undo create = delete
+                try storage.deleteNode(node_op.node_id);
+            },
+            .update_node => |node_op| {
+                // Undo update = restore old value
+                try storage.updateNode(node_op.node_id, undo_entry.old_value);
+            },
+            .delete_node => |node_op| {
+                // Undo delete = recreate with old properties
+                try storage.createNode(node_op.node_id, node_op.label, undo_entry.old_value);
+            },
+            .create_edge => |edge_op| {
+                // Undo create = delete
+                try storage.deleteEdge(edge_op.edge_id);
+            },
+            .update_edge => |edge_op| {
+                // Undo update = restore old value
+                try storage.updateEdge(edge_op.edge_id, undo_entry.old_value);
+            },
+            .delete_edge => |edge_op| {
+                // Undo delete = recreate with old properties
+                try storage.createEdge(edge_op.edge_id, edge_op.source_id, edge_op.target_id, edge_op.edge_type, undo_entry.old_value);
+            },
+        }
     }
 };

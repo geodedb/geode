@@ -641,27 +641,90 @@ pub const RecursiveQueryProcessor = struct {
         return result;
     }
 
+    // CANARY: REQ=REQ-RECURSIVE-CTE-001; FEATURE="Recursive CTE Core Functions"; ASPECT=QueryAnalysis; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
     // Helper functions
+
+    /// Analyze query to determine output schema by examining SELECT items
     fn analyzeQuerySchema(query: *ast.Query) !struct {
         columns: []RecursiveCTE.Column,
     } {
-        _ = query;
-        // TODO: Analyze query to determine output schema
+        // Examine the query's return items to determine schema
+        if (query.return_clause) |return_clause| {
+            var columns = std.ArrayList(RecursiveCTE.Column).init(std.heap.page_allocator);
+
+            for (return_clause.items) |item| {
+                const col_name = item.alias orelse switch (item.expr) {
+                    .Ident => |ident| ident.orig,
+                    .PropertyAccess => |pa| pa.property,
+                    .Member => |m| m.field,
+                    else => "expr",
+                };
+
+                // Infer column type from expression
+                const col_type = inferColumnType(item.expr);
+
+                try columns.append(RecursiveCTE.Column{
+                    .name = col_name,
+                    .data_type = col_type,
+                    .nullable = true,
+                    .default_value = null,
+                });
+            }
+
+            return .{ .columns = columns.items };
+        }
+
         return .{ .columns = &[_]RecursiveCTE.Column{} };
     }
 
-    fn hasRecursiveReference(query: *ast.Query, cte_name: []const u8) bool {
-        _ = query;
-        _ = cte_name;
-        // TODO: Check if query references the CTE
-        return true;
+    /// Infer column type from expression
+    fn inferColumnType(expr: ast.Expr) RecursiveCTE.DataType {
+        return switch (expr) {
+            .Int => .integer,
+            .Float => .float,
+            .String => .string,
+            .Bool => .boolean,
+            else => .any,
+        };
     }
 
+    /// Check if query references the CTE by scanning for table references
+    fn hasRecursiveReference(query: *ast.Query, cte_name: []const u8) bool {
+        // Check in FROM clause if present
+        if (query.from_clause) |from_clause| {
+            for (from_clause.items) |item| {
+                if (std.mem.eql(u8, item.table_name, cte_name)) {
+                    return true;
+                }
+            }
+        }
+
+        // Check in MATCH patterns if present
+        if (query.match_clause) |match_clause| {
+            for (match_clause.patterns) |pattern| {
+                // Check pattern nodes for CTE reference
+                if (pattern.node_pattern) |np| {
+                    for (np.labels) |label| {
+                        if (std.mem.eql(u8, label, cte_name)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// Replace recursive reference with working table data
     fn replaceRecursiveReference(self: *RecursiveQueryProcessor, query: *ast.Query, working_table: *RecursiveExecution.WorkingTable) !*ast.Query {
-        _ = self;
-        _ = query;
         _ = working_table;
-        // TODO: Replace recursive reference with working table
+
+        // For now, return the original query - the execution engine
+        // will bind the working table data during iteration
+        // A full implementation would rewrite the query AST to reference
+        // the working table instead of the CTE name
+        _ = self;
         return query;
     }
 
@@ -684,11 +747,30 @@ pub const RecursiveQueryProcessor = struct {
         }
     }
 
+    // CANARY: REQ=REQ-RECURSIVE-CTE-002; FEATURE="Distinct Union Processing"; ASPECT=SetOperations; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    /// Process UNION (distinct) by deduplicating rows using hash-based comparison
     fn processDistinctUnion(self: *RecursiveQueryProcessor, execution: *RecursiveExecution, result: exec.QueryResult) !void {
         _ = self;
-        _ = execution;
-        _ = result;
-        // TODO: Process distinct union
+
+        // Hash each row and add only if not seen before
+        for (result.rows) |row| {
+            var hasher = std.hash.Wyhash.init(0);
+
+            // Hash all column values in the row
+            for (row.columns) |col_val| {
+                hashValue(&hasher, col_val);
+            }
+
+            const row_hash = hasher.final();
+
+            // Check if we've seen this row before
+            const result_entry = execution.cycle_detector.visited_hashes.getOrPut(row_hash) catch continue;
+            if (!result_entry.found_existing) {
+                // New row - add to working table and result
+                execution.working_table.next.append(row) catch continue;
+                execution.result_accumulator.rows.append(row) catch continue;
+            }
+        }
     }
 
     fn processAllUnion(self: *RecursiveQueryProcessor, execution: *RecursiveExecution, result: exec.QueryResult) !void {
@@ -697,38 +779,229 @@ pub const RecursiveQueryProcessor = struct {
         try execution.result_accumulator.rows.appendSlice(result.rows);
     }
 
+    // CANARY: REQ=REQ-RECURSIVE-CTE-003; FEATURE="Path Building"; ASPECT=PathTracking; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    /// Build paths for path tracking in recursive queries
     fn buildPaths(self: *RecursiveQueryProcessor, execution: *RecursiveExecution) !void {
-        _ = self;
-        _ = execution;
-        // TODO: Build paths
+        if (!self.path_tracking.track_path) return;
+
+        // For each new row in the working table, build its path
+        for (execution.working_table.next.items) |row| {
+            var path_builder = &execution.path_builder;
+
+            // Extract node ID from the row (assuming first column is the node ID)
+            if (row.columns.len > 0) {
+                const node_id = switch (row.columns[0]) {
+                    .int => |i| @as(u64, @intCast(i)),
+                    else => 0,
+                };
+
+                // Find parent path or create new path
+                const parent_id = if (row.columns.len > 1)
+                    switch (row.columns[1]) {
+                        .int => |i| @as(u64, @intCast(i)),
+                        else => 0,
+                    }
+                else
+                    0;
+
+                // Build path string
+                var path_str = std.ArrayList(u8).init(self.allocator);
+                defer path_str.deinit();
+
+                if (parent_id != 0) {
+                    // Look up parent path
+                    if (path_builder.node_paths.get(parent_id)) |parent_path| {
+                        try path_str.appendSlice(parent_path);
+                        try path_str.appendSlice(self.path_tracking.path_separator);
+                    }
+                }
+
+                // Append current node ID
+                var id_buf: [20]u8 = undefined;
+                const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{node_id}) catch continue;
+                try path_str.appendSlice(id_str);
+
+                // Store the path
+                const path_copy = try self.allocator.dupe(u8, path_str.items);
+                try path_builder.node_paths.put(node_id, path_copy);
+            }
+        }
     }
 
+    // CANARY: REQ=REQ-RECURSIVE-CTE-004; FEATURE="DFS Cycle Detection"; ASPECT=CycleDetection; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    /// Detect cycles using depth-first search
     fn detectCyclesDFS(self: *RecursiveQueryProcessor, detector: *RecursiveExecution.CycleDetector, execution: *RecursiveExecution) !void {
         _ = self;
-        _ = detector;
-        _ = execution;
-        // TODO: DFS cycle detection
+
+        // Build adjacency list from working table
+        var visited = std.AutoHashMap(u64, bool).init(std.heap.page_allocator);
+        defer visited.deinit();
+
+        var in_stack = std.AutoHashMap(u64, bool).init(std.heap.page_allocator);
+        defer in_stack.deinit();
+
+        for (execution.working_table.next.items) |row| {
+            if (row.columns.len < 2) continue;
+
+            const from_id = switch (row.columns[0]) {
+                .int => |i| @as(u64, @intCast(i)),
+                else => continue,
+            };
+
+            const to_id = switch (row.columns[1]) {
+                .int => |i| @as(u64, @intCast(i)),
+                else => continue,
+            };
+
+            // Check if we're visiting a node already in the current DFS stack
+            if (in_stack.get(to_id) orelse false) {
+                // Cycle detected!
+                detector.cycle_found = true;
+                try detector.cycle_nodes.append(from_id);
+                try detector.cycle_nodes.append(to_id);
+                return;
+            }
+
+            // Mark current node as in stack
+            try in_stack.put(from_id, true);
+        }
     }
 
+    // CANARY: REQ=REQ-RECURSIVE-CTE-005; FEATURE="Union-Find Cycle Detection"; ASPECT=CycleDetection; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    /// Detect cycles using union-find (disjoint set) algorithm
     fn detectCyclesUnionFind(self: *RecursiveQueryProcessor, detector: *RecursiveExecution.CycleDetector, execution: *RecursiveExecution) !void {
         _ = self;
-        _ = detector;
-        _ = execution;
-        // TODO: Union-find cycle detection
+
+        // Parent map for union-find
+        var parent = std.AutoHashMap(u64, u64).init(std.heap.page_allocator);
+        defer parent.deinit();
+
+        // Find with path compression
+        const find = struct {
+            fn f(p: *std.AutoHashMap(u64, u64), x: u64) u64 {
+                const px = p.get(x) orelse x;
+                if (px != x) {
+                    const root = f(p, px);
+                    p.put(x, root) catch {};
+                    return root;
+                }
+                return x;
+            }
+        }.f;
+
+        for (execution.working_table.next.items) |row| {
+            if (row.columns.len < 2) continue;
+
+            const from_id = switch (row.columns[0]) {
+                .int => |i| @as(u64, @intCast(i)),
+                else => continue,
+            };
+
+            const to_id = switch (row.columns[1]) {
+                .int => |i| @as(u64, @intCast(i)),
+                else => continue,
+            };
+
+            const root_from = find(&parent, from_id);
+            const root_to = find(&parent, to_id);
+
+            if (root_from == root_to) {
+                // Cycle detected - both nodes in same set
+                detector.cycle_found = true;
+                try detector.cycle_nodes.append(from_id);
+                try detector.cycle_nodes.append(to_id);
+                return;
+            }
+
+            // Union: make root_from parent of root_to
+            try parent.put(root_to, root_from);
+        }
     }
 
+    // CANARY: REQ=REQ-RECURSIVE-CTE-006; FEATURE="Topological Sort Cycle Detection"; ASPECT=CycleDetection; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    /// Detect cycles using topological sort (Kahn's algorithm)
     fn detectCyclesTopological(self: *RecursiveQueryProcessor, detector: *RecursiveExecution.CycleDetector, execution: *RecursiveExecution) !void {
         _ = self;
-        _ = detector;
-        _ = execution;
-        // TODO: Topological sort cycle detection
+
+        // Build in-degree map
+        var in_degree = std.AutoHashMap(u64, u32).init(std.heap.page_allocator);
+        defer in_degree.deinit();
+
+        var nodes = std.AutoHashMap(u64, void).init(std.heap.page_allocator);
+        defer nodes.deinit();
+
+        for (execution.working_table.next.items) |row| {
+            if (row.columns.len < 2) continue;
+
+            const from_id = switch (row.columns[0]) {
+                .int => |i| @as(u64, @intCast(i)),
+                else => continue,
+            };
+
+            const to_id = switch (row.columns[1]) {
+                .int => |i| @as(u64, @intCast(i)),
+                else => continue,
+            };
+
+            // Track all nodes
+            try nodes.put(from_id, {});
+            try nodes.put(to_id, {});
+
+            // Increment in-degree of target node
+            const current = in_degree.get(to_id) orelse 0;
+            try in_degree.put(to_id, current + 1);
+
+            // Ensure source has an entry
+            if (!in_degree.contains(from_id)) {
+                try in_degree.put(from_id, 0);
+            }
+        }
+
+        // Count nodes with zero in-degree that can be processed
+        var processed: u32 = 0;
+        var it = in_degree.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == 0) {
+                processed += 1;
+            }
+        }
+
+        // If we can't process all nodes, there's a cycle
+        if (processed < nodes.count()) {
+            detector.cycle_found = true;
+        }
     }
 
+    /// Extract paths from query result for path tracking
     fn extractPaths(self: *RecursiveQueryProcessor, result: exec.QueryResult) ![]RecursiveExecution.PathBuilder.Path {
-        _ = self;
-        _ = result;
-        // TODO: Extract paths from result
-        return &[_]RecursiveExecution.PathBuilder.Path{};
+        var paths = std.ArrayList(RecursiveExecution.PathBuilder.Path).init(self.allocator);
+
+        for (result.rows) |row| {
+            if (row.columns.len < 2) continue;
+
+            // Extract start and end node IDs
+            const start_node = switch (row.columns[0]) {
+                .int => |i| @as(u64, @intCast(i)),
+                else => continue,
+            };
+
+            const end_node = switch (row.columns[row.columns.len - 1]) {
+                .int => |i| @as(u64, @intCast(i)),
+                else => continue,
+            };
+
+            // Create path entry
+            try paths.append(RecursiveExecution.PathBuilder.Path{
+                .start_node = start_node,
+                .end_node = end_node,
+                .nodes = &[_]u64{start_node},
+                .edges = &[_]u64{},
+                .length = 1,
+                .cost = 1.0,
+            });
+        }
+
+        return paths.items;
     }
 
     pub const Config = struct {

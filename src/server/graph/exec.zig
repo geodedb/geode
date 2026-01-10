@@ -304,6 +304,7 @@ fn compareBindings(_: void, a: Binding, b: Binding) bool {
     return a_node_id < b_node_id;
 }
 
+// CANARY: REQ=REQ-WITH-WHERE-001; FEATURE="WITH WHERE Filtering"; ASPECT=QueryExecution; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-10
 // Execute WITH clause - processes intermediate results and applies transformations
 pub fn executeWith(
     allocator: std.mem.Allocator,
@@ -312,7 +313,6 @@ pub fn executeWith(
     where_clause: ?ast.Expr,
     graph: *const GraphStorage,
 ) ![]Binding {
-    _ = where_clause; // TODO: implement WHERE filtering on WITH results
     _ = graph;
 
     var results = std.ArrayList(Binding).initCapacity(allocator, 0) catch unreachable;
@@ -336,10 +336,208 @@ pub fn executeWith(
             }
         }
 
+        // Apply WHERE clause filtering if present
+        if (where_clause) |where_expr| {
+            const where_result = try evaluateWhereCondition(allocator, where_expr, &new_binding);
+            if (!where_result) {
+                // WHERE condition not satisfied, skip this binding
+                continue;
+            }
+        }
+
         try results.append(allocator, new_binding);
     }
 
     return results.toOwnedSlice(allocator);
+}
+
+// CANARY: REQ=REQ-WHERE-EVAL-001; FEATURE="WHERE Condition Evaluation"; ASPECT=Filtering; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-10
+/// Evaluate a WHERE condition expression and return true if condition is satisfied
+fn evaluateWhereCondition(allocator: std.mem.Allocator, expr: ast.Expr, binding: *const Binding) !bool {
+    return switch (expr) {
+        // Boolean literals
+        .Bool => |b| b,
+
+        // Comparison operators
+        .BinOp => |binop| blk: {
+            const left_val = try evaluateExpressionInBinding(allocator, binop.lhs.*, binding);
+            const right_val = try evaluateExpressionInBinding(allocator, binop.rhs.*, binding);
+            break :blk evaluateComparisonOp(binop.op, left_val, right_val);
+        },
+
+        // Logical operators
+        .UnaryOp => |unary| blk: {
+            if (unary.op == .Not) {
+                const inner_result = try evaluateWhereCondition(allocator, unary.operand.*, binding);
+                break :blk !inner_result;
+            }
+            break :blk false;
+        },
+
+        // AND/OR logical combinations
+        .And => |and_expr| blk: {
+            const left_result = try evaluateWhereCondition(allocator, and_expr.lhs.*, binding);
+            if (!left_result) break :blk false; // Short-circuit
+            const right_result = try evaluateWhereCondition(allocator, and_expr.rhs.*, binding);
+            break :blk right_result;
+        },
+
+        .Or => |or_expr| blk: {
+            const left_result = try evaluateWhereCondition(allocator, or_expr.lhs.*, binding);
+            if (left_result) break :blk true; // Short-circuit
+            const right_result = try evaluateWhereCondition(allocator, or_expr.rhs.*, binding);
+            break :blk right_result;
+        },
+
+        // Identifier (variable reference) - check if it's a truthy value
+        .Ident, .PropertyAccess, .Member => blk: {
+            const val = try evaluateExpressionInBinding(allocator, expr, binding);
+            break :blk isTruthyValue(val);
+        },
+
+        // NULL check expressions
+        .IsNull => |is_null_expr| blk: {
+            const val = try evaluateExpressionInBinding(allocator, is_null_expr.*, binding);
+            break :blk val == .Null;
+        },
+
+        .IsNotNull => |is_not_null_expr| blk: {
+            const val = try evaluateExpressionInBinding(allocator, is_not_null_expr.*, binding);
+            break :blk val != .Null;
+        },
+
+        // Default: try to evaluate as expression and check truthiness
+        else => blk: {
+            const val = try evaluateExpressionInBinding(allocator, expr, binding);
+            break :blk isTruthyValue(val);
+        },
+    };
+}
+
+/// Check if a BindingValue is truthy
+fn isTruthyValue(val: BindingValue) bool {
+    return switch (val) {
+        .Null => false,
+        .Value => |v| switch (v) {
+            .Null => false,
+            .Bool => |b| b,
+            .Int => |i| i != 0,
+            .String => |s| s.len > 0,
+            .Decimal => |d| d.coeff != 0,
+            .VectorF32 => true,
+        },
+        .Property => |p| switch (p) {
+            .Null => false,
+            .Bool => |b| b,
+            .Int => |i| i != 0,
+            .String => |s| s.len > 0,
+            .Decimal => |d| d.coeff != 0,
+            .VectorF32 => true,
+        },
+        .Node => true,
+        .Edge => true,
+        .Path => true,
+        .List => |l| l.len > 0,
+    };
+}
+
+/// Evaluate a comparison operation between two BindingValues
+fn evaluateComparisonOp(op: ast.BinaryOp, left: BindingValue, right: BindingValue) bool {
+    // Extract comparable values
+    const left_int = extractIntValue(left);
+    const right_int = extractIntValue(right);
+    const left_str = extractStringValue(left);
+    const right_str = extractStringValue(right);
+
+    return switch (op) {
+        .Equal => blk: {
+            if (left_str != null and right_str != null) {
+                break :blk std.mem.eql(u8, left_str.?, right_str.?);
+            }
+            if (left_int != null and right_int != null) {
+                break :blk left_int.? == right_int.?;
+            }
+            break :blk left == .Null and right == .Null;
+        },
+        .NotEqual => blk: {
+            if (left_str != null and right_str != null) {
+                break :blk !std.mem.eql(u8, left_str.?, right_str.?);
+            }
+            if (left_int != null and right_int != null) {
+                break :blk left_int.? != right_int.?;
+            }
+            break :blk !(left == .Null and right == .Null);
+        },
+        .LessThan => blk: {
+            if (left_int != null and right_int != null) {
+                break :blk left_int.? < right_int.?;
+            }
+            if (left_str != null and right_str != null) {
+                break :blk std.mem.order(u8, left_str.?, right_str.?) == .lt;
+            }
+            break :blk false;
+        },
+        .LessThanOrEqual => blk: {
+            if (left_int != null and right_int != null) {
+                break :blk left_int.? <= right_int.?;
+            }
+            if (left_str != null and right_str != null) {
+                const ord = std.mem.order(u8, left_str.?, right_str.?);
+                break :blk ord == .lt or ord == .eq;
+            }
+            break :blk false;
+        },
+        .GreaterThan => blk: {
+            if (left_int != null and right_int != null) {
+                break :blk left_int.? > right_int.?;
+            }
+            if (left_str != null and right_str != null) {
+                break :blk std.mem.order(u8, left_str.?, right_str.?) == .gt;
+            }
+            break :blk false;
+        },
+        .GreaterThanOrEqual => blk: {
+            if (left_int != null and right_int != null) {
+                break :blk left_int.? >= right_int.?;
+            }
+            if (left_str != null and right_str != null) {
+                const ord = std.mem.order(u8, left_str.?, right_str.?);
+                break :blk ord == .gt or ord == .eq;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
+/// Extract integer value from BindingValue if possible
+fn extractIntValue(val: BindingValue) ?i64 {
+    return switch (val) {
+        .Value => |v| switch (v) {
+            .Int => |i| i,
+            else => null,
+        },
+        .Property => |p| switch (p) {
+            .Int => |i| i,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// Extract string value from BindingValue if possible
+fn extractStringValue(val: BindingValue) ?[]const u8 {
+    return switch (val) {
+        .Value => |v| switch (v) {
+            .String => |s| s,
+            else => null,
+        },
+        .Property => |p| switch (p) {
+            .String => |s| s,
+            else => null,
+        },
+        else => null,
+    };
 }
 
 // Helper function to get a name for an expression (for aliasing)
