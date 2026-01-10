@@ -1509,7 +1509,7 @@ REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,TestCANARY_REQ_GQL_TDE_A
 REQ-GQL-TDE-BACKUP-KEY-001,KeyBackupHandling,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_BACKUP_KEY_001_RoundTrip,,security,2025-09-26,src/security/backup_key_envelope.zig
 REQ-GQL-TDE-BACKUP-KEY-001,KeyBackupHandling,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_BACKUP_KEY_001_RoundTrip,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-CORE-001,AES256GcmPrimitive,SECURITY,TESTED,Benchmark_encrypt_pages,,security,2025-09-26,docs/SECURITY_PROGRESS.md
-REQ-GQL-TDE-EXT-KMS-001,ExternalKMSWrapUnwrap,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_EXT_KMS_001_WrapUnwrap,,security,2026-01-10,src/security/external_kms_client.zig
+REQ-GQL-TDE-EXT-KMS-001,ExternalKMSIntegration,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_EXT_KMS_001,,security,2026-01-10,src/security/external_kms_client.zig
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSWrapUnwrap,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_001_WrapUnwrap,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSWrapUnwrap,TEST,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_001_WrapUnwrap,,security,2025-09-26,tests/test_external_kms_provider.zig
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSAuthGuard,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative,,security,2025-09-26,tests/test_remote_kms_auth_negative.zig

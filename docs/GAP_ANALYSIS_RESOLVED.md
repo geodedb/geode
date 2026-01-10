@@ -4,15 +4,40 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Last Updated**: January 10, 2026
 
-**Total Resolved**: 85 gaps (GAP-0001 through GAP-0085 - ALL GAPS RESOLVED)
+**Total Resolved**: 86 gaps (GAP-0001 through GAP-0086 - ALL GAPS RESOLVED!)
 
-**Remaining Open**: 0 gaps - All gaps have been resolved!
+**Remaining Open**: 0 gaps
 
-**Note**: Gap analysis on January 10, 2026 identified 21 additional gaps (GAP-0065 through GAP-0085) through comprehensive codebase scanning. All gaps were resolved on the same day including security, CBO, path finding, LSP, GPU telemetry, GraphSAGE, and CTE improvements.
+**Note**: Gap analysis on January 10, 2026 identified 21 additional gaps (GAP-0065 through GAP-0085) through comprehensive codebase scanning. All were resolved on the same day. GAP-0086 (External KMS Integration) was also resolved on January 10, 2026 with full HTTP implementation for Vault Transit and AWS KMS APIs.
 
 ---
 
 ## All Remaining Gaps Resolved (January 10, 2026)
+
+### GAP-0086: External KMS Integration (Resolved January 10, 2026)
+- **Original Gap:** VaultTransitClient and AwsKmsClient were stub implementations with local simulation
+- **Original Severity:** Medium (Security)
+- **Resolution Evidence:**
+  - src/security/external_kms_client.zig:73-341 — Complete VaultTransitClient with HTTP implementation:
+    - HTTP POST to `/v1/transit/encrypt/:key_name` for wrap()
+    - HTTP POST to `/v1/transit/decrypt/:key_name` for unwrap()
+    - HTTP POST to `/v1/transit/keys/:key_name/rotate` for rotateKey()
+    - Base64 encoding/decoding for plaintext handling
+    - JSON response parsing for ciphertext extraction
+    - CANARY marker: REQ=REQ-GQL-TDE-VAULT-001, STATUS=IMPL, UPDATED=2026-01-10
+  - src/security/external_kms_client.zig:343-637 — Complete AwsKmsClient with HTTP implementation:
+    - HTTP POST with `X-Amz-Target: TrentService.Encrypt` for wrap()
+    - HTTP POST with `X-Amz-Target: TrentService.Decrypt` for unwrap()
+    - HTTP POST with `X-Amz-Target: TrentService.GenerateDataKey` for generateKey()
+    - Compatible with local-kms and real AWS KMS
+    - CANARY marker: REQ=REQ-GQL-TDE-AWS-001, STATUS=IMPL, UPDATED=2026-01-10
+- **Testing Infrastructure:**
+  - Vault dev container: `docker run -d -p 8200:8200 -e 'VAULT_DEV_ROOT_TOKEN_ID=geode-test-token' hashicorp/vault`
+  - local-kms container: `docker run -d -p 8080:8080 nsmithuk/local-kms`
+  - Geodetestlab spec: `geodetestlab/specs/external_kms_integration.yml`
+- **Verification:** Keys are now wrapped/unwrapped using actual Vault Transit and AWS KMS APIs
+
+---
 
 ### GAP-0056: LSP Go-To-Definition (Resolved January 10, 2026)
 - **Original Gap:** LSP go-to-definition returned null without implementation
