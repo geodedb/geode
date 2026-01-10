@@ -312,11 +312,74 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const sum = lc + rc; // overflow ignored for now (would return Unsupported if needed)
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
-            // Date + Interval
+            // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+            // Date + Interval: Add months and days from interval to date
             if (l == .Date and r == .Interval) {
-                // TODO: Implement Date + Interval
-                // Return Unsupported for now to allow future impl without crash
-                return EvalError.Unsupported;
+                const datetime_module = @import("types/datetime.zig");
+                const date = l.Date;
+                const interval = r.Interval;
+
+                // Convert date to year/month/day components
+                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
+
+                // Add months (with year overflow handling)
+                var new_month: i32 = @as(i32, ymd.month) + interval.months;
+                var new_year: i32 = ymd.year;
+
+                // Handle month overflow/underflow
+                while (new_month > 12) {
+                    new_month -= 12;
+                    new_year += 1;
+                }
+                while (new_month < 1) {
+                    new_month += 12;
+                    new_year -= 1;
+                }
+
+                // Clamp day to valid range for new month
+                const max_day = datetime_module.Date.daysInMonth(new_year, @intCast(new_month));
+                const new_day: u8 = @min(ymd.day, max_day);
+
+                // Calculate new days since epoch
+                const new_days = datetime_module.Date.daysSinceEpoch(new_year, @intCast(new_month), new_day) catch {
+                    return EvalError.Unsupported;
+                };
+
+                // Add interval days
+                const final_days = new_days + interval.days;
+
+                break :blk .{ .Date = .{ .days_since_epoch = final_days } };
+            }
+            // Interval + Date: commutative
+            if (l == .Interval and r == .Date) {
+                const datetime_module = @import("types/datetime.zig");
+                const date = r.Date;
+                const interval = l.Interval;
+
+                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
+
+                var new_month: i32 = @as(i32, ymd.month) + interval.months;
+                var new_year: i32 = ymd.year;
+
+                while (new_month > 12) {
+                    new_month -= 12;
+                    new_year += 1;
+                }
+                while (new_month < 1) {
+                    new_month += 12;
+                    new_year -= 1;
+                }
+
+                const max_day = datetime_module.Date.daysInMonth(new_year, @intCast(new_month));
+                const new_day: u8 = @min(ymd.day, max_day);
+
+                const new_days = datetime_module.Date.daysSinceEpoch(new_year, @intCast(new_month), new_day) catch {
+                    return EvalError.Unsupported;
+                };
+
+                const final_days = new_days + interval.days;
+
+                break :blk .{ .Date = .{ .days_since_epoch = final_days } };
             }
             return EvalError.TypeMismatch;
         },
@@ -338,6 +401,43 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const rc = try scaleTo(rd.coeff, rd.scale, maxs);
                 const diff = lc - rc;
                 break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
+            }
+            // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+            // Date - Interval: Subtract months and days from interval
+            if (l == .Date and r == .Interval) {
+                const datetime_module = @import("types/datetime.zig");
+                const date = l.Date;
+                const interval = r.Interval;
+
+                // Convert date to year/month/day components
+                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
+
+                // Subtract months (with year underflow handling)
+                var new_month: i32 = @as(i32, ymd.month) - interval.months;
+                var new_year: i32 = ymd.year;
+
+                while (new_month > 12) {
+                    new_month -= 12;
+                    new_year += 1;
+                }
+                while (new_month < 1) {
+                    new_month += 12;
+                    new_year -= 1;
+                }
+
+                // Clamp day to valid range for new month
+                const max_day = datetime_module.Date.daysInMonth(new_year, @intCast(new_month));
+                const new_day: u8 = @min(ymd.day, max_day);
+
+                // Calculate new days since epoch
+                const new_days = datetime_module.Date.daysSinceEpoch(new_year, @intCast(new_month), new_day) catch {
+                    return EvalError.Unsupported;
+                };
+
+                // Subtract interval days
+                const final_days = new_days - interval.days;
+
+                break :blk2 .{ .Date = .{ .days_since_epoch = final_days } };
             }
             return EvalError.TypeMismatch;
         },
@@ -2746,12 +2846,13 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = node.properties.iterator();
                 while (prop_iter.next()) |entry| {
+                    // CANARY: REQ=REQ-FLOAT-PROP-001; FEATURE="FloatPropertyPreservation"; ASPECT=NodeProperties; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
                     const prop_val: Value = switch (entry.value_ptr.*) {
                         .Null => Value{ .Null = {} },
                         .Bool => |b| Value{ .Bool = b },
                         .Int => |i| Value{ .Int = i },
                         .String => |s| Value{ .Str = s },
-                        .Float => Value{ .Null = {} }, // TODO: Handle Float properly
+                        .Float => |f| Value{ .Double = f }, // Convert PropertyValue.Float (f64) to Value.Double
                         .ExtValue => |ext| Value{ .ExtValue = ext },
                     };
                     prop_map.put(entry.key_ptr.*, prop_val) catch continue;
@@ -2763,12 +2864,13 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = edge.properties.iterator();
                 while (prop_iter.next()) |entry| {
+                    // CANARY: REQ=REQ-FLOAT-PROP-002; FEATURE="FloatPropertyPreservation"; ASPECT=EdgeProperties; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
                     const prop_val: Value = switch (entry.value_ptr.*) {
                         .Null => Value{ .Null = {} },
                         .Bool => |b| Value{ .Bool = b },
                         .Int => |i| Value{ .Int = i },
                         .String => |s| Value{ .Str = s },
-                        .Float => Value{ .Null = {} },
+                        .Float => |f| Value{ .Double = f }, // Convert PropertyValue.Float (f64) to Value.Double
                         .ExtValue => |ext| Value{ .ExtValue = ext },
                     };
                     prop_map.put(entry.key_ptr.*, prop_val) catch continue;
@@ -3344,9 +3446,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const datetime_module = @import("types/datetime.zig");
             const d = datetime_module.Date.fromStr(str) catch return null;
 
-            const eval_ext = @import("eval_extended.zig");
-            const date_val = eval_ext.ExtValue{ .Date = d };
-            return Value{ .ExtValue = date_val };
+            // Return Date directly for proper type matching in arithmetic operations
+            return Value{ .Date = d };
         } else {
             return null;
         }
@@ -3377,8 +3478,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
-    // Handle duration() function - parses ISO 8601 duration string
+    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration; STATUS=IMPL; OWNER=datetime; UPDATED=2026-01-09
+    // Handle duration() function - parses ISO 8601 duration string and returns Interval
     if (std.mem.eql(u8, function_name, "duration")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
@@ -3388,8 +3489,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         };
 
         // Parse ISO 8601 duration format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
-        const duration_val = parseDurationString(str) catch return null;
-        return Value{ .Int = duration_val };
+        // Use datetime.Interval.fromStr for proper month/day/micros parsing
+        const datetime_module = @import("types/datetime.zig");
+        const interval = datetime_module.Interval.fromStr(str) catch return null;
+        return Value{ .Interval = interval };
     }
 
     // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=IMPL; OWNER=types; UPDATED=2025-12-22

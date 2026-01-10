@@ -318,10 +318,34 @@ const ShardMap = struct {
         self.shards.deinit();
     }
 
+    // CANARY: REQ=REQ-SHARD-PRUNE-001; FEATURE="ShardPruning"; ASPECT=QueryOptimization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-09
     fn getShardsForQuery(self: *ShardMap, query: []const u8) ![][]const u8 {
-        _ = query;
-        // For now, return all shards
-        // TODO: Implement shard pruning based on query predicates
+        // Try to extract partition key predicates from query
+        // Look for patterns like "WHERE id = <value>" or "WHERE partition_key = <value>"
+        const partition_value = self.extractPartitionValue(query);
+
+        if (partition_value) |value| {
+            // If we found a partition key value, find matching shard(s)
+            var matching_shards = std.ArrayList([]const u8).init(self.allocator);
+            defer matching_shards.deinit();
+
+            var iter = self.shards.iterator();
+            while (iter.next()) |entry| {
+                const shard_info = entry.value_ptr.*;
+                // Check if value falls within this shard's key range
+                if (value >= shard_info.key_range_start and value < shard_info.key_range_end) {
+                    try matching_shards.append(entry.key_ptr.*);
+                }
+            }
+
+            if (matching_shards.items.len > 0) {
+                std.log.debug("Shard pruning: query targets {} of {} shards", .{ matching_shards.items.len, self.shards.count() });
+                return matching_shards.toOwnedSlice();
+            }
+        }
+
+        // Fallback: return all shards if no partition key found or no matches
+        std.log.debug("Shard pruning: query targets all {} shards (no partition key found)", .{self.shards.count()});
         var shard_ids = try self.allocator.alloc([]const u8, self.shards.count());
         var iter = self.shards.iterator();
         var i: usize = 0;
@@ -329,6 +353,28 @@ const ShardMap = struct {
             shard_ids[i] = entry.key_ptr.*;
         }
         return shard_ids;
+    }
+
+    // Extract numeric partition value from query WHERE clause
+    fn extractPartitionValue(self: *ShardMap, query: []const u8) ?u64 {
+        _ = self;
+        // Look for patterns: "WHERE id = <number>" or "WHERE partition_key = <number>"
+        // This is a simplified implementation - full implementation would use AST
+        const patterns = [_][]const u8{ "WHERE id = ", "WHERE partition_key = ", "WHERE id=", "WHERE partition_key=" };
+
+        for (patterns) |pattern| {
+            if (std.mem.indexOf(u8, query, pattern)) |idx| {
+                const start = idx + pattern.len;
+                var end = start;
+                while (end < query.len and (query[end] >= '0' and query[end] <= '9')) {
+                    end += 1;
+                }
+                if (end > start) {
+                    return std.fmt.parseInt(u64, query[start..end], 10) catch null;
+                }
+            }
+        }
+        return null;
     }
 };
 

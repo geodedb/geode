@@ -2,7 +2,7 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 9, 2026 (GAP-0020 through GAP-0025 resolved)
+**Last Updated**: January 9, 2026 (GAP-0026 through GAP-0034 resolved)
 
 ---
 
@@ -542,8 +542,177 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ---
 
+### GAP-0026: Float Property Values Lost During Property Map Conversion (Resolved January 9, 2026)
+- **Original Gap:** Float values stored as node/edge properties were silently converted to NULL
+- **Original Severity:** High
+- **GitLab Issue:** [#108](https://gitlab.com/devnw/geode/geode/-/issues/108) (closed)
+- **Resolution Evidence:**
+  - src/eval.zig:2754,2771 — Fixed PropertyValue.Float handling:
+    - Changed `.Float => Value{ .Null = {} }` to `.Float => |f| Value{ .Double = f }`
+    - Properly converts PropertyValue.Float (f64) to Value.Double (f64)
+  - CANARY marker: REQ=REQ-FLOAT-PROP-001; FEATURE="FloatPropertyPreservation"; STATUS=IMPL; UPDATED=2026-01-09
+- **Verification:** Float properties now return correct values, not NULL
+- **Test coverage:** geodetestlab/specs/gap_analysis_fixes_january_2026.yml (gap-0026-*)
+
+---
+
+### GAP-0027: Date + Interval Arithmetic Not Implemented (Resolved January 9, 2026)
+- **Original Gap:** Date + Interval arithmetic returned EvalError.Unsupported
+- **Original Severity:** Medium
+- **GitLab Issue:** [#109](https://gitlab.com/devnw/geode/geode/-/issues/109) (closed)
+- **Resolution Evidence:**
+  - src/eval.zig:315-383 — Added Date + Interval arithmetic:
+    - Handles month and day components separately
+    - Proper month overflow/underflow handling (month 0, 13)
+    - Day clamping for month-end dates (Jan 31 + 1 month = Feb 28/29)
+  - src/eval.zig:405-441 — Added Date - Interval subtraction support
+  - src/types/datetime.zig — Made helper functions public:
+    - daysInMonth(year, month)
+    - daysSinceEpoch(year, month, day)
+  - CANARY markers: REQ=REQ-DATE-INTERVAL-001 through REQ=REQ-DATE-INTERVAL-004; STATUS=IMPL; UPDATED=2026-01-09
+- **Verification:** Date arithmetic with intervals now functional
+- **Test coverage:** geodetestlab/specs/gap_analysis_fixes_january_2026.yml (gap-0027-*)
+
+---
+
+### GAP-0028: Distributed Cluster Operations Are Stubs (Resolved January 9, 2026)
+- **Original Gap:** Cluster operations returned hardcoded values or did nothing
+- **Original Severity:** High
+- **GitLab Issue:** [#110](https://gitlab.com/devnw/geode/geode/-/issues/110) (closed)
+- **Resolution Evidence:**
+  - src/distributed/cluster.zig:533-696 — Implemented full cluster operations:
+    - getReplicationLag(): Calculates lag based on health check latency and shard size
+    - startReplication(): Initiates replication with proper shard/replica tracking
+    - rebalanceShards(): Load-balanced shard redistribution across nodes
+    - serializeClusterTopology(): Returns JSON with nodes, shards, config, timestamp
+  - CANARY markers: REQ=REQ-DIST-CLUSTER-001 through REQ=REQ-DIST-CLUSTER-004; STATUS=IMPL; UPDATED=2026-01-09
+- **Verification:** Cluster operations now functional with real implementations
+
+---
+
+### GAP-0029: CDC Webhook HTTP Client Not Implemented (Resolved January 9, 2026)
+- **Original Gap:** Webhook HTTP client returned hardcoded 200 without sending requests
+- **Original Severity:** Medium
+- **GitLab Issue:** [#111](https://gitlab.com/devnw/geode/geode/-/issues/111) (closed)
+- **Resolution Evidence:**
+  - src/cdc/webhook_sink.zig:367-441 — Implemented HTTP client:
+    - Uses std.http.Client for actual HTTP requests
+    - URL parsing with std.Uri.parse()
+    - Support for all HTTP methods (GET, POST, PUT, DELETE, PATCH)
+    - Proper header handling including Authorization
+    - Error handling with appropriate status codes
+  - CANARY marker: REQ=REQ-CDC-HTTP-001; FEATURE="CDCWebhookHTTP"; STATUS=IMPL; UPDATED=2026-01-09
+- **Verification:** HTTP requests are now actually sent to webhook endpoints
+
+---
+
+### GAP-0030: 2PC Timeout Parameter Ignored (Resolved January 9, 2026)
+- **Original Gap:** 2PC transactions ignored timeout parameter, could hang indefinitely
+- **Original Severity:** Medium
+- **GitLab Issue:** [#112](https://gitlab.com/devnw/geode/geode/-/issues/112) (closed)
+- **Resolution Evidence:**
+  - src/distributed/twophase.zig:190-243 — Implemented timeout handling:
+    - Tracks start_time using std.time.milliTimestamp()
+    - Polls connection with intervals within remaining timeout
+    - Returns error.Timeout when timeout_ms exceeded
+    - Proper cleanup on timeout
+  - CANARY marker: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; STATUS=IMPL; UPDATED=2026-01-09
+- **Verification:** Transactions now properly timeout instead of hanging
+
+---
+
+### GAP-0031: Shard Pruning Not Implemented (Resolved January 9, 2026)
+- **Original Gap:** All queries touched all shards regardless of predicates
+- **Original Severity:** Medium
+- **GitLab Issue:** [#113](https://gitlab.com/devnw/geode/geode/-/issues/113) (closed)
+- **Resolution Evidence:**
+  - src/distributed/query_coordinator.zig:321-379 — Implemented shard pruning:
+    - extractPartitionValue(): Parses WHERE clause for partition key values
+    - Pattern matching for "WHERE id = X" and "WHERE partition_key = X"
+    - getShardsForQuery(): Filters shards by key range match
+    - Falls back to all shards if no partition key found
+  - CANARY marker: REQ=REQ-SHARD-PRUNE-001; FEATURE="ShardPruning"; STATUS=IMPL; UPDATED=2026-01-09
+- **Verification:** Queries now prune non-matching shards for partition key predicates
+
+---
+
+### GAP-0032: Materialized View Refresh Cancellation Not Implemented (Resolved January 9, 2026)
+- **Original Gap:** cancelRefresh() was empty stub
+- **Original Severity:** Low
+- **GitLab Issue:** [#114](https://gitlab.com/devnw/geode/geode/-/issues/114) (closed)
+- **Resolution Evidence:**
+  - src/query/enhanced_materialized_views.zig:1049-1069 — Implemented cancelRefresh:
+    - Drains priority queue to temporary list
+    - Filters out entries matching cancelled view_id
+    - Rebuilds queue with remaining entries
+  - CANARY marker: REQ=REQ-MV-CANCEL-001; FEATURE="MVRefreshCancellation"; STATUS=IMPL; UPDATED=2026-01-09
+- **Verification:** Cancelled refreshes are properly removed from scheduled queue
+
+---
+
+### GAP-0033: DELETE WHERE Clause Not Evaluated (Resolved January 9, 2026)
+- **Original Gap:** DELETE statements ignored WHERE clause, potentially deleting all matching nodes
+- **Original Severity:** High
+- **GitLab Issue:** [#115](https://gitlab.com/devnw/geode/geode/-/issues/115) (closed)
+- **Resolution Evidence:**
+  - src/execution/crud_operations.zig:2223-2263 — Implemented WHERE evaluation:
+    - Creates Env with node binding for variable name from MATCH pattern
+    - Evaluates WHERE expression with eval.evalExpr()
+    - Checks result for truthy value (Bool true)
+    - Only deletes nodes where WHERE evaluates to true
+  - CANARY marker: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; STATUS=IMPL; UPDATED=2026-01-09
+- **Verification:** DELETE WHERE now properly filters which nodes to delete
+- **Test coverage:** geodetestlab/specs/gap_analysis_fixes_january_2026.yml (gap-0033-*)
+
+---
+
+### GAP-0034: Graph Metadata Not Persisted (Resolved January 9, 2026)
+- **Original Gap:** Graph definitions were lost on server restart
+- **Original Severity:** Medium
+- **GitLab Issue:** [#116](https://gitlab.com/devnw/geode/geode/-/issues/116) (closed)
+- **Resolution Evidence:**
+  - src/schema/catalog.zig:522-562 — Added graph persistence:
+    - addGraph(): Stores graph name in catalog with rwlock protection
+    - removeGraph(): Removes graph from catalog
+    - graphExists(): Checks graph existence
+    - save() called after modifications for persistence
+  - src/storage/multi_graph.zig:249-271 — Updated to use catalog:
+    - persistGraphMetadata(): Calls catalog.addGraph()
+    - removeGraphMetadata(): Calls catalog.removeGraph()
+  - CANARY markers: REQ=REQ-GRAPH-META-001 through REQ=REQ-GRAPH-META-005; STATUS=IMPL; UPDATED=2026-01-09
+- **Verification:** Graph metadata now persists across server restarts
+
+---
+
 ## Verification Notes
 
 All resolved gaps include CANARY markers for governance tracking. The implementations were verified against documentation claims and test evidence.
+
+### GitLab Issue Closure (January 9, 2026)
+
+The following GitLab gap issues were verified as resolved and closed:
+
+- **#95** (GAP-0013): 2PC Network Transport — Closed with QUIC implementation evidence
+- **#96** (GAP-0014): Backup Restore Operations — Closed with PITR implementation evidence
+- **#97** (GAP-0015): Remote KMS Server — Closed with QUIC RPC implementation evidence
+- **#98** (GAP-0016): Server State CANARY Status — Closed with updated marker evidence
+- **#99** (GAP-0017): XOR Key Wrapping — Closed with AES-256-GCM implementation evidence
+- **#100** (GAP-0018): QUIC Mutation Execution — Closed with execution routing evidence
+- **#101** (GAP-0019): CDC Sinks — Closed with Kafka/File/Webhook implementation evidence
+- **#102** (GAP-0020): CREATE CONSTRAINT — Closed with catalog integration evidence
+- **#103** (GAP-0021): Recursive CTE Path Finding — Closed with CTE builder evidence
+- **#104** (GAP-0022): Point-in-Time WAL — Closed with WAL replay implementation evidence
+- **#105** (GAP-0023): Multi-Tenancy — Closed with tenant_id propagation evidence
+- **#106** (GAP-0024): FLE Predicate Rewriting — Closed with blind index evidence
+- **#107** (GAP-0025): Encrypted Page Reading — Closed with PageStorage implementation evidence
+- **#108** (GAP-0026): Float Property Values — Closed with PropertyValue.Float handling evidence
+- **#109** (GAP-0027): Date + Interval Arithmetic — Closed with Date arithmetic implementation evidence
+- **#110** (GAP-0028): Distributed Cluster Operations — Closed with cluster.zig implementation evidence
+- **#111** (GAP-0029): CDC Webhook HTTP Client — Closed with std.http.Client implementation evidence
+- **#112** (GAP-0030): 2PC Timeout Handling — Closed with timeout polling implementation evidence
+- **#113** (GAP-0031): Shard Pruning — Closed with extractPartitionValue implementation evidence
+- **#114** (GAP-0032): MV Refresh Cancellation — Closed with cancelRefresh implementation evidence
+- **#115** (GAP-0033): DELETE WHERE Evaluation — Closed with WHERE clause evaluation evidence
+- **#116** (GAP-0034): Graph Metadata Persistence — Closed with catalog.addGraph/removeGraph evidence
 
 *Archive maintained for audit trail*

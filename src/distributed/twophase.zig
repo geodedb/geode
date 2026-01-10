@@ -187,9 +187,10 @@ pub const TwoPhaseTransport = struct {
         return self.connections.getPtr(endpoint).?;
     }
 
-    /// Send a 2PC message and receive response
+    // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-09
+    /// Send a 2PC message and receive response with timeout handling
     pub fn sendMessage(self: *TwoPhaseTransport, endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
-        _ = timeout_ms; // TODO: Implement proper timeout handling
+        const start_time = std.time.milliTimestamp();
 
         const conn = try self.getConnection(endpoint);
 
@@ -203,21 +204,42 @@ pub const TwoPhaseTransport = struct {
         const json_msg = try serializeTwoPhaseMessage(self.allocator, msg);
         defer self.allocator.free(json_msg);
 
+        // Check timeout before sending
+        const elapsed = std.time.milliTimestamp() - start_time;
+        if (elapsed >= @as(i64, @intCast(timeout_ms))) {
+            std.debug.print("2PC_TRANSPORT: Timeout before send to {s}\n", .{endpoint});
+            return error.Timeout;
+        }
+
         // Send message
         try stream.writeAll(json_msg);
 
-        // Poll for response
-        try conn.client.poll(100);
+        // Poll for response with timeout
+        const remaining_timeout = timeout_ms - @as(u64, @intCast(@max(0, elapsed)));
+        const poll_interval: u64 = @min(100, remaining_timeout);
+        var total_polled: u64 = 0;
 
-        // Read response line
-        const response_line = stream.readLine(4096) catch |err| {
-            std.debug.print("2PC_TRANSPORT: Failed to read response from {s}: {}\n", .{ endpoint, err });
-            return error.ReadFailed;
-        };
-        defer self.allocator.free(response_line);
+        while (total_polled < remaining_timeout) {
+            try conn.client.poll(@intCast(poll_interval));
 
-        // Parse response
-        return try parseTwoPhaseResponse(self.allocator, response_line);
+            // Try to read response
+            if (stream.readLine(4096)) |response_line| {
+                defer self.allocator.free(response_line);
+                return try parseTwoPhaseResponse(self.allocator, response_line);
+            } else |err| {
+                // Check if it's just waiting for data vs actual error
+                if (err != error.WouldBlock) {
+                    std.debug.print("2PC_TRANSPORT: Failed to read response from {s}: {}\n", .{ endpoint, err });
+                    return error.ReadFailed;
+                }
+            }
+
+            total_polled += poll_interval;
+        }
+
+        // Timeout reached
+        std.debug.print("2PC_TRANSPORT: Timeout waiting for response from {s} after {}ms\n", .{ endpoint, timeout_ms });
+        return error.Timeout;
     }
 };
 

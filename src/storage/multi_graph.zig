@@ -206,8 +206,8 @@ pub const MultiGraphManager = struct {
             }
         }
 
-        // Remove metadata
-        try self.removeGraphMetadata(id);
+        // Remove metadata from catalog persistence
+        try self.removeGraphMetadata(name);
     }
 
     pub fn useGraph(self: *Self, name: []const u8) !void {
@@ -246,18 +246,28 @@ pub const MultiGraphManager = struct {
         return list.toOwnedSlice();
     }
 
+    // CANARY: REQ=REQ-GRAPH-META-004; FEATURE="GraphMetadataPersistence"; ASPECT=Persist; STATUS=IMPL; OWNER=multi_graph; UPDATED=2026-01-09
     fn persistGraphMetadata(self: *Self, id: GraphId, name: []const u8, options: CreateGraphOptions) !void {
-        _ = self;
         _ = id;
-        _ = name;
         _ = options;
-        // TODO: Persist to catalog
+        // Persist graph to catalog (which handles file storage)
+        self.metadata_storage.addGraph(name) catch |err| {
+            // If graph already exists in catalog, that's fine (idempotent)
+            if (err != error.GraphAlreadyExists) {
+                return err;
+            }
+        };
     }
 
-    fn removeGraphMetadata(self: *Self, id: GraphId) !void {
-        _ = self;
-        _ = id;
-        // TODO: Remove from catalog
+    // CANARY: REQ=REQ-GRAPH-META-005; FEATURE="GraphMetadataPersistence"; ASPECT=Remove; STATUS=IMPL; OWNER=multi_graph; UPDATED=2026-01-09
+    fn removeGraphMetadata(self: *Self, name: []const u8) !void {
+        // Remove graph from catalog (which handles file storage)
+        self.metadata_storage.removeGraph(name) catch |err| {
+            // If graph not found in catalog, that's fine
+            if (err != error.GraphNotFound) {
+                return err;
+            }
+        };
     }
 };
 

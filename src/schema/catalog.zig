@@ -518,6 +518,48 @@ pub const Catalog = struct {
 
         return result.toOwnedSlice();
     }
+
+    // CANARY: REQ=REQ-GRAPH-META-001; FEATURE="GraphMetadataPersistence"; ASPECT=AddGraph; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-09
+    /// Add a graph to the catalog and persist
+    pub fn addGraph(self: *Catalog, name: []const u8) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        // Check if graph already exists
+        if (self.graphs.contains(name)) {
+            return error.GraphAlreadyExists;
+        }
+
+        // Duplicate name for ownership
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        try self.graphs.put(owned_name, {});
+        try self.save();
+    }
+
+    // CANARY: REQ=REQ-GRAPH-META-002; FEATURE="GraphMetadataPersistence"; ASPECT=RemoveGraph; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-09
+    /// Remove a graph from the catalog and persist
+    pub fn removeGraph(self: *Catalog, name: []const u8) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        const entry = self.graphs.fetchRemove(name) orelse return error.GraphNotFound;
+
+        // Free the stored key
+        self.allocator.free(entry.key);
+
+        try self.save();
+    }
+
+    // CANARY: REQ=REQ-GRAPH-META-003; FEATURE="GraphMetadataPersistence"; ASPECT=GraphExists; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-09
+    /// Check if a graph exists in the catalog
+    pub fn graphExists(self: *Catalog, name: []const u8) bool {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        return self.graphs.contains(name);
+    }
 };
 
 // Backward compatibility: Keep old function signatures that use global state

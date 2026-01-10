@@ -364,6 +364,7 @@ const HttpClient = struct {
         _ = self;
     }
 
+    // CANARY: REQ=REQ-CDC-HTTP-001; FEATURE="CDCWebhookHTTP"; ASPECT=Request; STATUS=IMPL; OWNER=cdc; UPDATED=2026-01-09
     fn request(
         self: *HttpClient,
         method: HttpMethod,
@@ -371,15 +372,69 @@ const HttpClient = struct {
         headers: []const Header,
         body: []const u8,
     ) !HttpResponse {
-        _ = self;
-        _ = method;
-        _ = url;
-        _ = headers;
-        _ = body;
+        // Parse the URL
+        const uri = std.Uri.parse(url) catch {
+            std.log.err("CDC webhook: Invalid URL: {s}", .{url});
+            return HttpResponse{ .status = 400, .body = "Invalid URL" };
+        };
 
-        // TODO: Implement actual HTTP request
+        // Create HTTP client
+        var client = std.http.Client{ .allocator = self.allocator };
+        defer client.deinit();
+
+        // Build headers
+        var extra_headers = std.http.Client.Request.Headers{};
+        extra_headers.content_type = .{ .override = "application/json" };
+
+        // Add custom headers (limited to what std.http supports)
+        for (headers) |header| {
+            if (std.mem.eql(u8, header.name, "Authorization")) {
+                extra_headers.authorization = .{ .override = header.value };
+            }
+        }
+
+        // Determine HTTP method
+        const http_method: std.http.Method = switch (method) {
+            .GET => .GET,
+            .POST => .POST,
+            .PUT => .PUT,
+            .DELETE => .DELETE,
+            .PATCH => .PATCH,
+        };
+
+        // Open request
+        var request_obj = client.open(http_method, uri, extra_headers, .{}) catch |err| {
+            std.log.err("CDC webhook: Failed to open connection to {s}: {any}", .{ url, err });
+            return HttpResponse{ .status = 503, .body = "Connection failed" };
+        };
+        defer request_obj.deinit();
+
+        // Write body
+        if (body.len > 0) {
+            request_obj.write(body) catch |err| {
+                std.log.err("CDC webhook: Failed to write body: {any}", .{err});
+                return HttpResponse{ .status = 500, .body = "Write failed" };
+            };
+        }
+
+        // Finish and read response
+        request_obj.finish() catch |err| {
+            std.log.err("CDC webhook: Failed to finish request: {any}", .{err});
+            return HttpResponse{ .status = 500, .body = "Request failed" };
+        };
+
+        // Wait for response
+        request_obj.wait() catch |err| {
+            std.log.err("CDC webhook: Failed to get response: {any}", .{err});
+            return HttpResponse{ .status = 504, .body = "Timeout" };
+        };
+
+        const status = @intFromEnum(request_obj.response.status);
+
+        std.log.debug("CDC webhook: {s} {s} -> {d}", .{ @tagName(method), url, status });
+
         return HttpResponse{
-            .status = 200,
+            .status = status,
             .body = "",
         };
     }

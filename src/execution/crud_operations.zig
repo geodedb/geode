@@ -2220,10 +2220,46 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                 if (!has_all_labels) should_delete = false;
             }
 
-            // Apply WHERE clause if present
-            if (d.where_clause != null and should_delete) {
-                // For now, skip WHERE clause evaluation in DELETE
-                // TODO: Implement WHERE clause evaluation with node context
+            // CANARY: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; ASPECT=WhereClause; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+            // Apply WHERE clause if present - evaluate with node bound to variable
+            if (d.where_clause) |where_expr| {
+                if (should_delete) {
+                    // Get variable name from MATCH pattern (e.g., "n" from MATCH (n:Person))
+                    var var_name: []const u8 = "n"; // Default variable name
+                    if (match_pattern.chains.len > 0) {
+                        if (match_pattern.chains[0].head) |node_pattern| {
+                            if (node_pattern.name) |name| {
+                                var_name = name;
+                            }
+                        }
+                    }
+
+                    // Create environment with node bound to the variable
+                    const names = try allocator.alloc([]const u8, 1);
+                    names[0] = var_name;
+                    const values = try allocator.alloc(Value, 1);
+                    values[0] = Value{ .Node = entry.value_ptr };
+
+                    const env = Env{
+                        .allocator = allocator,
+                        .names = names,
+                        .values = values,
+                    };
+
+                    // Evaluate WHERE expression
+                    const result = eval.evalExpr(allocator, where_expr, env) catch {
+                        // If evaluation fails, don't delete the node
+                        should_delete = false;
+                        continue;
+                    };
+
+                    // Check if result is truthy - only delete if WHERE evaluates to true
+                    should_delete = switch (result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        else => false, // Non-boolean results are falsy for DELETE purposes
+                    };
+                }
             }
 
             if (should_delete) {

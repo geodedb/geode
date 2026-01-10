@@ -27,7 +27,8 @@ pub const Date = struct {
         return std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}", .{ ymd.year, ymd.month, ymd.day });
     }
 
-    fn daysSinceEpoch(year: i32, month: u8, day: u8) !i32 {
+    // CANARY: REQ=REQ-DATE-INTERVAL-003; FEATURE="DateIntervalArithmetic"; ASPECT=Helper; STATUS=IMPL; OWNER=datetime; UPDATED=2026-01-09
+    pub fn daysSinceEpoch(year: i32, month: u8, day: u8) !i32 {
         const days_per_year = 365;
         const leap_years = @divFloor(year - 1, 4) - @divFloor(year - 1, 100) + @divFloor(year - 1, 400) -
             (@divFloor(1970 - 1, 4) - @divFloor(1970 - 1, 100) + @divFloor(1970 - 1, 400));
@@ -69,7 +70,8 @@ pub const Date = struct {
         return (@rem(year, 4) == 0 and @rem(year, 100) != 0) or @rem(year, 400) == 0;
     }
 
-    fn daysInMonth(year: i32, month: u8) u8 {
+    // CANARY: REQ=REQ-DATE-INTERVAL-004; FEATURE="DateIntervalArithmetic"; ASPECT=Helper; STATUS=IMPL; OWNER=datetime; UPDATED=2026-01-09
+    pub fn daysInMonth(year: i32, month: u8) u8 {
         const days = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
         if (month == 2 and isLeapYear(year)) return 29;
         return days[month - 1];

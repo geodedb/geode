@@ -895,3 +895,195 @@ tests:
       exit_code: 0
       stdout_contains: ["healthy", "name", "versions"]
     tags: ["integration", "gap-0013", "gap-0014", "gap-0015", "gap-0016"]
+
+  # =============================================================================
+  # GAP-0026: Float Property Values Preserved (January 2026)
+  # =============================================================================
+
+  - name: "gap-0026-float-property-basic"
+    description: "Float property values are preserved when accessed"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (n:Product {name: 'Widget', price: 19.99});
+      MATCH (n:Product {name: 'Widget'}) RETURN n.price AS price
+    expect:
+      exit_code: 0
+      stdout_contains: ["19.99"]
+    tags: ["gap-0026", "float", "property"]
+
+  - name: "gap-0026-float-property-arithmetic"
+    description: "Float properties can be used in arithmetic operations"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (n:Item {value: 10.5});
+      MATCH (n:Item) RETURN n.value * 2 AS doubled
+    expect:
+      exit_code: 0
+      stdout_contains: ["21"]
+    tags: ["gap-0026", "float", "arithmetic"]
+
+  - name: "gap-0026-float-property-comparison"
+    description: "Float properties can be compared"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (a:Measurement {reading: 3.14159});
+      CREATE (b:Measurement {reading: 2.71828});
+      MATCH (n:Measurement) WHERE n.reading > 3.0 RETURN n.reading AS reading
+    expect:
+      exit_code: 0
+      stdout_contains: ["3.14159"]
+    tags: ["gap-0026", "float", "comparison"]
+
+  - name: "gap-0026-float-property-aggregation"
+    description: "Float properties work with aggregation functions"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (a:FloatScore {value: 85.5});
+      CREATE (b:FloatScore {value: 92.3});
+      CREATE (c:FloatScore {value: 78.7});
+      MATCH (n:FloatScore) RETURN sum(n.value) AS total, avg(n.value) AS average
+    expect:
+      exit_code: 0
+      stdout_contains: ["256.5", "85.5"]
+    tags: ["gap-0026", "float", "aggregation"]
+
+  - name: "gap-0026-float-property-multiple"
+    description: "Multiple float properties on same node"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (n:Coordinates {lat: 40.7128, lng: -74.006});
+      MATCH (n:Coordinates) RETURN n.lat AS lat, n.lng AS lng
+    expect:
+      exit_code: 0
+      stdout_contains: ["40.7128", "-74.006"]
+    tags: ["gap-0026", "float", "multiple"]
+
+  # =============================================================================
+  # GAP-0027: Date + Interval Arithmetic (January 2026)
+  # =============================================================================
+
+  - name: "gap-0027-date-plus-interval-days"
+    description: "Add days interval to date"
+    args: ["query", "-"]
+    stdin: "WITH date('2024-01-15') AS d RETURN d + duration('P10D') AS result"
+    expect:
+      exit_code: 0
+      stdout_contains: ["2024-01-25"]
+    tags: ["gap-0027", "date", "interval", "days"]
+
+  - name: "gap-0027-date-plus-interval-months"
+    description: "Add months interval to date"
+    args: ["query", "-"]
+    stdin: "WITH date('2024-01-15') AS d RETURN d + duration('P2M') AS result"
+    expect:
+      exit_code: 0
+      stdout_contains: ["2024-03-15"]
+    tags: ["gap-0027", "date", "interval", "months"]
+
+  - name: "gap-0027-date-minus-interval-days"
+    description: "Subtract days interval from date"
+    args: ["query", "-"]
+    stdin: "WITH date('2024-03-15') AS d RETURN d - duration('P10D') AS result"
+    expect:
+      exit_code: 0
+      stdout_contains: ["2024-03-05"]
+    tags: ["gap-0027", "date", "interval", "subtract"]
+
+  - name: "gap-0027-date-interval-month-overflow"
+    description: "Date interval handles month overflow correctly"
+    args: ["query", "-"]
+    stdin: "WITH date('2024-01-31') AS d RETURN d + duration('P1M') AS result"
+    expect:
+      exit_code: 0
+      stdout_contains: ["2024-02-29"]
+    tags: ["gap-0027", "date", "interval", "overflow"]
+
+  - name: "gap-0027-date-interval-year-boundary"
+    description: "Date interval crosses year boundary"
+    args: ["query", "-"]
+    stdin: "WITH date('2024-12-15') AS d RETURN d + duration('P1M') AS result"
+    expect:
+      exit_code: 0
+      stdout_contains: ["2025-01-15"]
+    tags: ["gap-0027", "date", "interval", "year-boundary"]
+
+  - name: "gap-0027-date-interval-combined"
+    description: "Date interval with months and days combined"
+    args: ["query", "-"]
+    stdin: "WITH date('2024-01-01') AS d RETURN d + duration('P1M10D') AS result"
+    expect:
+      exit_code: 0
+      stdout_contains: ["2024-02-11"]
+    tags: ["gap-0027", "date", "interval", "combined"]
+
+  # =============================================================================
+  # GAP-0033: DELETE WHERE Clause Evaluation (January 2026)
+  # =============================================================================
+
+  - name: "gap-0033-delete-where-basic"
+    description: "DELETE with WHERE clause filters correctly"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (a:ToDelete {status: 'inactive', name: 'A'});
+      CREATE (b:ToDelete {status: 'active', name: 'B'});
+      CREATE (c:ToDelete {status: 'inactive', name: 'C'});
+      DELETE (n:ToDelete) WHERE n.status = 'inactive';
+      MATCH (n:ToDelete) RETURN n.name AS name ORDER BY name
+    expect:
+      exit_code: 0
+      stdout_contains: ["B"]
+    tags: ["gap-0033", "delete", "where"]
+
+  - name: "gap-0033-delete-where-numeric"
+    description: "DELETE with numeric WHERE condition"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (a:NumNode {value: 5});
+      CREATE (b:NumNode {value: 15});
+      CREATE (c:NumNode {value: 25});
+      DELETE (n:NumNode) WHERE n.value < 10;
+      MATCH (n:NumNode) RETURN n.value AS val ORDER BY val
+    expect:
+      exit_code: 0
+      stdout_contains: ["15", "25"]
+    tags: ["gap-0033", "delete", "where", "numeric"]
+
+  - name: "gap-0033-delete-where-no-match"
+    description: "DELETE with WHERE that matches nothing"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (a:KeepMe {id: 1});
+      CREATE (b:KeepMe {id: 2});
+      DELETE (n:KeepMe) WHERE n.id > 100;
+      MATCH (n:KeepMe) RETURN count(n) AS cnt
+    expect:
+      exit_code: 0
+      stdout_contains: ["2"]
+    tags: ["gap-0033", "delete", "where", "no-match"]
+
+  - name: "gap-0033-delete-where-all-match"
+    description: "DELETE with WHERE that matches all"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (a:DeleteAll {flag: true});
+      CREATE (b:DeleteAll {flag: true});
+      DELETE (n:DeleteAll) WHERE n.flag = true;
+      MATCH (n:DeleteAll) RETURN count(n) AS cnt
+    expect:
+      exit_code: 0
+      stdout_contains: ["0"]
+    tags: ["gap-0033", "delete", "where", "all-match"]
+
+  - name: "gap-0033-delete-where-string-pattern"
+    description: "DELETE with string comparison in WHERE"
+    args: ["query", "-"]
+    stdin: |
+      CREATE (a:Named {name: 'Alice'});
+      CREATE (b:Named {name: 'Bob'});
+      CREATE (c:Named {name: 'Amanda'});
+      DELETE (n:Named) WHERE n.name STARTS WITH 'A';
+      MATCH (n:Named) RETURN n.name AS name
+    expect:
+      exit_code: 0
+      stdout_contains: ["Bob"]
+    tags: ["gap-0033", "delete", "where", "string"]

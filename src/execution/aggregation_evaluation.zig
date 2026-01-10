@@ -286,6 +286,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
                     // AVG aggregation over group
+                    // CANARY: REQ=REQ-AGGREGATION-AVG-002; FEATURE="AvgAggregation"; ASPECT=FloatSupport; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -301,6 +302,9 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
                                         sum += @floatFromInt(val.Int);
+                                        count += 1;
+                                    } else if (val == .Float) {
+                                        sum += val.Float;
                                         count += 1;
                                     }
                                 }

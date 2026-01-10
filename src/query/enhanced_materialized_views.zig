@@ -1046,10 +1046,26 @@ const RefreshScheduler = struct {
         });
     }
 
+    // CANARY: REQ=REQ-MV-CANCEL-001; FEATURE="MVRefreshCancellation"; ASPECT=Cancel; STATUS=IMPL; OWNER=mv; UPDATED=2026-01-09
     fn cancelRefresh(self: *RefreshScheduler, view_id: u64) !void {
-        _ = self;
-        _ = view_id;
-        // TODO: Implement refresh cancellation by rebuilding queue without target
+        // Rebuild the queue without entries for the target view_id
+        // This is the standard approach for priority queues without direct removal support
+
+        // Collect all items that should be kept
+        var items_to_keep = std.ArrayList(ScheduledRefresh).init(self.allocator);
+        defer items_to_keep.deinit();
+
+        // Drain the queue and collect non-matching items
+        while (self.scheduled_refreshes.removeOrNull()) |refresh| {
+            if (refresh.view_id != view_id) {
+                try items_to_keep.append(refresh);
+            }
+        }
+
+        // Re-add all kept items to the queue
+        for (items_to_keep.items) |refresh| {
+            try self.scheduled_refreshes.add(refresh);
+        }
     }
 
     fn getNextRefresh(self: *RefreshScheduler) ?ScheduledRefresh {

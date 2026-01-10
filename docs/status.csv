@@ -1,10 +1,12 @@
 REQ,Feature,Aspect,Status,Test,Bench,Owner,Updated,File
 <req-id>,<feature>,<aspect>,<status>,,,<owner>,<date>,tests/unit_gap_0013_0016_fixes.zig
+REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,,,distributed,2026-01-09,src/distributed/twophase.zig
 REQ-AGG-COLLECT-001,AggregationFunctions,COLLECT,IMPL,,,aggregation,2025-12-22,src/execution/aggregation_evaluation.zig
 REQ-AGG-COLLECT-002,AggregationFunctions,COLLECT_STORE,IMPL,,,aggregation,2025-12-22,src/execution/aggregation_evaluation.zig
 REQ-AGG-COLLECT-003,AggregationFunctions,COLLECT_NULL_SKIP,IMPL,,,aggregation,2025-12-28,src/execution/aggregation_evaluation.zig
 REQ-AGG-COLLECT-004,AggregationFunctions,COLLECT_GROUP,IMPL,,,engine,2025-12-28,src/execution/match_operations.zig
 REQ-AGGREGATION-AVG-001,AvgAggregation,DecimalSupport,IMPL,,,engine,2025-12-23,src/execution/aggregation_evaluation.zig
+REQ-AGGREGATION-AVG-002,AvgAggregation,FloatSupport,IMPL,,,engine,2026-01-09,src/execution/aggregation_evaluation.zig
 REQ-AGGREGATION-SUM-001,SumAggregation,DecimalSupport,IMPL,,,engine,2025-12-23,src/execution/aggregation_evaluation.zig
 REQ-AGGREGATION-SUM-002,SumAggregation,DecimalSupport,IMPL,,,engine,2025-12-23,src/execution/aggregation_evaluation.zig
 REQ-ALG-SIM-001,SimilarityAlgorithms,Cosine,IMPL,,,eval,2025-10-16,src/eval.zig
@@ -114,6 +116,7 @@ REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-002,Build System Module Dependencies In
 REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-003,Build System Module Dependencies Integration,GraphStorageIntegration,TESTED,TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStorageIntegration,,build,2025-10-05,tests/test_build_system_module_dependencies_integration.zig
 REQ-C4-001,MemoryLeakFix,Environment,IMPLEMENTED,,,core,2025-10-17,src/value_types.zig
 REQ-CDC-FILE-001,CDC File Sink,Streaming,IMPL,,,streaming,2026-01-09,src/streaming/cdc.zig
+REQ-CDC-HTTP-001,CDCWebhookHTTP,Request,IMPL,,,cdc,2026-01-09,src/cdc/webhook_sink.zig
 REQ-CDC-KAFKA-001,CDC Kafka Sink,Streaming,IMPL,,,streaming,2026-01-09,src/streaming/cdc.zig
 REQ-CDC-PROC-001,CDCProcedures,Enable,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
 REQ-CDC-PROC-002,CDCProcedures,Disable,IMPL,,,cdc,2025-10-25,src/execution/procedure_registry.zig
@@ -184,16 +187,25 @@ REQ-COUNT-DISTINCT-BINDING-001,CountDistinctBindings,BindingAggregation,IMPL,,,a
 REQ-COUNT-DISTINCT-FIX-001,CountDistinctStrings,StringSupport,IMPL,,,engine,2025-12-26,src/execution/aggregation_evaluation.zig
 REQ-COUNT-DISTINCT-FIX-002,CountDistinctStrings,StringSupport,IMPL,,,engine,2025-12-26,src/execution/aggregation_evaluation.zig
 REQ-COUNT-DISTINCT-GROUP-001,CountDistinctGroupAggregation,GroupAggregation,IMPL,,,engine,2025-12-28,src/execution/match_operations.zig
+REQ-DATE-INTERVAL-001,DateIntervalArithmetic,Addition,IMPL,,,eval,2026-01-09,src/eval.zig
+REQ-DATE-INTERVAL-002,DateIntervalArithmetic,Subtraction,IMPL,,,eval,2026-01-09,src/eval.zig
+REQ-DATE-INTERVAL-003,DateIntervalArithmetic,Helper,IMPL,,,datetime,2026-01-09,src/types/datetime.zig
+REQ-DATE-INTERVAL-004,DateIntervalArithmetic,Helper,IMPL,,,datetime,2026-01-09,src/types/datetime.zig
 REQ-DATETIME-001,DateTimeFunctions,datetime,IMPL,,,datetime,2025-12-22,src/eval.zig
-REQ-DATETIME-001,DateTimeFunctions,duration,IMPL,,,datetime,2025-12-22,src/eval.zig
+REQ-DATETIME-001,DateTimeFunctions,duration,IMPL,,,datetime,2026-01-09,src/eval.zig
 REQ-DATETIME-001,DateTimeFunctions,duration_parsing,IMPL,,,datetime,2025-12-22,src/eval.zig
 REQ-DATETIME-001,DateTimeFunctions,localdatetime,IMPL,,,datetime,2025-12-22,src/eval.zig
 REQ-DATETIME-001,DateTimeFunctions,timestamp,IMPL,,,datetime,2025-12-22,src/eval.zig
+REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,IMPL,,,crud_operations,2026-01-09,src/execution/crud_operations.zig
 REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,IMPL,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,IMPL,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,IMPL,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,IMPL,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,IMPL,,,distributed,2026-01-09,src/distributed/twophase.zig
+REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,IMPL,,,distributed,2026-01-09,src/distributed/cluster.zig
+REQ-DIST-CLUSTER-002,DistributedCluster,Replication,IMPL,,,distributed,2026-01-09,src/distributed/cluster.zig
+REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,IMPL,,,distributed,2026-01-09,src/distributed/cluster.zig
+REQ-DIST-CLUSTER-004,DistributedCluster,Topology,IMPL,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-LB-001,Load Balancing,ShardSelection,IMPL,,,distributed,2026-01-08,src/distributed/enhanced_query_transport.zig
@@ -274,6 +286,8 @@ REQ-FLE-TEST-002,FieldLevelEncryption,TESTING,IMPL,,,security,2025-10-15,geodete
 REQ-FLE-TEST-003,FieldLevelEncryption,TESTING,IMPL,,,security,2025-10-15,geodetestlab/specs/encryption/encryption_rotation.yml
 REQ-FLE-TEST-004,FieldLevelEncryption,TESTING,IMPL,,,security,2025-10-15,geodetestlab/specs/encryption/encryption_migration.yml
 REQ-FLE-TEST-005,FieldLevelEncryption,TESTING,IMPL,,,security,2025-10-15,geodetestlab/specs/encryption/encryption_rbac.yml
+REQ-FLOAT-PROP-001,FloatPropertyPreservation,NodeProperties,IMPL,,,eval,2026-01-09,src/eval.zig
+REQ-FLOAT-PROP-002,FloatPropertyPreservation,EdgeProperties,IMPL,,,eval,2026-01-09,src/eval.zig
 REQ-FUZZ-DICT-001,FuzzDictionaries,MetadataDerived,IMPL,,,tooling,2026-01-03,scripts/generate_fuzz_dict.zig
 REQ-FUZZ-DICT-002,FuzzDictionaries,BuildTarget,IMPL,,,tooling,2026-01-03,build.zig
 REQ-GAP-0013-0016-TESTS-001,GapAnalysisJan2026Fixes,UnitTests,IMPL,,,testing,2026-01-09,tests/unit_gap_0013_0016_fixes.zig
@@ -1600,6 +1614,11 @@ REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-006,Graph Performance Integration,Er
 REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-007,Graph Performance Integration,MemoryManagementIntegration,TESTED,test_memory_management_integration,,graph,2025-10-05,tests/test_graph_algorithm_performance_enhancements_integration.zig
 REQ-GRAPH-LEIDEN-AGG-001,Leiden Network Aggregation,Aggregation,IMPL,,,graph,2026-01-08,src/graph/leiden.zig
 REQ-GRAPH-LEIDEN-SPLIT-001,Leiden Split Community,Graph,IMPL,TestCANARY_Leiden,,graph,2025-10-16,src/graph/leiden.zig
+REQ-GRAPH-META-001,GraphMetadataPersistence,AddGraph,IMPL,,,catalog,2026-01-09,src/schema/catalog.zig
+REQ-GRAPH-META-002,GraphMetadataPersistence,RemoveGraph,IMPL,,,catalog,2026-01-09,src/schema/catalog.zig
+REQ-GRAPH-META-003,GraphMetadataPersistence,GraphExists,IMPL,,,catalog,2026-01-09,src/schema/catalog.zig
+REQ-GRAPH-META-004,GraphMetadataPersistence,Persist,IMPL,,,multi_graph,2026-01-09,src/storage/multi_graph.zig
+REQ-GRAPH-META-005,GraphMetadataPersistence,Remove,IMPL,,,multi_graph,2026-01-09,src/storage/multi_graph.zig
 REQ-HNSW-INDEX-OPTIMIZER-ENHANCEMENT-001,Enhanced HNSW Vector Index Integration,DynamicIndexSelection,TESTED,TestCANARY_REQ_HNSW_INDEX_OPTIMIZER_ENHANCEMENT_001_DynamicIndexSelection,,vector,2025-10-05,tests/test_hnsw_index_optimizer_enhancement.zig
 REQ-HNSW-INDEX-OPTIMIZER-INTEGRATION-001,HNSW IndexOptimizer Integration,ProductionIntegration,TESTED,TestCANARY_REQ_HNSW_INDEX_OPTIMIZER_INTEGRATION_001_ProductionIntegration,,vector,2025-10-05,tests/test_hnsw_index_optimizer_integration.zig
 REQ-INDEX-001,IndexManagement,Catalog,IMPLEMENTED,,,storage,2025-10-14,src/schema/catalog.zig
@@ -1813,6 +1832,7 @@ REQ-MULTI-TENANT-002,MultiTenancy,MultiGraph,IMPL,,,enterprise,2026-01-09,src/st
 REQ-MULTI-TENANT-003,Multi-Tenancy Protocol,HelloTenant,IMPL,,,protocol,2026-01-09,src/protocol.zig
 REQ-MULTI-TENANT-004,Multi-Tenancy Protocol,HelloParsing,IMPL,,,protocol,2026-01-09,src/protocol.zig
 REQ-MULTI-TENANT-005,Multi-Tenancy Session,HelloHandler,IMPL,,,session,2026-01-09,src/server/quic_connection_handler.zig
+REQ-MV-CANCEL-001,MVRefreshCancellation,Cancel,IMPL,,,mv,2026-01-09,src/query/enhanced_materialized_views.zig
 REQ-OPTIONAL-MATCH-COUNT-001,OptionalMatchCount,WithAggregation,IMPL,,,engine,2025-12-23,src/execution.zig
 REQ-OVERFLOW-SAFE-SUM-005,OverflowSafeSum,IntOverflow,IMPL,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
 REQ-OVERFLOW-SAFE-SUM-006,OverflowSafeSum,ExtIntOverflow,IMPL,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
@@ -1952,6 +1972,7 @@ REQ-SERVER-REFACTOR-013,ServerRefactoring,STDIO_HANDLER,IMPL,,,refactor,2025-11-
 REQ-SERVER-STARTUP-INTEGRATION-001,Server Startup Integration Tests,EndToEndServerTesting,TESTED,TestCANARY_REQ_SERVER_STARTUP_INTEGRATION_001_EndToEndServerTesting,,server,2025-10-05,tests/test_server_startup_integration.zig
 REQ-SERVER-STARTUP-REGRESSION-001,Server Startup Regression Tests,UnifiedBinaryServerStartup,TESTED,TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup,,server,2025-10-05,tests/test_server_startup_regression.zig
 REQ-SET-RETURN-FIX-001,SetReturnFix,NoReturnClause,IMPL,,,engine,2025-12-23,src/execution/match_operations.zig
+REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,IMPL,,,distributed,2026-01-09,src/distributed/query_coordinator.zig
 REQ-STREAMING-KAFKA-001,Kafka Sink Implementation,ProducerSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/kafka_sink.zig
 REQ-STREAMING-KEYROT-REENCRYPT-001,Page Re-encryption,ReEncryption,IMPL,,,security,2025-12-30,src/security/key_rotation.zig
 REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/webhook_sink.zig
