@@ -985,12 +985,61 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateConstraint => |cc| {
-            // CREATE CONSTRAINT implementation
-            // For now, just return success (no enforcement)
-            // TODO: Store constraint in catalog
-            // TODO: Validate existing data
-            // TODO: Enforce on INSERT/UPDATE/DELETE
-            _ = cc;
+            // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+            // CREATE CONSTRAINT implementation - store in catalog and enforce
+
+            // Convert AST constraint type to catalog constraint type
+            const constraint_type: catalog_mod.ConstraintInfo.ConstraintType = switch (cc.constraint_type) {
+                .unique => .unique,
+                .node_key => .node_key,
+                .not_null => .not_null,
+                .exists => .exists,
+            };
+
+            // Create constraint info
+            const constraint_info = catalog_mod.ConstraintInfo{
+                .name = cc.name,
+                .constraint_type = constraint_type,
+                .label = cc.label,
+                .properties = cc.properties,
+                .is_enforced = true, // Constraints are enforced by default
+            };
+
+            // Get catalog from context
+            const cat = context.catalog;
+
+            // Check IF NOT EXISTS
+            if (cc.if_not_exists) {
+                const existing = cat.getConstraint(cc.label, cc.name) catch null;
+                if (existing != null) {
+                    // Constraint already exists, return success (no-op)
+                    return ExecutionResult{
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = blk: {
+                            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                            break :blk list;
+                        },
+                    };
+                }
+            }
+
+            // Add constraint to catalog
+            cat.addConstraint(constraint_info) catch |err| {
+                if (err == error.ConstraintAlreadyExists and !cc.if_not_exists) {
+                    return ExecutionResult{
+                        .columns = try allocator.alloc([]const u8, 1),
+                        .rows = try allocator.alloc([]Value, 1),
+                        .flags = blk: {
+                            var list = try std.ArrayList([]const u8).initCapacity(allocator, 1);
+                            try list.append(allocator, "error");
+                            break :blk list;
+                        },
+                    };
+                }
+                return err;
+            };
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),

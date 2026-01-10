@@ -3383,7 +3383,9 @@ pub const Parser = struct {
             .string_lit => blk: {
                 const tkn = self.cur;
                 self.advance();
-                break :blk .{ .String = tkn.lexeme };
+                // CANARY: REQ=REQ-GQL-STRING-ESCAPE-001; FEATURE="StringEscaping"; ASPECT=Unescaping; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-09
+                // Unescape the string literal to handle \' -> ' and other escape sequences
+                break :blk .{ .String = try self.unescapeString(tkn.lexeme) };
             },
             .integer_lit => blk: {
                 const tkn = self.cur;

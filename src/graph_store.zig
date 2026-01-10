@@ -104,21 +104,48 @@ pub const PropertyValue = union(enum) {
     ExtValue: @import("eval_extended.zig").ExtValue,
 };
 
+// CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=IMPL; OWNER=enterprise; UPDATED=2026-01-09
 pub const GraphStore = struct {
     allocator: std.mem.Allocator,
     nodes: std.AutoHashMap(u64, Node),
     edges: std.AutoHashMap(u64, Edge),
     next_node_id: u64,
     next_edge_id: u64,
+    // Multi-tenancy: tenant_id scopes all data operations
+    tenant_id: []const u8,
+    schema_name: []const u8,
 
+    /// Initialize GraphStore with default tenant
     pub fn init(allocator: std.mem.Allocator) GraphStore {
+        return initWithTenant(allocator, "default", "default");
+    }
+
+    /// Initialize GraphStore with specific tenant and schema
+    pub fn initWithTenant(allocator: std.mem.Allocator, tenant_id: []const u8, schema_name: []const u8) GraphStore {
         return GraphStore{
             .allocator = allocator,
             .nodes = std.AutoHashMap(u64, Node).init(allocator),
             .edges = std.AutoHashMap(u64, Edge).init(allocator),
             .next_node_id = 1,
             .next_edge_id = 1,
+            .tenant_id = tenant_id,
+            .schema_name = schema_name,
         };
+    }
+
+    /// Set tenant ID for this graph store (used when context changes)
+    pub fn setTenant(self: *GraphStore, tenant_id: []const u8) void {
+        self.tenant_id = tenant_id;
+    }
+
+    /// Set schema name for this graph store
+    pub fn setSchema(self: *GraphStore, schema_name: []const u8) void {
+        self.schema_name = schema_name;
+    }
+
+    /// Get current tenant ID
+    pub fn getTenantId(self: *const GraphStore) []const u8 {
+        return self.tenant_id;
     }
 
     pub fn deinit(self: *GraphStore) void {
@@ -328,10 +355,10 @@ pub const GraphStore = struct {
                     // Get node type (primary label) for catalog lookup
                     const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
 
-                    // Create encryption context
+                    // Create encryption context using GraphStore's tenant/schema
                     const fle_ctx = fle_integration.EncryptionContext{
-                        .tenant_id = "default", // TODO: get from session context
-                        .schema_name = "default", // TODO: get from session context
+                        .tenant_id = self.tenant_id,
+                        .schema_name = self.schema_name,
                         .allocator = self.allocator,
                         .current_user_role = fle_integration.getCurrentUserRole(),
                     };

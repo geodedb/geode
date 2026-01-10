@@ -1298,6 +1298,36 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         try new_bindings.append(allocator, new_binding);
                     }
                 }
+            } else {
+                // CANARY: REQ=REQ-GQL-CARTESIAN-PRODUCT-001; FEATURE="CartesianProductMatch"; ASPECT=IndependentChains; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+                // No shared variable - this is a Cartesian product case
+                // Find all matching relationships for this chain and combine with existing binding
+                const left_labels = hop.left.labels;
+                var node_iter = store.nodes.iterator();
+                while (node_iter.next()) |node_entry| {
+                    const new_left_node = node_entry.value_ptr;
+                    if (!std.mem.eql(u8, new_left_node.graph_name, filter_graph)) continue;
+                    if (!matchesLabels(new_left_node, left_labels)) continue;
+
+                    // Find matching edges from this node
+                    const edges = store.getEdgesFrom(new_left_node.id);
+                    for (edges) |edge| {
+                        if (rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+
+                        if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                            if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                            if (!matchesLabels(right_node, right_labels)) continue;
+
+                            // Clone existing binding and add both new variables
+                            var new_binding = try existing.clone();
+                            if (left_var) |lv| try new_binding.vars.put(lv, new_left_node);
+                            if (right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            try new_bindings.append(allocator, new_binding);
+                        }
+                    }
+                }
             }
         }
 

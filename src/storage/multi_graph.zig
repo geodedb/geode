@@ -72,6 +72,7 @@ pub const GraphStatistics = struct {
     last_updated: i64 = 0,
 };
 
+// CANARY: REQ=REQ-MULTI-TENANT-002; FEATURE="MultiTenancy"; ASPECT=MultiGraph; STATUS=IMPL; OWNER=enterprise; UPDATED=2026-01-09
 pub const MultiGraphManager = struct {
     allocator: Allocator,
     graphs: std.AutoHashMap(GraphId, *GraphNamespace),
@@ -80,10 +81,17 @@ pub const MultiGraphManager = struct {
     current_graph: ?GraphId,
     default_graph: ?GraphId,
     metadata_storage: *catalog.Catalog,
+    // Multi-tenancy: tenant_id scopes all graph operations
+    tenant_id: []const u8,
 
     const Self = @This();
 
     pub fn init(allocator: Allocator, metadata_storage: *catalog.Catalog) !Self {
+        return initWithTenant(allocator, metadata_storage, "default");
+    }
+
+    /// Initialize with specific tenant
+    pub fn initWithTenant(allocator: Allocator, metadata_storage: *catalog.Catalog, tenant_id: []const u8) !Self {
         return Self{
             .allocator = allocator,
             .graphs = std.AutoHashMap(GraphId, *GraphNamespace).init(allocator),
@@ -92,7 +100,18 @@ pub const MultiGraphManager = struct {
             .current_graph = null,
             .default_graph = null,
             .metadata_storage = metadata_storage,
+            .tenant_id = tenant_id,
         };
+    }
+
+    /// Set tenant ID for this manager
+    pub fn setTenant(self: *Self, tenant_id: []const u8) void {
+        self.tenant_id = tenant_id;
+    }
+
+    /// Get current tenant ID
+    pub fn getTenantId(self: *const Self) []const u8 {
+        return self.tenant_id;
     }
 
     pub fn deinit(self: *Self) void {
@@ -216,7 +235,7 @@ pub const MultiGraphManager = struct {
             const descriptor = GraphDescriptor{
                 .id = entry.key_ptr.*,
                 .name = graph.name,
-                .owner = "system", // TODO: implement proper ownership
+                .owner = self.tenant_id, // Use tenant_id as owner
                 .created_at = std.time.milliTimestamp(),
                 .properties = std.StringHashMap([]const u8).init(allocator),
                 .is_default = self.default_graph == entry.key_ptr.*,

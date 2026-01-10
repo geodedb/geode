@@ -18,6 +18,8 @@ pub const Hello = struct {
     wanted_conformance: []const u8,
     username: ?[]const u8 = null,
     password: ?[]const u8 = null,
+    // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="Multi-Tenancy Protocol"; ASPECT=HelloTenant; STATUS=IMPL; OWNER=protocol; UPDATED=2026-01-09
+    tenant_id: ?[]const u8 = null, // Optional tenant identifier for multi-tenant deployments
 };
 
 pub const RunGql = struct {
@@ -467,6 +469,7 @@ pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !Clien
         // Extract optional authentication fields
         var username: ?[]const u8 = null;
         var password: ?[]const u8 = null;
+        var tenant_id: ?[]const u8 = null;
         if (obj.get("username")) |unv| {
             if (unv == .string) {
                 username = try allocator.dupe(u8, unv.string);
@@ -477,8 +480,14 @@ pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !Clien
                 password = try allocator.dupe(u8, pwv.string);
             }
         }
+        // CANARY: REQ=REQ-MULTI-TENANT-004; FEATURE="Multi-Tenancy Protocol"; ASPECT=HelloParsing; STATUS=IMPL; OWNER=protocol; UPDATED=2026-01-09
+        if (obj.get("tenant_id")) |tid| {
+            if (tid == .string) {
+                tenant_id = try allocator.dupe(u8, tid.string);
+            }
+        }
 
-        return .{ .HELLO = .{ .client_name = cn, .client_ver = cv, .wanted_conformance = wc, .username = username, .password = password } };
+        return .{ .HELLO = .{ .client_name = cn, .client_ver = cv, .wanted_conformance = wc, .username = username, .password = password, .tenant_id = tenant_id } };
     } else if (std.mem.eql(u8, typ, "RUN_GQL")) {
         const txtv = obj.get("text") orelse return error.Invalid;
         if (txtv != .string) return error.Invalid;

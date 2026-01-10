@@ -51,6 +51,39 @@ All 7 development phases from the TODO list have been successfully implemented:
 - **Audit Logging**: Comprehensive compliance tracking
 - **Data Classification**: 5-level security classification
 
+### **Field-Level Encryption (FLE)** ✅ January 2026
+- **Searchable Encryption**: Blind index for encrypted field queries
+- **Predicate Rewriting**: Automatic WHERE clause transformation
+- **RBAC Integration**: Role-based decryption permissions
+- **Implementation**: `src/planner/rewrite.zig`, `src/fle_integration.zig`
+
+## 📦 Data Integrity & Recovery
+
+### **Constraint Enforcement** ✅ January 2026
+- **UNIQUE Constraints**: Prevent duplicate property values
+- **NOT NULL Constraints**: Require non-null property values
+- **NODE KEY Constraints**: Combined uniqueness + existence
+- **Catalog Persistence**: Constraints stored across restarts
+- **Implementation**: `src/schema/catalog.zig`, `src/execution/crud_operations.zig`
+
+### **Point-in-Time Recovery** ✅ January 2026
+- **WAL Replay**: Apply transaction logs after base restore
+- **Arbitrary Timestamps**: Recover to any point in WAL coverage
+- **Segment Management**: Ordered WAL file processing
+- **Implementation**: `src/cli/backup_cli.zig`
+
+### **Multi-Tenancy Support** ✅ January 2026
+- **Session Tenant ID**: Tenant context via QUIC handshake
+- **Data Isolation**: Operations scoped to tenant context
+- **Protocol Support**: tenant_id field in HELLO message
+- **Implementation**: `src/protocol.zig`, `src/server/server_state.zig`, `src/graph_store.zig`
+
+### **TDE Page Storage** ✅ January 2026
+- **Encrypted Page Read/Write**: Full AES-256-GCM encryption cycle
+- **Authentication Tags**: Integrity verification on read
+- **Page Locking**: Concurrent access control
+- **Implementation**: `src/storage/crypto_enhanced.zig`
+
 ## 🚀 Performance & Scalability
 
 ### **Query Optimization**

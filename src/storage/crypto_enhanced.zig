@@ -227,20 +227,68 @@ pub const CryptoManager = struct {
         try self.wrapDataKey();
     }
 
+    // CANARY: REQ=REQ-TDE-KEYWRAP-001; FEATURE="AES-GCM Key Wrapping"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
     fn wrapDataKey(self: *Self) !void {
-        // Use AES-GCM to wrap the DEK with KEK
-        var wrapped: [48]u8 = undefined; // 32 bytes key + 16 bytes tag
+        // Use AES-256-GCM to wrap the DEK with KEK (RFC 5649 style)
+        // Output format: [nonce (12 bytes)] [ciphertext (32 bytes)] [tag (16 bytes)] = 60 bytes
+        // But we store in wrapped_dek which is 48 bytes, so we use a compact format:
+        // [ciphertext (32 bytes)] [tag (16 bytes)] = 48 bytes
+        // Nonce is derived deterministically from KEK hash for reproducibility
 
         var nonce: [12]u8 = undefined;
-        crypto.random.bytes(&nonce);
+        // Derive nonce from hash of KEK to ensure reproducible wrapping
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&self.current_key.key_encryption_key);
+        hasher.update("keywrap-nonce");
+        const hash_result = hasher.finalResult();
+        @memcpy(&nonce, hash_result[0..12]);
 
-        // In production, use proper AES-GCM wrapping
-        // For now, XOR as placeholder
-        for (self.current_key.data_key, 0..) |byte, i| {
-            wrapped[i] = byte ^ self.current_key.key_encryption_key[i % 32];
-        }
+        // Encrypt DEK with KEK using AES-256-GCM
+        const gcm = crypto.aead.aes_gcm.Aes256Gcm;
+        var ciphertext: [32]u8 = undefined;
+        var tag: [16]u8 = undefined;
 
-        self.current_key.wrapped_dek = wrapped;
+        gcm.encrypt(
+            &ciphertext,
+            &tag,
+            &self.current_key.data_key,
+            &.{}, // No additional authenticated data for key wrapping
+            nonce,
+            self.current_key.key_encryption_key,
+        );
+
+        // Store wrapped key: [ciphertext][tag]
+        @memcpy(self.current_key.wrapped_dek[0..32], &ciphertext);
+        @memcpy(self.current_key.wrapped_dek[32..48], &tag);
+    }
+
+    // CANARY: REQ=REQ-TDE-KEYUNWRAP-001; FEATURE="AES-GCM Key Unwrapping"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+    pub fn unwrapDataKey(self: *Self) !void {
+        // Unwrap DEK from wrapped_dek using KEK with AES-256-GCM
+        // Input format: [ciphertext (32 bytes)] [tag (16 bytes)]
+
+        var nonce: [12]u8 = undefined;
+        // Derive nonce from hash of KEK (must match wrapDataKey)
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&self.current_key.key_encryption_key);
+        hasher.update("keywrap-nonce");
+        const hash_result = hasher.finalResult();
+        @memcpy(&nonce, hash_result[0..12]);
+
+        // Extract ciphertext and tag
+        const ciphertext = self.current_key.wrapped_dek[0..32];
+        const tag = self.current_key.wrapped_dek[32..48];
+
+        // Decrypt with AES-256-GCM
+        const gcm = crypto.aead.aes_gcm.Aes256Gcm;
+        gcm.decrypt(
+            &self.current_key.data_key,
+            ciphertext,
+            tag.*,
+            &.{}, // No additional authenticated data
+            nonce,
+            self.current_key.key_encryption_key,
+        ) catch return error.KeyUnwrapFailed;
     }
 
     pub fn encryptPage(self: *Self, page_data: []const u8, page_id: u64) ![]u8 {
@@ -484,28 +532,125 @@ pub const ReencryptionTool = struct {
     }
 };
 
-// Placeholder for PageStorage interface
-const PageStorage = struct {
-    pub fn readPage(self: *PageStorage, page_id: u64) ![]u8 {
-        _ = self;
-        _ = page_id;
-        return error.NotImplemented;
+// CANARY: REQ=REQ-TDE-PAGESTORAGE-001; FEATURE="Encrypted Page Storage"; ASPECT=STORAGE; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-09
+// Page storage with transparent encryption/decryption
+pub const PageStorage = struct {
+    allocator: Allocator,
+    data_dir: []const u8,
+    crypto_manager: ?*CryptoManager,
+    page_locks: std.AutoHashMap(u64, bool),
+    page_size: usize,
+
+    const Self = @This();
+
+    pub fn init(allocator: Allocator, data_dir: []const u8, crypto_manager: ?*CryptoManager) Self {
+        return .{
+            .allocator = allocator,
+            .data_dir = data_dir,
+            .crypto_manager = crypto_manager,
+            .page_locks = std.AutoHashMap(u64, bool).init(allocator),
+            .page_size = 4096, // Standard page size
+        };
     }
 
-    pub fn writePage(self: *PageStorage, page_id: u64, data: []const u8) !void {
-        _ = self;
-        _ = page_id;
-        _ = data;
+    pub fn deinit(self: *Self) void {
+        self.page_locks.deinit();
     }
 
-    pub fn lockPage(self: *PageStorage, page_id: u64) !void {
-        _ = self;
-        _ = page_id;
+    /// Read and decrypt a page from storage
+    pub fn readPage(self: *Self, page_id: u64) ![]u8 {
+        // Build page file path
+        var path_buf: [256]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "{s}/pages/{d}.page", .{ self.data_dir, page_id }) catch return error.PathTooLong;
+
+        // Open and read the page file
+        const cwd = std.fs.cwd();
+        const file = cwd.openFile(path, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                // Return empty page if file doesn't exist (new page)
+                const empty_page = try self.allocator.alloc(u8, self.page_size);
+                @memset(empty_page, 0);
+                return empty_page;
+            },
+            else => return err,
+        };
+        defer file.close();
+
+        // Read file contents
+        const stat = try file.stat();
+        const file_size = stat.size;
+        const encrypted_data = try self.allocator.alloc(u8, file_size);
+        defer self.allocator.free(encrypted_data);
+
+        const bytes_read = try file.readAll(encrypted_data);
+        if (bytes_read != file_size) {
+            return error.IncompleteRead;
+        }
+
+        // Decrypt if crypto manager is configured
+        if (self.crypto_manager) |cm| {
+            const decrypted = try cm.decryptPage(encrypted_data, page_id);
+            return decrypted;
+        } else {
+            // No encryption - return raw data
+            return try self.allocator.dupe(u8, encrypted_data);
+        }
     }
 
-    pub fn unlockPage(self: *PageStorage, page_id: u64) void {
-        _ = self;
-        _ = page_id;
+    /// Encrypt and write a page to storage
+    pub fn writePage(self: *Self, page_id: u64, data: []const u8) !void {
+        // Ensure pages directory exists
+        var dir_path_buf: [256]u8 = undefined;
+        const dir_path = std.fmt.bufPrint(&dir_path_buf, "{s}/pages", .{self.data_dir}) catch return error.PathTooLong;
+
+        const cwd = std.fs.cwd();
+        cwd.makePath(dir_path) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+
+        // Build page file path
+        var path_buf: [256]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "{s}/pages/{d}.page", .{ self.data_dir, page_id }) catch return error.PathTooLong;
+
+        // Encrypt if crypto manager is configured
+        var write_data: []const u8 = data;
+        var encrypted_data: ?[]u8 = null;
+        defer if (encrypted_data) |ed| self.allocator.free(ed);
+
+        if (self.crypto_manager) |cm| {
+            encrypted_data = try cm.encryptPage(data, page_id);
+            write_data = encrypted_data.?;
+        }
+
+        // Write to file
+        const file = try cwd.createFile(path, .{});
+        defer file.close();
+
+        try file.writeAll(write_data);
+    }
+
+    /// Acquire exclusive lock on a page
+    pub fn lockPage(self: *Self, page_id: u64) !void {
+        // Simple spinlock implementation
+        var attempts: usize = 0;
+        while (attempts < 10000) : (attempts += 1) {
+            const result = self.page_locks.getOrPut(page_id) catch return error.LockFailed;
+            if (!result.found_existing or !result.value_ptr.*) {
+                result.value_ptr.* = true;
+                return;
+            }
+            // Brief yield
+            std.time.sleep(100);
+        }
+        return error.LockTimeout;
+    }
+
+    /// Release lock on a page
+    pub fn unlockPage(self: *Self, page_id: u64) void {
+        if (self.page_locks.getPtr(page_id)) |lock| {
+            lock.* = false;
+        }
     }
 };
 

@@ -226,6 +226,15 @@ pub fn processMessage(
                 log.info("Authenticated user: {s} with role: {s}", .{ username, role.toString() });
             }
 
+            // CANARY: REQ=REQ-MULTI-TENANT-005; FEATURE="Multi-Tenancy Session"; ASPECT=HelloHandler; STATUS=IMPL; OWNER=session; UPDATED=2026-01-09
+            // Store tenant_id in session if provided
+            if (hello.tenant_id) |tenant| {
+                if (state.session_config) |*config| {
+                    config.tenant_id = gpa.dupe(u8, tenant) catch null;
+                    log.info("Session tenant_id set to: {s}", .{tenant});
+                }
+            }
+
             // Return HELLO response with capabilities
             const hello_response = "{\"status_class\":\"00000\",\"capabilities\":[\"QUIC\",\"TLS1.3\"]}\n";
             return try gpa.dupe(u8, hello_response);
@@ -646,19 +655,82 @@ pub fn processMessage(
                             }
                             return schema_line;
                         },
-                        .Create, .Insert, .Delete, .Merge => {
-                            // Handle mutation statements (CREATE, INSERT, DELETE, MERGE)
-                            // TODO: Execute actual mutations - for now just return success
-                            // Set up empty result for PULL
-                            state.last_columns = &.{};
+                        // CANARY: REQ=REQ-QUIC-MUTATIONS-001; FEATURE="QUIC Mutation Execution"; ASPECT=ServerHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+                        .Create => |create_stmt| {
+                            // Execute CREATE mutation using execution engine
+                            const current_graph = state.current_graph orelse "default";
+                            const exec_result = execution.executeCreate(gpa, create_stmt, current_graph) catch |err| {
+                                return protocol.buildErrorLine(gpa, "MutationFailed", "CREATE failed", @errorName(err)) catch try gpa.dupe(u8, "");
+                            };
+
+                            // Build column names for result
+                            const columns = exec_result.columns;
+                            const rows = exec_result.rows;
+
+                            // Set up result for PULL
+                            state.last_columns = columns;
                             state.last_ordered = false;
                             state.last_order_keys = &.{};
                             state.last_distinct = false;
-                            state.page_items = &.{};
+                            state.page_items = rows;
                             state.page_index = 0;
                             state.active_result = true;
 
-                            return protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                            return protocol.buildSchemaLine(gpa, columns, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                        },
+                        .Insert => |insert_stmt| {
+                            // Execute INSERT mutation using execution engine
+                            const current_graph = state.current_graph orelse "default";
+                            const exec_result = execution.executeInsert(gpa, insert_stmt, current_graph) catch |err| {
+                                return protocol.buildErrorLine(gpa, "MutationFailed", "INSERT failed", @errorName(err)) catch try gpa.dupe(u8, "");
+                            };
+
+                            // Set up result for PULL
+                            state.last_columns = exec_result.columns;
+                            state.last_ordered = false;
+                            state.last_order_keys = &.{};
+                            state.last_distinct = false;
+                            state.page_items = exec_result.rows;
+                            state.page_index = 0;
+                            state.active_result = true;
+
+                            return protocol.buildSchemaLine(gpa, exec_result.columns, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                        },
+                        .Delete => |delete_stmt| {
+                            // Execute DELETE mutation using execution engine
+                            const current_graph = state.current_graph orelse "default";
+                            const exec_result = execution.executeDelete(gpa, delete_stmt, current_graph) catch |err| {
+                                return protocol.buildErrorLine(gpa, "MutationFailed", "DELETE failed", @errorName(err)) catch try gpa.dupe(u8, "");
+                            };
+
+                            // Set up result for PULL
+                            state.last_columns = exec_result.columns;
+                            state.last_ordered = false;
+                            state.last_order_keys = &.{};
+                            state.last_distinct = false;
+                            state.page_items = exec_result.rows;
+                            state.page_index = 0;
+                            state.active_result = true;
+
+                            return protocol.buildSchemaLine(gpa, exec_result.columns, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                        },
+                        .Merge => |merge_stmt| {
+                            // Execute MERGE mutation using execution engine
+                            const current_graph = state.current_graph orelse "default";
+                            const exec_result = execution.executeMerge(gpa, merge_stmt, current_graph) catch |err| {
+                                return protocol.buildErrorLine(gpa, "MutationFailed", "MERGE failed", @errorName(err)) catch try gpa.dupe(u8, "");
+                            };
+
+                            // Set up result for PULL
+                            state.last_columns = exec_result.columns;
+                            state.last_ordered = false;
+                            state.last_order_keys = &.{};
+                            state.last_distinct = false;
+                            state.page_items = exec_result.rows;
+                            state.page_index = 0;
+                            state.active_result = true;
+
+                            return protocol.buildSchemaLine(gpa, exec_result.columns, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
                         },
                         // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphSupport"; ASPECT=ServerHandler; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
                         .UseGraph => |ug| {

@@ -544,6 +544,14 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 }) };
             }
 
+            // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-002; FEATURE="ThreeValuedLogic"; ASPECT=NullComparison; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+            // GQL/SQL three-valued logic: Any comparison with NULL returns NULL
+            // null = null => null, null > 5 => null, null < x => null, etc.
+            // IMPORTANT: This check must come BEFORE generic equality check to ensure null = null returns null, not true
+            if (l == .Null or r == .Null) {
+                return Value{ .Null = {} };
+            }
+
             // Generic equality for same types (UUID=UUID, Date=Date, etc.)
             if ((op == .Eq or op == .Ne) and std.meta.activeTag(l) == std.meta.activeTag(r)) {
                 const isEqual = eqVals(l, r);
@@ -567,12 +575,6 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 if (op != .Eq and op != .Ne) return EvalError.TypeMismatch;
                 const eq = l.Edge.id == r.Edge.id;
                 return .{ .Bool = if (op == .Eq) eq else !eq };
-            }
-            // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-002; FEATURE="ThreeValuedLogic"; ASPECT=NullComparison; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
-            // GQL/SQL three-valued logic: Any comparison with NULL returns NULL
-            // null = null => null, null > 5 => null, null < x => null, etc.
-            if (l == .Null or r == .Null) {
-                return Value{ .Null = {} };
             }
             return EvalError.TypeMismatch;
         },
@@ -1062,8 +1064,9 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     else => break :blk_call .{ .Null = {} },
                 };
 
+                // GQL/SQL uses 1-based indexing for substring
                 const start = switch (start_arg) {
-                    .Int => |i| if (i < 0) 0 else @as(usize, @intCast(i)),
+                    .Int => |i| if (i < 1) 0 else @as(usize, @intCast(i - 1)),
                     else => break :blk_call .{ .Null = {} },
                 };
 
@@ -2352,6 +2355,14 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             break :blk_member Value{ .Int = @intCast(seconds) };
                         }
                     },
+                    // CANARY: REQ=REQ-MAP-PROP-003; FEATURE="MapProperties"; ASPECT=JsonMemberAccess; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+                    // Handle member access on JSON strings (map properties stored as JSON)
+                    .Json => |json_str| {
+                        // Parse JSON and extract the field value
+                        if (extractJsonField(allocator, json_str, member.field)) |extracted| {
+                            break :blk_member extracted;
+                        }
+                    },
                     else => {},
                 }
             }
@@ -2562,6 +2573,137 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
     };
 }
 
+// CANARY: REQ=REQ-MAP-PROP-004; FEATURE="MapProperties"; ASPECT=JsonFieldExtraction; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+/// Extract a field from a JSON string and return it as a Value
+/// Supports nested JSON object access by returning the nested JSON as ExtValue.Json
+fn extractJsonField(allocator: std.mem.Allocator, json_str: []const u8, field: []const u8) ?Value {
+    // Simple JSON field extractor - looks for "field": value patterns
+    // Find the field key in the JSON
+    var i: usize = 0;
+    while (i < json_str.len) {
+        // Skip whitespace
+        while (i < json_str.len and (json_str[i] == ' ' or json_str[i] == '\n' or json_str[i] == '\t' or json_str[i] == '\r')) {
+            i += 1;
+        }
+
+        // Look for quoted key
+        if (i < json_str.len and json_str[i] == '"') {
+            i += 1;
+            const key_start = i;
+
+            // Find end of key
+            while (i < json_str.len and json_str[i] != '"') : (i += 1) {}
+            if (i >= json_str.len) return null;
+
+            const key = json_str[key_start..i];
+            i += 1; // Skip closing quote
+
+            // Skip whitespace and colon
+            while (i < json_str.len and (json_str[i] == ' ' or json_str[i] == ':')) : (i += 1) {}
+
+            // Check if this is the field we're looking for
+            if (std.mem.eql(u8, key, field)) {
+                // Parse the value
+                return parseJsonValue(allocator, json_str, &i);
+            } else {
+                // Skip this value
+                _ = parseJsonValue(allocator, json_str, &i);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    return null;
+}
+
+/// Parse a JSON value starting at position i, advancing i past the value
+fn parseJsonValue(allocator: std.mem.Allocator, json_str: []const u8, i: *usize) ?Value {
+    // Skip whitespace
+    while (i.* < json_str.len and (json_str[i.*] == ' ' or json_str[i.*] == '\n' or json_str[i.*] == '\t' or json_str[i.*] == '\r')) {
+        i.* += 1;
+    }
+
+    if (i.* >= json_str.len) return null;
+
+    const c = json_str[i.*];
+
+    if (c == '"') {
+        // String value
+        i.* += 1;
+        const str_start = i.*;
+        while (i.* < json_str.len and json_str[i.*] != '"') {
+            if (json_str[i.*] == '\\' and i.* + 1 < json_str.len) {
+                i.* += 2; // Skip escaped character
+            } else {
+                i.* += 1;
+            }
+        }
+        if (i.* >= json_str.len) return null;
+        const str_val = allocator.dupe(u8, json_str[str_start..i.*]) catch return null;
+        i.* += 1; // Skip closing quote
+        return Value{ .Str = str_val };
+    } else if (c == '{') {
+        // Nested object - return as Json ExtValue for further member access
+        const obj_start = i.*;
+        var depth: i32 = 1;
+        i.* += 1;
+        while (i.* < json_str.len and depth > 0) {
+            if (json_str[i.*] == '{') depth += 1;
+            if (json_str[i.*] == '}') depth -= 1;
+            if (json_str[i.*] == '"') {
+                i.* += 1;
+                while (i.* < json_str.len and json_str[i.*] != '"') {
+                    if (json_str[i.*] == '\\') i.* += 1;
+                    i.* += 1;
+                }
+            }
+            i.* += 1;
+        }
+        const obj_str = allocator.dupe(u8, json_str[obj_start..i.*]) catch return null;
+        return Value{ .ExtValue = .{ .Json = obj_str } };
+    } else if (c == '[') {
+        // Array - skip for now
+        var depth: i32 = 1;
+        i.* += 1;
+        while (i.* < json_str.len and depth > 0) {
+            if (json_str[i.*] == '[') depth += 1;
+            if (json_str[i.*] == ']') depth -= 1;
+            i.* += 1;
+        }
+        return Value{ .Null = {} };
+    } else if (c == 't' and i.* + 4 <= json_str.len and std.mem.eql(u8, json_str[i.*..][0..4], "true")) {
+        i.* += 4;
+        return Value{ .Bool = true };
+    } else if (c == 'f' and i.* + 5 <= json_str.len and std.mem.eql(u8, json_str[i.*..][0..5], "false")) {
+        i.* += 5;
+        return Value{ .Bool = false };
+    } else if (c == 'n' and i.* + 4 <= json_str.len and std.mem.eql(u8, json_str[i.*..][0..4], "null")) {
+        i.* += 4;
+        return Value{ .Null = {} };
+    } else if (c == '-' or (c >= '0' and c <= '9')) {
+        // Number
+        const num_start = i.*;
+        if (json_str[i.*] == '-') i.* += 1;
+        while (i.* < json_str.len and json_str[i.*] >= '0' and json_str[i.*] <= '9') : (i.* += 1) {}
+        var is_float = false;
+        if (i.* < json_str.len and json_str[i.*] == '.') {
+            is_float = true;
+            i.* += 1;
+            while (i.* < json_str.len and json_str[i.*] >= '0' and json_str[i.*] <= '9') : (i.* += 1) {}
+        }
+        const num_str = json_str[num_start..i.*];
+        if (is_float) {
+            const float_val = std.fmt.parseFloat(f64, num_str) catch return Value{ .Null = {} };
+            return Value{ .Decimal = .{ .coeff = @intFromFloat(float_val * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+        } else {
+            const int_val = std.fmt.parseInt(i64, num_str, 10) catch return Value{ .Null = {} };
+            return Value{ .Int = int_val };
+        }
+    }
+
+    return null;
+}
+
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-003; FEATURE="Phase 6 Modularization"; ASPECT=ValueConverters; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Value converter functions moved to eval/type_promotion.zig
 // Functions: valueToExtValue, extValueToValue, evalValueToHeapValue, heapValueToEvalValue
@@ -2732,6 +2874,19 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Node => |n| return Value{ .Int = @intCast(n.id) }, // Get node ID
             else => return Value{ .Null = {} }, // Can't get ID from other types
         }
+    }
+
+    // CANARY: REQ=REQ-GQL-EXISTS-PROP-001; FEATURE="ExistsFunction"; ASPECT=PropertyExistence; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+    // Handle exists() function - checks if a property exists on a node/edge (returns true/false)
+    // This is different from EXISTS { ... } predicate which checks pattern matches
+    if (std.mem.eql(u8, function_name, "exists")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(allocator, args[0].*, env);
+        // exists() returns true if the value is NOT null, false if it is null
+        // When a property doesn't exist on a node, property access returns null
+        // So exists(n.prop) returns true if n.prop is not null (property exists with a value)
+        // and false if n.prop is null (property doesn't exist or has null value)
+        return Value{ .Bool = arg != .Null };
     }
 
     // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=IMPL; OWNER=types; UPDATED=2025-12-22

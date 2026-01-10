@@ -410,6 +410,46 @@ pub fn checkPropertyAccess(
     );
 }
 
+// CANARY: REQ=REQ-FLE-PREDICATE-HELPERS-001; FEATURE="FLE Predicate Rewriting"; ASPECT=Helpers; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+/// Check if a field is encrypted according to the FLE catalog
+pub fn isFieldEncrypted(ctx: EncryptionContext, type_name: []const u8, field_name: []const u8) bool {
+    const catalog = fle_catalog.globalCatalog(ctx.allocator) catch return false;
+    return catalog.isFieldEncrypted(type_name, field_name);
+}
+
+/// Check if an encrypted field is searchable (has blind index)
+pub fn isFieldSearchable(ctx: EncryptionContext, type_name: []const u8, field_name: []const u8) bool {
+    const catalog = fle_catalog.globalCatalog(ctx.allocator) catch return false;
+    return catalog.isFieldSearchable(type_name, field_name);
+}
+
+/// Compute blind index hash for a value
+/// Used for predicate rewriting to enable equality search on encrypted fields
+pub fn computeBlindIndex(
+    ctx: EncryptionContext,
+    type_name: []const u8,
+    field_name: []const u8,
+    plaintext_value: []const u8,
+) ![]const u8 {
+    _ = type_name;
+
+    // Get BIK from key manager
+    const key_manager = try getGlobalKeyManager(ctx.allocator);
+    const key_ids = key_types.KeyIds{
+        .tenant = ctx.tenant_id,
+        .schema = ctx.schema_name,
+        .field = field_name,
+        .version = 1,
+    };
+    const bik = try key_manager.getBIK(key_ids);
+
+    // Get blind index
+    const blind_index = try getGlobalBlindIndex(ctx.allocator);
+
+    // Compute hash
+    return try blind_index.computeHash(bik, plaintext_value);
+}
+
 test "FLE integration placeholder" {
     const testing = std.testing;
 

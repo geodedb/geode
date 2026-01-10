@@ -16,6 +16,23 @@ pub const IndexInfo = struct {
     columns: [][]const u8, // Property names
 };
 
+// CANARY: REQ=REQ-CONSTRAINT-001; FEATURE="ConstraintManagement"; ASPECT=Catalog; STATUS=IMPL; OWNER=schema; UPDATED=2026-01-09
+// ConstraintInfo stores metadata about a schema constraint
+pub const ConstraintInfo = struct {
+    name: []const u8, // Constraint name (user-provided)
+    constraint_type: ConstraintType, // Type of constraint
+    label: []const u8, // Node/edge label
+    properties: [][]const u8, // Property names involved
+    is_enforced: bool, // Whether constraint is currently enforced
+
+    pub const ConstraintType = enum {
+        unique, // IS UNIQUE - single property uniqueness
+        node_key, // IS NODE KEY - composite key (implies unique + not null)
+        not_null, // IS NOT NULL - property must be present
+        exists, // EXISTS - legacy syntax, same as not_null
+    };
+};
+
 /// Generate a scoped index key for catalog storage
 /// Format: "label:index_name" to allow same index name on different labels
 /// This follows database best practices where indexes are scoped per table/label
@@ -23,7 +40,7 @@ pub fn getScopedIndexKey(allocator: std.mem.Allocator, label: []const u8, index_
     return std.fmt.allocPrint(allocator, "{s}:{s}", .{ label, index_name });
 }
 
-/// Catalog manages database metadata (schemas, graphs, indexes)
+/// Catalog manages database metadata (schemas, graphs, indexes, constraints)
 /// Thread-safe via RwLock for concurrent access
 pub const Catalog = struct {
     allocator: std.mem.Allocator,
@@ -31,6 +48,7 @@ pub const Catalog = struct {
     schemas: std.StringHashMap(void),
     graphs: std.StringHashMap(void),
     indexes: std.StringHashMap(IndexInfo),
+    constraints: std.StringHashMap(ConstraintInfo),
     data_dir: []const u8,
 
     /// Initialize a new catalog with dependency injection
@@ -45,6 +63,7 @@ pub const Catalog = struct {
             .schemas = std.StringHashMap(void).init(allocator),
             .graphs = std.StringHashMap(void).init(allocator),
             .indexes = std.StringHashMap(IndexInfo).init(allocator),
+            .constraints = std.StringHashMap(ConstraintInfo).init(allocator),
             .data_dir = try allocator.dupe(u8, data_dir),
         };
 
@@ -97,6 +116,22 @@ pub const Catalog = struct {
             self.indexes.deinit();
         }
 
+        // Free constraint entries
+        {
+            var iter = self.constraints.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                const info = entry.value_ptr.*;
+                self.allocator.free(info.name);
+                self.allocator.free(info.label);
+                for (info.properties) |prop| {
+                    self.allocator.free(prop);
+                }
+                self.allocator.free(info.properties);
+            }
+            self.constraints.deinit();
+        }
+
         self.allocator.free(self.data_dir);
         // Caller is responsible for destroying the Catalog struct itself
     }
@@ -113,11 +148,12 @@ pub const Catalog = struct {
         const file = try std.fs.cwd().createFile(catalog_path, .{});
         defer file.close();
 
-        // Write header: schema_count, graph_count, index_count
-        var header: [12]u8 = undefined;
+        // Write header: schema_count, graph_count, index_count, constraint_count
+        var header: [16]u8 = undefined;
         std.mem.writeInt(u32, header[0..4], @intCast(self.schemas.count()), .little);
         std.mem.writeInt(u32, header[4..8], @intCast(self.graphs.count()), .little);
         std.mem.writeInt(u32, header[8..12], @intCast(self.indexes.count()), .little);
+        std.mem.writeInt(u32, header[12..16], @intCast(self.constraints.count()), .little);
         _ = try file.write(&header);
 
         // Write schemas (just names)
@@ -175,6 +211,44 @@ pub const Catalog = struct {
                 _ = try file.write(col);
             }
         }
+
+        // Write constraints
+        var constraint_iter = self.constraints.iterator();
+        while (constraint_iter.next()) |entry| {
+            const constraint_info = entry.value_ptr.*;
+
+            // Write constraint name
+            var name_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &name_len_buf, @intCast(constraint_info.name.len), .little);
+            _ = try file.write(&name_len_buf);
+            _ = try file.write(constraint_info.name);
+
+            // Write constraint type (as u8)
+            const type_byte: [1]u8 = .{@intFromEnum(constraint_info.constraint_type)};
+            _ = try file.write(&type_byte);
+
+            // Write label
+            var label_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &label_len_buf, @intCast(constraint_info.label.len), .little);
+            _ = try file.write(&label_len_buf);
+            _ = try file.write(constraint_info.label);
+
+            // Write is_enforced flag
+            const enforced_byte: [1]u8 = .{if (constraint_info.is_enforced) 1 else 0};
+            _ = try file.write(&enforced_byte);
+
+            // Write property count and properties
+            var prop_count_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &prop_count_buf, @intCast(constraint_info.properties.len), .little);
+            _ = try file.write(&prop_count_buf);
+
+            for (constraint_info.properties) |prop| {
+                var prop_len_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &prop_len_buf, @intCast(prop.len), .little);
+                _ = try file.write(&prop_len_buf);
+                _ = try file.write(prop);
+            }
+        }
     }
 
     /// Load catalog from disk
@@ -192,14 +266,16 @@ pub const Catalog = struct {
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
-        // Read header
-        var header: [12]u8 = undefined;
+        // Read header (supports both old 12-byte and new 16-byte format)
+        var header: [16]u8 = undefined;
         const bytes_read = try file.read(&header);
         if (bytes_read < 12) return error.InvalidCatalogFile;
 
         const schema_count = std.mem.readInt(u32, header[0..4], .little);
         const graph_count = std.mem.readInt(u32, header[4..8], .little);
         const index_count = std.mem.readInt(u32, header[8..12], .little);
+        // Constraint count only available in new format (16-byte header)
+        const constraint_count: u32 = if (bytes_read >= 16) std.mem.readInt(u32, header[12..16], .little) else 0;
 
         // Read schemas
         var i: u32 = 0;
@@ -287,6 +363,160 @@ pub const Catalog = struct {
             const scoped_key = try getScopedIndexKey(self.allocator, table_name, name);
             try self.indexes.put(scoped_key, index_info);
         }
+
+        // Read constraints (if present in catalog file)
+        i = 0;
+        while (i < constraint_count) : (i += 1) {
+            // Read constraint name
+            var name_len_buf: [4]u8 = undefined;
+            if ((try file.read(&name_len_buf)) < 4) return error.InvalidCatalogFile;
+            const name_len = std.mem.readInt(u32, &name_len_buf, .little);
+            const name = try self.allocator.alloc(u8, name_len);
+            errdefer self.allocator.free(name);
+            if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+
+            // Read constraint type
+            var type_byte: [1]u8 = undefined;
+            if ((try file.read(&type_byte)) < 1) return error.InvalidCatalogFile;
+            const constraint_type: ConstraintInfo.ConstraintType = @enumFromInt(type_byte[0]);
+
+            // Read label
+            var label_len_buf: [4]u8 = undefined;
+            if ((try file.read(&label_len_buf)) < 4) return error.InvalidCatalogFile;
+            const label_len = std.mem.readInt(u32, &label_len_buf, .little);
+            const label = try self.allocator.alloc(u8, label_len);
+            errdefer self.allocator.free(label);
+            if ((try file.read(label)) < label_len) return error.InvalidCatalogFile;
+
+            // Read is_enforced flag
+            var enforced_byte: [1]u8 = undefined;
+            if ((try file.read(&enforced_byte)) < 1) return error.InvalidCatalogFile;
+            const is_enforced = enforced_byte[0] != 0;
+
+            // Read property count
+            var prop_count_buf: [4]u8 = undefined;
+            if ((try file.read(&prop_count_buf)) < 4) return error.InvalidCatalogFile;
+            const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
+
+            // Read properties
+            const properties = try self.allocator.alloc([]const u8, prop_count);
+            errdefer self.allocator.free(properties);
+            var prop_idx: u32 = 0;
+            while (prop_idx < prop_count) : (prop_idx += 1) {
+                var prop_len_buf: [4]u8 = undefined;
+                if ((try file.read(&prop_len_buf)) < 4) return error.InvalidCatalogFile;
+                const prop_len = std.mem.readInt(u32, &prop_len_buf, .little);
+                const prop = try self.allocator.alloc(u8, prop_len);
+                errdefer self.allocator.free(prop);
+                if ((try file.read(prop)) < prop_len) return error.InvalidCatalogFile;
+                properties[prop_idx] = prop;
+            }
+
+            const constraint_info = ConstraintInfo{
+                .name = name,
+                .constraint_type = constraint_type,
+                .label = label,
+                .properties = properties,
+                .is_enforced = is_enforced,
+            };
+
+            // Use scoped key: "label:constraint_name"
+            const scoped_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ label, name });
+            try self.constraints.put(scoped_key, constraint_info);
+        }
+    }
+
+    // CANARY: REQ=REQ-CONSTRAINT-002; FEATURE="ConstraintManagement"; ASPECT=CatalogMethods; STATUS=IMPL; OWNER=schema; UPDATED=2026-01-09
+    /// Add a constraint to the catalog
+    pub fn addConstraint(self: *Catalog, info: ConstraintInfo) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        // Create scoped key
+        const scoped_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ info.label, info.name });
+        errdefer self.allocator.free(scoped_key);
+
+        // Check if constraint already exists
+        if (self.constraints.contains(scoped_key)) {
+            self.allocator.free(scoped_key);
+            return error.ConstraintAlreadyExists;
+        }
+
+        // Duplicate strings for catalog ownership
+        const owned_name = try self.allocator.dupe(u8, info.name);
+        errdefer self.allocator.free(owned_name);
+
+        const owned_label = try self.allocator.dupe(u8, info.label);
+        errdefer self.allocator.free(owned_label);
+
+        const owned_props = try self.allocator.alloc([]const u8, info.properties.len);
+        errdefer self.allocator.free(owned_props);
+
+        for (info.properties, 0..) |prop, idx| {
+            owned_props[idx] = try self.allocator.dupe(u8, prop);
+        }
+
+        const owned_info = ConstraintInfo{
+            .name = owned_name,
+            .constraint_type = info.constraint_type,
+            .label = owned_label,
+            .properties = owned_props,
+            .is_enforced = info.is_enforced,
+        };
+
+        try self.constraints.put(scoped_key, owned_info);
+        try self.save();
+    }
+
+    /// Remove a constraint from the catalog
+    pub fn removeConstraint(self: *Catalog, label: []const u8, name: []const u8) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        const scoped_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ label, name });
+        defer self.allocator.free(scoped_key);
+
+        const entry = self.constraints.fetchRemove(scoped_key) orelse return error.ConstraintNotFound;
+
+        // Free the stored values
+        self.allocator.free(entry.key);
+        self.allocator.free(entry.value.name);
+        self.allocator.free(entry.value.label);
+        for (entry.value.properties) |prop| {
+            self.allocator.free(prop);
+        }
+        self.allocator.free(entry.value.properties);
+
+        try self.save();
+    }
+
+    /// Get a constraint by label and name
+    pub fn getConstraint(self: *Catalog, label: []const u8, name: []const u8) !?ConstraintInfo {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        var key_buf: [512]u8 = undefined;
+        const scoped_key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ label, name }) catch return null;
+
+        return self.constraints.get(scoped_key);
+    }
+
+    /// Get all constraints for a label
+    pub fn getConstraintsForLabel(self: *Catalog, label: []const u8) ![]ConstraintInfo {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        var result = std.ArrayList(ConstraintInfo).init(self.allocator);
+        errdefer result.deinit();
+
+        var iter = self.constraints.iterator();
+        while (iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.label, label)) {
+                try result.append(entry.value_ptr.*);
+            }
+        }
+
+        return result.toOwnedSlice();
     }
 };
 

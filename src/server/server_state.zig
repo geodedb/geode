@@ -62,6 +62,10 @@ pub const SessionConfiguration = struct {
     current_graph: ?[]const u8 = null,
     property_graph_default: bool = true,
 
+    // CANARY: REQ=REQ-MULTI-TENANT-002; FEATURE="Multi-Tenancy Session"; ASPECT=TenantId; STATUS=IMPL; OWNER=session; UPDATED=2026-01-09
+    // Multi-tenancy settings
+    tenant_id: ?[]const u8 = null, // Default tenant if not specified in handshake
+
     // Time zone settings
     time_zone: ?[]const u8 = null,
 
@@ -98,6 +102,9 @@ pub const SessionConfiguration = struct {
         }
         if (self.current_graph) |graph| {
             self.allocator.free(graph);
+        }
+        if (self.tenant_id) |tenant| {
+            self.allocator.free(tenant);
         }
         if (self.time_zone) |tz| {
             self.allocator.free(tz);

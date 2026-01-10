@@ -5,6 +5,8 @@ const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
 // CANARY: REQ=REQ-TXN-UNDO-008; FEATURE="TransactionUndoLog"; ASPECT=CrudImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
+// CANARY: REQ=REQ-CONSTRAINT-ENFORCE-001; FEATURE="ConstraintEnforcement"; ASPECT=CatalogImport; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+const catalog_mod = @import("../schema/catalog.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -43,6 +45,278 @@ fn valueListToExtValueList(allocator: std.mem.Allocator, values: []Value) ![]Ext
         };
     }
     return result;
+}
+
+// CANARY: REQ=REQ-MAP-PROP-002; FEATURE="MapProperties"; ASPECT=JsonSerialization; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+/// Convert a Value.Map (std.StringHashMap(Value)) to a JSON string for storage
+fn valueMapToJson(allocator: std.mem.Allocator, map: std.StringHashMap(Value)) ![]const u8 {
+    var json_parts = try std.ArrayList(u8).initCapacity(allocator, 256);
+    defer json_parts.deinit(allocator);
+
+    try json_parts.append(allocator, '{');
+
+    var first = true;
+    var iter = map.iterator();
+    while (iter.next()) |entry| {
+        if (!first) {
+            try json_parts.append(allocator, ',');
+        }
+        first = false;
+
+        // Key (escaped)
+        try json_parts.append(allocator, '"');
+        try json_parts.appendSlice(allocator, entry.key_ptr.*);
+        try json_parts.append(allocator, '"');
+        try json_parts.append(allocator, ':');
+
+        // Value
+        try valueToJsonAppend(allocator, entry.value_ptr.*, &json_parts);
+    }
+
+    try json_parts.append(allocator, '}');
+    return try allocator.dupe(u8, json_parts.items);
+}
+
+/// Append a Value as JSON to the output list
+fn valueToJsonAppend(allocator: std.mem.Allocator, value: Value, output: *std.ArrayList(u8)) !void {
+    switch (value) {
+        .Null => try output.appendSlice(allocator, "null"),
+        .Int => |i| {
+            var buf: [32]u8 = undefined;
+            const formatted = std.fmt.bufPrint(&buf, "{d}", .{i}) catch "0";
+            try output.appendSlice(allocator, formatted);
+        },
+        .Bool => |b| try output.appendSlice(allocator, if (b) "true" else "false"),
+        .Str => |s| {
+            try output.append(allocator, '"');
+            // Simple JSON string escaping
+            for (s) |c| {
+                switch (c) {
+                    '"' => try output.appendSlice(allocator, "\\\""),
+                    '\\' => try output.appendSlice(allocator, "\\\\"),
+                    '\n' => try output.appendSlice(allocator, "\\n"),
+                    '\r' => try output.appendSlice(allocator, "\\r"),
+                    '\t' => try output.appendSlice(allocator, "\\t"),
+                    else => try output.append(allocator, c),
+                }
+            }
+            try output.append(allocator, '"');
+        },
+        .Decimal => |d| {
+            // Convert decimal to string representation
+            const float_val = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+            var buf: [64]u8 = undefined;
+            const formatted = std.fmt.bufPrint(&buf, "{d:.6}", .{float_val}) catch "0";
+            try output.appendSlice(allocator, formatted);
+        },
+        .List => |list| {
+            try output.append(allocator, '[');
+            for (list, 0..) |item, i| {
+                if (i > 0) try output.append(allocator, ',');
+                try valueToJsonAppend(allocator, item, output);
+            }
+            try output.append(allocator, ']');
+        },
+        .Map => |map| {
+            try output.append(allocator, '{');
+            var first = true;
+            var iter = map.iterator();
+            while (iter.next()) |entry| {
+                if (!first) try output.append(allocator, ',');
+                first = false;
+                try output.append(allocator, '"');
+                try output.appendSlice(allocator, entry.key_ptr.*);
+                try output.append(allocator, '"');
+                try output.append(allocator, ':');
+                try valueToJsonAppend(allocator, entry.value_ptr.*, output);
+            }
+            try output.append(allocator, '}');
+        },
+        else => try output.appendSlice(allocator, "null"),
+    }
+}
+
+// CANARY: REQ=REQ-CONSTRAINT-ENFORCE-002; FEATURE="ConstraintEnforcement"; ASPECT=Validation; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+/// Constraint violation error
+pub const ConstraintViolationError = error{
+    UniqueConstraintViolation,
+    NotNullConstraintViolation,
+    NodeKeyConstraintViolation,
+};
+
+/// Validate constraints before creating a node
+/// Checks UNIQUE, NOT NULL, and NODE KEY constraints
+fn validateConstraints(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    labels: []const []const u8,
+    props: ?[]const ast.PropSpec,
+    context: *const execution.ExecutionContext,
+) ConstraintViolationError!void {
+    // Get catalog from context
+    const cat = context.catalog;
+
+    // Check constraints for each label
+    for (labels) |label| {
+        const constraints = cat.getConstraintsForLabel(label) catch continue;
+        defer allocator.free(constraints);
+
+        for (constraints) |constraint| {
+            if (!constraint.is_enforced) continue;
+
+            switch (constraint.constraint_type) {
+                .unique => {
+                    // Check if any existing node has same property value
+                    if (props) |prop_specs| {
+                        for (constraint.properties) |prop_name| {
+                            for (prop_specs) |prop_spec| {
+                                if (std.mem.eql(u8, prop_spec.key, prop_name)) {
+                                    // Found the property, check for duplicates
+                                    const value = eval.evalExpr(allocator, prop_spec.value.*, Env{
+                                        .names = &.{},
+                                        .values = &.{},
+                                        .allocator = allocator,
+                                    }) catch continue;
+
+                                    // Check if value exists in any node with this label
+                                    if (checkUniqueViolation(store, label, prop_name, value)) {
+                                        return ConstraintViolationError.UniqueConstraintViolation;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                .not_null => {
+                    // Check if required property is present and non-null
+                    for (constraint.properties) |prop_name| {
+                        var found = false;
+                        if (props) |prop_specs| {
+                            for (prop_specs) |prop_spec| {
+                                if (std.mem.eql(u8, prop_spec.key, prop_name)) {
+                                    found = true;
+                                    // Check if value is null
+                                    const value = eval.evalExpr(allocator, prop_spec.value.*, Env{
+                                        .names = &.{},
+                                        .values = &.{},
+                                        .allocator = allocator,
+                                    }) catch continue;
+
+                                    if (value == .Null) {
+                                        return ConstraintViolationError.NotNullConstraintViolation;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        if (!found) {
+                            return ConstraintViolationError.NotNullConstraintViolation;
+                        }
+                    }
+                },
+                .node_key => {
+                    // NODE KEY is combination of NOT NULL + UNIQUE
+                    // First check all properties present
+                    for (constraint.properties) |prop_name| {
+                        var found = false;
+                        if (props) |prop_specs| {
+                            for (prop_specs) |prop_spec| {
+                                if (std.mem.eql(u8, prop_spec.key, prop_name)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!found) {
+                            return ConstraintViolationError.NodeKeyConstraintViolation;
+                        }
+                    }
+                    // Then check uniqueness of combination (simplified: check first property)
+                    if (constraint.properties.len > 0 and props != null) {
+                        const first_prop = constraint.properties[0];
+                        for (props.?) |prop_spec| {
+                            if (std.mem.eql(u8, prop_spec.key, first_prop)) {
+                                const value = eval.evalExpr(allocator, prop_spec.value.*, Env{
+                                    .names = &.{},
+                                    .values = &.{},
+                                    .allocator = allocator,
+                                }) catch continue;
+
+                                if (checkUniqueViolation(store, label, first_prop, value)) {
+                                    return ConstraintViolationError.NodeKeyConstraintViolation;
+                                }
+                            }
+                        }
+                    }
+                },
+                .exists => {
+                    // EXISTS just requires property to be present (not necessarily non-null)
+                    for (constraint.properties) |prop_name| {
+                        var found = false;
+                        if (props) |prop_specs| {
+                            for (prop_specs) |prop_spec| {
+                                if (std.mem.eql(u8, prop_spec.key, prop_name)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!found) {
+                            return ConstraintViolationError.NotNullConstraintViolation;
+                        }
+                    }
+                },
+            }
+        }
+    }
+}
+
+/// Check if a unique constraint would be violated
+fn checkUniqueViolation(
+    store: *graph_store.GraphStore,
+    label: []const u8,
+    property: []const u8,
+    value: Value,
+) bool {
+    // Get all nodes with this label
+    const nodes = store.getNodesByLabel(label) catch return false;
+    defer store.allocator.free(nodes);
+
+    // Check if any node has same property value
+    for (nodes) |node_id| {
+        const existing_value = store.getNodePropertyValue(node_id, property) catch continue;
+        if (valuesEqual(existing_value, value)) {
+            return true; // Violation found
+        }
+    }
+
+    return false;
+}
+
+/// Compare two values for equality
+fn valuesEqual(prop_val: graph_store.PropertyValue, value: Value) bool {
+    return switch (prop_val) {
+        .String => |s| switch (value) {
+            .Str => |v| std.mem.eql(u8, s, v),
+            else => false,
+        },
+        .Int => |i| switch (value) {
+            .Int => |v| i == v,
+            else => false,
+        },
+        .Bool => |b| switch (value) {
+            .Bool => |v| b == v,
+            else => false,
+        },
+        .Float => |f| switch (value) {
+            .Decimal => |d| blk: {
+                const fval = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+                break :blk @abs(f - fval) < 0.0001;
+            },
+            else => false,
+        },
+        else => false,
+    };
 }
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-004; FEATURE="ExecutionRefactoring"; ASPECT=CRUD_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
@@ -133,6 +407,14 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                         .List => |list| blk: {
                             const ext_list = try valueListToExtValueList(allocator, list);
                             break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
+                        },
+                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+                        // Handle map properties by converting to ExtValue.Json for storage
+                        .Map => |map| blk: {
+                            const json_str = valueMapToJson(allocator, map) catch {
+                                break :blk graph_store.PropertyValue{ .Null = {} };
+                            };
+                            break :blk graph_store.PropertyValue{ .ExtValue = .{ .Json = json_str } };
                         },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
@@ -310,6 +592,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                         .List => |list| blk: {
                             const ext_list = try valueListToExtValueList(allocator, list);
                             break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
+                        },
+                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+                        // Handle map properties by converting to ExtValue.Json for storage
+                        .Map => |map| blk: {
+                            const json_str = valueMapToJson(allocator, map) catch {
+                                break :blk graph_store.PropertyValue{ .Null = {} };
+                            };
+                            break :blk graph_store.PropertyValue{ .ExtValue = .{ .Json = json_str } };
                         },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
@@ -1050,6 +1340,14 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                             const ext_list = try valueListToExtValueList(allocator, list);
                             break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
                         },
+                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+                        // Handle map properties by converting to ExtValue.Json for storage
+                        .Map => |map| blk: {
+                            const json_str = valueMapToJson(allocator, map) catch {
+                                break :blk graph_store.PropertyValue{ .Null = {} };
+                            };
+                            break :blk graph_store.PropertyValue{ .ExtValue = .{ .Json = json_str } };
+                        },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -1318,6 +1616,14 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                         .List => |list| blk: {
                             const ext_list = try valueListToExtValueList(allocator, list);
                             break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
+                        },
+                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+                        // Handle map properties by converting to ExtValue.Json for storage
+                        .Map => |map| blk: {
+                            const json_str = valueMapToJson(allocator, map) catch {
+                                break :blk graph_store.PropertyValue{ .Null = {} };
+                            };
+                            break :blk graph_store.PropertyValue{ .ExtValue = .{ .Json = json_str } };
                         },
                         .Null => graph_store.PropertyValue{ .Null = {} },
                         else => graph_store.PropertyValue{ .Null = {} },

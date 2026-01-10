@@ -578,15 +578,78 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
     if json_asserts:
         import json
         try:
-            # Try to parse JSON from output
+            # Try to parse JSON from output - look for BINDINGS response with row data
             json_lines = [line for line in result.stdout.split('\n') if line.startswith('{')]
-            if json_lines:
-                for assertion in expect.get("stdout_json_assert", []):
-                    # Simple validation - just check that we got JSON output
-                    if not json_lines:
-                        return False, "no JSON output for assertion"
-        except:
-            pass  # JSON parsing failed, but test might still pass on other criteria
+            if not json_lines:
+                return False, "no JSON output for assertion"
+
+            for assertion in expect.get("stdout_json_assert", []):
+                expr = assertion.get("expression", "")
+                expected_val = assertion.get("equals")
+                not_equals_val = assertion.get("not_equals")
+
+                # Find the BINDINGS response (contains the actual query results)
+                # or fall back to raw JSON output for CLI commands
+                bindings_data = None
+                raw_json_data = None
+                for line in json_lines:
+                    try:
+                        parsed = json.loads(line)
+                        if isinstance(parsed, dict):
+                            result_obj = parsed.get("result", {})
+                            if result_obj.get("type") == "BINDINGS" and "rows" in result_obj:
+                                bindings_data = parsed
+                                break
+                            # Save first valid JSON as fallback for CLI commands
+                            if raw_json_data is None:
+                                raw_json_data = parsed
+                    except json.JSONDecodeError:
+                        continue
+
+                # Use bindings data if found, otherwise use raw JSON
+                json_data = bindings_data if bindings_data else raw_json_data
+                if not json_data:
+                    return False, f"no valid JSON found for assertion: {expr}"
+
+                # Evaluate the JSON path expression
+                # Convert test spec expression format to actual path only for query results
+                actual_expr = expr
+                if bindings_data:
+                    actual_expr = expr.replace("results[", "result.rows[")
+
+                # Navigate the JSON path
+                try:
+                    extracted = json_data
+                    for part in actual_expr.split('.'):
+                        if '[' in part and ']' in part:
+                            # Handle array index like rows[0]
+                            key = part[:part.index('[')]
+                            idx = int(part[part.index('[')+1:part.index(']')])
+                            if key:
+                                if not isinstance(extracted, dict) or key not in extracted:
+                                    return False, f"path '{key}' not found in JSON"
+                                extracted = extracted[key]
+                            if isinstance(extracted, list) and idx < len(extracted):
+                                extracted = extracted[idx]
+                            else:
+                                return False, f"index {idx} out of range for {key}"
+                        else:
+                            # Check if key exists (distinguishes null value from missing key)
+                            if not isinstance(extracted, dict) or part not in extracted:
+                                return False, f"path '{part}' not found in JSON"
+                            extracted = extracted[part]
+
+                    # Compare extracted value with expected
+                    if expected_val is not None:
+                        if extracted != expected_val:
+                            return False, f"JSON assert failed: {expr} = {extracted}, expected {expected_val}"
+                    elif not_equals_val is not None:
+                        if extracted == not_equals_val:
+                            return False, f"JSON assert failed: {expr} = {extracted}, should not equal {not_equals_val}"
+                except Exception as e:
+                    return False, f"JSON path evaluation error: {e}"
+        except Exception as e:
+            return False, f"JSON assertion error: {e}"
     
     # Handle geode_query expectation
     if geode_query:
