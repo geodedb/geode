@@ -37,7 +37,10 @@ source_nix_env() {
 
 install_nix() {
   if have nix; then log "Nix already present: $(nix --version)"; return 0; fi
-  install_prereqs
+  # Only install prereqs if curl/git not available (avoids unnecessary sudo)
+  if ! have curl || ! have git; then
+    install_prereqs
+  fi
 
   local installer=/tmp/nix-install.sh
   curl -fsSL https://nixos.org/nix/install -o "$installer"
@@ -65,6 +68,7 @@ install_nix() {
 }
 
 install_direnv() {
+  if have direnv; then log "direnv already present: $(direnv version)"; return 0; fi
   log "Installing direnv + nix-direnv via Nix…"
   if ! nix profile install nixpkgs#direnv nixpkgs#nix-direnv; then
     warn "nix profile failed; bootstrapping channel + nix-env fallback."

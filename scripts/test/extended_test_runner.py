@@ -135,6 +135,22 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
             for old, new in replacements.items():
                 processed_arg = processed_arg.replace(old, new)
 
+            # Add unique suffixes to labels/types for test isolation
+            # Match :LabelName patterns (for both node labels and relationship types)
+            label_pattern = r':([A-Z][a-zA-Z0-9_]*)'
+            label_matches = list(re.finditer(label_pattern, processed_arg))
+            label_replacements = {}
+            for match in label_matches:
+                old_label = match.group(1)
+                # Skip common GQL keywords that look like labels
+                if old_label.upper() in ['ORDER', 'BY', 'ASC', 'DESC', 'NULL', 'TRUE', 'FALSE', 'AND', 'OR', 'NOT']:
+                    continue
+                new_label = f"{old_label}_{test_id}"
+                # Use full match with colon to avoid partial word replacements
+                label_replacements[f":{old_label}"] = f":{new_label}"
+            for old, new in label_replacements.items():
+                processed_arg = processed_arg.replace(old, new)
+
         processed_args.append(processed_arg)
     args = processed_args
     
@@ -215,6 +231,15 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                             if old_name.upper() not in ['TYPE', 'IF', 'NOT', 'EXISTS', 'PROPERTY', 'LIKE', 'AS', 'COPY', 'OF', 'TYPED']:
                                 processed_arg = processed_arg.replace(f"GRAPH {old_name}", f"GRAPH {old_name}_{test_id}")
                                 processed_arg = processed_arg.replace(f"EXISTS {old_name}", f"EXISTS {old_name}_{test_id}")
+
+                        # Add unique suffixes to labels/types for test isolation (setup)
+                        label_pattern = r':([A-Z][a-zA-Z0-9_]*)'
+                        label_matches = list(re.finditer(label_pattern, processed_arg))
+                        for match in label_matches:
+                            old_label = match.group(1)
+                            if old_label.upper() not in ['ORDER', 'BY', 'ASC', 'DESC', 'NULL', 'TRUE', 'FALSE', 'AND', 'OR', 'NOT']:
+                                new_label = f"{old_label}_{test_id}"
+                                processed_arg = processed_arg.replace(f":{old_label}", f":{new_label}")
 
                     setup_processed.append(processed_arg)
 
@@ -616,28 +641,59 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                 actual_expr = expr
                 if bindings_data:
                     actual_expr = expr.replace("results[", "result.rows[")
+                    # Also handle direct rows[] access
+                    if actual_expr.startswith("rows["):
+                        actual_expr = "result." + actual_expr
 
                 # Navigate the JSON path
+                # Extract headers for column name resolution
+                headers = None
+                if isinstance(json_data, dict) and "result" in json_data:
+                    result_obj = json_data.get("result", {})
+                    if isinstance(result_obj, dict):
+                        headers = result_obj.get("headers", [])
+
                 try:
                     extracted = json_data
+                    in_rows_array = False  # Track if we're navigating within a rows array element
                     for part in actual_expr.split('.'):
                         if '[' in part and ']' in part:
-                            # Handle array index like rows[0]
+                            # Handle array index(es) like rows[0] or rows[0][0]
+                            # First extract the key before any brackets
                             key = part[:part.index('[')]
-                            idx = int(part[part.index('[')+1:part.index(']')])
                             if key:
                                 if not isinstance(extracted, dict) or key not in extracted:
                                     return False, f"path '{key}' not found in JSON"
                                 extracted = extracted[key]
-                            if isinstance(extracted, list) and idx < len(extracted):
-                                extracted = extracted[idx]
-                            else:
-                                return False, f"index {idx} out of range for {key}"
+                                in_rows_array = (key == "rows")
+
+                            # Now extract ALL indices from this part (handles [0][0] etc.)
+                            import re
+                            indices = re.findall(r'\[(\d+)\]', part)
+                            for idx_str in indices:
+                                idx = int(idx_str)
+                                if isinstance(extracted, list) and idx < len(extracted):
+                                    extracted = extracted[idx]
+                                else:
+                                    return False, f"index {idx} out of range for {key or 'array'}"
                         else:
+                            # Check if this is a column name lookup on a row element
+                            if in_rows_array and isinstance(extracted, list) and headers:
+                                # Look up column name in headers to get index
+                                try:
+                                    col_idx = headers.index(part)
+                                    if col_idx < len(extracted):
+                                        extracted = extracted[col_idx]
+                                        in_rows_array = False
+                                        continue
+                                except ValueError:
+                                    pass  # Column not found in headers, fall through to normal key lookup
+
                             # Check if key exists (distinguishes null value from missing key)
                             if not isinstance(extracted, dict) or part not in extracted:
                                 return False, f"path '{part}' not found in JSON"
                             extracted = extracted[part]
+                            in_rows_array = False
 
                     # Compare extracted value with expected
                     if expected_val is not None:

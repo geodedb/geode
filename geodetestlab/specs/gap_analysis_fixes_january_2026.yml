@@ -622,7 +622,7 @@ tests:
     expect:
       exit_code: 0
       stdout_json_assert:
-        - expression: "results[0].answer"
+        - expression: "rows[0][0]"
           equals: 42
     tags: ["edge-case", "values", "single"]
 
@@ -633,13 +633,13 @@ tests:
     expect:
       exit_code: 0
       stdout_json_assert:
-        - expression: "results[0].y"
+        - expression: "rows[0][0]"
           equals: 2024
-        - expression: "results[0].m"
+        - expression: "rows[0][1]"
           equals: 12
-        - expression: "results[0].d"
+        - expression: "rows[0][2]"
           equals: 31
-        - expression: "results[0].h"
+        - expression: "rows[0][3]"
           equals: 23
     tags: ["edge-case", "datetime", "boundary"]
 
