@@ -190,6 +190,8 @@ REQ-CONSTRAINT-002,ConstraintManagement,CatalogMethods,IMPL,,,schema,2026-01-09,
 REQ-CONSTRAINT-ENFORCE-001,ConstraintEnforcement,CatalogImport,IMPL,,,engine,2026-01-09,src/execution/crud_operations.zig
 REQ-CONSTRAINT-ENFORCE-002,ConstraintEnforcement,Validation,IMPL,,,engine,2026-01-09,src/execution/crud_operations.zig
 REQ-CONSTRAINT-EXEC-001,ConstraintExecution,CREATE,IMPL,,,engine,2026-01-09,src/execution.zig
+REQ-CONSTRAINT-EXEC-001,ConstraintExecution,CREATE,IMPL,,,engine,2026-01-10,src/execution/statement_dispatcher.zig
+REQ-CONSTRAINT-EXEC-002,ConstraintExecution,DROP,IMPL,,,engine,2026-01-10,src/execution/statement_dispatcher.zig
 REQ-COUNT-DISTINCT-BINDING-001,CountDistinctBindings,BindingAggregation,IMPL,,,aggregation,2025-12-28,src/execution/aggregation_evaluation.zig
 REQ-COUNT-DISTINCT-FIX-001,CountDistinctStrings,StringSupport,IMPL,,,engine,2025-12-26,src/execution/aggregation_evaluation.zig
 REQ-COUNT-DISTINCT-FIX-002,CountDistinctStrings,StringSupport,IMPL,,,engine,2025-12-26,src/execution/aggregation_evaluation.zig
@@ -269,6 +271,7 @@ REQ-EXEC-REFACTOR-008,ExecutionRefactoring,AGGREGATION_EVALUATION,IMPL,,,refacto
 REQ-EXEC-REFACTOR-009,FileModularization,ReturnAndSorting,IMPL,,,refactoring,2025-10-17,src/execution/return_and_sorting.zig
 REQ-EXEC-REFACTOR-010,FileModularization,StatementDispatcher,IMPL,,,refactoring,2025-10-17,src/execution/statement_dispatcher.zig
 REQ-EXEC-REFACTOR-011,FileModularization,QueryExecution,IMPL,,,refactoring,2025-10-17,src/execution/query_execution.zig
+REQ-FED-QUIC-001,FederationQUICConnection,Connection,IMPL,,,federation,2026-01-10,src/distributed/federation.zig
 REQ-FLE-ADMIN-001,FieldLevelEncryption,ADMIN,IMPL,,,security,2026-01-09,src/admin/fle_commands.zig
 REQ-FLE-AEAD-001,FieldLevelEncryption,SECURITY,IMPL,,,security,2025-10-15,src/crypto/aead.zig
 REQ-FLE-AST-001,FieldLevelEncryption,AST,IMPL,,,security,2025-10-15,src/gql/ast.zig
@@ -1068,6 +1071,7 @@ REQ-GQL-087,MigrationEngine,CliParityStatusCommand,TESTED,TestCANARY_REQ_GQL_087
 REQ-GQL-087,MigrationEngine,DownReversalSafety,TESTED,TestCANARY_REQ_GQL_087_DownReversalSafety,,migration,2025-09-26,src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,DriftPolicyOutcomeStrict,TESTED,TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict,,migration,2025-09-26,src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,ObservabilityMetrics,TESTED,TestCANARY_REQ_GQL_087_ObservabilityMetrics,,migration,2025-09-26,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,IMPL,,,migration,2026-01-10,src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,TestCANARY_REQ_GQL_087_PlanDryRunIntegrity,,migration,2025-09-26,src/migration/mod.zig
 REQ-GQL-087,NamespacedFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval.zig
 REQ-GQL-087,Temporal Types,TimestampTZNormalization,TESTED,TestCANARY_REQ_GQL_087_TimestampTZNorm,,types,2025-09-27,src/canary.zig
@@ -1748,6 +1752,7 @@ REQ-MATERIALIZED-VIEWS-002,Materialized View Integration,DistributedQueries,TEST
 REQ-MATERIALIZED-VIEWS-003,MV Storage Calculation,AccurateStorageMetrics,IMPL,test_materialized_views,,query,2025-12-30,src/query/materialized_views.zig
 REQ-MATERIALIZED-VIEWS-004,MV Filter Evaluation,PredicateEvaluation,IMPL,test_materialized_views,,query,2025-12-30,src/query/materialized_views.zig
 REQ-MATERIALIZED-VIEWS-005,MV Query Compatibility,SemanticQueryMatching,IMPL,test_materialized_views,,query,2025-12-30,src/query/materialized_views.zig
+REQ-MATERIALIZED-VIEWS-006,MV Source Query Execution,ActualQueryExecution,IMPL,test_materialized_views,,query,2026-01-10,src/query/materialized_views.zig
 REQ-MATH-ARITH-001,ArithmeticFunctions,MOD,IMPL,,,math,2025-10-26,src/eval.zig
 REQ-MATH-ARITH-001,ArithmeticFunctions,ROUND,IMPL,,,math,2025-12-22,src/eval.zig
 REQ-MATH-ARITH-002,ArithmeticFunctions,SIGN,IMPL,,,math,2025-10-26,src/eval.zig

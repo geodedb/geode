@@ -357,11 +357,81 @@ pub fn metricsSnapshot() MigrationError!Metrics {
     return global_metrics;
 }
 
-pub fn planDryRun(_: *std.mem.Allocator, _: []const []const u8) MigrationError!MigrationPlan {
-    // Early slice PlanDryRunIntegrity: do not mutate ledger, just echo prospective plan
-    // sorted by version ascending. Allocate slices using provided allocator.
+pub fn planDryRun(alloc: *std.mem.Allocator, names: []const []const u8) MigrationError!MigrationPlan {
+    // GAP-0042: Implement actual dry-run planning without mutating ledger
+    // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PlanDryRunIntegrity; STATUS=IMPL; OWNER=migration; UPDATED=2026-01-10
     ensureLedgerInit();
-    return MigrationPlan{ .up = &.{}, .down = &.{} };
+
+    const Planner = struct {
+        fn parseVersion(name: []const u8) ?i64 {
+            var i: usize = 0;
+            var value: i64 = 0;
+            while (i < name.len and name[i] >= '0' and name[i] <= '9') : (i += 1) {
+                if (i > 17) return null;
+                value = value * 10 + @as(i64, name[i] - '0');
+            }
+            if (i == 0) return null;
+            return value;
+        }
+        fn isApplied(v: i64) bool {
+            for (ledger_storage[0..ledger_len]) |row| {
+                if (row.version == v and row.applied) return true;
+            }
+            return false;
+        }
+    };
+
+    // Collect migrations that would be applied (not yet in ledger)
+    var pending_up = std.ArrayList([]const u8).init(alloc.*);
+    errdefer pending_up.deinit();
+
+    // Collect migrations that could be rolled back (in ledger and applied, version > 1)
+    var pending_down = std.ArrayList([]const u8).init(alloc.*);
+    errdefer pending_down.deinit();
+
+    // Analyze input migrations for up plan
+    for (names) |nm| {
+        const ver_opt = Planner.parseVersion(nm) orelse continue;
+        if (!Planner.isApplied(ver_opt)) {
+            // Check not already in pending list
+            var exists = false;
+            for (pending_up.items) |existing| {
+                if (std.mem.eql(u8, existing, nm)) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                try pending_up.append(nm);
+            }
+        }
+    }
+
+    // Analyze ledger for down plan (reversible migrations)
+    var idx: isize = @as(isize, @intCast(ledger_len)) - 1;
+    while (idx >= 0) : (idx -= 1) {
+        const row = ledger_storage[@intCast(idx)];
+        if (row.applied and row.version > 1) {
+            try pending_down.append(row.name);
+        }
+    }
+
+    // Sort up migrations by version ascending
+    const Ctx = struct {};
+    if (pending_up.items.len > 1) {
+        std.sort.heap([]const u8, pending_up.items, Ctx{}, struct {
+            fn lessThan(_: Ctx, a: []const u8, b: []const u8) bool {
+                const va = Planner.parseVersion(a) orelse return false;
+                const vb = Planner.parseVersion(b) orelse return true;
+                return va < vb;
+            }
+        }.lessThan);
+    }
+
+    return MigrationPlan{
+        .up = try pending_up.toOwnedSlice(),
+        .down = try pending_down.toOwnedSlice(),
+    };
 }
 
 pub fn testSimulateDrift() void {

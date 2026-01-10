@@ -457,6 +457,12 @@ pub fn main() !void {
                                     .Str => |sval| try w.print("\"{s}\"", .{sval}),
                                     .Decimal => |_| try w.print("<dec>", .{}),
                                     .List => |_| try w.print("<list>", .{}),
+                                    // GAP-0045: Handle complex graph types in output
+                                    .Node => |_| try w.print("<node>", .{}),
+                                    .Edge => |_| try w.print("<edge>", .{}),
+                                    .Path => |_| try w.print("<path>", .{}),
+                                    .Map => |_| try w.print("<map>", .{}),
+                                    .ExtValue => |_| try w.print("<ext>", .{}),
                                 }
                             }
                             try w.print("\n", .{});
@@ -774,6 +780,12 @@ pub fn main() !void {
                                 },
                                 .Str => |sval| try w.print("\"{s}\"", .{sval}),
                                 .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
+                                // GAP-0045: Handle complex graph types in aggregate output
+                                .Node => |_| try w.print("<node>", .{}),
+                                .Edge => |_| try w.print("<edge>", .{}),
+                                .Path => |_| try w.print("<path>", .{}),
+                                .Map => |_| try w.print("<map>", .{}),
+                                .ExtValue => |_| try w.print("<ext>", .{}),
                             }
                         }
                         try w.print("\n", .{});

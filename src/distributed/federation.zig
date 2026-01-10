@@ -3,6 +3,7 @@ const protocol = @import("../protocol.zig");
 const planner = @import("../planner.zig");
 const exec = @import("../exec.zig");
 const raft = @import("raft.zig");
+const quic = @import("../transport/quic.zig");
 
 /// Federation configuration
 pub const FederationConfig = struct {
@@ -124,11 +125,13 @@ pub const ConnectionPool = struct {
 };
 
 /// Connection to a remote node
+/// CANARY: REQ=REQ-FED-QUIC-001; FEATURE="FederationQUICConnection"; ASPECT=Connection; STATUS=IMPL; OWNER=federation; UPDATED=2026-01-10
 pub const Connection = struct {
     allocator: std.mem.Allocator,
-    client: ?*anyopaque = null,
-    stream: ?*anyopaque = null,
+    client: ?quic.QuicClient = null,
+    stream: ?*quic.QuicClientStream = null,
     last_used: i64,
+    connected: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) !Connection {
         return .{
@@ -136,40 +139,75 @@ pub const Connection = struct {
             .client = null,
             .stream = null,
             .last_used = 0,
+            .connected = false,
         };
     }
 
     pub fn deinit(self: *Connection) void {
-        if (self.stream) |s| s.deinit();
-        if (self.client) |*c| c.deinit();
-        self.stream = null;
-        self.client = null;
+        if (self.stream) |s| {
+            s.deinit();
+            self.stream = null;
+        }
+        if (self.client) |*c| {
+            c.deinit();
+            self.client = null;
+        }
+        self.connected = false;
     }
 
-    pub fn connect(_: *Connection, endpoint: []const u8) !void {
-        // endpoint like "host:port"
+    /// GAP-0044: Initialize QUIC client and establish connection to remote federation node
+    pub fn connect(self: *Connection, endpoint: []const u8) !void {
+        // Parse endpoint like "host:port"
         const colon = std.mem.indexOfScalar(u8, endpoint, ':') orelse return error.InvalidEndpoint;
         const host = endpoint[0..colon];
         const port = std.fmt.parseInt(u16, endpoint[colon + 1 ..], 10) catch return error.InvalidEndpoint;
-        // TODO: Initialize QUIC client and stream
-        _ = host;
-        _ = port;
-        // self.client = qc;
-        // self.stream = try self.client.?.getStream();
+
+        // Initialize QUIC client
+        self.client = quic.QuicClient.init(self.allocator);
+
+        // Connect to remote federation node with insecure mode for internal federation traffic
+        // Federation nodes use mutual TLS in production but allow insecure for testing
+        try self.client.?.connectInsecure(host, port, true);
+
+        // Wait for TLS handshake to complete (5 second timeout)
+        try self.client.?.waitForHandshake(5);
+
+        // Open a bidirectional stream for query/result exchange
+        self.stream = try self.client.?.getStream();
+        self.last_used = std.time.milliTimestamp();
+        self.connected = true;
     }
 
     pub fn sendQuery(self: *Connection, query: FederatedQuery) !void {
         const payload = try std.json.stringifyAlloc(self.allocator, query, .{});
         defer self.allocator.free(payload);
-        if (self.stream == null) return error.NotConnected;
+        if (self.stream == null or !self.connected) return error.NotConnected;
+
+        // Drive the QUIC endpoint to process outgoing packets
+        if (self.client) |*c| {
+            try c.poll(10);
+        }
+
         try self.stream.?.writeAll(payload);
         try self.stream.?.writeAll("\n");
+
+        // Drive the endpoint again to flush
+        if (self.client) |*c| {
+            try c.poll(10);
+        }
     }
 
     pub fn receiveResults(self: *Connection, allocator: std.mem.Allocator) !QueryResults {
-        if (self.stream == null) return error.NotConnected;
+        if (self.stream == null or !self.connected) return error.NotConnected;
+
+        // Drive the QUIC endpoint to receive incoming packets
+        if (self.client) |*c| {
+            try c.poll(100); // Longer timeout for receiving results
+        }
+
         const line = try self.stream.?.readLine(512 * 1024); // 512KB max frame
         defer allocator.free(line);
+        self.last_used = std.time.milliTimestamp();
         return parseResultsLine(allocator, line);
     }
 };

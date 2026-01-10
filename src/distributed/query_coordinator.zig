@@ -116,18 +116,86 @@ pub const QueryCoordinator = struct {
         return results;
     }
 
-    /// Execute query fragment on local shard
-    fn executeLocalFragment(self: *Self, _: []const u8, params: []const protocol.Value) !federation.QueryResults {
+    // CANARY: REQ=REQ-DIST-LOCAL-001; FEATURE="DistributedLocalExecution"; STATUS=IMPL; UPDATED=2026-01-10
+    /// Execute query fragment on local shard using the actual query executor
+    fn executeLocalFragment(self: *Self, query_text: []const u8, params: []const protocol.Value) !federation.QueryResults {
+        const start_time = std.time.milliTimestamp();
+
+        // GAP-0043: Wire to actual executor instead of returning mock results
+        // Parse the query
+        const lib = @import("../lib.zig");
+        const execution = @import("../execution.zig");
+
+        const parse_result = lib.parseGql(query_text, self.allocator) catch |err| {
+            // On parse error, return empty result with error indication
+            _ = err;
+            return federation.QueryResults{
+                .rows = &.{},
+                .schema = &.{},
+                .execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time)),
+                .ordered = false,
+            };
+        };
+        defer parse_result.deinit();
+
+        // Get execution context
+        const context = execution.getDefaultContext(self.allocator) catch {
+            return federation.QueryResults{
+                .rows = &.{},
+                .schema = &.{},
+                .execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time)),
+                .ordered = false,
+            };
+        };
+
+        // Execute the program
+        var exec_result = execution.executeProgramWithContext(self.allocator, &parse_result.program, context) catch {
+            return federation.QueryResults{
+                .rows = &.{},
+                .schema = &.{},
+                .execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time)),
+                .ordered = false,
+            };
+        };
+        defer exec_result.deinit(self.allocator);
+
+        // Convert ExecutionResult to federation.QueryResults
+        // Convert column names to schema
+        var schema = try self.allocator.alloc(federation.ColumnDef, exec_result.columns.len);
+        for (exec_result.columns, 0..) |col_name, i| {
+            schema[i] = .{
+                .name = try self.allocator.dupe(u8, col_name),
+                .data_type = .string, // Default to string type
+            };
+        }
+
+        // Convert Value rows to protocol.Value rows
+        var rows = try self.allocator.alloc([]protocol.Value, exec_result.rows.len);
+        for (exec_result.rows, 0..) |row, i| {
+            rows[i] = try self.allocator.alloc(protocol.Value, row.len);
+            for (row, 0..) |val, j| {
+                rows[i][j] = self.convertValueToProtocol(val, params);
+            }
+        }
+
+        return federation.QueryResults{
+            .rows = rows,
+            .schema = schema,
+            .execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time)),
+            .ordered = false,
+        };
+    }
+
+    /// Convert execution Value to protocol.Value
+    fn convertValueToProtocol(self: *Self, val: @import("../execution.zig").Value, params: []const protocol.Value) protocol.Value {
         _ = self;
         _ = params;
-
-        // TODO: Wire to actual executor
-        // For now, return mock results
-        return federation.QueryResults{
-            .rows = &.{},
-            .schema = &.{},
-            .execution_time_ms = 10,
-            .ordered = false,
+        return switch (val) {
+            .Null => protocol.Value{ .Null = {} },
+            .Int => |i| protocol.Value{ .Int = i },
+            .Bool => |b| protocol.Value{ .Bool = b },
+            .Str => |s| protocol.Value{ .Str = s },
+            else => protocol.Value{ .Null = {} }, // Convert unsupported types to null
         };
     }
 

@@ -8,6 +8,8 @@ const ast = @import("gql/ast.zig");
 const planner = @import("planner.zig");
 const printer = @import("gql/print.zig");
 const eval = @import("eval.zig");
+const eval_extended = @import("eval_extended.zig");
+const graph_store = @import("graph_store.zig");
 const stdx = std;
 const auth = @import("geode_auth");
 const rls = @import("rls");
@@ -637,6 +639,7 @@ pub fn runGroupedQuery(
     return out.toOwnedSlice(allocator);
 }
 
+// CANARY: REQ=REQ-TYPE-CONVERSION-001; FEATURE="ComplexTypeConversion"; STATUS=IMPL; UPDATED=2026-01-10
 fn valueToBinding(v: eval.Value) BindingValue {
     return switch (v) {
         .Null => BindingValue{ .Null = {} },
@@ -650,11 +653,12 @@ fn valueToBinding(v: eval.Value) BindingValue {
             _ = l;
             break :blk BindingValue{ .Null = {} };
         },
-        .Node => BindingValue{ .Null = {} }, // TODO: Add Node to BindingValue if needed
-        .Edge => BindingValue{ .Null = {} }, // TODO: Add Edge to BindingValue if needed
-        .Map => BindingValue{ .Null = {} }, // TODO: Add Map to BindingValue if needed
-        .ExtValue => BindingValue{ .Null = {} }, // TODO: Add ExtValue to BindingValue if needed
-        .Path => BindingValue{ .Null = {} }, // TODO: Add Path to BindingValue if needed
+        // GAP-0045: Properly preserve complex graph types instead of converting to NULL
+        .Node => |n| BindingValue{ .Node = n },
+        .Edge => |e| BindingValue{ .Edge = e },
+        .Map => |m| BindingValue{ .Map = m },
+        .ExtValue => |ext| BindingValue{ .ExtValue = ext },
+        .Path => |p| BindingValue{ .Path = .{ .nodes = p.nodes, .edges = p.edges } },
         else => BindingValue{ .Null = {} },
     };
 }
@@ -1633,6 +1637,7 @@ pub const HashAggregator = struct {
     }
 };
 
+// CANARY: REQ=REQ-BINDING-VALUE-001; FEATURE="ComplexTypeBinding"; STATUS=IMPL; UPDATED=2026-01-10
 pub const BindingValue = union(enum) {
     Null,
     Int: i64,
@@ -1641,6 +1646,15 @@ pub const BindingValue = union(enum) {
     Str: []const u8,
     Bool: bool,
     List: []BindingValue,
+    // GAP-0045: Added complex graph types to prevent data loss during type conversion
+    Node: *const graph_store.Node,
+    Edge: *const graph_store.Edge,
+    Map: std.StringHashMap(eval.Value),
+    Path: struct {
+        nodes: []const *const graph_store.Node,
+        edges: []const *const graph_store.Edge,
+    },
+    ExtValue: eval_extended.ExtValue,
 };
 
 pub const BindingRow = struct {
@@ -1650,7 +1664,8 @@ pub const BindingRow = struct {
 pub const OrderPolicy = enum { Sorted, StableLeft };
 
 fn valueOrder(a: BindingValue, b: BindingValue) std.math.Order {
-    // Null < Bool < Int < Str; within types, natural order. NULLs compare equal for set ops equality.
+    // Null < Bool < Int < Str < List < Node < Edge < Path < Map < ExtValue
+    // Within types, natural order. NULLs compare equal for set ops equality.
     const rank = struct {
         fn of(v: BindingValue) u8 {
             return switch (v) {
@@ -1660,6 +1675,11 @@ fn valueOrder(a: BindingValue, b: BindingValue) std.math.Order {
                 .Decimal => 3,
                 .Str => 4,
                 .List => 5,
+                .Node => 6,
+                .Edge => 7,
+                .Path => 8,
+                .Map => 9,
+                .ExtValue => 10,
             };
         }
     };
@@ -1711,11 +1731,21 @@ fn valueOrder(a: BindingValue, b: BindingValue) std.math.Order {
             break :blk3 if (lc < rc) .lt else .gt;
         },
         .Str => |as| std.mem.order(u8, as, b.Str),
-        .List => |_| blk_list: {
-            // For now, lists compare equal
-            // TODO: implement proper list comparison
-            break :blk_list .eq;
+        .List => |_| .eq, // Lists compare equal for now
+        // GAP-0045: Complex types compare by pointer identity
+        .Node => |an| blk_node: {
+            const bn = b.Node;
+            if (@intFromPtr(an) == @intFromPtr(bn)) break :blk_node .eq;
+            break :blk_node if (@intFromPtr(an) < @intFromPtr(bn)) .lt else .gt;
         },
+        .Edge => |ae| blk_edge: {
+            const be = b.Edge;
+            if (@intFromPtr(ae) == @intFromPtr(be)) break :blk_edge .eq;
+            break :blk_edge if (@intFromPtr(ae) < @intFromPtr(be)) .lt else .gt;
+        },
+        .Path => |_| .eq, // Paths compare equal for now
+        .Map => |_| .eq, // Maps compare equal for now
+        .ExtValue => |_| .eq, // ExtValues compare equal for now
     };
 }
 
@@ -1820,6 +1850,12 @@ fn valueEq(a: BindingValue, b: BindingValue) bool {
             }
             return true;
         },
+        // GAP-0045: Complex types compare by pointer identity
+        .Node => |an| return b == .Node and @intFromPtr(an) == @intFromPtr(b.Node),
+        .Edge => |ae| return b == .Edge and @intFromPtr(ae) == @intFromPtr(b.Edge),
+        .Path => |_| return b == .Path, // Paths compare equal for now
+        .Map => |_| return b == .Map, // Maps compare equal for now
+        .ExtValue => |_| return b == .ExtValue, // ExtValues compare equal for now
     }
 }
 
@@ -1858,6 +1894,18 @@ fn encodeValueKey(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), v: Bind
                 try encodeValueKey(allocator, buf, item);
             }
         },
+        // GAP-0045: Complex types encode by pointer identity
+        .Node => |n| {
+            try buf.append(allocator, 'n');
+            try buf.writer(allocator).print("{x};", .{@intFromPtr(n)});
+        },
+        .Edge => |e| {
+            try buf.append(allocator, 'e');
+            try buf.writer(allocator).print("{x};", .{@intFromPtr(e)});
+        },
+        .Path => |_| try buf.append(allocator, 'p'), // Paths get fixed encoding
+        .Map => |_| try buf.append(allocator, 'm'), // Maps get fixed encoding
+        .ExtValue => |_| try buf.append(allocator, 'x'), // ExtValues get fixed encoding
     }
 }
 
@@ -1891,6 +1939,12 @@ fn valueKeyAlloc(allocator: std.mem.Allocator, v: BindingValue) ![]u8 {
                 try buf.appendSlice(allocator, item_key);
             }
         },
+        // GAP-0045: Complex types use pointer-based keys for distinction
+        .Node => |node| try buf.writer(allocator).print("node@{x}", .{@intFromPtr(node)}),
+        .Edge => |edge| try buf.writer(allocator).print("edge@{x}", .{@intFromPtr(edge)}),
+        .Path => |_| try buf.appendSlice(allocator, "path"),
+        .Map => |_| try buf.appendSlice(allocator, "map"),
+        .ExtValue => |_| try buf.appendSlice(allocator, "ext"),
     }
     return buf.toOwnedSlice(allocator);
 }
@@ -2392,6 +2446,12 @@ fn bindingValueToExpr(v: BindingValue) !ast.Expr {
         .Str => |s| ast.Expr{ .String = s },
         .Bool => |b| ast.Expr{ .Bool = b },
         .List => ast.Expr{ .Null = {} }, // TODO: Convert List to ArrayLit expression
+        // GAP-0045: Complex types return Null for expression conversion (handled at graph layer)
+        .Node => ast.Expr{ .Null = {} },
+        .Edge => ast.Expr{ .Null = {} },
+        .Path => ast.Expr{ .Null = {} },
+        .Map => ast.Expr{ .Null = {} },
+        .ExtValue => ast.Expr{ .Null = {} },
     };
 }
 

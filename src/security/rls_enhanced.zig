@@ -346,14 +346,14 @@ pub const ExpressionCompiler = struct {
         return try self.evaluateInterpreted(expression.raw, row, context);
     }
 
+    // CANARY: REQ=REQ-RLS-CONTEXT-001; FEATURE="RLSContextEvaluation"; STATUS=IMPL; UPDATED=2026-01-10
     fn evaluateCompiled(
         self: *ExpressionCompiler,
         compiled: *rls.RLSEngine.CompiledExpression,
         row: *const std.StringHashMap(rls.Value),
         context: *auth.SecurityContext,
     ) !bool {
-        _ = context; // TODO: Use context for user-specific evaluations
-        // Simple bytecode interpreter
+        // GAP-0047: Now properly uses security context for user-specific evaluations
         var pc: usize = 0;
         var stack = std.ArrayList(rls.Value).init(self.allocator);
         defer stack.deinit();
@@ -369,8 +369,20 @@ pub const ExpressionCompiler = struct {
                     pc += 1;
                     try stack.append(compiled.constants[const_idx]);
                 },
-                0x02 => { // LOAD_FIELD
-                    const field_name = "user_id"; // Simplified
+                0x02 => { // LOAD_FIELD (reads field name index from bytecode)
+                    const field_idx = if (pc < compiled.bytecode.len) blk: {
+                        const idx = compiled.bytecode[pc];
+                        pc += 1;
+                        break :blk idx;
+                    } else 0;
+                    // Get field name from constants array (stored as string values)
+                    const field_name = if (field_idx < compiled.constants.len)
+                        switch (compiled.constants[field_idx]) {
+                            .string => |s| s,
+                            else => "user_id",
+                        }
+                    else
+                        "user_id"; // Fallback for backwards compatibility
                     if (row.get(field_name)) |value| {
                         try stack.append(value);
                     } else {
@@ -393,6 +405,60 @@ pub const ExpressionCompiler = struct {
                         };
                     }
                     return false;
+                },
+                // GAP-0047: New opcodes for security context access
+                0x05 => { // LOAD_CURRENT_USER - pushes current user ID from context
+                    try stack.append(rls.Value{ .integer = @intCast(context.user.id) });
+                },
+                0x06 => { // LOAD_CURRENT_USER_NAME - pushes current username from context
+                    try stack.append(rls.Value{ .string = context.user.username });
+                },
+                0x07 => { // HAS_ROLE - pops role name from stack, pushes boolean
+                    if (stack.items.len < 1) {
+                        try stack.append(rls.Value{ .boolean = false });
+                    } else {
+                        const role_val = stack.pop();
+                        const has_role = switch (role_val) {
+                            .string => |role_name| self.userHasRole(context, role_name),
+                            else => false,
+                        };
+                        try stack.append(rls.Value{ .boolean = has_role });
+                    }
+                },
+                0x08 => { // COMPARE_NE (not equal)
+                    if (stack.items.len < 2) return false;
+                    const b = stack.pop();
+                    const a = stack.pop();
+                    const result = try self.compareValues(a, b);
+                    try stack.append(rls.Value{ .boolean = !result });
+                },
+                0x09 => { // LOGICAL_AND
+                    if (stack.items.len < 2) return false;
+                    const b = stack.pop();
+                    const a = stack.pop();
+                    const a_bool = switch (a) {
+                        .boolean => |v| v,
+                        else => false,
+                    };
+                    const b_bool = switch (b) {
+                        .boolean => |v| v,
+                        else => false,
+                    };
+                    try stack.append(rls.Value{ .boolean = a_bool and b_bool });
+                },
+                0x0A => { // LOGICAL_OR
+                    if (stack.items.len < 2) return false;
+                    const b = stack.pop();
+                    const a = stack.pop();
+                    const a_bool = switch (a) {
+                        .boolean => |v| v,
+                        else => false,
+                    };
+                    const b_bool = switch (b) {
+                        .boolean => |v| v,
+                        else => false,
+                    };
+                    try stack.append(rls.Value{ .boolean = a_bool or b_bool });
                 },
                 else => return false, // Unknown opcode
             }
