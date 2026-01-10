@@ -441,20 +441,146 @@ pub const MLEngine = struct {
         };
     }
 
-    fn modularityGain(self: *Self, node: NodeId, community: u32, communities: *std.AutoHashMap(NodeId, u32)) f32 {
-        _ = self;
-        _ = node;
-        _ = community;
-        _ = communities;
-        // Simplified modularity gain calculation
-        return std.crypto.random.float(f32) * 0.1; // Placeholder
+    /// Calculate modularity gain for moving a node to a different community
+    /// CANARY: REQ=REQ-ML-MODULARITY-001; FEATURE="Louvain Modularity Gain"; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
+    /// GAP-0050: Implements actual modularity gain calculation using standard formula
+    /// ΔQ = [k_i,in / m - (Σ_tot * k_i) / (2m²)] where:
+    ///   k_i,in = sum of edge weights from node i to nodes in target community
+    ///   Σ_tot = sum of all edge weights incident to nodes in target community
+    ///   k_i = degree of node i (sum of its edge weights)
+    ///   m = total edge weight in graph / 2
+    fn modularityGain(self: *Self, node: NodeId, target_community: u32, communities: *std.AutoHashMap(NodeId, u32)) f32 {
+        // Calculate total edge weight (m)
+        var total_weight: f32 = 0.0;
+        var edge_it = self.graph.edges.iterator();
+        while (edge_it.next()) |entry| {
+            total_weight += entry.value_ptr.weight;
+        }
+        // For undirected graph, m = total_weight / 2
+        const m = total_weight / 2.0;
+        if (m == 0.0) return 0.0;
+
+        // Calculate k_i (degree of node)
+        var k_i: f32 = 0.0;
+        if (self.graph.outgoing_edges.get(node)) |out_edges| {
+            for (out_edges.items) |edge_id| {
+                if (self.graph.edges.get(edge_id)) |edge| {
+                    k_i += edge.weight;
+                }
+            }
+        }
+        if (self.graph.incoming_edges.get(node)) |in_edges| {
+            for (in_edges.items) |edge_id| {
+                if (self.graph.edges.get(edge_id)) |edge| {
+                    k_i += edge.weight;
+                }
+            }
+        }
+
+        // Calculate k_i,in (edges from node to target community)
+        var k_i_in: f32 = 0.0;
+        if (self.graph.outgoing_edges.get(node)) |out_edges| {
+            for (out_edges.items) |edge_id| {
+                if (self.graph.edges.get(edge_id)) |edge| {
+                    if (communities.get(edge.target)) |target_comm| {
+                        if (target_comm == target_community) {
+                            k_i_in += edge.weight;
+                        }
+                    }
+                }
+            }
+        }
+        if (self.graph.incoming_edges.get(node)) |in_edges| {
+            for (in_edges.items) |edge_id| {
+                if (self.graph.edges.get(edge_id)) |edge| {
+                    if (communities.get(edge.source)) |source_comm| {
+                        if (source_comm == target_community) {
+                            k_i_in += edge.weight;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Calculate Σ_tot (total weight incident to target community)
+        var sigma_tot: f32 = 0.0;
+        var node_it = communities.iterator();
+        while (node_it.next()) |entry| {
+            if (entry.value_ptr.* != target_community) continue;
+            const comm_node = entry.key_ptr.*;
+            if (self.graph.outgoing_edges.get(comm_node)) |out_edges| {
+                for (out_edges.items) |edge_id| {
+                    if (self.graph.edges.get(edge_id)) |edge| {
+                        sigma_tot += edge.weight;
+                    }
+                }
+            }
+        }
+
+        // Calculate modularity gain: ΔQ = k_i,in / m - (Σ_tot * k_i) / (2m²)
+        const delta_q = (k_i_in / m) - (sigma_tot * k_i) / (2.0 * m * m);
+        return delta_q;
     }
 
+    /// Calculate overall modularity of current community assignment
+    /// CANARY: REQ=REQ-ML-MODULARITY-002; FEATURE="Graph Modularity Calculation"; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
+    /// GAP-0050: Implements actual modularity calculation using standard formula
+    /// Q = (1/2m) * Σ_ij [A_ij - (k_i * k_j) / (2m)] * δ(c_i, c_j)
     fn calculateModularity(self: *Self, communities: *std.AutoHashMap(NodeId, u32)) !f32 {
-        _ = self;
-        _ = communities;
-        // Simplified modularity calculation
-        return 0.75; // Placeholder
+        // Calculate total edge weight (m)
+        var total_weight: f32 = 0.0;
+        var edge_it = self.graph.edges.iterator();
+        while (edge_it.next()) |entry| {
+            total_weight += entry.value_ptr.weight;
+        }
+        const m = total_weight / 2.0;
+        if (m == 0.0) return 0.0;
+
+        // Pre-calculate node degrees
+        var degrees = std.AutoHashMap(NodeId, f32).init(self.allocator);
+        defer degrees.deinit();
+
+        var node_it = self.graph.nodes.iterator();
+        while (node_it.next()) |entry| {
+            const node_id = entry.key_ptr.*;
+            var k_i: f32 = 0.0;
+            if (self.graph.outgoing_edges.get(node_id)) |out_edges| {
+                for (out_edges.items) |edge_id| {
+                    if (self.graph.edges.get(edge_id)) |edge| {
+                        k_i += edge.weight;
+                    }
+                }
+            }
+            if (self.graph.incoming_edges.get(node_id)) |in_edges| {
+                for (in_edges.items) |edge_id| {
+                    if (self.graph.edges.get(edge_id)) |edge| {
+                        k_i += edge.weight;
+                    }
+                }
+            }
+            try degrees.put(node_id, k_i);
+        }
+
+        // Calculate modularity: Q = (1/2m) * Σ [A_ij - (k_i * k_j)/(2m)] * δ(c_i, c_j)
+        var modularity: f32 = 0.0;
+        edge_it = self.graph.edges.iterator();
+        while (edge_it.next()) |entry| {
+            const edge = entry.value_ptr.*;
+            const c_i = communities.get(edge.source) orelse continue;
+            const c_j = communities.get(edge.target) orelse continue;
+
+            // Only count if same community (δ = 1)
+            if (c_i != c_j) continue;
+
+            const k_i = degrees.get(edge.source) orelse 0.0;
+            const k_j = degrees.get(edge.target) orelse 0.0;
+
+            // Q_edge = A_ij - (k_i * k_j) / (2m)
+            modularity += edge.weight - (k_i * k_j) / (2.0 * m);
+        }
+
+        // Normalize by 1/(2m)
+        return modularity / (2.0 * m);
     }
 };
 

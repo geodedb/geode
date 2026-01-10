@@ -338,12 +338,123 @@ pub const AnomalyDetector = struct {
         };
     }
 
+    /// Extract relevant numeric value from event for anomaly detection
+    /// CANARY: REQ=REQ-ANALYTICS-METRIC-001; FEATURE="Metric Extraction"; STATUS=IMPL; OWNER=analytics; UPDATED=2026-01-10
+    /// GAP-0051: Implements actual metric extraction based on event type and properties
     fn extractMetricValue(self: *AnomalyDetector, event: *const AnalyticsEvent) !f64 {
         _ = self;
-        _ = event;
-        // Extract relevant numeric value for anomaly detection
-        // This could be frequency, magnitude, or other measurable attributes
-        return 1.0; // Placeholder - would extract actual metrics
+
+        // Extract metric based on event type
+        switch (event.event_type) {
+            .graph_query => {
+                // For queries: extract execution time or row count
+                if (event.metadata.processing_time) |pt| {
+                    return @as(f64, @floatFromInt(pt));
+                }
+                // Check for explicit execution_time property
+                if (event.properties.get("execution_time_ms")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        .integer => |i| @as(f64, @floatFromInt(i)),
+                        else => 1.0,
+                    };
+                }
+                // Check for row_count property
+                if (event.properties.get("row_count")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        .integer => |i| @as(f64, @floatFromInt(i)),
+                        else => 1.0,
+                    };
+                }
+                return 1.0; // Count as single event
+            },
+            .similarity_search => {
+                // For similarity searches: extract result count or similarity score
+                if (event.properties.get("result_count")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        .integer => |i| @as(f64, @floatFromInt(i)),
+                        else => 1.0,
+                    };
+                }
+                if (event.properties.get("similarity_score")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        else => 1.0,
+                    };
+                }
+                return 1.0;
+            },
+            .anomaly_detection => {
+                // For anomaly events: extract confidence or severity
+                if (event.properties.get("confidence")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        else => 1.0,
+                    };
+                }
+                return 1.0;
+            },
+            .node_creation, .edge_creation, .node_update, .edge_update => {
+                // For mutation events: extract affected count or use 1.0 per event
+                if (event.properties.get("affected_count")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        .integer => |i| @as(f64, @floatFromInt(i)),
+                        else => 1.0,
+                    };
+                }
+                // Check for batch_size for batch operations
+                if (event.properties.get("batch_size")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        .integer => |i| @as(f64, @floatFromInt(i)),
+                        else => 1.0,
+                    };
+                }
+                return 1.0; // Single creation/update event
+            },
+            .node_deletion, .edge_deletion => {
+                // Deletion events count affected items
+                if (event.properties.get("deleted_count")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        .integer => |i| @as(f64, @floatFromInt(i)),
+                        else => 1.0,
+                    };
+                }
+                return 1.0;
+            },
+            .embedding_update => {
+                // For embedding updates: extract dimension or vector count
+                if (event.properties.get("vectors_updated")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        .integer => |i| @as(f64, @floatFromInt(i)),
+                        else => 1.0,
+                    };
+                }
+                return 1.0;
+            },
+            .pattern_detection, .trend_analysis => {
+                // Pattern/trend events: extract significance score
+                if (event.properties.get("significance")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        else => 1.0,
+                    };
+                }
+                if (event.properties.get("pattern_count")) |val| {
+                    return switch (val) {
+                        .float => |f| f,
+                        .integer => |i| @as(f64, @floatFromInt(i)),
+                        else => 1.0,
+                    };
+                }
+                return 1.0;
+            },
+        }
     }
 
     fn updateBaseline(self: *AnomalyDetector, metric_key: []const u8, value: f64) !void {

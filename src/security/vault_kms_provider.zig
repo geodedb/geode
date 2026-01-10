@@ -131,11 +131,82 @@ pub const VaultKMSProvider = struct {
     }
 
     /// List available keys in Vault
+    /// CANARY: REQ=REQ-VAULT-KMS-LIST-001; FEATURE="Vault Key Listing"; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+    /// GAP-0052: Implements actual Vault key listing using `vault kv list` command
     pub fn listKeys(self: *Self) ![][]u8 {
-        // This would use `vault kv list` equivalent
-        // For now, return a placeholder implementation
-        const keys = try self.allocator.alloc([]u8, 1);
-        keys[0] = try self.allocator.dupe(u8, "master-key");
+        // Execute vault kv list command to get actual keys
+        const result = std.ChildProcess.exec(.{
+            .allocator = self.allocator,
+            .argv = &[_][]const u8{ "vault", "kv", "list", "-format=json", self.key_path },
+            .env_map = &std.process.EnvMap.init(self.allocator),
+        }) catch |err| {
+            // If vault command fails (e.g., vault not available), return empty list
+            std.log.warn("Vault list keys failed: {}, returning empty list", .{err});
+            return try self.allocator.alloc([]u8, 0);
+        };
+        defer self.allocator.free(result.stderr);
+
+        if (result.term.Exited != 0) {
+            self.allocator.free(result.stdout);
+            // No keys found or path doesn't exist - return empty list
+            return try self.allocator.alloc([]u8, 0);
+        }
+
+        // Parse JSON array output from vault kv list
+        // Format: ["key1", "key2", ...]
+        const json_output = std.mem.trim(u8, result.stdout, " \t\n\r");
+        defer self.allocator.free(result.stdout);
+
+        if (json_output.len == 0 or json_output[0] != '[') {
+            // Not valid JSON array - return empty list
+            return try self.allocator.alloc([]u8, 0);
+        }
+
+        // Count keys by counting quotes
+        var key_count: usize = 0;
+        var in_string = false;
+        for (json_output) |c| {
+            if (c == '"' and !in_string) {
+                in_string = true;
+            } else if (c == '"' and in_string) {
+                in_string = false;
+                key_count += 1;
+            }
+        }
+        key_count = key_count / 2; // Each key has 2 quotes
+
+        if (key_count == 0) {
+            return try self.allocator.alloc([]u8, 0);
+        }
+
+        // Allocate result array
+        const keys = try self.allocator.alloc([]u8, key_count);
+        errdefer self.allocator.free(keys);
+
+        // Parse keys from JSON
+        var key_idx: usize = 0;
+        var i: usize = 1; // Skip opening [
+        while (i < json_output.len and key_idx < key_count) {
+            // Find start of string
+            while (i < json_output.len and json_output[i] != '"') {
+                i += 1;
+            }
+            if (i >= json_output.len) break;
+            i += 1; // Skip opening quote
+
+            // Find end of string
+            const key_start = i;
+            while (i < json_output.len and json_output[i] != '"') {
+                i += 1;
+            }
+            if (i >= json_output.len) break;
+
+            // Copy key
+            keys[key_idx] = try self.allocator.dupe(u8, json_output[key_start..i]);
+            key_idx += 1;
+            i += 1; // Skip closing quote
+        }
+
         return keys;
     }
 

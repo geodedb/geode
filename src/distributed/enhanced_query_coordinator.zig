@@ -452,10 +452,31 @@ pub const EnhancedQueryCoordinator = struct {
         };
     }
 
-    /// Simple row comparison for sorting
+    /// Row comparison for distributed query result sorting
+    /// CANARY: REQ=REQ-DIST-ROW-SORT-001; FEATURE="Distributed Row Sorting"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    /// GAP-0053: Implements actual field-by-field comparison using ORDER BY semantics
     fn simpleRowCompare(context: void, a: protocol.BindingRow, b: protocol.BindingRow) bool {
         _ = context;
-        return a.len < b.len; // Placeholder comparison
+        // Compare rows column by column in ascending order with NULLS FIRST
+        // For distributed queries without explicit ORDER BY, we use all columns as sort keys
+        const max_cols = if (a.cols.len > b.cols.len) a.cols.len else b.cols.len;
+        if (max_cols == 0) return false;
+
+        var col_indices: [32]usize = undefined;
+        const num_cols = if (max_cols > 32) 32 else max_cols;
+        for (0..num_cols) |i| {
+            col_indices[i] = i;
+        }
+
+        const ascending = [_]bool{true} ** 32;
+        const cmp = protocol.compareBindingRows(
+            a,
+            b,
+            col_indices[0..num_cols],
+            ascending[0..num_cols],
+            true, // NULLS FIRST by default
+        );
+        return cmp == .lt;
     }
 
     /// Hash a row for deduplication

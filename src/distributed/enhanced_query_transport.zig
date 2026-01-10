@@ -57,6 +57,9 @@ pub const EnhancedQueryTransport = struct {
     message_handlers: MessageHandlers,
     statistics: TransportStatistics,
     config: TransportConfig,
+    // CANARY: REQ=REQ-DIST-TRACKER-001; FEATURE="Query Tracker Storage"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    // GAP-0054: Added active_trackers map for query tracking
+    active_trackers: std.AutoHashMap(u64, *QueryTracker),
 
     pub const TransportConfig = struct {
         max_concurrent_queries: u32 = 200,
@@ -111,6 +114,8 @@ pub const EnhancedQueryTransport = struct {
                 .shard_utilization = std.AutoHashMap(u64, TransportStatistics.ShardUtilization).init(allocator),
             },
             .config = TransportConfig{},
+            // GAP-0054: Initialize active query trackers map
+            .active_trackers = std.AutoHashMap(u64, *QueryTracker).init(allocator),
         };
 
         // Register message handlers
@@ -469,25 +474,50 @@ pub const EnhancedQueryTransport = struct {
         };
     }
 
-    // Placeholder functions for tracking and coordination
+    /// Track an active query for coordination and cancellation support
+    /// CANARY: REQ=REQ-DIST-TRACKER-002; FEATURE="Query Tracking"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    /// GAP-0054: Implements actual query tracking using HashMap storage
     fn trackActiveQuery(self: *EnhancedQueryTransport, query_id: u64, plan: *const ExecutionPlan, callback: QueryCompletionCallback) !void {
-        _ = self;
-        _ = query_id;
-        _ = plan;
-        _ = callback;
-        // Implementation would track active queries
+        // Allocate and initialize tracker
+        const tracker = try self.allocator.create(QueryTracker);
+        tracker.* = QueryTracker{
+            .query_id = query_id,
+            .start_time = std.time.milliTimestamp(),
+            .fragment_results = std.AutoHashMap(u64, QueryResult).init(self.allocator),
+            .completion_callback = callback,
+        };
+
+        // Pre-populate expected fragments from plan
+        for (plan.fragments) |fragment| {
+            _ = fragment;
+            // Fragment tracking will be added when results arrive
+        }
+
+        // Store in active trackers map
+        try self.active_trackers.put(query_id, tracker);
+
+        log.debug("Tracking query {d} with {d} fragments", .{ query_id, plan.fragments.len });
     }
 
+    /// Get the tracker for an active query
+    /// CANARY: REQ=REQ-DIST-TRACKER-003; FEATURE="Query Tracker Lookup"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    /// GAP-0054: Implements actual tracker retrieval from HashMap
     fn getQueryTracker(self: *EnhancedQueryTransport, query_id: u64) ?*QueryTracker {
-        _ = self;
-        _ = query_id;
-        return null; // Placeholder
+        return self.active_trackers.get(query_id);
     }
 
+    /// Remove and clean up a query tracker after completion or cancellation
+    /// CANARY: REQ=REQ-DIST-TRACKER-004; FEATURE="Query Tracker Cleanup"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    /// GAP-0054: Implements actual tracker cleanup with proper memory deallocation
     fn removeQueryTracker(self: *EnhancedQueryTransport, query_id: u64) void {
-        _ = self;
-        _ = query_id;
-        // Implementation would clean up query tracking
+        if (self.active_trackers.fetchRemove(query_id)) |entry| {
+            const tracker = entry.value;
+            // Clean up fragment results
+            tracker.fragment_results.deinit();
+            // Deallocate tracker
+            self.allocator.destroy(tracker);
+            log.debug("Removed tracker for query {d}", .{query_id});
+        }
     }
 
     fn deallocateExecutionPlan(self: *EnhancedQueryTransport, plan: *ExecutionPlan) void {

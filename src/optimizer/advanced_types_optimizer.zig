@@ -285,25 +285,28 @@ pub const AdvancedTypesOptimizer = struct {
     }
 
     // Filter optimization helpers
+    /// Check if filter involves vector operations (similarity search, distance)
+    /// CANARY: REQ=REQ-OPTIMIZER-FILTER-001; FEATURE="Vector Filter Detection"; STATUS=IMPL; OWNER=optimizer; UPDATED=2026-01-10
+    /// GAP-0049: Implements actual filter type detection based on predicate_type
     fn isVectorFilter(self: *AdvancedTypesOptimizer, filter_op: *FilterOperation) bool {
         _ = self;
-        _ = filter_op;
-        // Check if filter involves vector operations
-        return false; // Placeholder
+        return filter_op.predicate_type == .vector_similarity;
     }
 
+    /// Check if filter involves geographic operations (spatial distance, containment)
+    /// CANARY: REQ=REQ-OPTIMIZER-FILTER-002; FEATURE="Geographic Filter Detection"; STATUS=IMPL; OWNER=optimizer; UPDATED=2026-01-10
+    /// GAP-0049: Implements actual filter type detection based on predicate_type
     fn isGeographicFilter(self: *AdvancedTypesOptimizer, filter_op: *FilterOperation) bool {
         _ = self;
-        _ = filter_op;
-        // Check if filter involves geographic operations
-        return false; // Placeholder
+        return filter_op.predicate_type == .spatial_distance;
     }
 
+    /// Check if filter involves cryptographic operations (signature verification)
+    /// CANARY: REQ=REQ-OPTIMIZER-FILTER-003; FEATURE="Cryptographic Filter Detection"; STATUS=IMPL; OWNER=optimizer; UPDATED=2026-01-10
+    /// GAP-0049: Implements actual filter type detection based on predicate_type
     fn isCryptographicFilter(self: *AdvancedTypesOptimizer, filter_op: *FilterOperation) bool {
         _ = self;
-        _ = filter_op;
-        // Check if filter involves cryptographic operations
-        return false; // Placeholder
+        return filter_op.predicate_type == .crypto_verify;
     }
 
     fn optimizeVectorFilter(self: *AdvancedTypesOptimizer, filter_op: *FilterOperation) !void {
