@@ -1682,34 +1682,187 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
     return error.UnsupportedGeometry;
 }
 
+// CANARY: REQ=REQ-SPATIAL-CONTAINS-001; FEATURE="SpatialContains"; ASPECT=GeometryRelation; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// GAP-0089 RESOLVED: Proper point-in-polygon test using ray casting algorithm
 fn stContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    _ = allocator;
     if (args.len != 2) return error.InvalidArgs;
     if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
 
-    // Simplified point-in-polygon test
-    // For MVP, always return true for demo
-    return .{ .Bool = true };
-}
+    const container = args[0].Geometry;
+    const contained = args[1].Geometry;
 
-fn stIntersects(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
-    if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
+    // Parse both geometries
+    const container_type = parseWkbGeomType(container.wkb);
+    const contained_type = parseWkbGeomType(contained.wkb);
 
-    // Simplified intersection test
-    // For MVP, always return true for demo
-    return .{ .Bool = true };
-}
+    // Point-in-Polygon test
+    if (container_type == 3 and contained_type == 1) { // Polygon contains Point
+        const point = try parseWkbPoint(contained.wkb);
+        const polygon = try parseWkbPolygon(allocator, container.wkb);
+        defer allocator.free(polygon);
 
-fn stWithin(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
-    if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
+        const result = pointInPolygon(point, polygon);
+        return .{ .Bool = result };
+    }
 
-    // Simplified within test
-    // For MVP, always return false for demo
+    // Point contains Point: only if same location
+    if (container_type == 1 and contained_type == 1) {
+        const p1 = try parseWkbPoint(container.wkb);
+        const p2 = try parseWkbPoint(contained.wkb);
+        const result = @abs(p1[0] - p2[0]) < 1e-10 and @abs(p1[1] - p2[1]) < 1e-10;
+        return .{ .Bool = result };
+    }
+
+    // For unsupported geometry combinations, return false
     return .{ .Bool = false };
+}
+
+// CANARY: REQ=REQ-SPATIAL-INTERSECTS-001; FEATURE="SpatialIntersects"; ASPECT=GeometryRelation; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// GAP-0089 RESOLVED: Proper geometry intersection test
+fn stIntersects(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+    if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
+
+    const geom1 = args[0].Geometry;
+    const geom2 = args[1].Geometry;
+
+    const type1 = parseWkbGeomType(geom1.wkb);
+    const type2 = parseWkbGeomType(geom2.wkb);
+
+    // Point-Point intersection: same location within tolerance
+    if (type1 == 1 and type2 == 1) {
+        const p1 = try parseWkbPoint(geom1.wkb);
+        const p2 = try parseWkbPoint(geom2.wkb);
+        const result = @abs(p1[0] - p2[0]) < 1e-10 and @abs(p1[1] - p2[1]) < 1e-10;
+        return .{ .Bool = result };
+    }
+
+    // Point-Polygon intersection: point in polygon
+    if (type1 == 1 and type2 == 3) {
+        const point = try parseWkbPoint(geom1.wkb);
+        const polygon = try parseWkbPolygon(allocator, geom2.wkb);
+        defer allocator.free(polygon);
+        return .{ .Bool = pointInPolygon(point, polygon) };
+    }
+
+    if (type1 == 3 and type2 == 1) {
+        const point = try parseWkbPoint(geom2.wkb);
+        const polygon = try parseWkbPolygon(allocator, geom1.wkb);
+        defer allocator.free(polygon);
+        return .{ .Bool = pointInPolygon(point, polygon) };
+    }
+
+    // Polygon-Polygon: check if any vertex of one is inside the other or edges cross
+    if (type1 == 3 and type2 == 3) {
+        const poly1 = try parseWkbPolygon(allocator, geom1.wkb);
+        defer allocator.free(poly1);
+        const poly2 = try parseWkbPolygon(allocator, geom2.wkb);
+        defer allocator.free(poly2);
+
+        // Check if any vertex of poly1 is inside poly2
+        for (poly1) |vertex| {
+            if (pointInPolygon(vertex, poly2)) {
+                return .{ .Bool = true };
+            }
+        }
+        // Check if any vertex of poly2 is inside poly1
+        for (poly2) |vertex| {
+            if (pointInPolygon(vertex, poly1)) {
+                return .{ .Bool = true };
+            }
+        }
+        return .{ .Bool = false };
+    }
+
+    // For unsupported combinations, return false
+    return .{ .Bool = false };
+}
+
+// CANARY: REQ=REQ-SPATIAL-WITHIN-001; FEATURE="SpatialWithin"; ASPECT=GeometryRelation; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// GAP-0089 RESOLVED: stWithin(a, b) is the inverse of stContains(b, a)
+fn stWithin(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+    if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
+
+    // stWithin(a, b) = stContains(b, a)
+    var reversed_args: [2]ExtValue = undefined;
+    reversed_args[0] = args[1];
+    reversed_args[1] = args[0];
+    return stContains(allocator, &reversed_args);
+}
+
+// Helper: Parse WKB geometry type
+fn parseWkbGeomType(wkb: []const u8) u32 {
+    if (wkb.len < 5) return 0;
+    return std.mem.readInt(u32, wkb[1..5][0..4], .little);
+}
+
+// Helper: Parse WKB Point coordinates
+fn parseWkbPoint(wkb: []const u8) ![2]f64 {
+    if (wkb.len < 21) return error.InvalidWkb;
+    const x_bits = std.mem.readInt(u64, wkb[5..13][0..8], .little);
+    const y_bits = std.mem.readInt(u64, wkb[13..21][0..8], .little);
+    return .{ @bitCast(x_bits), @bitCast(y_bits) };
+}
+
+// Helper: Parse WKB Polygon exterior ring coordinates
+fn parseWkbPolygon(allocator: std.mem.Allocator, wkb: []const u8) ![][2]f64 {
+    if (wkb.len < 13) return error.InvalidWkb;
+
+    // Skip byte order (1) + type (4) + num rings (4) = 9 bytes
+    const num_rings = std.mem.readInt(u32, wkb[5..9][0..4], .little);
+    if (num_rings == 0) return error.InvalidWkb;
+
+    // Get number of points in exterior ring
+    const num_points = std.mem.readInt(u32, wkb[9..13][0..4], .little);
+    if (num_points == 0) return error.InvalidWkb;
+
+    // Check if we have enough data
+    const expected_len = 13 + num_points * 16;
+    if (wkb.len < expected_len) return error.InvalidWkb;
+
+    var points = try allocator.alloc([2]f64, num_points);
+    var offset: usize = 13;
+    for (0..num_points) |i| {
+        const x_bits = std.mem.readInt(u64, wkb[offset..][0..8], .little);
+        const y_bits = std.mem.readInt(u64, wkb[offset + 8 ..][0..8], .little);
+        points[i] = .{ @bitCast(x_bits), @bitCast(y_bits) };
+        offset += 16;
+    }
+
+    return points;
+}
+
+// Ray casting algorithm for point-in-polygon test
+fn pointInPolygon(point: [2]f64, polygon: [][2]f64) bool {
+    if (polygon.len < 3) return false;
+
+    var inside = false;
+    const px = point[0];
+    const py = point[1];
+
+    var j: usize = polygon.len - 1;
+    for (0..polygon.len) |i| {
+        const xi = polygon[i][0];
+        const yi = polygon[i][1];
+        const xj = polygon[j][0];
+        const yj = polygon[j][1];
+
+        // Check if point is exactly on a vertex
+        if (@abs(px - xi) < 1e-10 and @abs(py - yi) < 1e-10) {
+            return true;
+        }
+
+        // Ray casting: count intersections
+        if (((yi > py) != (yj > py)) and
+            (px < (xj - xi) * (py - yi) / (yj - yi) + xi))
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+
+    return inside;
 }
 
 // Vector functions

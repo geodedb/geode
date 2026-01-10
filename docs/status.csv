@@ -104,6 +104,8 @@ REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,202
 REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,2025-10-14,src/cli/main.zig
 REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,IMPL,,,cli,2026-01-10,src/cli/backup_cli.zig
 REQ-BACKUP-LOCAL-001,Local Directory Backup,DataExport,IMPL,,,cli,2026-01-10,src/cli/backup_cli.zig
+REQ-BACKUP-REAL-DATA-001,BackupRealData,DataIntegrity,IMPL,,,backup,2026-01-10,src/cli/backup_cli.zig
+REQ-BACKUP-REAL-DATA-001,BackupRealData,DataIntegrity,IMPL,,,backup,2026-01-10,src/server/backup_manager.zig
 REQ-BACKUP-REMOTE-001,RemoteBackup,QUICProtocol,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-BACKUP-RESTORE-001,Backup Restore,RemoteRestore,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
@@ -1434,6 +1436,8 @@ REQ-GQL-ORDERBY-WRAPPER-001,OrderBySortRowsWrapper,BackwardsCompatibility,IMPL,,
 REQ-GQL-OUTDEGREE-001,OutdegreeFunction,NodeDegree,IMPL,,,eval,2026-01-03,src/eval.zig
 REQ-GQL-PARALLEL-001,Parallel Exec,ENGINE,TESTED,tests/e2e_parallel_execution.zig:1,tests/benchmark_parallel_expand_mem_perf.zig:1,engine,2025-09-26,src/execution/parallel.zig
 REQ-GQL-PATH,Path Type Unit Tests,Testing,TESTED,test_path_type,,graph,2025-10-10,tests/unit/test_path_type.zig
+REQ-GQL-PATH-002,ShortestPath,GraphTraversal,IMPL,,,eval,2026-01-10,src/eval.zig
+REQ-GQL-PATH-003,AllShortestPaths,GraphTraversal,IMPL,,,eval,2026-01-10,src/eval.zig
 REQ-GQL-PATH-ASSIGNMENT,PathVariableAssignment,ShortestPathBinding,IMPLEMENTED,,,engine,2025-10-12,src/execution/match_operations.zig
 REQ-GQL-PATH-MODES-001,GQL Path Mode Execution,AST,IMPL,,,parser,2026-01-08,src/gql/ast.zig
 REQ-GQL-PATH-MODES-002,GQL Path Mode AST,Chain,IMPL,,,parser,2026-01-08,src/gql/ast.zig
@@ -2010,7 +2014,7 @@ REQ-SECURITY-PERM-001,Permission Check Integration,Authorization,IMPL,,,security
 REQ-SERVER-BACKUP-001,Server Backup API,UnitTests,TESTED,TestServer_BackupAPIUnit,,server,2025-10-05,tests/test_server_backup_api_unit.zig
 REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,IMPL,,,refactor,2026-01-09,src/server/server_state.zig
 REQ-SERVER-REFACTOR-001B,ServerRefactoring,SERVER_STATE_STRUCT,IMPL,,,refactor,2025-11-14,src/server/server_state.zig
-REQ-SERVER-REFACTOR-002,ServerRefactoring,BACKUP_MANAGER,IMPL,,,refactor,2025-11-12,src/server/backup_manager.zig
+REQ-SERVER-REFACTOR-002,ServerRefactoring,BACKUP_MANAGER,IMPL,,,refactor,2026-01-10,src/server/backup_manager.zig
 REQ-SERVER-REFACTOR-003,ServerRefactoring,INDEX_CATALOG,IMPL,,,refactor,2025-11-12,src/server/index_catalog.zig
 REQ-SERVER-REFACTOR-004,ServerRefactoring,FLAG_UTILITIES,IMPL,,,refactor,2025-11-12,src/server/server_flags.zig
 REQ-SERVER-REFACTOR-005,ServerRefactoring,GRAPH_STORAGE,IMPL,,,refactor,2025-11-12,src/server/graph_storage_manager.zig
@@ -2027,6 +2031,9 @@ REQ-SERVER-STARTUP-INTEGRATION-001,Server Startup Integration Tests,EndToEndServ
 REQ-SERVER-STARTUP-REGRESSION-001,Server Startup Regression Tests,UnifiedBinaryServerStartup,TESTED,TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup,,server,2025-10-05,tests/test_server_startup_regression.zig
 REQ-SET-RETURN-FIX-001,SetReturnFix,NoReturnClause,IMPL,,,engine,2025-12-23,src/execution/match_operations.zig
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,IMPL,,,distributed,2026-01-09,src/distributed/query_coordinator.zig
+REQ-SPATIAL-CONTAINS-001,SpatialContains,GeometryRelation,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-INTERSECTS-001,SpatialIntersects,GeometryRelation,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-WITHIN-001,SpatialWithin,GeometryRelation,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-STREAMING-KAFKA-001,Kafka Sink Implementation,ProducerSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/kafka_sink.zig
 REQ-STREAMING-KEYROT-REENCRYPT-001,Page Re-encryption,ReEncryption,IMPL,,,security,2025-12-30,src/security/key_rotation.zig
 REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/webhook_sink.zig

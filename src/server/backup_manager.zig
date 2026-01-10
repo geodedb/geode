@@ -3,17 +3,34 @@ const backup = @import("../storage/backup.zig");
 const BackupConfig = backup.BackupConfig;
 const BackupMetadata = backup.BackupMetadata;
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-002; FEATURE="ServerRefactoring"; ASPECT=BACKUP_MANAGER; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-SERVER-REFACTOR-002; FEATURE="ServerRefactoring"; ASPECT=BACKUP_MANAGER; STATUS=IMPL; OWNER=refactor; UPDATED=2026-01-10
+// CANARY: REQ=REQ-BACKUP-REAL-DATA-001; FEATURE="BackupRealData"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-10
 // Phase 3 M3.1 - Backup Manager Module (Incremental Extraction)
 // Extracted SimplifiedBackupManager from server/main.zig for better modularity
+// GAP-0087 RESOLVED: Now reads actual data from data directory instead of placeholder data
 
 /// Simplified backup manager for server integration
 /// Provides basic backup/restore functionality for the server
+/// Reads actual database files from the data directory
 pub const SimplifiedBackupManager = struct {
     allocator: std.mem.Allocator,
     config: BackupConfig,
     backup_dir: []const u8,
+    data_dir: []const u8,
     last_backup_id: u128 = 0,
+
+    const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
+    const BACKUP_VERSION: u16 = 2;
+
+    const BackupHeader = extern struct {
+        magic: u32,
+        version: u16,
+        backup_type: backup.BackupType,
+        timestamp: i64,
+        compression: backup.CompressionType,
+        encrypted: bool = false,
+        _padding: [2]u8 = .{0} ** 2,
+    };
 
     /// Initialize backup manager with directory and configuration
     pub fn init(allocator: std.mem.Allocator, backup_dir: []const u8, config: BackupConfig) !SimplifiedBackupManager {
@@ -23,19 +40,28 @@ pub const SimplifiedBackupManager = struct {
             else => return err,
         };
 
+        // Determine data directory from environment or default
+        const data_dir = if (std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |dir| blk: {
+            defer allocator.free(dir);
+            break :blk try allocator.dupe(u8, dir);
+        } else |_| try allocator.dupe(u8, "./data");
+
         return .{
             .allocator = allocator,
             .config = config,
             .backup_dir = try allocator.dupe(u8, backup_dir),
+            .data_dir = data_dir,
         };
     }
 
     /// Clean up backup manager resources
     pub fn deinit(self: *SimplifiedBackupManager) void {
         self.allocator.free(self.backup_dir);
+        self.allocator.free(self.data_dir);
     }
 
     /// Create a full backup and return metadata
+    /// GAP-0087: Now reads actual data from data directory
     pub fn createFullBackup(self: *SimplifiedBackupManager) !BackupMetadata {
         self.last_backup_id += 1;
         const backup_id = self.last_backup_id;
@@ -49,37 +75,118 @@ pub const SimplifiedBackupManager = struct {
         const file = try std.fs.cwd().createFile(backup_path, .{});
         defer file.close();
 
-        // Write simplified backup content
+        var writer = file.writer();
         var size_bytes: u64 = 0;
-        const header = "GEODE_BACKUP_V2\n";
-        try file.writeAll(header);
-        size_bytes += header.len;
 
-        const metadata_str = try std.fmt.allocPrint(self.allocator, "BACKUP_ID: {x}\nTIMESTAMP: {}\nTYPE: full\nLSN_START: 1000\nLSN_END: 1100\n", .{ backup_id, timestamp });
-        defer self.allocator.free(metadata_str);
-        try file.writeAll(metadata_str);
-        size_bytes += metadata_str.len;
+        // Write backup header
+        const header = BackupHeader{
+            .magic = BACKUP_MAGIC,
+            .version = BACKUP_VERSION,
+            .backup_type = .full,
+            .timestamp = timestamp,
+            .compression = self.config.compression,
+        };
+        const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
+        try file.writeAll(header_bytes);
+        size_bytes += @sizeOf(BackupHeader);
 
-        // Simulate backing up data
-        const data_section = "DATA_SECTION\nSimulated backup data content\nEND_BACKUP\n";
-        try file.writeAll(data_section);
-        size_bytes += data_section.len;
+        // Read and write actual catalog data from data directory
+        var catalog_data: []const u8 = undefined;
+        var catalog_owned = false;
+        const catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/catalog.dat", .{self.data_dir});
+        defer self.allocator.free(catalog_path);
+
+        if (std.fs.cwd().openFile(catalog_path, .{})) |catalog_file| {
+            defer catalog_file.close();
+            catalog_data = try catalog_file.readToEndAlloc(self.allocator, 64 * 1024 * 1024); // 64MB max
+            catalog_owned = true;
+        } else |_| {
+            // No catalog file, write empty marker
+            catalog_data = "-- Empty catalog (no data)\n";
+        }
+        defer if (catalog_owned) self.allocator.free(catalog_data);
+
+        try writer.writeInt(u64, catalog_data.len, .little);
+        try writer.writeAll(catalog_data);
+        size_bytes += @sizeOf(u64) + catalog_data.len;
+
+        // Find and backup all page files from data directory
+        var page_count: u64 = 0;
+        var page_files = std.ArrayList([]const u8).init(self.allocator);
+        defer {
+            for (page_files.items) |pf| self.allocator.free(pf);
+            page_files.deinit();
+        }
+
+        // Scan data directory for .page files
+        if (std.fs.cwd().openDir(self.data_dir, .{ .iterate = true })) |*dir| {
+            var dir_mut = dir.*;
+            defer dir_mut.close();
+            var iter = dir_mut.iterate();
+            while (try iter.next()) |entry| {
+                if (entry.kind == .file) {
+                    if (std.mem.endsWith(u8, entry.name, ".page") or std.mem.endsWith(u8, entry.name, ".dat")) {
+                        try page_files.append(try self.allocator.dupe(u8, entry.name));
+                        page_count += 1;
+                    }
+                }
+            }
+        } else |_| {
+            // No data directory or can't read it
+        }
+
+        // Write page count
+        try writer.writeInt(u64, page_count, .little);
+        size_bytes += @sizeOf(u64);
+
+        // Write each page file
+        for (page_files.items) |page_name| {
+            const page_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.data_dir, page_name });
+            defer self.allocator.free(page_path);
+
+            // Write page name length and name
+            try writer.writeInt(u16, @intCast(page_name.len), .little);
+            try writer.writeAll(page_name);
+            size_bytes += @sizeOf(u16) + page_name.len;
+
+            // Read and write page data
+            if (std.fs.cwd().openFile(page_path, .{})) |page_file| {
+                defer page_file.close();
+                const page_data = try page_file.readToEndAlloc(self.allocator, 64 * 1024 * 1024);
+                defer self.allocator.free(page_data);
+
+                try writer.writeInt(u32, @intCast(page_data.len), .little);
+                try writer.writeAll(page_data);
+                size_bytes += @sizeOf(u32) + page_data.len;
+            } else |_| {
+                // Failed to read page, write zero-length marker
+                try writer.writeInt(u32, 0, .little);
+                size_bytes += @sizeOf(u32);
+            }
+        }
+
+        // Calculate checksum of entire file
+        try file.seekTo(0);
+        const file_data = try file.readToEndAlloc(self.allocator, 1024 * 1024 * 1024);
+        defer self.allocator.free(file_data);
+        const checksum = std.hash.crc.Crc32.hash(file_data);
 
         return BackupMetadata{
             .backup_id = backup_id,
             .timestamp = timestamp,
             .backup_type = .full,
-            .start_lsn = 1000,
-            .end_lsn = 1100,
+            .start_lsn = 0,
+            .end_lsn = @intCast(page_count),
             .size_bytes = size_bytes,
             .compression = self.config.compression,
             .encrypted = self.config.encryption,
-            .checksum = 0xDEADBEEF,
+            .checksum = checksum,
             .parent_backup_id = null,
         };
     }
 
     /// Create an incremental backup and return metadata
+    /// GAP-0087: Now reads actual changed data since parent backup
     pub fn createIncrementalBackup(self: *SimplifiedBackupManager, _: u64) !BackupMetadata {
         self.last_backup_id += 1;
         const backup_id = self.last_backup_id;
@@ -93,32 +200,63 @@ pub const SimplifiedBackupManager = struct {
         const file = try std.fs.cwd().createFile(backup_path, .{});
         defer file.close();
 
+        var writer = file.writer();
         var size_bytes: u64 = 0;
-        const header = "GEODE_BACKUP_V2\n";
-        try file.writeAll(header);
-        size_bytes += header.len;
 
-        const metadata_str = try std.fmt.allocPrint(self.allocator, "BACKUP_ID: {x}\nTIMESTAMP: {}\nTYPE: incremental\nLSN_START: 1100\nLSN_END: 1200\n", .{ backup_id, timestamp });
-        defer self.allocator.free(metadata_str);
-        try file.writeAll(metadata_str);
-        size_bytes += metadata_str.len;
+        // Write backup header
+        const header = BackupHeader{
+            .magic = BACKUP_MAGIC,
+            .version = BACKUP_VERSION,
+            .backup_type = .incremental,
+            .timestamp = timestamp,
+            .compression = self.config.compression,
+        };
+        const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
+        try file.writeAll(header_bytes);
+        size_bytes += @sizeOf(BackupHeader);
 
-        // Simulate incremental data
-        const data_section = "DATA_SECTION\nIncremental backup data\nEND_BACKUP\n";
-        try file.writeAll(data_section);
-        size_bytes += data_section.len;
+        // Write parent backup ID
+        const parent_id: u128 = if (self.last_backup_id > 1) self.last_backup_id - 1 else 0;
+        try writer.writeInt(u128, parent_id, .little);
+        size_bytes += @sizeOf(u128);
+
+        // Read and write WAL files for incremental backup
+        var wal_data: []const u8 = undefined;
+        var wal_owned = false;
+        const wal_path = try std.fmt.allocPrint(self.allocator, "{s}/wal.log", .{self.data_dir});
+        defer self.allocator.free(wal_path);
+
+        if (std.fs.cwd().openFile(wal_path, .{})) |wal_file| {
+            defer wal_file.close();
+            wal_data = try wal_file.readToEndAlloc(self.allocator, 256 * 1024 * 1024); // 256MB max
+            wal_owned = true;
+        } else |_| {
+            // No WAL file, write empty marker
+            wal_data = "-- Empty WAL (no changes)\n";
+        }
+        defer if (wal_owned) self.allocator.free(wal_data);
+
+        try writer.writeInt(u64, wal_data.len, .little);
+        try writer.writeAll(wal_data);
+        size_bytes += @sizeOf(u64) + wal_data.len;
+
+        // Calculate checksum
+        try file.seekTo(0);
+        const file_data = try file.readToEndAlloc(self.allocator, 1024 * 1024 * 1024);
+        defer self.allocator.free(file_data);
+        const checksum = std.hash.crc.Crc32.hash(file_data);
 
         return BackupMetadata{
             .backup_id = backup_id,
             .timestamp = timestamp,
             .backup_type = .incremental,
-            .start_lsn = 1100,
-            .end_lsn = 1200,
+            .start_lsn = 0,
+            .end_lsn = 0,
             .size_bytes = size_bytes,
             .compression = self.config.compression,
             .encrypted = self.config.encryption,
-            .checksum = 0xDEADBEEF,
-            .parent_backup_id = self.last_backup_id - 1,
+            .checksum = checksum,
+            .parent_backup_id = parent_id,
         };
     }
 
@@ -132,13 +270,85 @@ pub const SimplifiedBackupManager = struct {
             else => return err,
         };
 
-        // Simulate restore process by creating a restore marker file
+        // Find the latest full backup
+        var latest_backup_path: ?[]const u8 = null;
+        defer if (latest_backup_path) |p| self.allocator.free(p);
+
+        if (std.fs.cwd().openDir(self.backup_dir, .{ .iterate = true })) |*dir| {
+            var dir_mut = dir.*;
+            defer dir_mut.close();
+            var iter = dir_mut.iterate();
+            while (try iter.next()) |entry| {
+                if (entry.kind == .file and std.mem.startsWith(u8, entry.name, "full_") and std.mem.endsWith(u8, entry.name, ".backup")) {
+                    if (latest_backup_path) |old| self.allocator.free(old);
+                    latest_backup_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.backup_dir, entry.name });
+                }
+            }
+        } else |_| {
+            return error.NoBackupsFound;
+        }
+
+        const backup_file_path = latest_backup_path orelse return error.NoBackupsFound;
+
+        // Open backup file
+        const backup_file = try std.fs.cwd().openFile(backup_file_path, .{});
+        defer backup_file.close();
+
+        var reader = backup_file.reader();
+
+        // Read and verify header
+        var header_bytes: [@sizeOf(BackupHeader)]u8 = undefined;
+        _ = try reader.readAll(&header_bytes);
+        const header = @as(*const BackupHeader, @ptrCast(&header_bytes)).*;
+
+        if (header.magic != BACKUP_MAGIC) {
+            return error.InvalidBackupFormat;
+        }
+
+        // Read catalog data
+        const catalog_len = try reader.readInt(u64, .little);
+        const catalog_data = try self.allocator.alloc(u8, catalog_len);
+        defer self.allocator.free(catalog_data);
+        _ = try reader.readAll(catalog_data);
+
+        // Write catalog to restore directory
+        const restore_catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/catalog.dat", .{restore_dir});
+        defer self.allocator.free(restore_catalog_path);
+        const catalog_file = try std.fs.cwd().createFile(restore_catalog_path, .{});
+        defer catalog_file.close();
+        try catalog_file.writeAll(catalog_data);
+
+        // Read and restore page files
+        const page_count = try reader.readInt(u64, .little);
+        var i: u64 = 0;
+        while (i < page_count) : (i += 1) {
+            // Read page name
+            const name_len = try reader.readInt(u16, .little);
+            const page_name = try self.allocator.alloc(u8, name_len);
+            defer self.allocator.free(page_name);
+            _ = try reader.readAll(page_name);
+
+            // Read page data
+            const page_len = try reader.readInt(u32, .little);
+            if (page_len > 0) {
+                const page_data = try self.allocator.alloc(u8, page_len);
+                defer self.allocator.free(page_data);
+                _ = try reader.readAll(page_data);
+
+                // Write page to restore directory
+                const restore_page_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ restore_dir, page_name });
+                defer self.allocator.free(restore_page_path);
+                const page_file = try std.fs.cwd().createFile(restore_page_path, .{});
+                defer page_file.close();
+                try page_file.writeAll(page_data);
+            }
+        }
+
+        // Write restore marker
         const restore_marker_path = try std.fmt.allocPrint(self.allocator, "{s}/restore_complete.marker", .{restore_dir});
         defer self.allocator.free(restore_marker_path);
-
         const marker_file = try std.fs.cwd().createFile(restore_marker_path, .{});
         defer marker_file.close();
-
         try marker_file.writeAll("Restore completed successfully\n");
     }
 
@@ -156,3 +366,95 @@ pub const SimplifiedBackupManager = struct {
         // In a real implementation, this would load backup metadata from disk
     }
 };
+
+// Unit tests
+test "SimplifiedBackupManager creates backup with actual data" {
+    const allocator = std.testing.allocator;
+
+    // Create test data directory
+    try std.fs.cwd().makePath("./test_backup_data");
+    defer std.fs.cwd().deleteTree("./test_backup_data") catch {};
+
+    // Create test backup directory
+    try std.fs.cwd().makePath("./test_backups");
+    defer std.fs.cwd().deleteTree("./test_backups") catch {};
+
+    // Create some test data files
+    {
+        const test_catalog = try std.fs.cwd().createFile("./test_backup_data/catalog.dat", .{});
+        defer test_catalog.close();
+        try test_catalog.writeAll("test catalog data");
+    }
+    {
+        const test_page = try std.fs.cwd().createFile("./test_backup_data/page_0.page", .{});
+        defer test_page.close();
+        try test_page.writeAll("test page 0 data");
+    }
+
+    // Initialize backup manager with test directories
+    var mgr = try SimplifiedBackupManager.init(allocator, "./test_backups", .{});
+    defer mgr.deinit();
+
+    // Override data dir for test
+    allocator.free(mgr.data_dir);
+    mgr.data_dir = try allocator.dupe(u8, "./test_backup_data");
+
+    // Create a backup
+    const metadata = try mgr.createFullBackup();
+
+    // Verify backup was created with actual data
+    try std.testing.expect(metadata.backup_id > 0);
+    try std.testing.expect(metadata.size_bytes > 100); // Should be more than just header
+
+    // Verify backup file exists
+    const backup_path = try std.fmt.allocPrint(allocator, "./test_backups/full_{x}.backup", .{metadata.backup_id});
+    defer allocator.free(backup_path);
+    const backup_stat = try std.fs.cwd().statFile(backup_path);
+    try std.testing.expect(backup_stat.size > 0);
+}
+
+test "SimplifiedBackupManager restore works" {
+    const allocator = std.testing.allocator;
+
+    // Create test data directory
+    try std.fs.cwd().makePath("./test_backup_data2");
+    defer std.fs.cwd().deleteTree("./test_backup_data2") catch {};
+
+    // Create test backup directory
+    try std.fs.cwd().makePath("./test_backups2");
+    defer std.fs.cwd().deleteTree("./test_backups2") catch {};
+
+    // Create restore directory
+    try std.fs.cwd().makePath("./test_restore2");
+    defer std.fs.cwd().deleteTree("./test_restore2") catch {};
+
+    // Create some test data files
+    const test_data = "test catalog data for restore verification";
+    {
+        const test_catalog = try std.fs.cwd().createFile("./test_backup_data2/catalog.dat", .{});
+        defer test_catalog.close();
+        try test_catalog.writeAll(test_data);
+    }
+
+    // Initialize backup manager
+    var mgr = try SimplifiedBackupManager.init(allocator, "./test_backups2", .{});
+    defer mgr.deinit();
+
+    // Override data dir for test
+    allocator.free(mgr.data_dir);
+    mgr.data_dir = try allocator.dupe(u8, "./test_backup_data2");
+
+    // Create a backup
+    _ = try mgr.createFullBackup();
+
+    // Restore to test directory
+    try mgr.restoreToPointInTime(0, "./test_restore2");
+
+    // Verify restored catalog matches original
+    const restored_catalog = try std.fs.cwd().openFile("./test_restore2/catalog.dat", .{});
+    defer restored_catalog.close();
+    const restored_data = try restored_catalog.readToEndAlloc(allocator, 1024);
+    defer allocator.free(restored_data);
+
+    try std.testing.expectEqualStrings(test_data, restored_data);
+}
