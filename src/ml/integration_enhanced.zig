@@ -748,11 +748,18 @@ const GraphData = struct {
         return 0;
     }
 
+    // CANARY: REQ=REQ-ML-HASEDGE-001; FEATURE="GraphData.hasEdge"; ASPECT=EdgeLookup; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
     pub fn hasEdge(self: *GraphData, source: NodeId, target: NodeId) bool {
-        _ = self;
-        _ = source;
-        _ = target;
-        return false; // Placeholder
+        // Look up the source node in the outgoing_edges map
+        if (self.outgoing_edges.get(source)) |edges| {
+            // Search for the target in the edge list
+            for (edges.items) |edge| {
+                if (edge.target == target) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 };
 

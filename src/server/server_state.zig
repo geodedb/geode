@@ -32,6 +32,41 @@ pub const CatalogGraph = struct {
     edge_count: u64 = 0,
 };
 
+// CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=TypeDefinition; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-10
+/// Graph type definition for CREATE GRAPH TYPE persistence
+pub const GraphTypeDefinition = struct {
+    name: []const u8,
+    property_graph: bool = true,
+    created_at: i64,
+    created_by: []const u8 = "system",
+    description: ?[]const u8 = null,
+    /// Node type definitions (label -> property constraints)
+    node_types: ?[]const NodeTypeSpec = null,
+    /// Edge type definitions (label -> property constraints, source/target types)
+    edge_types: ?[]const EdgeTypeSpec = null,
+};
+
+/// Node type specification for graph type definitions
+pub const NodeTypeSpec = struct {
+    label: []const u8,
+    properties: ?[]const PropertySpec = null,
+};
+
+/// Edge type specification for graph type definitions
+pub const EdgeTypeSpec = struct {
+    label: []const u8,
+    source_label: ?[]const u8 = null,
+    target_label: ?[]const u8 = null,
+    properties: ?[]const PropertySpec = null,
+};
+
+/// Property specification for node/edge types
+pub const PropertySpec = struct {
+    name: []const u8,
+    type_name: []const u8 = "STRING",
+    required: bool = false,
+};
+
 /// Session parameter value types for session configuration
 pub const SessionParameterValue = union(enum) {
     String: []const u8,
@@ -292,6 +327,10 @@ pub const ServerState = struct {
     // Catalog management for schemas and graphs
     catalog_schemas: std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
     catalog_graphs: std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
+
+    // CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=TypeManagement; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-10
+    // Graph type registry for CREATE/DROP GRAPH TYPE persistence
+    graph_types: std.HashMap([]const u8, GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
 
     // Security management for RBAC/ABAC - comment out for now to avoid import issues
     // security_manager: ?*SecurityManager = null,

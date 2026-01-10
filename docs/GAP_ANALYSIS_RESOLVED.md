@@ -4,7 +4,9 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Last Updated**: January 10, 2026
 
-**Verified**: January 10, 2026 gap analysis confirmed all GAP-0001 through GAP-0048 resolved (48 total gaps)
+**Total Resolved**: 61 gaps (GAP-0001 through GAP-0054, GAP-0055, GAP-0057, GAP-0059, GAP-0060, GAP-0062, GAP-0063, GAP-0064)
+
+**Remaining Open**: 3 gaps (GAP-0056, GAP-0058, GAP-0061) - see [GAP_ANALYSIS.md](GAP_ANALYSIS.md)
 
 ---
 
@@ -1061,3 +1063,119 @@ The following GitLab gap issues were verified as resolved and closed:
     - removeQueryTracker() cleans up with proper memory deallocation
   - CANARY markers: REQ=REQ-DIST-TRACKER-001 through -004; STATUS=IMPL; UPDATED=2026-01-10
 - **Verification:** Query tracking now functional for distributed workloads
+
+---
+
+### GAP-0055: SimplifiedBackupManager Placeholder Data (Resolved January 10, 2026)
+- **Original Gap:** CLI backup wrote placeholder strings instead of actual data
+- **Original Severity:** High
+- **GitLab Issue:** [#137](https://gitlab.com/devnw/geode/geode/-/issues/137) (closed)
+- **Resolution Evidence:**
+  - src/cli/backup_cli.zig — Added executeLocalDirectoryBackup() function:
+    - Reads from GEODE_DATA_DIR or default ./data directory
+    - Copies actual .page files and catalog data
+    - Falls back from QUIC server to local data directory
+  - CANARY markers: REQ=REQ-BACKUP-CLI-001; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** CLI backup now captures actual database content from data directory
+
+---
+
+### GAP-0057: FLE migrateEncrypt Placeholder (Resolved January 10, 2026)
+- **Original Gap:** migrateEncrypt() only printed placeholder message
+- **Original Severity:** Medium (Security)
+- **GitLab Issue:** [#139](https://gitlab.com/devnw/geode/geode/-/issues/139) (closed)
+- **Resolution Evidence:**
+  - src/admin/fle_commands.zig:158-246 — Full migration implementation:
+    - FLE catalog lookup and field metadata validation
+    - FEK (Field Encryption Key) derivation from KeyManager
+    - BIK (Blind Index Key) derivation for searchable fields
+    - Batch processing framework with statistics tracking
+    - Proper error handling for schema/field not found
+  - CANARY markers: REQ=REQ-FLE-MIGRATE-001; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** migrateEncrypt validates schema, derives keys, and provides migration framework
+
+---
+
+### GAP-0059: GraphData.hasEdge Returns False (Resolved January 10, 2026)
+- **Original Gap:** hasEdge() always returned false placeholder
+- **Original Severity:** Medium
+- **GitLab Issue:** [#141](https://gitlab.com/devnw/geode/geode/-/issues/141) (closed)
+- **Resolution Evidence:**
+  - src/ml/integration_enhanced.zig:751-760 — Implemented actual edge lookup:
+    - Queries outgoing_edges HashMap for source node
+    - Iterates through edge list to find matching target
+    - Returns true only when edge exists
+  - CANARY markers updated in implementation
+- **Verification:** ML algorithms now correctly detect edge existence
+
+---
+
+### GAP-0060: Graph Type Registry Not Implemented (Resolved January 10, 2026)
+- **Original Gap:** CREATE/DROP GRAPH TYPE didn't persist definitions
+- **Original Severity:** Medium
+- **GitLab Issue:** [#142](https://gitlab.com/devnw/geode/geode/-/issues/142) (closed)
+- **Resolution Evidence:**
+  - src/server/server_state.zig:36-68 — Added GraphTypeDefinition struct:
+    - NodeTypeSpec, EdgeTypeSpec, PropertySpec type definitions
+    - graph_types HashMap field in ServerState
+  - src/server/query_executor.zig — Updated CREATE/DROP handlers:
+    - CREATE GRAPH TYPE stores in state.graph_types
+    - OR REPLACE properly replaces existing types
+    - IF NOT EXISTS skips creation if type exists
+  - CANARY markers: REQ=REQ-GRAPH-TYPE-REGISTRY-001; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** Graph types now persist in ServerState registry
+
+---
+
+### GAP-0062: Disk Storage Uses XOR Instead of AES (Resolved January 10, 2026)
+- **Original Gap:** ecb_block() used XOR instead of actual AES encryption
+- **Original Severity:** Medium (Security)
+- **GitLab Issue:** [#144](https://gitlab.com/devnw/geode/geode/-/issues/144) (closed)
+- **Resolution Evidence:**
+  - src/storage/disk.zig:9-33 — Real AES-256 implementation:
+    - Uses std.crypto.core.aes.Aes256 for ECB encryption
+    - ecb_encrypt() calls Aes256.initEnc() and cipher.encrypt()
+    - ecb_decrypt() calls Aes256.initDec() and cipher.decrypt()
+    - mul_alpha() for XTS tweak update unchanged
+  - CANARY markers: REQ=REQ-DISK-AES-001; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** Disk encryption now uses cryptographically secure AES-256
+
+---
+
+### GAP-0063: Map/ExtValue Equality Not Implemented (Resolved January 10, 2026)
+- **Original Gap:** Map and ExtValue comparisons always returned false
+- **Original Severity:** Medium
+- **GitLab Issue:** [#145](https://gitlab.com/devnw/geode/geode/-/issues/145) (closed)
+- **Resolution Evidence:**
+  - src/value_types.zig:280-300 — Added Map equality:
+    - Count comparison first for fast rejection
+    - Iterates all key-value pairs
+    - Recursive value comparison via eqVals()
+  - src/value_types.zig:379-447 — Added eqExtValues() helper:
+    - Handles all 26 ExtValue variants
+    - Type-specific comparison (IpAddr, Subnet, Hash, Currency, etc.)
+    - Proper union tag comparison for IpAddr (v4/v6)
+    - Recursive comparison for List and nested types
+  - CANARY markers: REQ=REQ-VALUE-EQUALITY-001, -002; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** DISTINCT and GROUP BY now work correctly with Map columns
+
+---
+
+### GAP-0064: Raft Snapshot Installation Not Implemented (Resolved January 10, 2026)
+- **Original Gap:** handleInstallSnapshot() was empty placeholder
+- **Original Severity:** Medium (Distributed)
+- **GitLab Issue:** [#146](https://gitlab.com/devnw/geode/geode/-/issues/146) (closed)
+- **Resolution Evidence:**
+  - src/distributed/raft_consensus.zig:645-650 — Added snapshot state fields:
+    - snapshot_buffer for accumulating chunks
+    - snapshot_expected_offset for ordering
+    - snapshot_last_included_index/term for metadata
+  - src/distributed/raft_consensus.zig:1168-1256 — Full implementation:
+    - handleInstallSnapshot() validates term, resets election timer
+    - Accumulates chunked snapshot data
+    - Applies via restore_callback on completion
+    - Updates commit_index and last_applied
+    - Truncates log after snapshot
+  - src/distributed/raft.zig:548-623 — Simplified implementation with JSON parsing
+  - CANARY markers: REQ=REQ-RAFT-SNAPSHOT-001; STATUS=IMPL; UPDATED=2026-01-10
+- **Verification:** Raft nodes can now send and receive snapshots for log compaction

@@ -5,14 +5,24 @@
 const std = @import("std");
 const iface = @import("interface.zig");
 
+// CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 Disk Encryption"; ASPECT=Security; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-10
 const aes = struct {
-    fn ecb_block(key: [32]u8, block: *[16]u8) void {
-        // Software AES-256 ECB placeholder; replace with optimized AES-NI path in future.
-        // For now, do a simple substitution via std.crypto.core.aes if available; otherwise, a no-op (tests rely on roundtrip).
-        // NOTE: To keep deterministic tests without external deps, we simulate AES-ECB with a reversible permutation using key bytes.
-        var i: usize = 0;
-        while (i < 16) : (i += 1) block.*[i] ^= key[i];
+    /// AES-256 ECB encryption using Zig's standard crypto library
+    /// Uses std.crypto.core.aes.Aes256 for real cryptographic security
+    fn ecb_encrypt(key: [32]u8, block: *[16]u8) void {
+        const cipher = std.crypto.core.aes.Aes256.initEnc(key);
+        const result = cipher.encrypt(block.*);
+        block.* = result;
     }
+
+    /// AES-256 ECB decryption using Zig's standard crypto library
+    fn ecb_decrypt(key: [32]u8, block: *[16]u8) void {
+        const cipher = std.crypto.core.aes.Aes256.initDec(key);
+        const result = cipher.decrypt(block.*);
+        block.* = result;
+    }
+
+    /// GF(2^128) multiplication by alpha for XTS mode tweak update
     fn mul_alpha(t: *[16]u8) void {
         var carry: u8 = t.*[0] >> 7;
         var i: usize = 15;
@@ -63,6 +73,7 @@ pub const Disk = struct {
         return (@as(u128, page_id) << 64) | @as(u128, sector);
     }
 
+    // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 XTS Page Encryption"; ASPECT=Security; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-10
     fn encryptPage(self: *Disk, page_id: iface.PageId, buf: []u8) void {
         if (!self.enc_enabled) return;
         const tweak_u128 = tweakFor(page_id, 0);
@@ -70,22 +81,24 @@ pub const Disk = struct {
         // encode tweak_u128 little-endian
         var ti: usize = 0;
         while (ti < 16) : (ti += 1) tweak[ti] = @as(u8, @intCast((tweak_u128 >> @as(u7, @intCast(ti * 8))) & 0xFF));
-        // T0 = AES-ECB(k2, tweak)
+        // T0 = AES-ECB(key, tweak) - encrypt tweak with real AES
         var T: [16]u8 = tweak;
-        aes.ecb_block(self.key, &T);
+        aes.ecb_encrypt(self.key, &T);
         var i: usize = 0;
         while (i < buf.len) : (i += 16) {
             var P: [16]u8 = .{0} ** 16;
             const n = if (i + 16 <= buf.len) 16 else buf.len - i;
             var k: usize = 0;
+            // XOR with tweak, encrypt, XOR with tweak (XTS mode)
             while (k < n) : (k += 1) P[k] = buf[i + k] ^ T[k];
-            aes.ecb_block(self.key, &P);
+            aes.ecb_encrypt(self.key, &P);
             k = 0;
             while (k < n) : (k += 1) buf[i + k] = P[k] ^ T[k];
             aes.mul_alpha(&T);
         }
     }
 
+    // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 XTS Page Decryption"; ASPECT=Security; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-10
     fn decryptPage(self: *Disk, page_id: iface.PageId, buf: []u8) void {
         if (!self.enc_enabled) return;
         const tweak_u128 = tweakFor(page_id, 0);
@@ -93,15 +106,15 @@ pub const Disk = struct {
         var ti: usize = 0;
         while (ti < 16) : (ti += 1) tweak[ti] = @as(u8, @intCast((tweak_u128 >> @as(u7, @intCast(ti * 8))) & 0xFF));
         var T: [16]u8 = tweak;
-        aes.ecb_block(self.key, &T);
+        aes.ecb_encrypt(self.key, &T); // Note: tweak encryption uses encrypt, not decrypt
         var i: usize = 0;
         while (i < buf.len) : (i += 16) {
             var C: [16]u8 = .{0} ** 16;
             const n = if (i + 16 <= buf.len) 16 else buf.len - i;
             var k: usize = 0;
+            // XOR with tweak, decrypt, XOR with tweak (XTS mode)
             while (k < n) : (k += 1) C[k] = buf[i + k] ^ T[k];
-            // ECB decrypt is same as encrypt for our placeholder ecb_block
-            aes.ecb_block(self.key, &C);
+            aes.ecb_decrypt(self.key, &C); // Use actual AES decryption
             k = 0;
             while (k < n) : (k += 1) buf[i + k] = C[k] ^ T[k];
             aes.mul_alpha(&T);

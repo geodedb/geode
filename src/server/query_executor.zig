@@ -2261,6 +2261,7 @@ fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, 
     }
 }
 
+// CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=CreateStatement; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-10
 // Execute CREATE GRAPH TYPE statement
 fn executeCreateGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateGraphTypeStatement) ![]const u8 {
     // Check permission first
@@ -2273,27 +2274,46 @@ fn executeCreateGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerS
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid graph type name\"}}\n", .{});
     }
 
-    const graph_type = if (stmt.property_graph) "property graph type" else "graph type";
+    const graph_type_str = if (stmt.property_graph) "property graph type" else "graph type";
+
+    // Check if graph type already exists
+    const exists = state.graph_types.contains(stmt.name);
 
     // Handle OR REPLACE
-    if (stmt.or_replace) {
-        // Remove existing graph type if it exists
-        // For now, we'll use a simple approach and just proceed with creation
-    } else {
-        // Check if graph type already exists
-        // For now, we'll implement a basic check
+    if (stmt.or_replace and exists) {
+        // Remove existing graph type before replacement
+        if (state.graph_types.fetchRemove(stmt.name)) |kv| {
+            allocator.free(kv.key);
+        }
+    } else if (exists) {
+        // Type already exists and not replacing
         if (stmt.if_not_exists) {
-            // TODO: Implement proper graph type registry
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} created successfully (conditional)\"}}\n", .{ graph_type, stmt.name });
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} already exists (no action taken)\"}}\n", .{ graph_type_str, stmt.name });
+        } else {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42710\",\"message\":\"{s} {s} already exists\"}}\n", .{ graph_type_str, stmt.name });
         }
     }
 
-    // For now, implement basic graph type creation without persistent storage
-    // TODO: Implement proper graph type registry and type definition storage
-    const action = if (stmt.or_replace) "replaced" else "created";
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} {s} successfully\"}}\n", .{ graph_type, stmt.name, action });
+    // Create new graph type definition
+    const graph_type_def = server_state.GraphTypeDefinition{
+        .name = try allocator.dupe(u8, stmt.name),
+        .property_graph = stmt.property_graph,
+        .created_at = std.time.milliTimestamp(),
+        .created_by = if (state.authenticated_user) |user| user else "system",
+        .description = null,
+        .node_types = null,
+        .edge_types = null,
+    };
+
+    // Store in registry
+    const name_key = try allocator.dupe(u8, stmt.name);
+    try state.graph_types.put(name_key, graph_type_def);
+
+    const action = if (stmt.or_replace and exists) "replaced" else "created";
+    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} {s} successfully\"}}\n", .{ graph_type_str, stmt.name, action });
 }
 
+// CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=DropStatement; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-10
 // Execute DROP GRAPH TYPE statement
 fn executeDropGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DropGraphTypeStatement) ![]const u8 {
     // Check permission first
@@ -2306,15 +2326,27 @@ fn executeDropGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerSta
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid graph type name\"}}\n", .{});
     }
 
-    const graph_type = if (stmt.property_graph) "property graph type" else "graph type";
+    const graph_type_str = if (stmt.property_graph) "property graph type" else "graph type";
 
-    // For now, implement basic graph type dropping without persistent storage check
-    // TODO: Implement proper graph type registry and existence check
-    if (stmt.if_exists) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} dropped successfully (conditional)\"}}\n", .{ graph_type, stmt.name });
-    } else {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} dropped successfully\"}}\n", .{ graph_type, stmt.name });
+    // Check if graph type exists
+    const exists = state.graph_types.contains(stmt.name);
+
+    if (!exists) {
+        if (stmt.if_exists) {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} does not exist (no action taken)\"}}\n", .{ graph_type_str, stmt.name });
+        } else {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"{s} {s} does not exist\"}}\n", .{ graph_type_str, stmt.name });
+        }
     }
+
+    // Remove from registry
+    if (state.graph_types.fetchRemove(stmt.name)) |kv| {
+        allocator.free(kv.key);
+        // Note: graph_type_def.name was allocated when creating, need to free
+        allocator.free(kv.value.name);
+    }
+
+    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} dropped successfully\"}}\n", .{ graph_type_str, stmt.name });
 }
 
 // Removed: hasAggregationFunction() function (~32 lines) now in query_executor module (M3.3 Phase 3 fourth increment)

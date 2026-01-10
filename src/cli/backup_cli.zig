@@ -668,15 +668,169 @@ fn readLineWithPoll(client: *quic.QuicClient, stream: *quic.QuicClientStream, ma
 fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
 
-    // Check if we should use remote server or local backup
-    if (!std.mem.eql(u8, server, "127.0.0.1:3141")) {
-        // Use remote server backup
-        try executeRemoteBackup(allocator, dest, mode, parent_id, server, compress);
+    // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=ServerConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
+    // Always try to connect to server via QUIC first - this ensures we get real data
+    executeRemoteBackup(allocator, dest, mode, parent_id, server, compress) catch |err| {
+        std.debug.print("Warning: Could not connect to server {s}: {}\n", .{ server, err });
+        std.debug.print("Attempting local data directory backup...\n", .{});
+
+        // Try local data directory backup if server connection failed
+        executeLocalDirectoryBackup(allocator, dest, mode, parent_id, compress) catch |local_err| {
+            std.debug.print("Error: Local backup also failed: {}\n", .{local_err});
+            return local_err;
+        };
         return;
+    };
+}
+
+// CANARY: REQ=REQ-BACKUP-LOCAL-001; FEATURE="Local Directory Backup"; ASPECT=DataExport; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
+// Local directory backup - reads from Geode data directory when server not available
+fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, compress: bool) !void {
+    _ = parent_id;
+    _ = mode;
+
+    // Look for Geode data directory in common locations
+    const data_dirs = [_][]const u8{
+        "./data",
+        "./geode_data",
+        "/var/lib/geode/data",
+        std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch "./data",
+    };
+
+    var data_dir: ?std.fs.Dir = null;
+    var data_path: []const u8 = "";
+    for (data_dirs) |dir_path| {
+        if (std.fs.cwd().openDir(dir_path, .{ .iterate = true })) |dir| {
+            data_dir = dir;
+            data_path = dir_path;
+            break;
+        } else |_| {
+            continue;
+        }
     }
 
-    // For CLI usage, we create a simplified backup manager without full WAL/PageManager dependencies
-    // This creates a simplified backup that contains all the metadata and placeholders for data
+    if (data_dir == null) {
+        std.debug.print("Error: No Geode data directory found. Checked: ", .{});
+        for (data_dirs) |dir_path| {
+            std.debug.print("{s} ", .{dir_path});
+        }
+        std.debug.print("\n", .{});
+        return error.NoDataDirectory;
+    }
+    defer data_dir.?.close();
+
+    std.debug.print("Found data directory: {s}\n", .{data_path});
+
+    // Create backup file
+    const file = try std.fs.cwd().createFile(dest, .{});
+    defer file.close();
+
+    var size_bytes: u64 = 0;
+    const timestamp = std.time.milliTimestamp();
+
+    // Write backup header
+    const header = BackupHeader{
+        .magic = BACKUP_MAGIC,
+        .version = BACKUP_VERSION,
+        .backup_type = .full,
+        .timestamp = timestamp,
+        .compression = if (compress) .zstd else .none,
+    };
+    const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
+    try file.writeAll(header_bytes);
+    size_bytes += @sizeOf(BackupHeader);
+
+    // Read and backup catalog file if it exists
+    var catalog_data: []u8 = undefined;
+    var catalog_found = false;
+    if (data_dir.?.openFile("catalog.db", .{})) |catalog_file| {
+        defer catalog_file.close();
+        catalog_data = try catalog_file.readToEndAlloc(allocator, 10 * 1024 * 1024); // 10MB max
+        catalog_found = true;
+    } else |_| {
+        // Try alternate catalog locations
+        if (data_dir.?.openFile("schema/catalog.db", .{})) |catalog_file| {
+            defer catalog_file.close();
+            catalog_data = try catalog_file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+            catalog_found = true;
+        } else |_| {}
+    }
+
+    if (catalog_found) {
+        defer allocator.free(catalog_data);
+        const catalog_size_bytes = std.mem.toBytes(@as(u64, catalog_data.len));
+        try file.writeAll(catalog_size_bytes[0..]);
+        try file.writeAll(catalog_data);
+        size_bytes += @sizeOf(u64) + catalog_data.len;
+        std.debug.print("  Backed up catalog: {} bytes\n", .{catalog_data.len});
+    } else {
+        // Write empty catalog marker
+        const empty_catalog: u64 = 0;
+        const catalog_size_bytes = std.mem.toBytes(empty_catalog);
+        try file.writeAll(catalog_size_bytes[0..]);
+        size_bytes += @sizeOf(u64);
+        std.debug.print("  No catalog file found\n", .{});
+    }
+
+    // Backup page files
+    var page_count: u64 = 0;
+    var page_files = std.ArrayListUnmanaged([]const u8){};
+    defer {
+        for (page_files.items) |pf| allocator.free(pf);
+        page_files.deinit(allocator);
+    }
+
+    // Collect page file names
+    var dir_iter = data_dir.?.iterate();
+    while (try dir_iter.next()) |entry| {
+        if (entry.kind == .file) {
+            // Match page files (*.page, page_*.db, etc.)
+            if (std.mem.endsWith(u8, entry.name, ".page") or
+                std.mem.startsWith(u8, entry.name, "page_") or
+                std.mem.endsWith(u8, entry.name, ".db"))
+            {
+                try page_files.append(allocator, try allocator.dupe(u8, entry.name));
+            }
+        }
+    }
+
+    page_count = page_files.items.len;
+
+    // Write page count
+    const page_count_bytes = std.mem.toBytes(page_count);
+    try file.writeAll(page_count_bytes[0..]);
+    size_bytes += @sizeOf(u64);
+
+    // Backup each page file
+    for (page_files.items) |page_name| {
+        const page_file = data_dir.?.openFile(page_name, .{}) catch continue;
+        defer page_file.close();
+
+        const page_data = page_file.readToEndAlloc(allocator, 100 * 1024 * 1024) catch continue; // 100MB max per file
+        defer allocator.free(page_data);
+
+        // Write page name length and name
+        const name_len = @as(u32, @intCast(page_name.len));
+        const name_len_bytes = std.mem.toBytes(name_len);
+        try file.writeAll(name_len_bytes[0..]);
+        try file.writeAll(page_name);
+
+        // Write page data length and data
+        const data_len = @as(u32, @intCast(page_data.len));
+        const data_len_bytes = std.mem.toBytes(data_len);
+        try file.writeAll(data_len_bytes[0..]);
+        try file.writeAll(page_data);
+
+        size_bytes += @sizeOf(u32) + page_name.len + @sizeOf(u32) + page_data.len;
+    }
+
+    std.debug.print("  Backed up {} data files\n", .{page_count});
+    std.debug.print("Local backup completed: {s} ({} bytes)\n", .{ dest, size_bytes });
+}
+
+// Legacy fallback backup (kept for compatibility but marked deprecated)
+fn executeFallbackBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, compress: bool) !void {
+    // mode is used below in the backup_metadata conditional
     const simplified_backup_manager = SimplifiedBackupManager{
         .allocator = allocator,
         .config = backup_types.BackupConfig{

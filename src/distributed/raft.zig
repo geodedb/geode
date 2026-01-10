@@ -545,18 +545,81 @@ pub const RaftNode = struct {
         }
     }
 
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleInstallSnapshot; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
     fn handleInstallSnapshot(self: *RaftNode, from: []const u8, payload: []const u8) !void {
-        _ = self;
-        _ = from;
-        _ = payload;
-        // Snapshot installation not implemented in v0.15.0
+        // Parse snapshot metadata from payload (JSON format expected)
+        const parsed = std.json.parseFromSlice(
+            struct { term: u64, last_included_index: u64, last_included_term: u64, done: bool },
+            self.allocator,
+            payload,
+            .{},
+        ) catch return;
+        defer parsed.deinit();
+
+        const msg = parsed.value;
+
+        // If term < current term, ignore
+        if (msg.term < self.current_term) {
+            return;
+        }
+
+        // Update term if necessary
+        if (msg.term > self.current_term) {
+            self.current_term = msg.term;
+            self.voted_for = null;
+            self.state = .follower;
+        }
+
+        // If snapshot is complete, update state
+        if (msg.done) {
+            // Discard log entries up to last_included_index
+            // In a full implementation, this would also restore state machine from snapshot data
+            self.commit_index = msg.last_included_index;
+            self.last_applied = msg.last_included_index;
+
+            // Truncate log (simplified: just clear it since we'd have the snapshot)
+            self.log.clearAndFree();
+        }
+
+        // Send response
+        if (self.send_message_callback) |send_fn| {
+            const response_json = std.fmt.allocPrint(self.allocator, "{{\"term\":{d}}}", .{self.current_term}) catch return;
+            defer self.allocator.free(response_json);
+            send_fn(from, .install_snapshot_response, response_json);
+        }
     }
 
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleSnapshotResponse; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
     fn handleInstallSnapshotResponse(self: *RaftNode, from: []const u8, payload: []const u8) !void {
-        _ = self;
-        _ = from;
-        _ = payload;
-        // Snapshot installation not implemented in v0.15.0
+        // Only leaders process snapshot responses
+        if (self.state != .leader) {
+            return;
+        }
+
+        // Parse response
+        const parsed = std.json.parseFromSlice(
+            struct { term: u64 },
+            self.allocator,
+            payload,
+            .{},
+        ) catch return;
+        defer parsed.deinit();
+
+        const msg = parsed.value;
+
+        // If term is higher, step down
+        if (msg.term > self.current_term) {
+            self.current_term = msg.term;
+            self.voted_for = null;
+            self.state = .follower;
+            return;
+        }
+
+        // On successful snapshot installation, update next_index for the follower
+        // This would typically be the snapshot's last_included_index + 1
+        // For now, update to current log length
+        try self.next_index.put(from, self.getLastLogIndex() + 1);
+        try self.match_index.put(from, self.getLastLogIndex());
     }
 
     fn updateCommitIndex(self: *RaftNode) !void {

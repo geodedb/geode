@@ -277,8 +277,26 @@ pub fn eqVals(a: Value, b: Value) bool {
             }
             break :blk true;
         },
-        .Map => false, // Map equality comparison not implemented
-        .ExtValue => false, // ExtValue equality comparison not implemented
+        // CANARY: REQ=REQ-VALUE-EQUALITY-001; FEATURE="MapEquality"; ASPECT=DeepCompare; STATUS=IMPL; OWNER=value_types; UPDATED=2026-01-10
+        .Map => |am| blk: {
+            if (b != .Map) break :blk false;
+            const bm = b.Map;
+            // Maps must have same number of entries
+            if (am.count() != bm.count()) break :blk false;
+            // Every key in a must exist in b with equal value
+            var iter = am.iterator();
+            while (iter.next()) |entry| {
+                const bval = bm.get(entry.key_ptr.*) orelse break :blk false;
+                if (!eqVals(entry.value_ptr.*, bval)) break :blk false;
+            }
+            break :blk true;
+        },
+        // CANARY: REQ=REQ-VALUE-EQUALITY-002; FEATURE="ExtValueEquality"; ASPECT=TaggedUnion; STATUS=IMPL; OWNER=value_types; UPDATED=2026-01-10
+        .ExtValue => |ae| blk: {
+            if (b != .ExtValue) break :blk false;
+            const be = b.ExtValue;
+            break :blk eqExtValues(ae, be);
+        },
         .Path => |ap| blk: {
             if (b != .Path) break :blk false;
             const bp = b.Path;
@@ -349,6 +367,85 @@ fn pow10(scale: u8) i128 {
     var i: u8 = 0;
     while (i < scale) : (i += 1) p *= 10;
     return p;
+}
+
+// CANARY: REQ=REQ-VALUE-EQUALITY-002; FEATURE="ExtValueEquality"; ASPECT=Helper; STATUS=IMPL; OWNER=value_types; UPDATED=2026-01-10
+/// Compare two ExtValue instances for equality
+fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_extended.zig").ExtValue) bool {
+    const ExtValue = @import("eval_extended.zig").ExtValue;
+    // Must be same tag
+    if (@as(std.meta.Tag(ExtValue), a) != @as(std.meta.Tag(ExtValue), b)) return false;
+
+    return switch (a) {
+        .Null => true,
+        .Int => |v| v == b.Int,
+        .Bool => |v| v == b.Bool,
+        .Str => |v| std.mem.eql(u8, v, b.Str),
+        .Decimal => |v| v.coeff == b.Decimal.coeff and v.scale == b.Decimal.scale,
+        .IpAddr => |v| switch (v) {
+            .v4 => |addr| switch (b.IpAddr) {
+                .v4 => |baddr| std.mem.eql(u8, &addr, &baddr),
+                .v6 => false,
+            },
+            .v6 => |addr| switch (b.IpAddr) {
+                .v4 => false,
+                .v6 => |baddr| std.mem.eql(u8, &addr, &baddr),
+            },
+        },
+        .Subnet => |v| blk: {
+            const bv = b.Subnet;
+            if (v.prefix_len != bv.prefix_len) break :blk false;
+            break :blk switch (v.addr) {
+                .v4 => |addr| switch (bv.addr) {
+                    .v4 => |baddr| std.mem.eql(u8, &addr, &baddr),
+                    .v6 => false,
+                },
+                .v6 => |addr| switch (bv.addr) {
+                    .v4 => false,
+                    .v6 => |baddr| std.mem.eql(u8, &addr, &baddr),
+                },
+            };
+        },
+        .Mac => |v| std.mem.eql(u8, &v.bytes, &b.Mac.bytes),
+        .Hash => |v| std.mem.eql(u8, v.digest, b.Hash.digest) and v.alg == b.Hash.alg,
+        .Currency => |v| std.mem.eql(u8, &v.code, &b.Currency.code),
+        .LanguageTag => |v| std.mem.eql(u8, v.tag, b.LanguageTag.tag),
+        .LatLon => |v| v.lat == b.LatLon.lat and v.lon == b.LatLon.lon,
+        .LatLonAlt => |v| v.lat == b.LatLonAlt.lat and v.lon == b.LatLonAlt.lon and v.alt == b.LatLonAlt.alt,
+        .Geometry => |v| std.mem.eql(u8, v.wkb, b.Geometry.wkb),
+        .Temperature => |v| v.value_K == b.Temperature.value_K,
+        .Pressure => |v| v.value_Pa == b.Pressure.value_Pa,
+        .VectorF32 => |v| std.mem.eql(f32, v.data, b.VectorF32.data),
+        .VectorI32 => |v| std.mem.eql(i32, v.data, b.VectorI32.data),
+        .Date => |v| v.days_since_epoch == b.Date.days_since_epoch,
+        .Time => |v| v.micros_since_midnight == b.Time.micros_since_midnight,
+        .TimestampTZ => |v| v.micros_since_epoch_utc == b.TimestampTZ.micros_since_epoch_utc,
+        .Interval => |v| v.months == b.Interval.months and v.days == b.Interval.days and v.micros == b.Interval.micros,
+        .UUID => |v| std.mem.eql(u8, &v.bytes, &b.UUID.bytes),
+        .Url => |v| std.mem.eql(u8, v.scheme, b.Url.scheme) and std.mem.eql(u8, v.host, b.Url.host) and v.port == b.Url.port,
+        .Domain => |v| blk: {
+            if (v.labels.len != b.Domain.labels.len) break :blk false;
+            for (v.labels, b.Domain.labels) |l1, l2| {
+                if (!std.mem.eql(u8, l1, l2)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Bytea => |v| std.mem.eql(u8, v, b.Bytea),
+        .Json => |v| std.mem.eql(u8, v, b.Json),
+        .Jsonb => |v| std.mem.eql(u8, v.data, b.Jsonb.data),
+        .Xml => |v| std.mem.eql(u8, v.data, b.Xml.data),
+        .BitString => |v| v.bit_length == b.BitString.bit_length and std.mem.eql(u8, v.bytes, b.BitString.bytes),
+        .VarBit => |v| v.bit_length == b.VarBit.bit_length and std.mem.eql(u8, v.bytes, b.VarBit.bytes),
+        .IntRange => |v| v.lower == b.IntRange.lower and v.upper == b.IntRange.upper and v.bounds == b.IntRange.bounds,
+        .List => |v| blk: {
+            if (v.len != b.List.len) break :blk false;
+            for (v, b.List) |va, vb| {
+                if (!eqExtValues(va, vb)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Enum => |v| v.type_id == b.Enum.type_id and v.value_ordinal == b.Enum.value_ordinal,
+    };
 }
 
 // CANARY: REQ=REQ-M5.2-VALUE-TYPES-011; FEATURE="Value Helpers"; ASPECT=Stringify; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13

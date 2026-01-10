@@ -642,6 +642,13 @@ pub const RaftNode = struct {
     // Statistics
     stats: Statistics,
 
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=SnapshotTransfer; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
+    // Snapshot transfer state (follower receiving snapshot)
+    snapshot_buffer: ?std.ArrayList(u8) = null,
+    snapshot_expected_offset: u64 = 0,
+    snapshot_last_included_index: u64 = 0,
+    snapshot_last_included_term: u64 = 0,
+
     pub fn init(
         allocator: Allocator,
         id: u64,
@@ -1158,19 +1165,127 @@ pub const RaftNode = struct {
         }
     }
 
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleInstallSnapshot; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
     fn handleInstallSnapshot(self: *RaftNode, is: InstallSnapshot, from: u64) !void {
-        _ = self;
-        _ = is;
-        _ = from;
-        // Snapshot installation logic
-        // This is a simplified version - real implementation would handle chunked transfers
+        // 1. Reply immediately if term < currentTerm
+        if (is.term < self.current_term) {
+            try self.sendInstallSnapshotResponse(from, self.current_term);
+            return;
+        }
+
+        // 2. If term > currentTerm, update term and become follower
+        if (is.term > self.current_term) {
+            self.current_term = is.term;
+            self.voted_for = null;
+            self.state = .follower;
+        }
+
+        // 3. Reset election timer (valid message from current leader)
+        self.resetElectionTimer();
+
+        // 4. If this is a new snapshot (offset == 0), initialize buffer
+        if (is.offset == 0) {
+            // Clear any existing snapshot buffer
+            if (self.snapshot_buffer) |*buf| {
+                buf.deinit();
+            }
+            self.snapshot_buffer = std.ArrayList(u8).init(self.allocator);
+            self.snapshot_expected_offset = 0;
+            self.snapshot_last_included_index = is.last_included_index;
+            self.snapshot_last_included_term = is.last_included_term;
+        }
+
+        // 5. Validate offset matches expected
+        if (is.offset != self.snapshot_expected_offset) {
+            // Out of order chunk, reply with current term but don't process
+            try self.sendInstallSnapshotResponse(from, self.current_term);
+            return;
+        }
+
+        // 6. Append data to snapshot buffer
+        if (self.snapshot_buffer) |*buf| {
+            try buf.appendSlice(is.data);
+            self.snapshot_expected_offset = is.offset + is.data.len;
+        }
+
+        // 7. If done, apply snapshot and update state
+        if (is.done) {
+            if (self.snapshot_buffer) |*buf| {
+                // Apply snapshot via restore callback if available
+                if (self.restore_callback) |restore_fn| {
+                    try restore_fn(self.allocator, buf.items);
+                }
+
+                // Discard the entire log (snapshot replaces it)
+                self.log.clearAndFree();
+
+                // Update last_applied and commit_index to snapshot's last included index
+                self.last_applied = self.snapshot_last_included_index;
+                self.commit_index = self.snapshot_last_included_index;
+
+                // Persist snapshot if storage is available
+                if (self.storage) |storage| {
+                    try storage.saveSnapshot(self.snapshot_last_included_index, self.snapshot_last_included_term, buf.items);
+                }
+
+                // Update statistics
+                self.stats.snapshots_received += 1;
+
+                // Clean up buffer
+                buf.deinit();
+                self.snapshot_buffer = null;
+                self.snapshot_expected_offset = 0;
+            }
+        }
+
+        // 8. Send response
+        try self.sendInstallSnapshotResponse(from, self.current_term);
     }
 
+    fn sendInstallSnapshotResponse(self: *RaftNode, to: u64, term: u64) !void {
+        if (self.transport) |transport| {
+            const response = Message{
+                .install_snapshot_response = InstallSnapshotResponse{
+                    .term = term,
+                },
+            };
+            const frame = try encodeRaftFrame(self.allocator, self.id, term, response);
+            defer self.allocator.free(frame);
+            try transport.send(to, frame);
+        }
+    }
+
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleSnapshotResponse; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
     fn handleInstallSnapshotResponse(self: *RaftNode, isr: InstallSnapshotResponse, from: u64) !void {
-        _ = self;
-        _ = isr;
-        _ = from;
-        // Handle snapshot installation response
+        // Only leaders handle snapshot responses
+        if (self.state != .leader) {
+            return;
+        }
+
+        // If response contains a higher term, step down
+        if (isr.term > self.current_term) {
+            self.current_term = isr.term;
+            self.voted_for = null;
+            self.state = .follower;
+            return;
+        }
+
+        // If terms match and we're still the leader, update tracking for the follower
+        if (isr.term == self.current_term) {
+            // Get the snapshot's last included index (stored when we sent the snapshot)
+            // For now, we update next_index and match_index to the last known snapshot index
+            if (self.snapshot_last_included_index > 0) {
+                if (self.next_index) |*ni| {
+                    try ni.put(from, self.snapshot_last_included_index + 1);
+                }
+                if (self.match_index) |*mi| {
+                    try mi.put(from, self.snapshot_last_included_index);
+                }
+            }
+
+            // Update statistics
+            self.stats.snapshots_sent += 1;
+        }
     }
 
     fn updateCommitIndex(self: *RaftNode) !void {
