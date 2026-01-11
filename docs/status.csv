@@ -157,9 +157,15 @@ REQ-CLI-AUTO-001,GQL Query Auto-detection,UserExperience,TESTED,TestCANARY_REQ_C
 REQ-CLI-AUTO-002,Basic GQL Query Auto-detection,UserExperience,TESTED,TestCANARY_REQ_CLI_AUTO_002_BasicGqlAutoDetection,,cli,2025-10-04,tests/cli_gql_autodetection_basic_test.sh
 REQ-CLI-BACKUP-001,CLI Backup System,UnitTests,TESTED,TestCLI_BackupUnit,,cli,2025-10-05,tests/test_cli_backup_unit.zig
 REQ-CLI-BACKUP-002,CLI Backup Integration,IntegrationTests,TESTED,TestCLI_BackupIntegration,,cli,2025-10-05,tests/test_cli_backup_integration.zig
+REQ-CLI-BACKUP-INFO-001,CLIBackupInfo,FileMetadata,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-BACKUP-INTEGRATION-001,Remote Backup/Restore Operations,IntegrationTesting,IMPL,TestCANARY_REQ_CLI_BACKUP_INTEGRATION_001,,claude,2025-10-05,tests/test_server_backup_api_integration.zig
+REQ-CLI-BACKUP-LIST-001,CLIBackupList,DirectoryScan,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,TestCANARY_REQ_CLI_EXIT_001_ExitCodes,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
+REQ-CLI-MIGRATE-CREATE-001,CLIMigrateCreate,FileCreation,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
+REQ-CLI-MIGRATE-RUN-001,CLIMigrateRun,MigrationModule,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
+REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-POLICY-CMD-001,Policy CLI Commands,PolicyManagement,IMPL,,,security,2026-01-10,src/security/user_manager.zig
+REQ-CLI-QUERY-001,CLIQueryExecution,QUIC,IMPL,,,cli,2026-01-11,src/cli/main.zig
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,IMPL,,,security,2026-01-10,src/security/user_manager.zig
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,TestCANARY_REQ_CLI_ROUTE_001_OptionRouting,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedBinary,IMPL,TestCANARY_REQ_CLI_SUBPROCESS_ELIMINATION_001_UnifiedBinary,,cli,2025-10-05,src/cli/main.zig
@@ -200,6 +206,8 @@ REQ-COUNT-DISTINCT-BINDING-001,CountDistinctBindings,BindingAggregation,IMPL,,,a
 REQ-COUNT-DISTINCT-FIX-001,CountDistinctStrings,StringSupport,IMPL,,,engine,2025-12-26,src/execution/aggregation_evaluation.zig
 REQ-COUNT-DISTINCT-FIX-002,CountDistinctStrings,StringSupport,IMPL,,,engine,2025-12-26,src/execution/aggregation_evaluation.zig
 REQ-COUNT-DISTINCT-GROUP-001,CountDistinctGroupAggregation,GroupAggregation,IMPL,,,engine,2025-12-28,src/execution/match_operations.zig
+REQ-CRYPTO-RANDOM-001,CryptographicKeyGeneration,KMS_FALLBACK,IMPL,,,security,2026-01-11,src/storage/crypto_enhanced.zig
+REQ-CRYPTO-RANDOM-001,CryptographicKeyGeneration,SECURITY,IMPL,TestCANARY_REQ_CRYPTO_RANDOM_001,,security,2026-01-11,src/types/cryptographic.zig
 REQ-CTE-SPILL-001,CTEDiskSpilling,MemoryManagement,IMPL,,,planner,2026-01-10,src/planner/recursive.zig
 REQ-DATE-INTERVAL-001,DateIntervalArithmetic,Addition,IMPL,,,eval,2026-01-09,src/eval.zig
 REQ-DATE-INTERVAL-002,DateIntervalArithmetic,Subtraction,IMPL,,,eval,2026-01-09,src/eval.zig
@@ -1813,6 +1821,7 @@ REQ-ML-EMBEDDINGS-TEST-001,ML Embeddings Unit Tests,CoreFunctionality,TESTED,Tes
 REQ-ML-EMBEDDINGS-TEST-002,Node2Vec Algorithm Tests,Training,TESTED,TestCANARY_ML_EMBEDDINGS_TEST_002,,ml,2025-10-05,tests/test_ml_graph_embeddings.zig
 REQ-ML-EMBEDDINGS-TEST-003,GraphSAGE Algorithm Tests,NeighborAggregation,TESTED,TestCANARY_ML_EMBEDDINGS_TEST_003,,ml,2025-10-05,tests/test_ml_graph_embeddings.zig
 REQ-ML-HASEDGE-001,GraphData.hasEdge,EdgeLookup,IMPL,,,ml,2026-01-10,src/ml/integration_enhanced.zig
+REQ-ML-NEIGHBORS-001,GraphData.getNeighbors,NeighborLookup,IMPL,,,ml,2026-01-11,src/ml/integration_enhanced.zig
 REQ-MULTI-GRAPH-001,MultiGraphSupport,UseGraph,IMPL,,,engine,2025-12-20,src/execution/statement_dispatcher.zig
 REQ-MULTI-GRAPH-002,MultiGraphSupport,PerGraphStorage,IMPL,,,engine,2025-12-20,src/server/graph_storage_manager.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,IMPL,,,engine,2025-12-22,src/graph_store.zig

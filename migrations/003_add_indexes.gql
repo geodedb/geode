@@ -1,0 +1,7 @@
+-- Migration: add_indexes
+-- Version: 3
+-- Created: 1768139650738
+
+-- Add your GQL statements here
+-- Example:
+-- CREATE (:Node {name: "example"})
