@@ -242,9 +242,11 @@ pub const ChunkedMemoryMap = struct {
     file: std.fs.File,
     file_size: u64,
     chunk_size: u64,
-    chunks: std.HashMap(u64, Chunk, std.hash_map.DefaultContext(u64), 80),
+    chunks: std.AutoHashMap(u64, Chunk),
     max_chunks: usize,
     read_only: bool,
+    cache_hits: u64 = 0,
+    cache_misses: u64 = 0,
 
     const Self = @This();
 
@@ -268,7 +270,7 @@ pub const ChunkedMemoryMap = struct {
             .file = file,
             .file_size = file_size,
             .chunk_size = chunk_size,
-            .chunks = std.HashMap(u64, Chunk, std.hash_map.DefaultContext(u64), 80).init(allocator),
+            .chunks = std.AutoHashMap(u64, Chunk).init(allocator),
             .max_chunks = max_chunks,
             .read_only = read_only,
         };
@@ -341,11 +343,15 @@ pub const ChunkedMemoryMap = struct {
 
     /// Get or load chunk by index
     fn getChunk(self: *Self, chunk_index: u64) !*Chunk {
-        // Update access time for existing chunk
+        // Update access time for existing chunk (cache hit)
         if (self.chunks.getPtr(chunk_index)) |chunk| {
-            chunk.last_access = std.time.milliTimestamp();
+            chunk.last_access = @intCast(std.time.milliTimestamp());
+            self.cache_hits += 1;
             return chunk;
         }
+
+        // Cache miss - need to load chunk
+        self.cache_misses += 1;
 
         // Evict LRU chunk if at capacity
         if (self.chunks.count() >= self.max_chunks) {
@@ -370,7 +376,7 @@ pub const ChunkedMemoryMap = struct {
             .data = chunk_data,
             .offset = chunk_offset,
             .dirty = false,
-            .last_access = std.time.milliTimestamp(),
+            .last_access = @intCast(std.time.milliTimestamp()),
         };
 
         try self.chunks.put(chunk_index, chunk);
@@ -432,12 +438,19 @@ pub const ChunkedMemoryMap = struct {
             if (entry.value_ptr.dirty) dirty_chunks += 1;
         }
 
+        // Calculate cache hit ratio
+        const total_accesses = self.cache_hits + self.cache_misses;
+        const hit_ratio: f64 = if (total_accesses > 0)
+            @as(f64, @floatFromInt(self.cache_hits)) / @as(f64, @floatFromInt(total_accesses))
+        else
+            0.0;
+
         return CacheStats{
             .total_chunks = @intCast(self.chunks.count()),
             .dirty_chunks = dirty_chunks,
             .max_chunks = @intCast(self.max_chunks),
             .chunk_size = self.chunk_size,
-            .cache_hit_ratio = 0.0, // TODO: Track hit/miss ratio
+            .cache_hit_ratio = hit_ratio,
         };
     }
 };
@@ -603,4 +616,152 @@ test "Performance benchmark basic functionality" {
     try testing.expect(results.mmap_read_ns > 0);
     try testing.expect(results.regular_read_ns > 0);
     try testing.expect(results.mmap_advantage > 0.1);
+}
+
+// ============================================================================
+// Unit Tests for Cache Hit/Miss Ratio Tracking
+// CANARY: REQ=REQ-PERF-CACHE-RATIO-001; FEATURE="CacheHitRatioTracking"; ASPECT=UnitTest; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-10
+// ============================================================================
+
+test "ChunkedMemoryMap cache hit tracking" {
+    const allocator = testing.allocator;
+
+    const test_file = "test_chunked_cache.dat";
+    defer std.fs.cwd().deleteFile(test_file) catch {};
+
+    // Create test file with 3 chunks worth of data (chunk_size = 64)
+    const chunk_size: u64 = 64;
+    const total_size: usize = 192; // 3 chunks
+
+    {
+        const file = try std.fs.cwd().createFile(test_file, .{});
+        defer file.close();
+        var data: [total_size]u8 = undefined;
+        for (&data, 0..) |*b, i| {
+            b.* = @intCast(i % 256);
+        }
+        _ = try file.writeAll(&data);
+        try file.sync();
+    }
+
+    var chunked_map = try ChunkedMemoryMap.init(allocator, test_file, chunk_size, 2, true);
+    defer chunked_map.deinit();
+
+    // Initial state - no accesses
+    var stats = chunked_map.getCacheStats();
+    try testing.expectEqual(@as(f64, 0.0), stats.cache_hit_ratio);
+
+    // First read - chunk 0 (cache miss)
+    var buf1: [32]u8 = undefined;
+    _ = try chunked_map.readAt(0, &buf1);
+    stats = chunked_map.getCacheStats();
+    try testing.expectEqual(@as(u64, 0), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 1), chunked_map.cache_misses);
+
+    // Second read from same chunk (cache hit)
+    _ = try chunked_map.readAt(32, &buf1);
+    stats = chunked_map.getCacheStats();
+    try testing.expectEqual(@as(u64, 1), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 1), chunked_map.cache_misses);
+
+    // Read from chunk 1 (cache miss)
+    _ = try chunked_map.readAt(64, &buf1);
+    stats = chunked_map.getCacheStats();
+    try testing.expectEqual(@as(u64, 1), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 2), chunked_map.cache_misses);
+
+    // Read from chunk 0 again (cache hit)
+    _ = try chunked_map.readAt(16, &buf1);
+    stats = chunked_map.getCacheStats();
+    try testing.expectEqual(@as(u64, 2), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 2), chunked_map.cache_misses);
+
+    // Verify hit ratio: 2 hits / 4 total = 0.5
+    try testing.expectApproxEqAbs(@as(f64, 0.5), stats.cache_hit_ratio, 0.001);
+}
+
+test "ChunkedMemoryMap cache eviction tracks misses" {
+    const allocator = testing.allocator;
+
+    const test_file = "test_eviction.dat";
+    defer std.fs.cwd().deleteFile(test_file) catch {};
+
+    // Create test file with 4 chunks
+    const chunk_size: u64 = 32;
+    const total_size: usize = 128;
+
+    {
+        const file = try std.fs.cwd().createFile(test_file, .{});
+        defer file.close();
+        var data: [total_size]u8 = undefined;
+        for (&data, 0..) |*b, i| {
+            b.* = @intCast(i % 256);
+        }
+        _ = try file.writeAll(&data);
+        try file.sync();
+    }
+
+    // Only allow 2 chunks in cache
+    var chunked_map = try ChunkedMemoryMap.init(allocator, test_file, chunk_size, 2, true);
+    defer chunked_map.deinit();
+
+    var buf: [16]u8 = undefined;
+
+    // Read from chunk 0 (miss)
+    _ = try chunked_map.readAt(0, &buf);
+    try testing.expectEqual(@as(u64, 0), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 1), chunked_map.cache_misses);
+
+    // Read from chunk 1 (miss)
+    _ = try chunked_map.readAt(32, &buf);
+    try testing.expectEqual(@as(u64, 0), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 2), chunked_map.cache_misses);
+
+    // Read from chunk 2 (miss, evicts one of the existing chunks)
+    _ = try chunked_map.readAt(64, &buf);
+    try testing.expectEqual(@as(u64, 0), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 3), chunked_map.cache_misses);
+
+    // Read from chunk 2 again (hit, definitely in cache)
+    _ = try chunked_map.readAt(72, &buf);
+    try testing.expectEqual(@as(u64, 1), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 3), chunked_map.cache_misses);
+
+    // Read from chunk 3 (miss, evicts another chunk)
+    _ = try chunked_map.readAt(96, &buf);
+    try testing.expectEqual(@as(u64, 1), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 4), chunked_map.cache_misses);
+
+    // Read from chunk 3 again (hit, definitely in cache)
+    _ = try chunked_map.readAt(100, &buf);
+    try testing.expectEqual(@as(u64, 2), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 4), chunked_map.cache_misses);
+
+    // Final ratio: 2 hits / 6 total = 0.333...
+    const stats = chunked_map.getCacheStats();
+    try testing.expectApproxEqAbs(@as(f64, 0.333), stats.cache_hit_ratio, 0.01);
+}
+
+test "ChunkedMemoryMap zero accesses returns zero ratio" {
+    const allocator = testing.allocator;
+
+    const test_file = "test_zero_ratio.dat";
+    defer std.fs.cwd().deleteFile(test_file) catch {};
+
+    {
+        const file = try std.fs.cwd().createFile(test_file, .{});
+        defer file.close();
+        const data = [_]u8{0} ** 64;
+        _ = try file.writeAll(&data);
+        try file.sync();
+    }
+
+    var chunked_map = try ChunkedMemoryMap.init(allocator, test_file, 32, 2, true);
+    defer chunked_map.deinit();
+
+    // No accesses yet
+    const stats = chunked_map.getCacheStats();
+    try testing.expectEqual(@as(f64, 0.0), stats.cache_hit_ratio);
+    try testing.expectEqual(@as(u64, 0), chunked_map.cache_hits);
+    try testing.expectEqual(@as(u64, 0), chunked_map.cache_misses);
 }

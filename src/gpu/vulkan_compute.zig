@@ -82,8 +82,68 @@ pub const VulkanCompute = struct {
             return VulkanError.NoPhysicalDevices;
         }
 
-        // Select first physical device (TODO: make this smarter)
-        const physical_device = physical_devices[0];
+        // Smart device selection: prefer discrete GPU, then by compute capability and memory
+        var best_device: vk.VkPhysicalDevice = physical_devices[0];
+        var best_score: i64 = -1;
+
+        for (physical_devices) |dev| {
+            var props: vk.VkPhysicalDeviceProperties = undefined;
+            vk.Vulkan.getPhysicalDeviceProperties(dev, &props);
+
+            var mem_props: vk.VkPhysicalDeviceMemoryProperties = undefined;
+            vk.Vulkan.getPhysicalDeviceMemoryProperties(dev, &mem_props);
+
+            // Calculate device score
+            var score: i64 = 0;
+
+            // Prefer discrete GPUs (highest priority)
+            if (props.deviceType == vk.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+                score += 10000;
+            } else if (props.deviceType == vk.VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+                score += 1000;
+            } else if (props.deviceType == vk.VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU) {
+                score += 500;
+            }
+
+            // Check for compute queue support
+            var qf_count: u32 = 0;
+            vk.Vulkan.getPhysicalDeviceQueueFamilyProperties(dev, &qf_count, null);
+            const temp_qf = allocator.alloc(vk.VkQueueFamilyProperties, qf_count) catch continue;
+            defer allocator.free(temp_qf);
+            vk.Vulkan.getPhysicalDeviceQueueFamilyProperties(dev, &qf_count, temp_qf.ptr);
+
+            var has_compute = false;
+            var max_compute_queues: u32 = 0;
+            for (temp_qf) |family| {
+                if ((family.queueFlags & vk.VK_QUEUE_COMPUTE_BIT) != 0) {
+                    has_compute = true;
+                    if (family.queueCount > max_compute_queues) {
+                        max_compute_queues = family.queueCount;
+                    }
+                }
+            }
+
+            if (!has_compute) continue; // Skip devices without compute
+
+            // Add score for compute queues (more is better for parallel workloads)
+            score += @as(i64, max_compute_queues) * 10;
+
+            // Add score for device memory (in 256MB chunks)
+            var total_device_memory: u64 = 0;
+            for (0..mem_props.memoryHeapCount) |i| {
+                if ((mem_props.memoryHeaps[i].flags & vk.VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
+                    total_device_memory += mem_props.memoryHeaps[i].size;
+                }
+            }
+            score += @as(i64, @intCast(total_device_memory / (256 * 1024 * 1024)));
+
+            if (score > best_score) {
+                best_score = score;
+                best_device = dev;
+            }
+        }
+
+        const physical_device = best_device;
 
         var device_properties: vk.VkPhysicalDeviceProperties = undefined;
         vk.Vulkan.getPhysicalDeviceProperties(physical_device, &device_properties);

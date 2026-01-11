@@ -40,17 +40,18 @@ The following are documented limitations, not implementation gaps:
 - `src/security/key_provider.zig:70-81` uses XOR wrap/unwrap for MockKms provider
 - This is intentional for deterministic testing; production uses StaticEnv or ExternalKms
 
-### Minor TODOs (Not Tracking as Gaps)
-The following TODOs exist in code but are minor optimizations or enhancements, not gaps:
-- stdin reading for backup confirmation (UX improvement)
-- Vulkan device selection (optimization)
-- sorting algorithm improvements (performance)
-- big endian support (platform expansion)
-- cache hit ratio tracking (observability enhancement)
+### Completed Minor Enhancements (January 10, 2026)
+The following items from previous analysis have been implemented:
+- ✅ stdin reading for backup confirmation - Now prompts user to type 'yes' to confirm restore
+- ✅ Vulkan device selection - Smart scoring: discrete GPU > integrated, plus compute queues and memory
+- ✅ sorting algorithm improvements - Replaced O(n²) bubble sort with O(n log n) heap sort
+- ✅ big endian support - WKB parsing now handles both big and little endian byte order
+- ✅ cache hit ratio tracking - ChunkedMemoryMap now tracks cache_hits/cache_misses and calculates ratio
 
-### Dead Code (Not Security Risk)
-- `src/storage/crypto_simple.zig` - XOR cipher implementation exists but is NOT imported anywhere
-- `src/dist/scaffold.zig` - RPC placeholders exist but are NOT used in production paths
+### Build System Modules (Not Dead Code)
+These files are referenced in build.zig for specific tools but not used in main production paths:
+- `src/storage/crypto_simple.zig` - Referenced by key_rotate tool in build.zig
+- `src/dist/scaffold.zig` - RPC scaffolding module referenced in build.zig
 
 ---
 

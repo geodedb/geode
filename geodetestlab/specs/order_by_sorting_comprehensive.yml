@@ -1,0 +1,204 @@
+version: "1.0"
+name: "ORDER BY Sorting Comprehensive Tests"
+description: "Tests for ORDER BY clause with heap sort algorithm (O(n log n) performance)"
+
+cli:
+  binary: "./zig-out/bin/geode"
+  working_dir: null
+  env:
+    GEODE_LOG_LEVEL: "info"
+  server:
+    enabled: true
+    port: null
+    data_dir: null
+    startup_timeout_ms: 60000
+    cleanup: true
+    args: ["--log-level", "info"]
+    env: {}
+  client:
+    server_address: "127.0.0.1:3141"
+    timeout_ms: 30000
+    tls_verify: false
+    format: "json"
+
+secrets:
+  admin_password:
+    source: "env"
+    key: "GEODE_ADMIN_PASSWORD"
+    required: false
+
+invariants:
+  - type: "server_running"
+
+fuzz:
+  enabled: false
+
+tests:
+  # Basic ORDER BY tests
+  - name: "order-by-asc-integers"
+    description: "Test ORDER BY with ascending integer sort"
+    args: ["query", "-"]
+    stdin: "UNWIND [5, 2, 8, 1, 9, 3] AS n RETURN n ORDER BY n ASC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["1", "2", "3", "5", "8", "9"]
+    tags: ["order-by", "sorting", "basic"]
+
+  - name: "order-by-desc-integers"
+    description: "Test ORDER BY with descending integer sort"
+    args: ["query", "-"]
+    stdin: "UNWIND [5, 2, 8, 1, 9, 3] AS n RETURN n ORDER BY n DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["9", "8", "5", "3", "2", "1"]
+    tags: ["order-by", "sorting", "basic"]
+
+  - name: "order-by-strings"
+    description: "Test ORDER BY with string sorting"
+    args: ["query", "-"]
+    stdin: "UNWIND ['zebra', 'apple', 'mango', 'banana'] AS fruit RETURN fruit ORDER BY fruit"
+    expect:
+      exit_code: 0
+      stdout_contains: ["apple", "banana", "mango", "zebra"]
+    tags: ["order-by", "sorting", "strings"]
+
+  - name: "order-by-strings-desc"
+    description: "Test ORDER BY with descending string sorting"
+    args: ["query", "-"]
+    stdin: "UNWIND ['zebra', 'apple', 'mango', 'banana'] AS fruit RETURN fruit ORDER BY fruit DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["zebra", "mango", "banana", "apple"]
+    tags: ["order-by", "sorting", "strings"]
+
+  # NULL handling tests
+  - name: "order-by-nulls-first"
+    description: "Test ORDER BY with NULLS FIRST"
+    args: ["query", "-"]
+    stdin: "UNWIND [3, null, 1, null, 2] AS n RETURN n ORDER BY n NULLS FIRST"
+    expect:
+      exit_code: 0
+      stdout_contains: ["null", "1", "2", "3"]
+    tags: ["order-by", "sorting", "nulls"]
+
+  - name: "order-by-nulls-last"
+    description: "Test ORDER BY with NULLS LAST"
+    args: ["query", "-"]
+    stdin: "UNWIND [3, null, 1, null, 2] AS n RETURN n ORDER BY n NULLS LAST"
+    expect:
+      exit_code: 0
+      stdout_contains: ["1", "2", "3", "null"]
+    tags: ["order-by", "sorting", "nulls"]
+
+  - name: "order-by-desc-nulls-last"
+    description: "Test ORDER BY DESC with NULLS LAST"
+    args: ["query", "-"]
+    stdin: "UNWIND [3, null, 1, null, 2] AS n RETURN n ORDER BY n DESC NULLS LAST"
+    expect:
+      exit_code: 0
+      stdout_contains: ["3", "2", "1", "null"]
+    tags: ["order-by", "sorting", "nulls"]
+
+  - name: "order-by-desc-nulls-first"
+    description: "Test ORDER BY DESC with NULLS FIRST"
+    args: ["query", "-"]
+    stdin: "UNWIND [3, null, 1, null, 2] AS n RETURN n ORDER BY n DESC NULLS FIRST"
+    expect:
+      exit_code: 0
+      stdout_contains: ["null", "3", "2", "1"]
+    tags: ["order-by", "sorting", "nulls"]
+
+  # Multiple sort keys
+  - name: "order-by-multiple-keys"
+    description: "Test ORDER BY with multiple sort keys"
+    args: ["query", "-"]
+    stdin: |
+      UNWIND [{name: 'Alice', age: 30}, {name: 'Bob', age: 25}, {name: 'Alice', age: 25}] AS person
+      RETURN person.name AS name, person.age AS age
+      ORDER BY person.name, person.age
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Bob", "25", "30"]
+    tags: ["order-by", "sorting", "multiple-keys"]
+
+  - name: "order-by-mixed-directions"
+    description: "Test ORDER BY with mixed ASC/DESC"
+    args: ["query", "-"]
+    stdin: |
+      UNWIND [{name: 'Alice', age: 30}, {name: 'Bob', age: 25}, {name: 'Alice', age: 25}] AS person
+      RETURN person.name AS name, person.age AS age
+      ORDER BY person.name ASC, person.age DESC
+    expect:
+      exit_code: 0
+      stdout_contains: ["Alice", "Bob"]
+    tags: ["order-by", "sorting", "multiple-keys"]
+
+  # Ordinal sort keys
+  - name: "order-by-ordinal"
+    description: "Test ORDER BY with ordinal column reference"
+    args: ["query", "-"]
+    stdin: "UNWIND [3, 1, 2] AS n RETURN n ORDER BY 1"
+    expect:
+      exit_code: 0
+      stdout_contains: ["1", "2", "3"]
+    tags: ["order-by", "sorting", "ordinal"]
+
+  # Large dataset (tests heap sort performance)
+  - name: "order-by-large-dataset"
+    description: "Test ORDER BY with larger dataset for heap sort verification"
+    args: ["query", "-"]
+    stdin: "UNWIND range(100, 1, -1) AS n RETURN n ORDER BY n LIMIT 5"
+    expect:
+      exit_code: 0
+      stdout_contains: ["1", "2", "3", "4", "5"]
+    tags: ["order-by", "sorting", "performance"]
+
+  # Decimal sorting
+  - name: "order-by-decimals"
+    description: "Test ORDER BY with decimal values"
+    args: ["query", "-"]
+    stdin: "UNWIND [3.14, 2.71, 1.41, 1.73] AS n RETURN n ORDER BY n"
+    expect:
+      exit_code: 0
+      stdout_contains: ["1.41", "1.73", "2.71", "3.14"]
+    tags: ["order-by", "sorting", "decimals"]
+
+  # Boolean sorting
+  - name: "order-by-booleans"
+    description: "Test ORDER BY with boolean values"
+    args: ["query", "-"]
+    stdin: "UNWIND [true, false, true, false] AS b RETURN b ORDER BY b"
+    expect:
+      exit_code: 0
+      stdout_contains: ["false", "true"]
+    tags: ["order-by", "sorting", "booleans"]
+
+  # SKIP and LIMIT with ORDER BY
+  - name: "order-by-skip-limit"
+    description: "Test ORDER BY with SKIP and LIMIT"
+    args: ["query", "-"]
+    stdin: "UNWIND range(1, 10) AS n RETURN n ORDER BY n SKIP 2 LIMIT 3"
+    expect:
+      exit_code: 0
+      stdout_contains: ["3", "4", "5"]
+    tags: ["order-by", "sorting", "pagination"]
+
+  # Aliased expressions in ORDER BY
+  - name: "order-by-alias"
+    description: "Test ORDER BY with aliased column"
+    args: ["query", "-"]
+    stdin: "UNWIND [3, 1, 2] AS n RETURN n AS value ORDER BY value"
+    expect:
+      exit_code: 0
+      stdout_contains: ["1", "2", "3"]
+    tags: ["order-by", "sorting", "alias"]
+
+  # Expression in ORDER BY
+  - name: "order-by-expression"
+    description: "Test ORDER BY with expression"
+    args: ["query", "-"]
+    stdin: "UNWIND [3, 1, 2] AS n RETURN n, n * 2 AS doubled ORDER BY n * 2 DESC"
+    expect:
+      exit_code: 0
+      stdout_contains: ["6", "4", "2"]
+    tags: ["order-by", "sorting", "expression"]

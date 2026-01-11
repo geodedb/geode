@@ -1117,7 +1117,6 @@ REQ-GQL-098,Range Types,ContainmentOverlap,TESTED,TestCANARY_REQ_GQL_098_RangeOp
 REQ-GQL-099,Specialized Indexes,IntervalTreePersistence,TESTED,TestCANARY_REQ_GQL_099_IntervalIndexPersist,,index,2025-09-27,src/canary.zig
 REQ-GQL-100,Specialized Indexes,JsonbInvertedPersistence,TESTED,TestCANARY_REQ_GQL_100_JsonbIndexPersist,,index,2025-09-27,src/canary.zig
 REQ-GQL-100,UNION Query Operations,Parser,FIXED,gql_conformance.T1,,parser,2025-10-14,src/gql/parser.zig
-REQ-GQL-101,ORDER BY Expression Evaluation,Execution,FIXED,gql_conformance.T3,,execution,2025-10-14,src/execution/return_and_sorting.zig
 REQ-GQL-101,Specialized Indexes,DomainTriePersistence,TESTED,TestCANARY_REQ_GQL_101_DomainTriePersist,,index,2025-09-27,src/canary.zig
 REQ-GQL-164,Pattern Comprehension Shorthand,Parser,TESTED,,,parser,2025-10-14,src/gql/parser.zig
 REQ-GQL-165,Pattern Comprehension Execution,Evaluator,TESTED,,,eval,2025-10-14,src/eval.zig
@@ -1422,15 +1421,10 @@ REQ-GQL-ORDER-MULTICHAIN-001,OrderByMultiChain,FinalSort,IMPL,,,execution,2025-1
 REQ-GQL-ORDER-MULTINODE-001,OrderByMultiNode,FinalSort,IMPL,,,execution,2025-12-26,src/execution/match_operations.zig
 REQ-GQL-ORDER-POST-WITH-001,OrderByPostWith,FinalSort,IMPL,,,execution,2025-12-26,src/execution/match_operations.zig
 REQ-GQL-ORDER-POST-WITH-002,OrderByPostWithAgg,FinalSort,IMPL,,,execution,2025-12-26,src/execution/match_operations.zig
-REQ-GQL-ORDERBY-ALIAS-001,OrderByAliasedColumn,ExpressionMatch,IMPL,,,execution,2025-12-28,src/execution/return_and_sorting.zig
 REQ-GQL-ORDERBY-ALIAS-002,OrderByAliasedColumn,SimpleMatchPath,IMPL,,,execution,2025-12-28,src/execution/match_operations.zig
 REQ-GQL-ORDERBY-DECIMAL-001,OrderByDecimalComparison,DecimalSort,IMPL,,,execution,2025-12-26,src/execution/return_and_sorting.zig
-REQ-GQL-ORDERBY-EXPR-001,OrderByExpressionEval,ComplexExpr,IMPL,,,execution,2025-12-26,src/execution/return_and_sorting.zig
-REQ-GQL-ORDERBY-EXPR-001,OrderByExpressionEval,MemberFallback,IMPL,,,execution,2025-12-26,src/execution/return_and_sorting.zig
 REQ-GQL-ORDERBY-EXPR-001,OrderByExpressionEval,MemberResolution,IMPL,,,execution,2025-12-26,src/execution/return_and_sorting.zig
 REQ-GQL-ORDERBY-EXPR-MATCH-001,OrderByExpressionMatch,ExpressionEquality,IMPL,,,execution,2025-12-28,src/execution/return_and_sorting.zig
-REQ-GQL-ORDERBY-MEMBER-001,OrderByMemberExpr,PropertyAccess,IMPL,,,engine,2025-12-23,src/execution/return_and_sorting.zig
-REQ-GQL-ORDERBY-NULLS-001,OrderByNullsPolicy,NullsIndependentOfDesc,IMPL,,,execution,2025-12-28,src/execution/return_and_sorting.zig
 REQ-GQL-ORDERBY-RETURN-MATCH-001,OrderByReturnMatch,ColumnIndexLookup,IMPL,,,execution,2025-12-28,src/execution/return_and_sorting.zig
 REQ-GQL-ORDERBY-WRAPPER-001,OrderBySortRowsWrapper,BackwardsCompatibility,IMPL,,,execution,2025-12-28,src/execution/return_and_sorting.zig
 REQ-GQL-OUTDEGREE-001,OutdegreeFunction,NodeDegree,IMPL,,,eval,2026-01-03,src/eval.zig
@@ -1883,6 +1877,7 @@ REQ-PERF-ANALYSIS-001,PerformanceAnalysis,Benchmarking,IMPL,TestCANARY_Performan
 REQ-PERF-ASYNC-001,AsynchronousIO,Performance,IMPL,TestCANARY_AsynchronousIO,,performance,2025-10-04,src/performance/async_io.zig
 REQ-PERF-ASYNC-001,SimpleAsyncIO,Performance,IMPL,TestCANARY_SimpleAsyncIO,,performance,2025-10-04,src/performance/async_io_simple.zig
 REQ-PERF-ASYNC-001,SimpleAsynchronousIO,Performance,IMPL,TestCANARY_SimpleAsynchronousIO,,performance,2025-10-04,src/performance/simple_async_io.zig
+REQ-PERF-CACHE-RATIO-001,CacheHitRatioTracking,UnitTest,IMPL,,,performance,2026-01-10,src/performance/memory_mapped_io.zig
 REQ-PERF-COLLECTION-001,CollectionOptimization,Benchmarking,IMPL,TestCANARY_CollectionOptimization,,performance,2025-10-04,tests/benchmark_collection_optimization.zig
 REQ-PERF-COLLECTION-001,CollectionPerformanceValidation,Testing,TESTED,TestCANARY_CollectionPerfValidation,,performance,2025-10-04,tests/collection_perf_validation.zig
 REQ-PERF-COLLECTION-001,OptimizedCollections,Performance,IMPL,TestCANARY_OptimizedCollections,,performance,2025-10-04,src/performance/collection_optimized.zig
@@ -2031,9 +2026,17 @@ REQ-SERVER-STARTUP-INTEGRATION-001,Server Startup Integration Tests,EndToEndServ
 REQ-SERVER-STARTUP-REGRESSION-001,Server Startup Regression Tests,UnifiedBinaryServerStartup,TESTED,TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup,,server,2025-10-05,tests/test_server_startup_regression.zig
 REQ-SET-RETURN-FIX-001,SetReturnFix,NoReturnClause,IMPL,,,engine,2025-12-23,src/execution/match_operations.zig
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,IMPL,,,distributed,2026-01-09,src/distributed/query_coordinator.zig
+REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-CONTAINS-001,SpatialContains,GeometryRelation,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-DISTANCE-001,SpatialDistance,GeometryMeasure,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-INTERSECTS-001,SpatialIntersects,GeometryRelation,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-POINT-001,SpatialPoint,PointCreation,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-WITHIN-001,SpatialWithin,GeometryRelation,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-WKB-ENDIAN-001,WKBByteOrderParsing,UnitTest,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-X-001,SpatialX,CoordinateExtraction,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
+REQ-SPATIAL-Y-001,SpatialY,CoordinateExtraction,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-STREAMING-KAFKA-001,Kafka Sink Implementation,ProducerSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/kafka_sink.zig
 REQ-STREAMING-KEYROT-REENCRYPT-001,Page Re-encryption,ReEncryption,IMPL,,,security,2025-12-30,src/security/key_rotation.zig
 REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/webhook_sink.zig

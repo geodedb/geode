@@ -156,203 +156,117 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
 
     if (result.rows.len <= 1) return;
 
-    // For now, implement a simple bubble sort
-    // TODO: Replace with better sorting algorithm
-    var swapped = true;
-    while (swapped) {
-        swapped = false;
-        var i: usize = 0;
-        while (i < result.rows.len - 1) : (i += 1) {
-            // Compare rows based on ORDER BY keys
-            var should_swap = false;
+    // Use efficient O(n log n) heap sort with comparison context
+    const SortContext = struct {
+        allocator: std.mem.Allocator,
+        order: ast.OrderBy,
+        columns: []const []const u8,
+        return_items: ?[]const ast.ReturnItem,
 
-            for (order.keys) |key| {
-                // CANARY: REQ=REQ-GQL-101; FEATURE="ORDER BY Expression Evaluation"; ASPECT=Execution; STATUS=FIXED; TEST=gql_conformance.T3; OWNER=execution; UPDATED=2025-10-14
-                // Handle ordinal references (ORDER BY 2 means second column)
-                var val1: Value = undefined;
-                var val2: Value = undefined;
+        fn compare(ctx: @This(), row_a: []Value, row_b: []Value) bool {
+            for (ctx.order.keys) |key| {
+                const val1 = getValueForKey(ctx, key, row_a);
+                const val2 = getValueForKey(ctx, key, row_b);
 
-                if (key.expr == .Int) {
-                    // Ordinal reference - use 1-based indexing
-                    const col_idx = @as(usize, @intCast(key.expr.Int - 1));
-                    if (col_idx < result.rows[i].len) {
-                        val1 = result.rows[i][col_idx];
-                        val2 = result.rows[i + 1][col_idx];
-                    } else {
-                        // Invalid column index
-                        val1 = .{ .Null = {} };
-                        val2 = .{ .Null = {} };
-                    }
-                } else if (key.expr == .Ident) {
-                    // Simple column reference - look up by name
-                    const col_name = key.expr.Ident.orig;
-                    var col_idx_opt: ?usize = null;
-                    for (result.columns, 0..) |result_col, idx| {
-                        if (std.mem.eql(u8, result_col, col_name)) {
-                            col_idx_opt = idx;
-                            break;
-                        }
-                    }
-                    // D05 Fix: Try matching against RETURN expressions if not found by name
-                    if (col_idx_opt == null and return_items != null) {
-                        col_idx_opt = findColumnIndexByExpression(key.expr, return_items.?);
-                    }
-                    if (col_idx_opt) |col_idx| {
-                        val1 = result.rows[i][col_idx];
-                        val2 = result.rows[i + 1][col_idx];
-                    } else {
-                        // Column not found
-                        val1 = .{ .Null = {} };
-                        val2 = .{ .Null = {} };
-                    }
-                } else if (key.expr == .Member) {
-                    // CANARY: REQ=REQ-GQL-ORDERBY-MEMBER-001; FEATURE="OrderByMemberExpr"; ASPECT=PropertyAccess; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
-                    // Member expression like n.id - look up by property name or qualified name
-                    const member = key.expr.Member;
-                    const prop_name = member.field;
-
-                    // Try to find the column by property name or qualified name (e.g., "id" or "n.id")
-                    var col_idx_opt: ?usize = null;
-
-                    // First try: exact property name (e.g., "id")
-                    for (result.columns, 0..) |result_col, idx| {
-                        if (std.mem.eql(u8, result_col, prop_name)) {
-                            col_idx_opt = idx;
-                            break;
-                        }
-                    }
-
-                    // Second try: qualified name (e.g., "n.id") if target is an identifier
-                    if (col_idx_opt == null and member.target.* == .Ident) {
-                        const target_name = member.target.Ident.orig;
-                        for (result.columns, 0..) |result_col, idx| {
-                            // Check if column matches "target.property" pattern
-                            if (result_col.len == target_name.len + 1 + prop_name.len) {
-                                if (std.mem.startsWith(u8, result_col, target_name) and
-                                    result_col[target_name.len] == '.' and
-                                    std.mem.endsWith(u8, result_col, prop_name))
-                                {
-                                    col_idx_opt = idx;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // CANARY: REQ=REQ-GQL-ORDERBY-ALIAS-001; FEATURE="OrderByAliasedColumn"; ASPECT=ExpressionMatch; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
-                    // D05 Fix: Third try - match ORDER BY expression against RETURN expressions
-                    // This handles cases like: RETURN n.name AS persons ORDER BY n.name
-                    // where the column is aliased but ORDER BY uses the original expression
-                    if (col_idx_opt == null and return_items != null) {
-                        col_idx_opt = findColumnIndexByExpression(key.expr, return_items.?);
-                    }
-
-                    if (col_idx_opt) |col_idx| {
-                        val1 = result.rows[i][col_idx];
-                        val2 = result.rows[i + 1][col_idx];
-                    } else {
-                        // Column not found - try expression evaluation as fallback
-                        const env1 = Env{
-                            .names = result.columns,
-                            .values = result.rows[i],
-                            .allocator = allocator,
-                        };
-                        const env2 = Env{
-                            .names = result.columns,
-                            .values = result.rows[i + 1],
-                            .allocator = allocator,
-                        };
-                        // CANARY: REQ=REQ-GQL-ORDERBY-EXPR-001; FEATURE="OrderByExpressionEval"; ASPECT=MemberFallback; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
-                        val1 = evalOrderByExpr(allocator, key.expr, env1) catch .{ .Null = {} };
-                        val2 = evalOrderByExpr(allocator, key.expr, env2) catch .{ .Null = {} };
-                    }
-                } else {
-                    // Complex expression - need to evaluate it for each row
-                    // D05 Fix: Try expression matching first for fast column lookup
-                    if (return_items) |items| {
-                        if (findColumnIndexByExpression(key.expr, items)) |col_idx| {
-                            val1 = result.rows[i][col_idx];
-                            val2 = result.rows[i + 1][col_idx];
-                        } else {
-                            // Fall back to expression evaluation
-                            const env1 = Env{
-                                .names = result.columns,
-                                .values = result.rows[i],
-                                .allocator = allocator,
-                            };
-                            const env2 = Env{
-                                .names = result.columns,
-                                .values = result.rows[i + 1],
-                                .allocator = allocator,
-                            };
-                            val1 = evalOrderByExpr(allocator, key.expr, env1) catch .{ .Null = {} };
-                            val2 = evalOrderByExpr(allocator, key.expr, env2) catch .{ .Null = {} };
-                        }
-                    } else {
-                        // Create environment from row values
-                        const env1 = Env{
-                            .names = result.columns,
-                            .values = result.rows[i],
-                            .allocator = allocator,
-                        };
-                        const env2 = Env{
-                            .names = result.columns,
-                            .values = result.rows[i + 1],
-                            .allocator = allocator,
-                        };
-
-                        // CANARY: REQ=REQ-GQL-ORDERBY-EXPR-001; FEATURE="OrderByExpressionEval"; ASPECT=ComplexExpr; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
-                        // Use evalOrderByExpr to handle member expressions like i.price in ORDER BY
-                        val1 = evalOrderByExpr(allocator, key.expr, env1) catch .{ .Null = {} };
-                        val2 = evalOrderByExpr(allocator, key.expr, env2) catch .{ .Null = {} };
-                    }
-                }
-
-                // CANARY: REQ=REQ-GQL-ORDERBY-NULLS-001; FEATURE="OrderByNullsPolicy"; ASPECT=NullsIndependentOfDesc; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
-                // F01 Fix: Handle NULLS ordering independently from DESC/ASC
-                // The NULLS FIRST/LAST policy should determine null position regardless of sort direction
                 const v1_is_null = val1 == .Null;
                 const v2_is_null = val2 == .Null;
 
                 if (v1_is_null and v2_is_null) {
                     continue; // Both null, check next key
                 } else if (v1_is_null or v2_is_null) {
-                    // One is null - handle NULLS policy independently from DESC
                     const nulls_first = (key.nulls == .first or key.nulls == .default);
                     if (v1_is_null) {
-                        // val1 is null, val2 is not
-                        // NULLS FIRST: null should come before non-null → don't swap
-                        // NULLS LAST: null should come after non-null → swap
-                        should_swap = !nulls_first;
+                        return nulls_first;
                     } else {
-                        // val2 is null, val1 is not
-                        // NULLS FIRST: null should come before non-null → swap to move val2 before val1
-                        // NULLS LAST: null should come after non-null → don't swap
-                        should_swap = nulls_first;
+                        return !nulls_first;
                     }
-                    break;
                 } else {
-                    // Neither is null - compare normally and apply DESC
                     const cmp = compareValuesWithNullsPolicy(val1, val2, key.nulls);
-                    if (cmp == 0) continue; // Equal, check next key
-
+                    if (cmp == 0) continue;
                     if (key.desc) {
-                        should_swap = cmp < 0;
+                        return cmp > 0;
                     } else {
-                        should_swap = cmp > 0;
+                        return cmp < 0;
                     }
-                    break;
                 }
             }
+            return false; // Equal by all keys
+        }
 
-            if (should_swap) {
-                const temp = result.rows[i];
-                result.rows[i] = result.rows[i + 1];
-                result.rows[i + 1] = temp;
-                swapped = true;
+        fn getValueForKey(ctx: @This(), key: ast.OrderBy.OrderKey, row: []Value) Value {
+            if (key.expr == .Int) {
+                const col_idx = @as(usize, @intCast(key.expr.Int - 1));
+                if (col_idx < row.len) return row[col_idx];
+                return .{ .Null = {} };
+            } else if (key.expr == .Ident) {
+                const col_name = key.expr.Ident.orig;
+                for (ctx.columns, 0..) |result_col, idx| {
+                    if (std.mem.eql(u8, result_col, col_name)) {
+                        return row[idx];
+                    }
+                }
+                if (ctx.return_items) |items| {
+                    if (findColumnIndexByExpression(key.expr, items)) |idx| {
+                        return row[idx];
+                    }
+                }
+                return .{ .Null = {} };
+            } else if (key.expr == .Member) {
+                const member = key.expr.Member;
+                const prop_name = member.field;
+                for (ctx.columns, 0..) |result_col, idx| {
+                    if (std.mem.eql(u8, result_col, prop_name)) {
+                        return row[idx];
+                    }
+                }
+                if (member.target.* == .Ident) {
+                    const target_name = member.target.Ident.orig;
+                    for (ctx.columns, 0..) |result_col, idx| {
+                        if (result_col.len == target_name.len + 1 + prop_name.len) {
+                            if (std.mem.startsWith(u8, result_col, target_name) and
+                                result_col[target_name.len] == '.' and
+                                std.mem.endsWith(u8, result_col, prop_name))
+                            {
+                                return row[idx];
+                            }
+                        }
+                    }
+                }
+                if (ctx.return_items) |items| {
+                    if (findColumnIndexByExpression(key.expr, items)) |idx| {
+                        return row[idx];
+                    }
+                }
+                const env = Env{
+                    .names = ctx.columns,
+                    .values = row,
+                    .allocator = ctx.allocator,
+                };
+                return evalOrderByExpr(ctx.allocator, key.expr, env) catch .{ .Null = {} };
+            } else {
+                if (ctx.return_items) |items| {
+                    if (findColumnIndexByExpression(key.expr, items)) |idx| {
+                        return row[idx];
+                    }
+                }
+                const env = Env{
+                    .names = ctx.columns,
+                    .values = row,
+                    .allocator = ctx.allocator,
+                };
+                return evalOrderByExpr(ctx.allocator, key.expr, env) catch .{ .Null = {} };
             }
         }
-    }
+    };
+
+    const ctx = SortContext{
+        .allocator = allocator,
+        .order = order,
+        .columns = result.columns,
+        .return_items = return_items,
+    };
+
+    std.sort.heap([]Value, result.rows, ctx, SortContext.compare);
 }
 
 // CANARY: REQ=REQ-GQL-ORDERBY-WRAPPER-001; FEATURE="OrderBySortRowsWrapper"; ASPECT=BackwardsCompatibility; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
@@ -829,7 +743,7 @@ test "F01: sortRowsEx - DESC NULLS LAST puts nulls at end" {
 
     // ORDER BY salary DESC NULLS LAST
     const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
-    var order_keys = try allocator.alloc(ast.OrderBy.Key, 1);
+    var order_keys = try allocator.alloc(ast.OrderBy.OrderKey, 1);
     defer allocator.free(order_keys);
     order_keys[0] = .{ .expr = order_expr, .desc = true, .nulls = .last };
     const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
@@ -876,7 +790,7 @@ test "F01: sortRowsEx - ASC NULLS LAST also puts nulls at end" {
 
     // ORDER BY salary ASC NULLS LAST
     const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
-    var order_keys = try allocator.alloc(ast.OrderBy.Key, 1);
+    var order_keys = try allocator.alloc(ast.OrderBy.OrderKey, 1);
     defer allocator.free(order_keys);
     order_keys[0] = .{ .expr = order_expr, .desc = false, .nulls = .last };
     const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };
@@ -922,7 +836,7 @@ test "F01: sortRowsEx - DESC NULLS FIRST puts nulls at beginning" {
 
     // ORDER BY salary DESC NULLS FIRST
     const order_expr = ast.Expr{ .Ident = .{ .orig = "salary", .lower = "salary" } };
-    var order_keys = try allocator.alloc(ast.OrderBy.Key, 1);
+    var order_keys = try allocator.alloc(ast.OrderBy.OrderKey, 1);
     defer allocator.free(order_keys);
     order_keys[0] = .{ .expr = order_expr, .desc = true, .nulls = .first };
     const order = ast.OrderBy{ .keys = order_keys, .skip = null, .limit = null };

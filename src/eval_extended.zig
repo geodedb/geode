@@ -166,8 +166,15 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("geo_lon", &geoLon);
 
     // Geometry functions
+    try registry.put("st_point", &stPoint);
     try registry.put("st_astext", &stAsText);
     try registry.put("st_asgeojson", &stAsGeoJson);
+    try registry.put("st_x", &stX);
+    try registry.put("st_y", &stY);
+    try registry.put("st_distance", &stDistance);
+    try registry.put("st_area", &stArea);
+    try registry.put("st_centroid", &stCentroid);
+    try registry.put("st_buffer", &stBuffer);
     try registry.put("st_contains", &stContains);
     try registry.put("st_intersects", &stIntersects);
     try registry.put("st_within", &stWithin);
@@ -1631,21 +1638,63 @@ fn stAsText(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn wkbToWkt(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
-    if (wkb.len < 21) return error.InvalidWkb;
+    if (wkb.len < 5) return error.InvalidWkb;
 
-    const endian = wkb[0];
-    _ = endian; // TODO: Handle big endian
+    // WKB byte order: 0x00 = big endian, 0x01 = little endian
+    const byte_order: std.builtin.Endian = if (wkb[0] == 0x00) .big else .little;
 
-    const geom_type = std.mem.readInt(u32, wkb[1..5][0..4], .little);
+    const geom_type = std.mem.readInt(u32, wkb[1..5][0..4], byte_order);
 
     if (geom_type == 1) { // Point
-        const x_bits = std.mem.readInt(u64, wkb[5..13][0..8], .little);
-        const y_bits = std.mem.readInt(u64, wkb[13..21][0..8], .little);
+        if (wkb.len < 21) return error.InvalidWkb;
+        const x_bits = std.mem.readInt(u64, wkb[5..13][0..8], byte_order);
+        const y_bits = std.mem.readInt(u64, wkb[13..21][0..8], byte_order);
 
         const x: f64 = @bitCast(x_bits);
         const y: f64 = @bitCast(y_bits);
 
         return try std.fmt.allocPrint(allocator, "POINT({d} {d})", .{ x, y });
+    }
+
+    if (geom_type == 3) { // Polygon
+        if (wkb.len < 13) return error.InvalidWkb;
+
+        const num_rings = std.mem.readInt(u32, wkb[5..9][0..4], byte_order);
+        if (num_rings == 0) return error.InvalidWkb;
+
+        // Only handle exterior ring for now
+        const num_points = std.mem.readInt(u32, wkb[9..13][0..4], byte_order);
+        if (num_points == 0) return error.InvalidWkb;
+
+        const expected_len = 13 + num_points * 16;
+        if (wkb.len < expected_len) return error.InvalidWkb;
+
+        // Build coordinate string
+        var coords = std.ArrayListUnmanaged(u8){};
+        defer coords.deinit(allocator);
+
+        try coords.appendSlice(allocator, "POLYGON((");
+
+        var offset: usize = 13;
+        for (0..num_points) |i| {
+            const x_bits = std.mem.readInt(u64, wkb[offset..][0..8], byte_order);
+            const y_bits = std.mem.readInt(u64, wkb[offset + 8 ..][0..8], byte_order);
+            const x: f64 = @bitCast(x_bits);
+            const y: f64 = @bitCast(y_bits);
+
+            if (i > 0) {
+                try coords.appendSlice(allocator, ", ");
+            }
+            const coord_str = try std.fmt.allocPrint(allocator, "{d} {d}", .{ x, y });
+            defer allocator.free(coord_str);
+            try coords.appendSlice(allocator, coord_str);
+
+            offset += 16;
+        }
+
+        try coords.appendSlice(allocator, "))");
+
+        return try allocator.dupe(u8, coords.items);
     }
 
     return error.UnsupportedGeometry;
@@ -1662,21 +1711,62 @@ fn stAsGeoJson(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
-    if (wkb.len < 21) return error.InvalidWkb;
+    if (wkb.len < 5) return error.InvalidWkb;
 
-    const endian = wkb[0];
-    _ = endian; // TODO: Handle big endian
+    // WKB byte order: 0x00 = big endian, 0x01 = little endian
+    const byte_order: std.builtin.Endian = if (wkb[0] == 0x00) .big else .little;
 
-    const geom_type = std.mem.readInt(u32, wkb[1..5][0..4], .little);
+    const geom_type = std.mem.readInt(u32, wkb[1..5][0..4], byte_order);
 
     if (geom_type == 1) { // Point
-        const x_bits = std.mem.readInt(u64, wkb[5..13][0..8], .little);
-        const y_bits = std.mem.readInt(u64, wkb[13..21][0..8], .little);
+        if (wkb.len < 21) return error.InvalidWkb;
+        const x_bits = std.mem.readInt(u64, wkb[5..13][0..8], byte_order);
+        const y_bits = std.mem.readInt(u64, wkb[13..21][0..8], byte_order);
 
         const x: f64 = @bitCast(x_bits);
         const y: f64 = @bitCast(y_bits);
 
         return try std.fmt.allocPrint(allocator, "{{\"type\":\"Point\",\"coordinates\":[{d},{d}]}}", .{ x, y });
+    }
+
+    if (geom_type == 3) { // Polygon
+        if (wkb.len < 13) return error.InvalidWkb;
+
+        const num_rings = std.mem.readInt(u32, wkb[5..9][0..4], byte_order);
+        if (num_rings == 0) return error.InvalidWkb;
+
+        const num_points = std.mem.readInt(u32, wkb[9..13][0..4], byte_order);
+        if (num_points == 0) return error.InvalidWkb;
+
+        const expected_len = 13 + num_points * 16;
+        if (wkb.len < expected_len) return error.InvalidWkb;
+
+        // Build coordinate array string
+        var coords = std.ArrayListUnmanaged(u8){};
+        defer coords.deinit(allocator);
+
+        try coords.appendSlice(allocator, "{\"type\":\"Polygon\",\"coordinates\":[[");
+
+        var offset: usize = 13;
+        for (0..num_points) |i| {
+            const x_bits = std.mem.readInt(u64, wkb[offset..][0..8], byte_order);
+            const y_bits = std.mem.readInt(u64, wkb[offset + 8 ..][0..8], byte_order);
+            const x: f64 = @bitCast(x_bits);
+            const y: f64 = @bitCast(y_bits);
+
+            if (i > 0) {
+                try coords.appendSlice(allocator, ",");
+            }
+            const coord_str = try std.fmt.allocPrint(allocator, "[{d},{d}]", .{ x, y });
+            defer allocator.free(coord_str);
+            try coords.appendSlice(allocator, coord_str);
+
+            offset += 16;
+        }
+
+        try coords.appendSlice(allocator, "]]}");
+
+        return try allocator.dupe(u8, coords.items);
     }
 
     return error.UnsupportedGeometry;
@@ -1865,6 +1955,246 @@ fn pointInPolygon(point: [2]f64, polygon: [][2]f64) bool {
     return inside;
 }
 
+// CANARY: REQ=REQ-SPATIAL-POINT-001; FEATURE="SpatialPoint"; ASPECT=PointCreation; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// ST_Point(x, y) - Creates a Point geometry from coordinates
+fn stPoint(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+
+    // Extract x coordinate
+    const x: f64 = switch (args[0]) {
+        .Int => |i| @floatFromInt(i),
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @floatFromInt(d.scale)),
+        else => return error.TypeMismatch,
+    };
+
+    // Extract y coordinate
+    const y: f64 = switch (args[1]) {
+        .Int => |i| @floatFromInt(i),
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @floatFromInt(d.scale)),
+        else => return error.TypeMismatch,
+    };
+
+    // Create WKB for Point: 1 byte endian + 4 bytes type + 16 bytes coords = 21 bytes
+    var wkb = try allocator.alloc(u8, 21);
+    wkb[0] = 1; // Little endian
+    std.mem.writeInt(u32, wkb[1..5][0..4], 1, .little); // Point type = 1
+    std.mem.writeInt(u64, wkb[5..13][0..8], @bitCast(x), .little);
+    std.mem.writeInt(u64, wkb[13..21][0..8], @bitCast(y), .little);
+
+    return .{ .Geometry = .{ .wkb = wkb } };
+}
+
+// CANARY: REQ=REQ-SPATIAL-X-001; FEATURE="SpatialX"; ASPECT=CoordinateExtraction; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// ST_X(point) - Extracts X coordinate from a Point geometry
+fn stX(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 1) return error.InvalidArgs;
+    if (args[0] != .Geometry) return error.TypeMismatch;
+
+    const geom = args[0].Geometry;
+    const point = try parseWkbPoint(geom.wkb);
+
+    // Convert to Decimal with 6 decimal places
+    const x_scaled: i128 = @intFromFloat(point[0] * 1000000);
+    return .{ .Decimal = .{ .coeff = x_scaled, .scale = 6 } };
+}
+
+// CANARY: REQ=REQ-SPATIAL-Y-001; FEATURE="SpatialY"; ASPECT=CoordinateExtraction; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// ST_Y(point) - Extracts Y coordinate from a Point geometry
+fn stY(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 1) return error.InvalidArgs;
+    if (args[0] != .Geometry) return error.TypeMismatch;
+
+    const geom = args[0].Geometry;
+    const point = try parseWkbPoint(geom.wkb);
+
+    // Convert to Decimal with 6 decimal places
+    const y_scaled: i128 = @intFromFloat(point[1] * 1000000);
+    return .{ .Decimal = .{ .coeff = y_scaled, .scale = 6 } };
+}
+
+// CANARY: REQ=REQ-SPATIAL-DISTANCE-001; FEATURE="SpatialDistance"; ASPECT=GeometryMeasure; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// ST_Distance(geom1, geom2) - Calculates Euclidean distance between two geometries
+fn stDistance(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+    if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
+
+    const geom1 = args[0].Geometry;
+    const geom2 = args[1].Geometry;
+
+    // For now, only support Point-Point distance
+    const type1 = parseWkbGeomType(geom1.wkb);
+    const type2 = parseWkbGeomType(geom2.wkb);
+
+    if (type1 == 1 and type2 == 1) {
+        const p1 = try parseWkbPoint(geom1.wkb);
+        const p2 = try parseWkbPoint(geom2.wkb);
+
+        const dx = p2[0] - p1[0];
+        const dy = p2[1] - p1[1];
+        const distance = @sqrt(dx * dx + dy * dy);
+
+        // Convert to Decimal with 6 decimal places
+        const dist_scaled: i128 = @intFromFloat(distance * 1000000);
+        return .{ .Decimal = .{ .coeff = dist_scaled, .scale = 6 } };
+    }
+
+    return error.UnsupportedGeometry;
+}
+
+// CANARY: REQ=REQ-SPATIAL-AREA-001; FEATURE="SpatialArea"; ASPECT=GeometryMeasure; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// ST_Area(polygon) - Calculates area of a Polygon using Shoelace formula
+fn stArea(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 1) return error.InvalidArgs;
+    if (args[0] != .Geometry) return error.TypeMismatch;
+
+    const geom = args[0].Geometry;
+    const geom_type = parseWkbGeomType(geom.wkb);
+
+    // Only Polygon (type 3) has area
+    if (geom_type == 1) {
+        // Point has zero area
+        return .{ .Decimal = .{ .coeff = 0, .scale = 6 } };
+    }
+
+    if (geom_type != 3) return error.UnsupportedGeometry;
+
+    const polygon = try parseWkbPolygon(allocator, geom.wkb);
+    defer allocator.free(polygon);
+
+    if (polygon.len < 3) {
+        return .{ .Decimal = .{ .coeff = 0, .scale = 6 } };
+    }
+
+    // Shoelace formula: A = 0.5 * |sum((x[i] * y[i+1]) - (x[i+1] * y[i]))|
+    var sum: f64 = 0;
+    for (0..polygon.len) |i| {
+        const j = (i + 1) % polygon.len;
+        sum += polygon[i][0] * polygon[j][1];
+        sum -= polygon[j][0] * polygon[i][1];
+    }
+    const area = @abs(sum) / 2.0;
+
+    // Convert to Decimal with 6 decimal places
+    const area_scaled: i128 = @intFromFloat(area * 1000000);
+    return .{ .Decimal = .{ .coeff = area_scaled, .scale = 6 } };
+}
+
+// CANARY: REQ=REQ-SPATIAL-CENTROID-001; FEATURE="SpatialCentroid"; ASPECT=GeometryMeasure; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// ST_Centroid(polygon) - Calculates centroid of a Polygon
+fn stCentroid(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 1) return error.InvalidArgs;
+    if (args[0] != .Geometry) return error.TypeMismatch;
+
+    const geom = args[0].Geometry;
+    const geom_type = parseWkbGeomType(geom.wkb);
+
+    // Point centroid is itself
+    if (geom_type == 1) {
+        return args[0];
+    }
+
+    if (geom_type != 3) return error.UnsupportedGeometry;
+
+    const polygon = try parseWkbPolygon(allocator, geom.wkb);
+    defer allocator.free(polygon);
+
+    if (polygon.len < 3) return error.InvalidWkb;
+
+    // First calculate signed area
+    var signed_area: f64 = 0;
+    for (0..polygon.len) |i| {
+        const j = (i + 1) % polygon.len;
+        signed_area += polygon[i][0] * polygon[j][1] - polygon[j][0] * polygon[i][1];
+    }
+    signed_area /= 2.0;
+
+    if (@abs(signed_area) < 1e-10) return error.InvalidWkb;
+
+    // Calculate centroid coordinates
+    var cx: f64 = 0;
+    var cy: f64 = 0;
+    for (0..polygon.len) |i| {
+        const j = (i + 1) % polygon.len;
+        const factor = polygon[i][0] * polygon[j][1] - polygon[j][0] * polygon[i][1];
+        cx += (polygon[i][0] + polygon[j][0]) * factor;
+        cy += (polygon[i][1] + polygon[j][1]) * factor;
+    }
+    cx /= (6.0 * signed_area);
+    cy /= (6.0 * signed_area);
+
+    // Create WKB for Point
+    var wkb = try allocator.alloc(u8, 21);
+    wkb[0] = 1; // Little endian
+    std.mem.writeInt(u32, wkb[1..5][0..4], 1, .little); // Point type = 1
+    std.mem.writeInt(u64, wkb[5..13][0..8], @bitCast(cx), .little);
+    std.mem.writeInt(u64, wkb[13..21][0..8], @bitCast(cy), .little);
+
+    return .{ .Geometry = .{ .wkb = wkb } };
+}
+
+// CANARY: REQ=REQ-SPATIAL-BUFFER-001; FEATURE="SpatialBuffer"; ASPECT=GeometryTransform; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// ST_Buffer(geometry, distance) - Creates a buffer around a geometry
+// For Point: creates a square polygon at distance (approximation of circle)
+fn stBuffer(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    if (args.len != 2) return error.InvalidArgs;
+    if (args[0] != .Geometry) return error.TypeMismatch;
+
+    // Extract buffer distance
+    const distance: f64 = switch (args[1]) {
+        .Int => |i| @floatFromInt(i),
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @floatFromInt(d.scale)),
+        else => return error.TypeMismatch,
+    };
+
+    const geom = args[0].Geometry;
+    const geom_type = parseWkbGeomType(geom.wkb);
+
+    if (geom_type == 1) {
+        // Point: create a square polygon around it (8-point octagon for better approximation)
+        const point = try parseWkbPoint(geom.wkb);
+        const x = point[0];
+        const y = point[1];
+
+        // Create an 8-point octagon approximation of a circle buffer
+        const d = distance;
+        const d45 = distance * 0.7071067811865476; // cos(45°) = sin(45°) ≈ 0.7071
+
+        // Octagon points (counter-clockwise, closing at first point)
+        const points = [_][2]f64{
+            .{ x + d, y },
+            .{ x + d45, y + d45 },
+            .{ x, y + d },
+            .{ x - d45, y + d45 },
+            .{ x - d, y },
+            .{ x - d45, y - d45 },
+            .{ x, y - d },
+            .{ x + d45, y - d45 },
+            .{ x + d, y }, // Close the ring
+        };
+
+        // WKB size: 1 (endian) + 4 (type) + 4 (num_rings) + 4 (num_points) + 9 * 16 (coordinates)
+        const wkb_size = 1 + 4 + 4 + 4 + (9 * 16);
+        var wkb = try allocator.alloc(u8, wkb_size);
+
+        wkb[0] = 1; // Little endian
+        std.mem.writeInt(u32, wkb[1..5][0..4], 3, .little); // Polygon type = 3
+        std.mem.writeInt(u32, wkb[5..9][0..4], 1, .little); // 1 ring
+        std.mem.writeInt(u32, wkb[9..13][0..4], 9, .little); // 9 points
+
+        var offset: usize = 13;
+        for (points) |pt| {
+            std.mem.writeInt(u64, wkb[offset..][0..8], @bitCast(pt[0]), .little);
+            std.mem.writeInt(u64, wkb[offset + 8 ..][0..8], @bitCast(pt[1]), .little);
+            offset += 16;
+        }
+
+        return .{ .Geometry = .{ .wkb = wkb } };
+    }
+
+    // For other geometry types, return error for now
+    return error.UnsupportedGeometry;
+}
+
 // Vector functions
 fn vectorDot(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
@@ -2006,4 +2336,188 @@ fn decimalDiv(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
         else => return error.DecimalOverflow,
     };
     return .{ .Decimal = .{ .coeff = result.coeff, .scale = @intCast(result.scale) } };
+}
+
+// ============================================================================
+// Unit Tests for WKB Big Endian Support
+// CANARY: REQ=REQ-SPATIAL-WKB-ENDIAN-001; FEATURE="WKBByteOrderParsing"; ASPECT=UnitTest; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// ============================================================================
+
+const testing = std.testing;
+
+// Helper to create WKB Point data
+fn createWkbPoint(byte_order: u8, x: f64, y: f64) [21]u8 {
+    var result: [21]u8 = undefined;
+    result[0] = byte_order;
+
+    const x_bits: u64 = @bitCast(x);
+    const y_bits: u64 = @bitCast(y);
+
+    if (byte_order == 0x00) { // Big endian
+        // Geometry type = 1 (Point) in big endian
+        result[1] = 0x00;
+        result[2] = 0x00;
+        result[3] = 0x00;
+        result[4] = 0x01;
+        // X coordinate
+        result[5] = @intCast((x_bits >> 56) & 0xFF);
+        result[6] = @intCast((x_bits >> 48) & 0xFF);
+        result[7] = @intCast((x_bits >> 40) & 0xFF);
+        result[8] = @intCast((x_bits >> 32) & 0xFF);
+        result[9] = @intCast((x_bits >> 24) & 0xFF);
+        result[10] = @intCast((x_bits >> 16) & 0xFF);
+        result[11] = @intCast((x_bits >> 8) & 0xFF);
+        result[12] = @intCast(x_bits & 0xFF);
+        // Y coordinate
+        result[13] = @intCast((y_bits >> 56) & 0xFF);
+        result[14] = @intCast((y_bits >> 48) & 0xFF);
+        result[15] = @intCast((y_bits >> 40) & 0xFF);
+        result[16] = @intCast((y_bits >> 32) & 0xFF);
+        result[17] = @intCast((y_bits >> 24) & 0xFF);
+        result[18] = @intCast((y_bits >> 16) & 0xFF);
+        result[19] = @intCast((y_bits >> 8) & 0xFF);
+        result[20] = @intCast(y_bits & 0xFF);
+    } else { // Little endian (0x01)
+        // Geometry type = 1 (Point) in little endian
+        result[1] = 0x01;
+        result[2] = 0x00;
+        result[3] = 0x00;
+        result[4] = 0x00;
+        // X coordinate
+        result[5] = @intCast(x_bits & 0xFF);
+        result[6] = @intCast((x_bits >> 8) & 0xFF);
+        result[7] = @intCast((x_bits >> 16) & 0xFF);
+        result[8] = @intCast((x_bits >> 24) & 0xFF);
+        result[9] = @intCast((x_bits >> 32) & 0xFF);
+        result[10] = @intCast((x_bits >> 40) & 0xFF);
+        result[11] = @intCast((x_bits >> 48) & 0xFF);
+        result[12] = @intCast((x_bits >> 56) & 0xFF);
+        // Y coordinate
+        result[13] = @intCast(y_bits & 0xFF);
+        result[14] = @intCast((y_bits >> 8) & 0xFF);
+        result[15] = @intCast((y_bits >> 16) & 0xFF);
+        result[16] = @intCast((y_bits >> 24) & 0xFF);
+        result[17] = @intCast((y_bits >> 32) & 0xFF);
+        result[18] = @intCast((y_bits >> 40) & 0xFF);
+        result[19] = @intCast((y_bits >> 48) & 0xFF);
+        result[20] = @intCast((y_bits >> 56) & 0xFF);
+    }
+
+    return result;
+}
+
+test "wkbToWkt parses little endian Point correctly" {
+    const allocator = testing.allocator;
+
+    // Create little endian WKB Point at (1.5, 2.5)
+    const wkb = createWkbPoint(0x01, 1.5, 2.5);
+
+    const wkt = try wkbToWkt(allocator, &wkb);
+    defer allocator.free(wkt);
+
+    // Should contain POINT and coordinates
+    try testing.expect(std.mem.indexOf(u8, wkt, "POINT") != null);
+    try testing.expect(std.mem.indexOf(u8, wkt, "1.5") != null);
+    try testing.expect(std.mem.indexOf(u8, wkt, "2.5") != null);
+}
+
+test "wkbToWkt parses big endian Point correctly" {
+    const allocator = testing.allocator;
+
+    // Create big endian WKB Point at (3.0, 4.0)
+    const wkb = createWkbPoint(0x00, 3.0, 4.0);
+
+    const wkt = try wkbToWkt(allocator, &wkb);
+    defer allocator.free(wkt);
+
+    // Should contain POINT and coordinates
+    try testing.expect(std.mem.indexOf(u8, wkt, "POINT") != null);
+    try testing.expect(std.mem.indexOf(u8, wkt, "3") != null);
+    try testing.expect(std.mem.indexOf(u8, wkt, "4") != null);
+}
+
+test "wkbToWkt big endian and little endian produce same result for same coordinates" {
+    const allocator = testing.allocator;
+
+    const x: f64 = -122.4194;
+    const y: f64 = 37.7749;
+
+    // Create WKB in both byte orders
+    const wkb_le = createWkbPoint(0x01, x, y);
+    const wkb_be = createWkbPoint(0x00, x, y);
+
+    const wkt_le = try wkbToWkt(allocator, &wkb_le);
+    defer allocator.free(wkt_le);
+
+    const wkt_be = try wkbToWkt(allocator, &wkb_be);
+    defer allocator.free(wkt_be);
+
+    // Both should produce the same WKT output
+    try testing.expectEqualStrings(wkt_le, wkt_be);
+}
+
+test "wkbToGeoJson parses little endian Point correctly" {
+    const allocator = testing.allocator;
+
+    // Create little endian WKB Point at (10.0, 20.0)
+    const wkb = createWkbPoint(0x01, 10.0, 20.0);
+
+    const json = try wkbToGeoJson(allocator, &wkb);
+    defer allocator.free(json);
+
+    // Should be valid GeoJSON Point
+    try testing.expect(std.mem.indexOf(u8, json, "\"type\":\"Point\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"coordinates\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "10") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "20") != null);
+}
+
+test "wkbToGeoJson parses big endian Point correctly" {
+    const allocator = testing.allocator;
+
+    // Create big endian WKB Point at (-73.9857, 40.7484) (NYC)
+    const wkb = createWkbPoint(0x00, -73.9857, 40.7484);
+
+    const json = try wkbToGeoJson(allocator, &wkb);
+    defer allocator.free(json);
+
+    // Should be valid GeoJSON Point
+    try testing.expect(std.mem.indexOf(u8, json, "\"type\":\"Point\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"coordinates\"") != null);
+}
+
+test "wkbToGeoJson big endian and little endian produce same result" {
+    const allocator = testing.allocator;
+
+    const x: f64 = 139.6917;
+    const y: f64 = 35.6895;
+
+    // Create WKB in both byte orders
+    const wkb_le = createWkbPoint(0x01, x, y);
+    const wkb_be = createWkbPoint(0x00, x, y);
+
+    const json_le = try wkbToGeoJson(allocator, &wkb_le);
+    defer allocator.free(json_le);
+
+    const json_be = try wkbToGeoJson(allocator, &wkb_be);
+    defer allocator.free(json_be);
+
+    // Both should produce the same GeoJSON output
+    try testing.expectEqualStrings(json_le, json_be);
+}
+
+test "wkbToWkt rejects invalid WKB (too short)" {
+    const allocator = testing.allocator;
+
+    const short_wkb = [_]u8{ 0x01, 0x01, 0x00, 0x00 }; // Only 4 bytes
+    const result = wkbToWkt(allocator, &short_wkb);
+    try testing.expectError(error.InvalidWkb, result);
+}
+
+test "wkbToGeoJson rejects invalid WKB (too short)" {
+    const allocator = testing.allocator;
+
+    const short_wkb = [_]u8{ 0x00, 0x00, 0x00, 0x00 }; // Only 4 bytes
+    const result = wkbToGeoJson(allocator, &short_wkb);
+    try testing.expectError(error.InvalidWkb, result);
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 // Import backup types directly from storage/backup module
 const backup_types = @import("storage/backup");
@@ -14,6 +15,16 @@ const ExitCode = enum(u8) {
     general_error = 1,
     usage_error = 2,
 };
+
+// Cross-platform stdin helper (matches pattern in main.zig)
+fn getStdinFile() std.fs.File {
+    if (builtin.os.tag == .windows) {
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
+        return std.fs.File{ .handle = handle };
+    } else {
+        return std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    }
+}
 
 /// Backup command handler - routes to specific backup subcommands
 /// Handles: backup create, backup list, backup info, backup cleanup
@@ -386,8 +397,35 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         std.debug.print("All current data will be replaced with backup data.\n", .{});
         std.debug.print("Use --yes to skip this confirmation prompt.\n", .{});
 
-        // TODO: Implement proper stdin reading for confirmation
-        std.debug.print("Proceeding with restore (confirmation prompt temporarily disabled)...\n", .{});
+        // Read confirmation from stdin
+        std.debug.print("Type 'yes' to confirm restore: ", .{});
+
+        const stdin_file = getStdinFile();
+        var line_buf: [256]u8 = undefined;
+        var line_len: usize = 0;
+
+        // Read line character by character until newline
+        while (line_len < line_buf.len) {
+            var b: [1]u8 = undefined;
+            const bytes_read = stdin_file.readAll(&b) catch break;
+            if (bytes_read == 0) break;
+            if (b[0] == '\n') break;
+            line_buf[line_len] = b[0];
+            line_len += 1;
+        }
+
+        if (line_len == 0) {
+            std.debug.print("\nRestore cancelled (no input received).\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+
+        const trimmed = std.mem.trim(u8, line_buf[0..line_len], " \t\r");
+        if (!std.mem.eql(u8, trimmed, "yes")) {
+            std.debug.print("Restore cancelled.\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
+
+        std.debug.print("Proceeding with restore...\n", .{});
     }
 
     // Execute restore
