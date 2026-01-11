@@ -5,6 +5,8 @@ const geode = @import("geode");
 const backup_types = @import("storage/backup");
 // QUIC transport for remote backup operations
 const quic = @import("transport/quic");
+// Import migration module for actual migration operations
+const migration = @import("migration");
 
 // CANARY: REQ=REQ-M4.3-BACKUP-CLI-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
 // Phase 4 M4.3: Extract backup/restore/migrate commands from cli/main.zig
@@ -159,10 +161,40 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = allocator;
+// Helper types for backup list functionality
+const BackupFileInfo = struct {
+    name: []const u8,
+    size_bytes: u64,
+    backup_type: backup_types.BackupType,
+    timestamp: i64,
+    compression: backup_types.CompressionType,
+};
 
-    // Parse arguments for help
+fn formatSize(bytes: u64) []const u8 {
+    // Use static buffer for formatted size strings
+    const Static = struct {
+        var buf: [32]u8 = undefined;
+    };
+    if (bytes >= 1024 * 1024 * 1024) {
+        const result = std.fmt.bufPrint(&Static.buf, "{d:.1} GB", .{@as(f64, @floatFromInt(bytes)) / (1024 * 1024 * 1024)}) catch "? GB";
+        return result;
+    } else if (bytes >= 1024 * 1024) {
+        const result = std.fmt.bufPrint(&Static.buf, "{d:.1} MB", .{@as(f64, @floatFromInt(bytes)) / (1024 * 1024)}) catch "? MB";
+        return result;
+    } else if (bytes >= 1024) {
+        const result = std.fmt.bufPrint(&Static.buf, "{d:.1} KB", .{@as(f64, @floatFromInt(bytes)) / 1024}) catch "? KB";
+        return result;
+    } else {
+        const result = std.fmt.bufPrint(&Static.buf, "{d} B", .{bytes}) catch "? B";
+        return result;
+    }
+}
+
+// CANARY: REQ=REQ-CLI-BACKUP-LIST-001; FEATURE="CLIBackupList"; ASPECT=DirectoryScan; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
+fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    var custom_dir: ?[]const u8 = null;
+
+    // Parse arguments
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -171,19 +203,128 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 "Usage: geode backup list [options]\n" ++
                 "\n" ++
                 "Options:\n" ++
+                "  --dir <path>           Backup directory (scans ./backups and /tmp by default)\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
+        } else if (std.mem.eql(u8, argv[i], "--dir") and i + 1 < argv.len) {
+            i += 1;
+            custom_dir = argv[i];
         }
     }
 
-    // For now, simulate some backup listings
+    // Directories to scan for backups
+    const dirs_to_scan = if (custom_dir) |cd| &[_][]const u8{cd} else &[_][]const u8{ "./backups", "/tmp" };
+
+    // Collect backup files
+    var backup_files = std.ArrayList(BackupFileInfo){};
+    defer {
+        for (backup_files.items) |*info| {
+            allocator.free(info.name);
+        }
+        backup_files.deinit(allocator);
+    }
+
+    // Scan each directory for backup files
+    for (dirs_to_scan) |backup_dir| {
+        var dir = std.fs.cwd().openDir(backup_dir, .{ .iterate = true }) catch continue;
+        defer dir.close();
+
+        var dir_iter = dir.iterate();
+        while (dir_iter.next() catch null) |entry| {
+            if (entry.kind == .file) {
+                // Match geode backup file patterns
+                const is_backup = std.mem.startsWith(u8, entry.name, "geode_backup") or
+                    std.mem.endsWith(u8, entry.name, ".backup");
+                const has_ext = std.mem.endsWith(u8, entry.name, ".gz") or
+                    std.mem.endsWith(u8, entry.name, ".zst") or
+                    std.mem.endsWith(u8, entry.name, ".backup");
+
+                if (is_backup and has_ext) {
+                    // Build full path for display
+                    const full_name = std.fmt.allocPrint(allocator, "{s}/{s}", .{ backup_dir, entry.name }) catch continue;
+
+                    var info = BackupFileInfo{
+                        .name = full_name,
+                        .size_bytes = 0,
+                        .backup_type = .full,
+                        .timestamp = 0,
+                        .compression = .none,
+                    };
+
+                    // Determine backup type from filename
+                    if (std.mem.indexOf(u8, entry.name, "incremental") != null) {
+                        info.backup_type = .incremental;
+                    }
+
+                    // Determine compression from extension
+                    if (std.mem.endsWith(u8, entry.name, ".gz")) {
+                        info.compression = .gzip;
+                    } else if (std.mem.endsWith(u8, entry.name, ".zst")) {
+                        info.compression = .zstd;
+                    }
+
+                    // Get file stat for size
+                    if (dir.statFile(entry.name)) |stat| {
+                        info.size_bytes = stat.size;
+                    } else |_| {}
+
+                    // Try to read backup header for metadata (if uncompressed)
+                    if (info.compression == .none) {
+                        if (dir.openFile(entry.name, .{})) |file| {
+                            defer file.close();
+                            var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
+                            const bytes_read = file.readAll(&header_buf) catch 0;
+                            if (bytes_read == @sizeOf(BackupHeader)) {
+                                const header = @as(*const BackupHeader, @ptrCast(@alignCast(&header_buf))).*;
+                                if (header.magic == BACKUP_MAGIC) {
+                                    info.backup_type = header.backup_type;
+                                    info.timestamp = header.timestamp;
+                                    info.compression = header.compression;
+                                }
+                            }
+                        } else |_| {}
+                    }
+
+                    backup_files.append(allocator, info) catch {
+                        allocator.free(full_name);
+                        continue;
+                    };
+                }
+            }
+        }
+    }
+
+    if (backup_files.items.len == 0) {
+        std.debug.print("No backup files found.\n", .{});
+        std.debug.print("Searched: ./backups, /tmp\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+
+    // Sort by timestamp (newest first)
+    std.mem.sort(BackupFileInfo, backup_files.items, {}, struct {
+        fn lessThan(_: void, a: BackupFileInfo, b: BackupFileInfo) bool {
+            return a.timestamp > b.timestamp;
+        }
+    }.lessThan);
+
+    // Display backup list
     std.debug.print("Available backups:\n", .{});
-    std.debug.print("  ID: abc123def456  Type: full        Created: 2025-01-01 10:00:00\n", .{});
-    std.debug.print("  ID: def456ghi789  Type: incremental Created: 2025-01-01 11:00:00\n", .{});
+    std.debug.print("{s:<50} {s:<12} {s:<10} {s:<12}\n", .{ "Path", "Type", "Size", "Compression" });
+    std.debug.print("{s}\n", .{"-" ** 90});
+
+    for (backup_files.items) |info| {
+        const type_str = @tagName(info.backup_type);
+        const comp_str = @tagName(info.compression);
+        const size_str = formatSize(info.size_bytes);
+        std.debug.print("{s:<50} {s:<12} {s:<10} {s:<12}\n", .{ info.name, type_str, size_str, comp_str });
+    }
+
+    std.debug.print("\nTotal: {} backup(s)\n", .{backup_files.items.len});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
+// CANARY: REQ=REQ-CLI-BACKUP-INFO-001; FEATURE="CLIBackupInfo"; ASPECT=FileMetadata; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
 fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = allocator;
     var backup_file: ?[]const u8 = null;
@@ -213,12 +354,119 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // For now, simulate backup info
-    std.debug.print("Backup information for: {s}\n", .{backup_file.?});
-    std.debug.print("  Size: 1024 KB\n", .{});
-    std.debug.print("  Type: full\n", .{});
-    std.debug.print("  Timestamp: 2025-01-01 10:00:00\n", .{});
-    std.debug.print("  Compression: gzip\n", .{});
+    const filepath = backup_file.?;
+
+    // Open the backup file
+    const file = std.fs.cwd().openFile(filepath, .{}) catch |err| {
+        std.debug.print("Error: Cannot open backup file '{s}': {}\n", .{ filepath, err });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer file.close();
+
+    // Get file stat for size
+    const stat = file.stat() catch |err| {
+        std.debug.print("Error: Cannot stat backup file: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
+    std.debug.print("Backup information for: {s}\n", .{filepath});
+    std.debug.print("{s}\n", .{"-" ** 60});
+
+    // Detect compression from file extension and magic bytes
+    const is_gz = std.mem.endsWith(u8, filepath, ".gz");
+    const is_zst = std.mem.endsWith(u8, filepath, ".zst");
+
+    // Read first few bytes to detect format
+    var magic_buf: [4]u8 = undefined;
+    const magic_read = file.readAll(&magic_buf) catch 0;
+
+    // Check for gzip magic (0x1f 0x8b)
+    const is_gzip_magic = magic_read >= 2 and magic_buf[0] == 0x1f and magic_buf[1] == 0x8b;
+    // Check for zstd magic (0x28 0xb5 0x2f 0xfd)
+    const is_zstd_magic = magic_read >= 4 and magic_buf[0] == 0x28 and magic_buf[1] == 0xb5 and magic_buf[2] == 0x2f and magic_buf[3] == 0xfd;
+
+    if (is_gzip_magic or is_gz) {
+        // Compressed gzip file
+        std.debug.print("  Format:        Geode Backup (gzip compressed)\n", .{});
+        std.debug.print("  compression:   gzip\n", .{});
+
+        // Infer type from filename
+        if (std.mem.indexOf(u8, filepath, "incremental") != null) {
+            std.debug.print("  type:          incremental\n", .{});
+        } else {
+            std.debug.print("  type:          full\n", .{});
+        }
+
+        // Get timestamp from file modification time
+        const mtime_ns = stat.mtime;
+        const mtime_s = @divFloor(mtime_ns, 1_000_000_000);
+        std.debug.print("  timestamp:     {d} (file mtime)\n", .{mtime_s});
+    } else if (is_zstd_magic or is_zst) {
+        // Compressed zstd file
+        std.debug.print("  Format:        Geode Backup (zstd compressed)\n", .{});
+        std.debug.print("  compression:   zstd\n", .{});
+
+        if (std.mem.indexOf(u8, filepath, "incremental") != null) {
+            std.debug.print("  type:          incremental\n", .{});
+        } else {
+            std.debug.print("  type:          full\n", .{});
+        }
+
+        const mtime_ns = stat.mtime;
+        const mtime_s = @divFloor(mtime_ns, 1_000_000_000);
+        std.debug.print("  timestamp:     {d} (file mtime)\n", .{mtime_s});
+    } else {
+        // Try to read as uncompressed Geode backup
+        // Reset file position
+        file.seekTo(0) catch {};
+
+        var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
+        const bytes_read = file.readAll(&header_buf) catch 0;
+
+        if (bytes_read == @sizeOf(BackupHeader)) {
+            const header = @as(*const BackupHeader, @ptrCast(@alignCast(&header_buf))).*;
+
+            if (header.magic == BACKUP_MAGIC) {
+                // Valid Geode backup file
+                std.debug.print("  Format:        Geode Backup v{d}\n", .{header.version});
+                std.debug.print("  type:          {s}\n", .{@tagName(header.backup_type)});
+                std.debug.print("  compression:   {s}\n", .{@tagName(header.compression)});
+                std.debug.print("  Encrypted:     {}\n", .{header.encrypted});
+
+                // Format timestamp
+                const timestamp_ms = header.timestamp;
+                if (timestamp_ms > 0) {
+                    const secs = @divFloor(timestamp_ms, 1000);
+                    std.debug.print("  timestamp:     {d} (epoch ms: {d})\n", .{ secs, timestamp_ms });
+                } else {
+                    std.debug.print("  timestamp:     Unknown\n", .{});
+                }
+
+                // Try to read catalog size (next 8 bytes after header)
+                var catalog_size_buf: [8]u8 = undefined;
+                const catalog_bytes = file.readAll(&catalog_size_buf) catch 0;
+                if (catalog_bytes == 8) {
+                    const catalog_size = std.mem.readInt(u64, &catalog_size_buf, .little);
+                    std.debug.print("  Catalog Size:  {} bytes\n", .{catalog_size});
+                }
+            } else {
+                // Not a Geode format backup, show generic info
+                std.debug.print("  Format:        Unknown (not Geode backup format)\n", .{});
+                std.debug.print("  Magic:         0x{x:0>8}\n", .{header.magic});
+            }
+        } else {
+            std.debug.print("  Format:        Unknown (header read failed)\n", .{});
+        }
+    }
+
+    // File statistics
+    std.debug.print("  size:          {s}\n", .{formatSize(stat.size)});
+
+    // Show raw size in bytes for precision
+    if (stat.size >= 1024) {
+        std.debug.print("  Size (bytes):  {d}\n", .{stat.size});
+    }
+
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
@@ -481,35 +729,131 @@ fn printMigrateUsage() void {
         "Use 'geode migrate <subcommand> --help' for detailed usage\n", .{});
 }
 
+// CANARY: REQ=REQ-CLI-MIGRATE-STATUS-001; FEATURE="CLIMigrateStatus"; ASPECT=MigrationModule; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
 fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = allocator;
     _ = argv;
     _ = start_idx;
 
-    // For now, simulate migration status
+    // Get actual migration status from migration module
+    var alloc = allocator;
+    const status_rows = migration.statusReport(&alloc) catch |err| {
+        std.debug.print("Error: Failed to get migration status: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer allocator.free(status_rows);
+
+    // Count applied vs total
+    var applied_count: usize = 0;
+    for (status_rows) |row| {
+        if (row.applied) applied_count += 1;
+    }
+
+    const total = status_rows.len;
+    const pending = total - applied_count;
+
     std.debug.print("Migration status:\n", .{});
-    std.debug.print("  Applied: 3\n", .{});
-    std.debug.print("  Pending: 1\n", .{});
-    std.debug.print("  Total: 4\n", .{});
+    std.debug.print("  Applied: {}\n", .{applied_count});
+    std.debug.print("  Pending: {}\n", .{pending});
+    std.debug.print("  Total: {}\n", .{total});
+
+    // List individual migrations if any exist
+    if (total > 0) {
+        std.debug.print("\nMigrations:\n", .{});
+        for (status_rows) |row| {
+            const status_str = if (row.applied) "[applied]" else "[pending]";
+            std.debug.print("  {d:>6} {s} {s}\n", .{ row.version, status_str, row.name });
+        }
+    }
+
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
+// CANARY: REQ=REQ-CLI-MIGRATE-RUN-001; FEATURE="CLIMigrateRun"; ASPECT=MigrationModule; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
 fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = allocator;
-    _ = argv;
-    _ = start_idx;
+    // Parse arguments to find migration directory (default: ./migrations)
+    var migrations_dir: []const u8 = "migrations";
+    var dry_run = false;
 
-    // For now, simulate running migrations
-    std.debug.print("Running pending migrations...\n", .{});
-    std.debug.print("  Migration 004_add_indexes.gql: Applied\n", .{});
-    std.debug.print("Migrations completed successfully\n", .{});
+    var i: usize = start_idx;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
+            std.debug.print("geode migrate run - Apply pending migrations\n" ++
+                "\n" ++
+                "Usage: geode migrate run [options]\n" ++
+                "\n" ++
+                "Options:\n" ++
+                "  --dir <path>           Migrations directory (default: ./migrations)\n" ++
+                "  --dry-run              Show what would be applied without applying\n" ++
+                "  -h, --help             Show this help\n" ++
+                "\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        } else if (std.mem.eql(u8, argv[i], "--dir") and i + 1 < argv.len) {
+            i += 1;
+            migrations_dir = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--dry-run")) {
+            dry_run = true;
+        }
+    }
+
+    std.debug.print("Running migrations from: {s}\n", .{migrations_dir});
+
+    // Scan migrations directory for .gql files
+    var dir = std.fs.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
+        std.debug.print("Error: Cannot open migrations directory '{s}': {}\n", .{ migrations_dir, err });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer dir.close();
+
+    // Collect migration file names
+    var migration_names = std.ArrayList([]const u8){};
+    defer {
+        for (migration_names.items) |name| allocator.free(name);
+        migration_names.deinit(allocator);
+    }
+
+    var dir_iter = dir.iterate();
+    while (dir_iter.next() catch null) |entry| {
+        if (entry.kind == .file) {
+            if (std.mem.endsWith(u8, entry.name, ".gql")) {
+                const name_copy = allocator.dupe(u8, entry.name) catch continue;
+                migration_names.append(allocator, name_copy) catch {
+                    allocator.free(name_copy);
+                    continue;
+                };
+            }
+        }
+    }
+
+    if (migration_names.items.len == 0) {
+        std.debug.print("No migration files found in '{s}'\n", .{migrations_dir});
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+
+    std.debug.print("Found {} migration files\n", .{migration_names.items.len});
+
+    if (dry_run) {
+        std.debug.print("\nDry run mode - showing what would be applied:\n", .{});
+        for (migration_names.items) |name| {
+            std.debug.print("  Would apply: {s}\n", .{name});
+        }
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+
+    // Apply migrations using the migration module
+    var alloc = allocator;
+    migration.applyUpMigrations(&alloc, migration_names.items) catch |err| {
+        std.debug.print("Error: Failed to apply migrations: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
+    std.debug.print("Migrations applied successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
+// CANARY: REQ=REQ-CLI-MIGRATE-CREATE-001; FEATURE="CLIMigrateCreate"; ASPECT=FileCreation; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
 fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = allocator;
-
     var migration_name: ?[]const u8 = null;
+    var migrations_dir: []const u8 = "migrations";
 
     // Parse arguments
     var i: usize = start_idx;
@@ -517,16 +861,20 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
             std.debug.print("geode migrate create - Create a new migration file\n" ++
                 "\n" ++
-                "Usage: geode migrate create <name>\n" ++
+                "Usage: geode migrate create <name> [options]\n" ++
                 "\n" ++
                 "Arguments:\n" ++
-                "  name                   Migration name\n" ++
+                "  name                   Migration name (alphanumeric with underscores)\n" ++
                 "\n" ++
                 "Options:\n" ++
+                "  --dir <path>           Migrations directory (default: ./migrations)\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
-        } else if (migration_name == null) {
+        } else if (std.mem.eql(u8, argv[i], "--dir") and i + 1 < argv.len) {
+            i += 1;
+            migrations_dir = argv[i];
+        } else if (migration_name == null and !std.mem.startsWith(u8, argv[i], "-")) {
             migration_name = argv[i];
         }
     }
@@ -536,8 +884,73 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // For now, simulate creating a migration
-    std.debug.print("Created migration: 005_{s}.gql\n", .{migration_name.?});
+    // Ensure migrations directory exists
+    std.fs.cwd().makePath(migrations_dir) catch |err| {
+        if (err != error.PathAlreadyExists) {
+            std.debug.print("Error: Cannot create migrations directory '{s}': {}\n", .{ migrations_dir, err });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+    };
+
+    // Find next version number by scanning existing migrations
+    var dir = std.fs.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
+        std.debug.print("Error: Cannot open migrations directory '{s}': {}\n", .{ migrations_dir, err });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer dir.close();
+
+    var max_version: u32 = 0;
+    var dir_iter = dir.iterate();
+    while (dir_iter.next() catch null) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".gql")) {
+            // Parse version number from filename (e.g., "001_create_users.gql")
+            var version: u32 = 0;
+            var j: usize = 0;
+            while (j < entry.name.len and entry.name[j] >= '0' and entry.name[j] <= '9') : (j += 1) {
+                version = version * 10 + @as(u32, entry.name[j] - '0');
+            }
+            if (version > max_version) max_version = version;
+        }
+    }
+
+    const new_version = max_version + 1;
+
+    // Create filename: NNN_name.gql
+    const filename = std.fmt.allocPrint(allocator, "{s}/{d:0>3}_{s}.gql", .{ migrations_dir, new_version, migration_name.? }) catch {
+        std.debug.print("Error: Out of memory\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer allocator.free(filename);
+
+    // Create the migration file with template content
+    const template = std.fmt.allocPrint(allocator,
+        \\-- Migration: {s}
+        \\-- Version: {d}
+        \\-- Created: {d}
+        \\
+        \\-- Add your GQL statements here
+        \\-- Example:
+        \\-- CREATE (:Node {{name: "example"}})
+        \\
+    , .{ migration_name.?, new_version, std.time.milliTimestamp() }) catch {
+        std.debug.print("Error: Out of memory\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer allocator.free(template);
+
+    // Write the file
+    const file = std.fs.cwd().createFile(filename, .{}) catch |err| {
+        std.debug.print("Error: Cannot create migration file '{s}': {}\n", .{ filename, err });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer file.close();
+
+    file.writeAll(template) catch |err| {
+        std.debug.print("Error: Cannot write to migration file: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
+    std.debug.print("Created migration: {s}\n", .{filename});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 

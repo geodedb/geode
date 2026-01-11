@@ -1830,19 +1830,35 @@ fn runEmbeddedClient(allocator: std.mem.Allocator, config: ClientConfig) !void {
     // Add query text last
     try client_args.append(allocator, config.query_text);
 
-    // Unified binary architecture - no subprocess spawning
-    std.debug.print("Geode client executing with unified binary (no subprocess spawning)\n", .{});
-    std.debug.print("Server: {s}\n", .{config.server});
-    std.debug.print("Query: {s}\n", .{config.query_text});
-    std.debug.print("Format: {s}\n", .{config.format});
+    // CANARY: REQ=REQ-CLI-QUERY-001; FEATURE="CLIQueryExecution"; ASPECT=QUIC; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
+    // Execute query via QUIC connection (unified binary architecture)
+    const colon_idx = std.mem.lastIndexOf(u8, config.server, ":") orelse {
+        std.debug.print("Error: Invalid server address format (expected host:port): {s}\n", .{config.server});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    const host = config.server[0..colon_idx];
+    const port = std.fmt.parseInt(u16, config.server[colon_idx + 1 ..], 10) catch {
+        std.debug.print("Error: Invalid port number in server address: {s}\n", .{config.server});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 
-    // Direct function call approach (eliminates subprocess)
-    // In production, this would call the client main function directly
-    // For now, simulate successful query execution
-    std.debug.print("✅ Query execution simulation complete (unified binary)\n", .{});
-    std.debug.print("{{\"message\":\"Query executed via unified binary\", \"query\":\"{s}\", \"server\":\"{s}\"}}\n", .{ config.query_text, config.server });
+    // Create QUIC client and connect
+    var quic_client = quic.QuicClient.init(allocator);
+    defer quic_client.deinit();
 
-    // Exit successfully to demonstrate subprocess elimination
+    // Connect to server (insecure mode for now - TODO: add TLS certificate verification option)
+    _ = quic_client.connectInsecure(host, port, true) catch |err| {
+        std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
+    // Execute query on the connection
+    executeQueryOnConnection(allocator, &quic_client, config.query_text, config.format, config.user, config.password) catch |err| {
+        std.debug.print("Error: Query execution failed: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
+    // Exit successfully
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 

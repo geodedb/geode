@@ -120,14 +120,12 @@ pub const CryptoManager = struct {
         }
     }
 
+    // CANARY: REQ=REQ-CRYPTO-RANDOM-001; FEATURE="CryptographicKeyGeneration"; ASPECT=KMS_FALLBACK; STATUS=IMPL; OWNER=security; UPDATED=2026-01-11
     fn fetchFromAWSKMS(self: *Self, config: KMSConfig) !void {
-        // Simulate AWS KMS integration
-        // In production, this would use AWS SDK
-        var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-        const random = prng.random();
-
-        // Generate master key (in reality, fetched from KMS)
-        random.bytes(&self.current_key.master_key);
+        // AWS KMS fallback - uses cryptographically secure random
+        // In production with real AWS SDK, this would fetch from KMS
+        // Generate master key using cryptographically secure random
+        std.crypto.random.bytes(&self.current_key.master_key);
 
         // Derive DEK from master key
         try self.deriveDataKey();
@@ -144,10 +142,8 @@ pub const CryptoManager = struct {
 
     fn fetchFromAzureKeyVault(self: *Self, config: KMSConfig) !void {
         _ = config;
-        // Similar to AWS KMS
-        var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-        const random = prng.random();
-        random.bytes(&self.current_key.master_key);
+        // Azure Key Vault fallback - uses cryptographically secure random
+        std.crypto.random.bytes(&self.current_key.master_key);
         try self.deriveDataKey();
 
         self.current_key.provenance = .{
@@ -162,10 +158,8 @@ pub const CryptoManager = struct {
 
     fn fetchFromHashicorpVault(self: *Self, config: KMSConfig) !void {
         _ = config;
-        // Similar implementation
-        var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-        const random = prng.random();
-        random.bytes(&self.current_key.master_key);
+        // HashiCorp Vault fallback - uses cryptographically secure random
+        std.crypto.random.bytes(&self.current_key.master_key);
         try self.deriveDataKey();
 
         self.current_key.provenance = .{
@@ -180,10 +174,8 @@ pub const CryptoManager = struct {
 
     fn fetchFromGoogleCloudKMS(self: *Self, config: KMSConfig) !void {
         _ = config;
-        // Similar implementation
-        var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-        const random = prng.random();
-        random.bytes(&self.current_key.master_key);
+        // Google Cloud KMS fallback - uses cryptographically secure random
+        std.crypto.random.bytes(&self.current_key.master_key);
         try self.deriveDataKey();
 
         self.current_key.provenance = .{
@@ -197,10 +189,8 @@ pub const CryptoManager = struct {
     }
 
     fn generateLocalKeys(self: *Self) !void {
-        var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-        const random = prng.random();
-
-        random.bytes(&self.current_key.master_key);
+        // Generate local keys using cryptographically secure random
+        std.crypto.random.bytes(&self.current_key.master_key);
         try self.deriveDataKey();
 
         self.current_key.provenance = .{

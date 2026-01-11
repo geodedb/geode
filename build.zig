@@ -200,6 +200,10 @@ pub fn build(b: *std.Build) void {
     storage_backup_mod.addImport("wal", wal_mod);
     geode_exe.root_module.addImport("storage/backup", storage_backup_mod);
 
+    // M11a: Add migration module for CLI migrate commands
+    const migration_mod_cli = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
+    geode_exe.root_module.addImport("migration", migration_mod_cli);
+
     // M12: Add storage/stress_test module for CLI
     const storage_stress_mod = b.createModule(.{ .root_source_file = b.path("src/storage/stress_test.zig"), .target = target, .optimize = optimize });
     storage_stress_mod.addImport("geode", root_mod);

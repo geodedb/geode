@@ -110,8 +110,11 @@ pub fn applyUpMigrations(alloc: *std.mem.Allocator, names: []const []const u8) M
         }
     };
 
+    // Version entry type for buffer and sorting
+    const VersionEntry = struct { version: i64, name: []const u8 };
+
     // Temporary buffer (bounded) — early slice constraint
-    var buf: [16]struct { version: i64, name: []const u8 } = undefined;
+    var buf: [16]VersionEntry = undefined;
     var buf_len: usize = 0;
     names_loop: for (names) |nm| {
         const ver_opt = Collector.parseVersion(nm) orelse continue; // skip if no version prefix
@@ -127,9 +130,8 @@ pub fn applyUpMigrations(alloc: *std.mem.Allocator, names: []const []const u8) M
     if (buf_len == 0) return; // nothing new
 
     // Sort ascending by version
-    const Ctx = struct {};
-    std.sort.sort(struct { version: i64, name: []const u8 }, buf[0..buf_len], Ctx{}, struct {
-        fn lessThan(_: Ctx, a: struct { version: i64, name: []const u8 }, b: struct { version: i64, name: []const u8 }) bool {
+    std.mem.sort(VersionEntry, buf[0..buf_len], {}, struct {
+        fn lessThan(_: void, a: VersionEntry, b: VersionEntry) bool {
             return a.version < b.version;
         }
     }.lessThan);

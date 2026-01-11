@@ -735,10 +735,18 @@ const GraphData = struct {
         weight: f32 = 1.0,
     };
 
+    // CANARY: REQ=REQ-ML-NEIGHBORS-001; FEATURE="GraphData.getNeighbors"; ASPECT=NeighborLookup; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-11
     pub fn getNeighbors(self: *GraphData, node: NodeId) []NodeId {
-        _ = self;
-        _ = node;
-        return &[_]NodeId{}; // Placeholder
+        // Return neighbor nodes from outgoing edges
+        if (self.outgoing_edges.get(node)) |edges| {
+            // Collect target nodes from edges
+            const result = std.heap.page_allocator.alloc(NodeId, edges.items.len) catch return &[_]NodeId{};
+            for (edges.items, 0..) |edge, i| {
+                result[i] = edge.target;
+            }
+            return result;
+        }
+        return &[_]NodeId{};
     }
 
     pub fn getOutDegree(self: *GraphData, node: NodeId) u32 {

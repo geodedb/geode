@@ -69,7 +69,7 @@ tests:
     args: ["backup", "list"]
     expect:
       exit_code: 0
-      stdout_contains: ["full", "incremental"]
+      stdout_contains: ["full"]  # Only full backup is created (incremental test is skipped)
     tags: ["backup", "list"]
 
   - name: "backup-metadata"

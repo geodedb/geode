@@ -2,19 +2,152 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 10, 2026
+**Last Updated**: January 11, 2026
 
-**Total Resolved**: 89 gaps (GAP-0001 through GAP-0089)
+**Total Resolved**: 97 gaps (GAP-0001 through GAP-0097)
 
 **Remaining Open**: 0 gaps - All gaps resolved
 
 **Note**: Gap analysis on January 10, 2026 identified 21 additional gaps (GAP-0065 through GAP-0085) through comprehensive codebase scanning. All were resolved on the same day. GAP-0086 (External KMS Integration) was also resolved on January 10, 2026 with full HTTP implementation for Vault Transit and AWS KMS APIs.
 
-**Final Gaps (January 10, 2026)**: GAP-0087, GAP-0088, and GAP-0089 were identified and resolved on January 10, 2026. All gaps are now closed.
+**Additional Gaps (January 11, 2026)**: GAP-0090 through GAP-0097 (8 gaps) identified through security and CLI command auditing. All resolved on January 11, 2026.
 
 ---
 
-## All Remaining Gaps Resolved (January 10, 2026)
+## Latest Resolutions (January 11, 2026)
+
+### GAP-0090: ML GraphData.getNeighbors() Returns Empty Placeholder (Resolved January 11, 2026)
+- **Original Gap:** ML getNeighbors() function returned empty slice, breaking all random walk algorithms
+- **Original Severity:** Medium (Implementation)
+- **GitLab Issue:** [#172](https://gitlab.com/devnw/geode/geode/-/issues/172) (closed)
+- **Resolution Evidence:**
+  - src/ml/integration_enhanced.zig:738-755 — Implemented actual neighbor lookup:
+    - Queries `outgoing_edges` HashMap for node's edge list
+    - Returns array of target NodeIds from edge list
+    - Properly allocates result array using page_allocator
+    - Returns empty slice only for nodes with no outgoing edges
+  - CANARY marker: REQ=REQ-ML-NEIGHBORS-001; FEATURE="GraphData.getNeighbors"; STATUS=IMPL; UPDATED=2026-01-11
+- **Verification:** RandomWalker produces non-empty walks for graphs with edges; Node2Vec/GraphSAGE/DeepWalk functional
+
+---
+
+### GAP-0091: Cryptographic Key Generation Uses Non-Cryptographic PRNG (Resolved January 11, 2026)
+- **Original Gap:** Key generation used time-seeded DefaultPrng instead of cryptographically secure random
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#173](https://gitlab.com/devnw/geode/geode/-/issues/173) (closed)
+- **Resolution Evidence:**
+  - src/types/cryptographic.zig:222-280 — KeyPair.generate() now uses std.crypto.random:
+    - Ed25519: Uses std.crypto.random.bytes() for 32-byte seed
+    - ECDSA_P256: Uses std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair.generate() (internally secure)
+    - RSA: Uses std.crypto.random.bytes() for key material
+  - src/storage/crypto_enhanced.zig — All KMS simulation functions updated:
+    - fetchFromAWSKMS(), fetchFromAzureKeyVault(), fetchFromHashicorpVault(), fetchFromGoogleCloudKMS()
+    - All now use std.crypto.random.bytes() for key generation
+  - CANARY marker: REQ=REQ-CRYPTO-RANDOM-001; FEATURE="CryptographicKeyGeneration"; STATUS=IMPL; UPDATED=2026-01-11
+- **Verification:** Keys are now unpredictable; no time-based seed vulnerabilities
+
+---
+
+### GAP-0092: CLI Query Execution is Simulated (Resolved January 11, 2026)
+- **Original Gap:** `geode query` command printed simulation message instead of executing queries
+- **Original Severity:** High (Implementation)
+- **GitLab Issue:** [#174](https://gitlab.com/devnw/geode/geode/-/issues/174) (closed)
+- **Resolution Evidence:**
+  - src/cli/main.zig:1830-1865 — runEmbeddedClient() now uses real QUIC connection:
+    - Parses server address to extract host and port
+    - Initializes QuicClient and connects via connectInsecure()
+    - Calls executeQueryOnConnection() with actual query text
+    - Handles JSON/table output formatting
+  - CANARY marker: REQ=REQ-CLI-QUERY-001; FEATURE="CLIQueryExecution"; STATUS=IMPL; UPDATED=2026-01-11
+- **Verification:** `geode query "RETURN 1"` now connects to server and returns actual results
+
+---
+
+### GAP-0093: CLI Backup List Returns Hardcoded Fake Data (Resolved January 11, 2026)
+- **Original Gap:** `geode backup list` returned hardcoded fake entries instead of real backups
+- **Original Severity:** Medium (Implementation)
+- **GitLab Issue:** [#175](https://gitlab.com/devnw/geode/geode/-/issues/175) (closed)
+- **Resolution Evidence:**
+  - src/cli/backup_cli.zig:187-305 — cmdBackupList() now scans actual directory:
+    - Opens backup directory (default: ./backups, configurable with --dir)
+    - Scans for .backup, .gql, .gz, .zst files
+    - Reads file stat for size information
+    - Attempts to read BackupHeader for type/compression metadata
+    - Sorts by timestamp and displays formatted table
+  - CANARY marker: REQ=REQ-CLI-BACKUP-LIST-001; FEATURE="CLIBackupList"; STATUS=IMPL; UPDATED=2026-01-11
+- **Verification:** `geode backup list` now shows actual backup files from directory
+
+---
+
+### GAP-0094: CLI Backup Info Returns Hardcoded Fake Data (Resolved January 11, 2026)
+- **Original Gap:** `geode backup info` returned hardcoded metadata instead of reading file
+- **Original Severity:** Medium (Implementation)
+- **GitLab Issue:** [#176](https://gitlab.com/devnw/geode/geode/-/issues/176) (closed)
+- **Resolution Evidence:**
+  - src/cli/backup_cli.zig:308-400 — cmdBackupInfo() now reads actual file:
+    - Opens specified backup file
+    - Reads file stat for size
+    - Reads and parses BackupHeader (magic, version, type, compression, encrypted)
+    - Displays actual metadata including timestamp and catalog size
+    - Shows file size in both formatted and raw bytes
+  - CANARY marker: REQ=REQ-CLI-BACKUP-INFO-001; FEATURE="CLIBackupInfo"; STATUS=IMPL; UPDATED=2026-01-11
+- **Verification:** `geode backup info <file>` displays actual backup file metadata
+
+---
+
+### GAP-0095: CLI Migrate Status Returns Hardcoded Fake Data (Resolved January 11, 2026)
+- **Original Gap:** `geode migrate status` returned hardcoded counts instead of actual status
+- **Original Severity:** Medium (Implementation)
+- **GitLab Issue:** [#177](https://gitlab.com/devnw/geode/geode/-/issues/177) (closed)
+- **Resolution Evidence:**
+  - src/cli/backup_cli.zig:668-700 — cmdMigrateStatus() now calls migration module:
+    - Calls migration.statusReport() to get actual status rows
+    - Counts applied vs pending migrations from returned data
+    - Displays accurate totals
+    - Module import added for migration module
+  - build.zig:203-205 — Added migration module to CLI executable:
+    - migration_mod_cli module created and linked to geode_exe
+  - CANARY marker: REQ=REQ-CLI-MIGRATE-STATUS-001; FEATURE="CLIMigrateStatus"; STATUS=IMPL; UPDATED=2026-01-11
+- **Verification:** `geode migrate status` reports actual migration state
+
+---
+
+### GAP-0096: CLI Migrate Run Prints Success Without Applying Migrations (Resolved January 11, 2026)
+- **Original Gap:** `geode migrate run` printed success without applying any migrations
+- **Original Severity:** High (Implementation)
+- **GitLab Issue:** [#178](https://gitlab.com/devnw/geode/geode/-/issues/178) (closed)
+- **Resolution Evidence:**
+  - src/cli/backup_cli.zig:710-780 — cmdMigrateRun() now applies real migrations:
+    - Scans migrations directory for .gql files
+    - Collects migration file names into ArrayList
+    - Supports --dry-run flag to preview without applying
+    - Calls migration.applyUpMigrations() with actual file list
+    - Reports success/failure accurately
+  - src/migration/mod.zig:113-137 — Fixed Zig 0.15 compatibility:
+    - VersionEntry type defined for buffer and sort
+    - std.mem.sort() used instead of deprecated std.sort.sort()
+  - CANARY marker: REQ=REQ-CLI-MIGRATE-RUN-001; FEATURE="CLIMigrateRun"; STATUS=IMPL; UPDATED=2026-01-11
+- **Verification:** `geode migrate run` applies actual migrations from directory
+
+---
+
+### GAP-0097: CLI Migrate Create Prints Success Without Creating File (Resolved January 11, 2026)
+- **Original Gap:** `geode migrate create` printed success without creating actual file
+- **Original Severity:** Medium (Implementation)
+- **GitLab Issue:** [#179](https://gitlab.com/devnw/geode/geode/-/issues/179) (closed)
+- **Resolution Evidence:**
+  - src/cli/backup_cli.zig:820-890 — cmdMigrateCreate() now creates actual file:
+    - Counts existing migrations to determine next version number
+    - Creates filename as NNN_name.gql (e.g., 001_create_users.gql)
+    - Writes GQL template content with UP/DOWN sections
+    - Creates migrations directory if it doesn't exist
+    - Reports actual file path on success
+  - CANARY marker: REQ=REQ-CLI-MIGRATE-CREATE-001; FEATURE="CLIMigrateCreate"; STATUS=IMPL; UPDATED=2026-01-11
+- **Verification:** `geode migrate create <name>` creates actual .gql file with template
+
+---
+
+## Previous Resolutions (January 10, 2026)
 
 ### GAP-0086: External KMS Integration (Resolved January 10, 2026)
 - **Original Gap:** VaultTransitClient and AwsKmsClient were stub implementations with local simulation
@@ -1565,4 +1698,4 @@ The following GitLab gap issues were verified as resolved and closed:
 
 ---
 
-*Archive complete - All 89 gaps resolved*
+*Archive complete - All 97 gaps resolved*
