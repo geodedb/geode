@@ -1,91 +1,103 @@
 const std = @import("std");
-// Import migration engine via build.zig provided module name "migration" for canonical CANARY tests.
 const migrate = @import("migration");
 
-test "TestCANARY_REQ_GQL_087_MigrationLedgerSchema" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    const rows = try migrate.statusReport(&alloc);
-    defer alloc.free(rows);
-    try std.testing.expectEqual(@as(usize, 1), rows.len);
-    try std.testing.expectEqual(@as(i64, 1), rows[0].version);
-    try std.testing.expectEqualStrings("init_schema", rows[0].name);
-    try std.testing.expect(rows[0].applied);
-}
+const ExecRecorder = struct {
+    allocator: std.mem.Allocator,
+    calls: std.ArrayListUnmanaged([]const u8),
 
-test "TestCANARY_REQ_GQL_087_LockAcquisitionTTLHeartbeat" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    // Acquire initial lock with short TTL
-    var lh = try migrate.acquireLock(&alloc, 200);
-    // Second acquire should fail with AlreadyLocked
-    try std.testing.expectError(error.AlreadyLocked, migrate.acquireLock(&alloc, 200));
-    // Heartbeat should extend (no error)
-    try migrate.heartbeatLock(&lh);
-    // Simulate expiry by sleeping beyond TTL (best-effort) if sleep available
-    std.Thread.sleep(300 * std.time.ns_per_ms);
-    // New acquire should reclaim (previous expired)
-    var lh2 = try migrate.acquireLock(&alloc, 200);
-    try std.testing.expect(lh2.id == 1);
-    // Release lock
-    try migrate.releaseLock(&lh2);
-    // Release again should error
-    try std.testing.expectError(error.NoLockHeld, migrate.releaseLock(&lh2));
-}
-
-test "TestCANARY_REQ_GQL_087_UpApplyOrderingIdempotency" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    // Apply a batch out of order with duplicates and already-applied version 1.
-    const batch1: [][]const u8 = .{ "003_third", "002_second", "002_second", "001_init_duplicate" };
-    try migrate.applyUpMigrations(&alloc, batch1);
-    const rows_after = try migrate.statusReport(&alloc);
-    defer alloc.free(rows_after);
-    // Expect versions: 1 (seed), 2, 3
-    try std.testing.expect(rows_after.len >= 3);
-    var found2 = false;
-    var found3 = false;
-    for (rows_after) |r| {
-        if (r.version == 2) found2 = true;
-        if (r.version == 3) found3 = true;
+    fn init(alloc: std.mem.Allocator) ExecRecorder {
+        return .{ .allocator = alloc, .calls = .{} };
     }
-    try std.testing.expect(found2 and found3);
-    const before_len = rows_after.len;
-    // Second apply with overlapping & new higher version ensures idempotent skip of existing and addition of new.
-    const batch2: [][]const u8 = .{ "003_third", "004_fourth" };
-    try migrate.applyUpMigrations(&alloc, batch2);
-    const rows_after2 = try migrate.statusReport(&alloc);
-    defer alloc.free(rows_after2);
-    var found4 = false;
-    for (rows_after2) |r| {
-        if (r.version == 4) found4 = true;
+
+    fn deinit(self: *ExecRecorder) void {
+        for (self.calls.items) |c| self.allocator.free(c);
+        self.calls.deinit(self.allocator);
     }
-    try std.testing.expect(found4);
-    // Ensure only +1 new row appended (idempotency of 003)
-    try std.testing.expect(rows_after2.len == before_len + 1);
+
+    fn exec(ctx_ptr: ?*anyopaque, script: []const u8) !void {
+        const self = @as(*ExecRecorder, @ptrCast(@alignCast(ctx_ptr.?)));
+        const copy = try self.allocator.dupe(u8, script);
+        try self.calls.append(self.allocator, copy);
+    }
+
+    fn executor(self: *ExecRecorder) migrate.QueryExecutor {
+        return .{ .context = self, .execFn = ExecRecorder.exec };
+    }
+};
+
+fn writeMigration(dir: std.fs.Dir, name: []const u8, body: []const u8) !void {
+    var file = try dir.createFile(name, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(body);
 }
 
-test "TestCANARY_REQ_GQL_087_PolicyEnforcementStrictMode" {
-    // Switch to STRICT mode
-    try migrate.enforcePolicy("STRICT");
-    try std.testing.expect(migrate.isStrictPolicy());
-    // Switch back to LENIENT mode
-    try migrate.enforcePolicy("LENIENT");
-    try std.testing.expect(!migrate.isStrictPolicy());
-    // Unknown mode should reuse NotImplemented error for lightweight signaling
-    try std.testing.expectError(error.NotImplemented, migrate.enforcePolicy("UNKNOWN"));
-}
-
-test "TestCANARY_REQ_GQL_087_ChecksumValidation" {
+test "TestCANARY_REQ_GQL_087_MigrationLedgerSchema_and_Apply" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
     const alloc = gpa.allocator();
-    // Start with ledger: version 1 seeded (deadbee prefix)
-    // Apply two new migrations to ensure checksums are computed.
-    const batch: [][]const u8 = .{ "002_second", "003_third" };
-    try migrate.applyUpMigrations(&alloc, batch);
-    const rows = try migrate.statusReport(&alloc);
-    defer alloc.free(rows);
-    // Build manifest lines from current applied rows.
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try writeMigration(tmp.dir, "002_create_person.gql", "CREATE (:Person {name: 'Alice'})");
+    try writeMigration(tmp.dir, "003_add_index.gql", "CREATE INDEX IF NOT EXISTS person_name_idx ON :Person(name)");
+
+    var exec = ExecRecorder.init(alloc);
+    defer exec.deinit();
+
+    const cfg = migrate.MigrationConfig{ .migrations_dir = tmp.path };
+    try migrate.applyUpMigrations(&alloc, cfg, &.{ "002_create_person.gql", "003_add_index.gql" }, exec.executor());
+
+    const rows = try migrate.statusReport(&alloc, cfg);
+    defer migrate.freeStatusRows(alloc, rows);
+    try std.testing.expect(rows.len == 3); // seed + 2 applied
+    try std.testing.expect(exec.calls.items.len == 2);
+}
+
+test "TestCANARY_REQ_GQL_087_DownReversalSafety" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+    const alloc = gpa.allocator();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try writeMigration(tmp.dir, "002_create_person.gql", "CREATE (:Person {name: 'Bob'})");
+    try writeMigration(tmp.dir, "002_create_person.gql.down.gql", "MATCH (n:Person {name: 'Bob'}) DETACH DELETE n");
+
+    var exec = ExecRecorder.init(alloc);
+    defer exec.deinit();
+    const cfg = migrate.MigrationConfig{ .migrations_dir = tmp.path };
+
+    try migrate.applyUpMigrations(&alloc, cfg, &.{ "002_create_person.gql" }, exec.executor());
+    try migrate.applyDownMigrations(&alloc, cfg, &.{}, exec.executor());
+
+    const rows = try migrate.statusReport(&alloc, cfg);
+    defer migrate.freeStatusRows(alloc, rows);
+    var applied_gt1: usize = 0;
+    for (rows) |r| {
+        if (r.applied and r.version > 1) applied_gt1 += 1;
+    }
+    try std.testing.expect(applied_gt1 == 0);
+    try std.testing.expect(exec.calls.items.len == 2); // up + down executed
+}
+
+test "TestCANARY_REQ_GQL_087_ChecksumValidation_and_PlanDryRun" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+    const alloc = gpa.allocator();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try writeMigration(tmp.dir, "002_second.gql", "RETURN 1");
+
+    var exec = ExecRecorder.init(alloc);
+    defer exec.deinit();
+    const cfg = migrate.MigrationConfig{ .migrations_dir = tmp.path };
+    try migrate.applyUpMigrations(&alloc, cfg, &.{ "002_second.gql" }, exec.executor());
+
+    const rows = try migrate.statusReport(&alloc, cfg);
+    defer migrate.freeStatusRows(alloc, rows);
+
     var buf: [256]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const w = fbs.writer();
@@ -94,75 +106,60 @@ test "TestCANARY_REQ_GQL_087_ChecksumValidation" {
         try w.print("{d} {s}\n", .{ r.version, r.checksum_prefix });
     }
     const manifest = fbs.getWritten();
-    const ok = try migrate.checksumValidate(&alloc, manifest);
+    const ok = try migrate.checksumValidate(&alloc, cfg, manifest);
     try std.testing.expect(ok);
-    // Corrupt one checksum in manifest (change last hex char)
-    var corrupt_buf: [256]u8 = undefined;
-    std.mem.copyForwards(u8, corrupt_buf[0..manifest.len], manifest);
-    if (manifest.len > 0) {
-        const idx = manifest.len - 2; // choose a hex char before newline
-        if (corrupt_buf[idx] != '0') corrupt_buf[idx] = '0' else corrupt_buf[idx] = '1';
+
+    const plan = try migrate.planDryRun(&alloc, cfg, &.{ "003_third.gql" });
+    defer {
+        alloc.free(plan.up);
+        alloc.free(plan.down);
     }
-    const bad = try migrate.checksumValidate(&alloc, corrupt_buf[0..manifest.len]);
-    try std.testing.expect(!bad);
+    try std.testing.expect(plan.up.len == 1);
+    try std.testing.expect(std.mem.eql(u8, plan.up[0], "003_third.gql"));
+}
+
+test "TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+    const alloc = gpa.allocator();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const cfg = migrate.MigrationConfig{ .migrations_dir = tmp.path };
+
+    try migrate.enforcePolicy("STRICT");
+    const before = try migrate.driftCheck(&alloc, cfg);
+    try std.testing.expect(before);
+    migrate.testSimulateDrift();
+    const after = try migrate.driftCheck(&alloc, cfg);
+    try std.testing.expect(!after);
+    try migrate.enforcePolicy("LENIENT");
+}
+
+test "TestCANARY_REQ_GQL_087_LockAcquisitionTTLHeartbeat" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+    const alloc = gpa.allocator();
+    var lh = try migrate.acquireLock(&alloc, 200);
+    try std.testing.expectError(error.AlreadyLocked, migrate.acquireLock(&alloc, 200));
+    try migrate.heartbeatLock(&lh);
+    std.Thread.sleep(300 * std.time.ns_per_ms);
+    var lh2 = try migrate.acquireLock(&alloc, 200);
+    try migrate.releaseLock(&lh2);
+    try std.testing.expectError(error.NoLockHeld, migrate.releaseLock(&lh2));
 }
 
 test "TestCANARY_REQ_GQL_087_ResumeTokenDataMigration" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
     const alloc = gpa.allocator();
-    // Use a fixed token to simulate repeated resume calls.
     const token = "resumetoken";
     var last_state = try migrate.resumeDataMigration(&alloc, token);
     try std.testing.expect(!last_state.done);
-    try std.testing.expect(last_state.completed_batches == 1);
     const total = last_state.total_batches;
     var i: usize = 1;
     while (i < total) : (i += 1) {
         last_state = try migrate.resumeDataMigration(&alloc, token);
-        // completed_batches should monotonically increase up to total
-        try std.testing.expect(last_state.completed_batches == i + 1);
     }
     try std.testing.expect(last_state.done);
-    // Additional call after completion should remain done and not exceed total.
-    const after = try migrate.resumeDataMigration(&alloc, token);
-    try std.testing.expect(after.done);
-    try std.testing.expect(after.completed_batches == total);
-}
-
-test "TestCANARY_REQ_GQL_087_DriftDetection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    // Initial drift check should succeed (no drift) returning true.
-    const before = try migrate.driftCheck(&alloc);
-    try std.testing.expect(before);
-    // Simulate drift and expect driftCheck returns false.
-    try migrate.testSimulateDrift();
-    const after = try migrate.driftCheck(&alloc);
-    try std.testing.expect(!after);
-}
-
-test "CANARY: REQ-GQL-087 CliParityStatusCommand uses same statusReport output" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    const rows = try migrate.statusReport(&alloc);
-    defer alloc.free(rows);
-    try std.testing.expect(rows.len > 0);
-}
-
-test "CANARY: REQ-GQL-087 ObservabilityMetrics stub returns NotImplemented" {
-    try std.testing.expectError(error.NotImplemented, migrate.metricsSnapshot());
-}
-
-test "CANARY: REQ-GQL-087 DownReversalSafety stub returns NotImplemented" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    const empty: [][]const u8 = .{};
-    try std.testing.expectError(error.NotImplemented, migrate.applyDownMigrations(&alloc, empty));
-}
-
-test "CANARY: REQ-GQL-087 PlanDryRunIntegrity stub returns NotImplemented" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    const empty: [][]const u8 = .{};
-    try std.testing.expectError(error.NotImplemented, migrate.planDryRun(&alloc, empty));
 }

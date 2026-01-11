@@ -1,28 +1,43 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-// Migration Engine Stub Module (REQ-GQL-087)
-// Each public function is a placeholder returning error.NotImplemented until the
-// corresponding CANARY aspect is promoted from STUB→TESTED.
-//
-// CANARY Aspect Mapping (comments only – no functional code yet):
-//  - MigrationLedgerSchema            → ledger types & load/save
-//  - LockAcquisitionTTLHeartbeat      → acquireLock / heartbeatLock / releaseLock
-//  - UpApplyOrderingIdempotency       → applyUpMigrations
-//  - PolicyEnforcementStrictMode      → enforcePolicy
-//  - ChecksumValidation               → checksumValidate
-//  - ResumeTokenDataMigration         → resumeDataMigration
-//  - DriftDetection                   → driftCheck
-//  - CliParityStatusCommand           → statusReport (consumed by future CLI)
-//  - ObservabilityMetrics             → metricsSnapshot
-//  - DriftPolicyOutcomeStrict         → driftCheck (STRICT branch)
-//  - DownReversalSafety               → applyDownMigrations
-//  - PlanDryRunIntegrity              → planDryRun
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=Core; STATUS=IMPL; OWNER=migration; UPDATED=2026-01-11
+// Fully functional migration engine with durable ledger, checksum validation, up/down
+// application, drift detection, and pluggable query executor (QUIC-backed in CLI).
 
-pub const MigrationError = error{ NotImplemented, OutOfMemory, AlreadyLocked, LockExpired, NoLockHeld };
+pub const MigrationError = error{
+    NotImplemented,
+    OutOfMemory,
+    AlreadyLocked,
+    LockExpired,
+    NoLockHeld,
+    InvalidMigrationName,
+    MigrationFileMissing,
+    DownScriptMissing,
+    LedgerCorrupt,
+    ApplyFailed,
+    FileSystemError,
+};
+
+const StagedMigration = struct {
+    version: i64,
+    name: []const u8,
+};
+
+pub const MigrationConfig = struct {
+    migrations_dir: []const u8 = "migrations",
+    ledger_filename: []const u8 = "migration_ledger.json",
+};
+
+/// Pluggable executor so production uses QUIC and tests can inject a real executor.
+pub const QueryExecutor = struct {
+    context: ?*anyopaque = null,
+    execFn: *const fn (context: ?*anyopaque, script: []const u8) anyerror!void,
+};
 
 pub const LockHandle = struct {
     id: u64 = 0,
-    owner: []const u8 = "stub",
+    owner: []const u8 = "local",
     acquired_at_ms: u64 = 0,
     expires_at_ms: u64 = 0,
 };
@@ -36,7 +51,7 @@ pub const StatusRow = struct {
     version: i64 = 0,
     name: []const u8 = "stub",
     applied: bool = false,
-    checksum_prefix: []const u8 = "0000000",
+    checksum_prefix: [7]u8 = "0000000".*,
 };
 
 pub const Metrics = struct {
@@ -46,239 +61,75 @@ pub const Metrics = struct {
     lock_steal_attempts_total: u64 = 0,
 };
 
-var global_lock: ?LockHandle = null;
+pub const ResumeState = struct {
+    token: []const u8,
+    total_batches: u32,
+    completed_batches: u32,
+    done: bool,
+};
+
+const Ledger = struct {
+    rows: std.ArrayList(StatusRow),
+    baseline_fingerprint: u64,
+    metrics: Metrics,
+    alloc: std.mem.Allocator,
+
+    fn deinit(self: *Ledger) void {
+        for (self.rows.items) |row| {
+            self.alloc.free(row.name);
+        }
+        self.rows.deinit(self.alloc);
+    }
+};
+
+const LedgerFile = struct {
+    baseline_fingerprint: u64,
+    rows: []StatusRow,
+    metrics: Metrics = .{},
+};
+
+var baseline_override: ?u64 = null;
+
+// ------------------ Helpers ------------------
 
 fn nowMs() u64 {
-    // std.time.milliTimestamp returns i64; cast to u64 (monotonic enough for tests)
     return @intCast(std.time.milliTimestamp());
 }
 
-pub fn acquireLock(_: *std.mem.Allocator, ttl_ms: u64) MigrationError!LockHandle {
-    const now = nowMs();
-    // Reclaim if expired
-    if (global_lock) |lh| {
-        if (lh.expires_at_ms > now) {
-            return error.AlreadyLocked;
-        } else {
-            global_lock = null; // expired reclaim
-        }
+fn parseVersion(name: []const u8) ?i64 {
+    var i: usize = 0;
+    var value: i64 = 0;
+    while (i < name.len and name[i] >= '0' and name[i] <= '9') : (i += 1) {
+        if (i > 17) return null;
+        value = value * 10 + @as(i64, name[i] - '0');
     }
-    const handle = LockHandle{ .id = 1, .owner = "inmem", .acquired_at_ms = now, .expires_at_ms = now + ttl_ms };
-    global_lock = handle;
-    return handle;
+    if (i == 0) return null;
+    return value;
 }
 
-pub fn heartbeatLock(h: *LockHandle) MigrationError!void {
-    const now = nowMs();
-    if (global_lock) |*lh| {
-        if (lh.id != h.id) return error.NoLockHeld;
-        if (lh.expires_at_ms <= now) return error.LockExpired;
-        // Extend by preserving original TTL window (simple: add half remaining or fixed?)
-        const ttl = lh.expires_at_ms - lh.acquired_at_ms;
-        lh.expires_at_ms = now + ttl; // naive extension
-        h.* = lh.*; // reflect current
-    } else {
-        return error.NoLockHeld;
-    }
-}
-
-pub fn releaseLock(h: *LockHandle) MigrationError!void {
-    if (global_lock) |lh| {
-        if (lh.id != h.id) return error.NoLockHeld;
-        global_lock = null;
-    } else return error.NoLockHeld;
-}
-
-pub fn applyUpMigrations(alloc: *std.mem.Allocator, names: []const []const u8) MigrationError!void {
-    _ = alloc; // allocator reserved for future persistence; silence unused warning
-    ensureLedgerInit();
-
-    const Collector = struct {
-        fn parseVersion(name: []const u8) ?i64 {
-            var i: usize = 0;
-            var value: i64 = 0;
-            while (i < name.len and name[i] >= '0' and name[i] <= '9') : (i += 1) {
-                if (i > 17) return null; // guard overflow
-                value = value * 10 + @as(i64, name[i] - '0');
-            }
-            if (i == 0) return null;
-            return value;
-        }
-        fn already(v: i64) bool {
-            for (ledger_storage[0..ledger_len]) |row| if (row.version == v and row.applied) return true;
-            return false;
-        }
-    };
-
-    // Version entry type for buffer and sorting
-    const VersionEntry = struct { version: i64, name: []const u8 };
-
-    // Temporary buffer (bounded) — early slice constraint
-    var buf: [16]VersionEntry = undefined;
-    var buf_len: usize = 0;
-    names_loop: for (names) |nm| {
-        const ver_opt = Collector.parseVersion(nm) orelse continue; // skip if no version prefix
-        // Deduplicate inside incoming batch
-        for (buf[0..buf_len]) |e| if (e.version == ver_opt) continue :names_loop;
-        // Skip if already applied (idempotent) — no need to stage
-        if (Collector.already(ver_opt)) continue;
-        if (buf_len == buf.len) return error.OutOfMemory; // simplistic cap
-        buf[buf_len] = .{ .version = ver_opt, .name = nm };
-        buf_len += 1;
-    }
-
-    if (buf_len == 0) return; // nothing new
-
-    // Sort ascending by version
-    std.mem.sort(VersionEntry, buf[0..buf_len], {}, struct {
-        fn lessThan(_: void, a: VersionEntry, b: VersionEntry) bool {
-            return a.version < b.version;
-        }
-    }.lessThan);
-
-    // Append to ledger ensuring capacity
-    var newly_applied: usize = 0; // track for metrics
-    for (buf[0..buf_len]) |entry| {
-        if (ledger_len == ledger_storage.len) return error.OutOfMemory; // capacity guard
-        // Double-check no race (not expected in single-thread test slice)
-        var already = false;
-        for (ledger_storage[0..ledger_len]) |row| if (row.version == entry.version and row.applied) {
-            already = true;
-            break;
-        };
-        if (already) continue; // idempotent
-        // Simple deterministic checksum: FNV1a64 over name bytes
-        var h: u64 = 0xcbf29ce484222325;
-        for (entry.name) |b| {
-            h ^= b;
-            h *%= 0x100000001b3;
-        }
-        // Convert to hex and take first 7 chars as prefix
-        var full_hex: [16]u8 = undefined; // enough for 64-bit hex (16)
-        var i: usize = full_hex.len;
-        var tmp = h;
-        while (i > 0) : (i -= 1) {
-            const nyb = @as(u4, @intCast(tmp & 0xF));
-            full_hex[i - 1] = "0123456789abcdef"[nyb];
-            tmp >>= 4;
-        }
-        const prefix = full_hex[0..7];
-        ledger_storage[ledger_len] = StatusRow{ .version = entry.version, .name = entry.name, .applied = true, .checksum_prefix = prefix };
-        ledger_len += 1;
-        newly_applied += 1;
-    }
-    // Refresh baseline after successful batch
-    baseline_fingerprint = computeFingerprint();
-    if (newly_applied > 0) incApplied(newly_applied);
-}
-
-pub fn applyDownMigrations(_: *std.mem.Allocator, _: []const []const u8) MigrationError!void {
-    // Safety semantics (DownReversalSafety): only allow reversing the latest contiguous
-    // applied versions above the immutable baseline (version 1). All provided names must
-    // correspond to top-of-stack versions in descending order. If any mismatch occurs,
-    // operation aborts without partial reversal.
-    ensureLedgerInit();
-    // Provided migration names parameter ignored in early slice; reversal logic chooses latest.
-    // Collect candidate reversible rows (those with version > 1) from end while applied.
-    if (ledger_len == 0) return; // nothing
-    var pop_count: usize = 0;
-    // Do not remove baseline (version 1); treat all rows >1 as reversible if contiguous.
-    // Early semantics: reverse exactly one latest migration for deterministic minimal step.
-    var idx: isize = @intCast(ledger_len); // start one past end
-    idx -= 1;
-    while (idx >= 0) : (idx -= 1) {
-        const row = ledger_storage[@intCast(idx)];
-        if (!row.applied) break; // stop at first unapplied (shouldn't happen in append-only)
-        if (row.version <= 1) break; // protect baseline
-        // Mark for potential reversal (limit to 1 for conservative safety at this slice)
-        pop_count += 1;
-        break; // only one reversal per invocation for deterministic safety
-    }
-    if (pop_count == 0) return; // nothing reversible
-    // Perform reversal: set applied=false for selected latest row(s)
-    var reversed: usize = 0;
-    var j: isize = @as(isize, @intCast(ledger_len)) - 1;
-    while (reversed < pop_count and j >= 0) : (j -= 1) {
-        if (ledger_storage[@intCast(j)].version <= 1) break;
-        ledger_storage[@intCast(j)].applied = false;
-        reversed += 1;
-    }
-    baseline_fingerprint = computeFingerprint();
-    if (reversed > 0) incApplied(0); // no applied increment; placeholder hook (keeps pattern)
-}
-
-// Policy enforcement (STRICT vs LENIENT) simple state machine for PolicyEnforcementStrictMode aspect.
-pub const PolicyMode = enum { strict, lenient };
-var policy_mode: PolicyMode = .lenient; // default lenient
-
-pub fn enforcePolicy(mode: []const u8) MigrationError!void {
-    if (std.mem.eql(u8, mode, "STRICT")) {
-        policy_mode = .strict;
-        return;
-    } else if (std.mem.eql(u8, mode, "LENIENT")) {
-        policy_mode = .lenient;
-        return;
-    }
-    return error.NotImplemented; // reuse existing error set for unknown mode (lightweight)
-}
-
-pub fn isStrictPolicy() bool {
-    return policy_mode == .strict;
-}
-
-pub fn checksumValidate(alloc: *std.mem.Allocator, manifest: []const u8) MigrationError!bool {
-    _ = alloc; // reserved for advanced reporting
-    ensureLedgerInit();
-    // Manifest format (early slice): lines with "<version> <7hexprefix>"; ignore empty/comment (#) lines.
-    var it = std.mem.tokenizeAny(u8, manifest, "\n\r");
-    var matched: usize = 0;
-    while (it.next()) |line_raw| {
-        const line = std.mem.trim(u8, line_raw, " \t");
-        if (line.len == 0 or line[0] == '#') continue;
-        var parts = std.mem.tokenizeScalar(u8, line, ' ');
-        const ver_txt = parts.next() orelse continue;
-        const chk_txt = parts.next() orelse continue;
-        // Parse version (base10)
-        var ver: i64 = 0;
-        for (ver_txt) |c| {
-            if (c < '0' or c > '9') {
-                ver = -1;
-                break;
-            }
-            ver = ver * 10 + @as(i64, c - '0');
-        }
-        if (ver <= 0) continue; // invalid version line skip
-        // Find ledger row
-        var found = false;
-        for (ledger_storage[0..ledger_len]) |row| {
-            if (row.version == ver) {
-                found = true;
-                if (!row.applied) return false; // inconsistent state
-                // Compare prefix (case-insensitive? assume lower hex in ledger)
-                if (!std.mem.startsWith(u8, row.checksum_prefix, chk_txt)) return false;
-                matched += 1;
-                break;
-            }
-        }
-        // Lines referencing unapplied versions are ignored for this slice.
-        // found unused beyond this point for early slice semantics
-    }
-    // All applied rows must appear in manifest with matching prefix;
-    // If manifest omits an applied version, validation fails.
-    var applied_count: usize = 0;
-    for (ledger_storage[0..ledger_len]) |row| {
-        if (row.applied) applied_count += 1;
-    }
-    return matched == applied_count;
-}
-
-var baseline_fingerprint: u64 = 0; // updated after each successful apply batch
-
-fn computeFingerprint() u64 {
+fn checksumPrefix(bytes: []const u8) [7]u8 {
     var h: u64 = 0xcbf29ce484222325;
-    for (ledger_storage[0..ledger_len]) |row| {
+    for (bytes) |b| {
+        h ^= b;
+        h *%= 0x100000001b3;
+    }
+    var hex: [16]u8 = undefined;
+    var idx: usize = hex.len;
+    var tmp = h;
+    while (idx > 0) : (idx -= 1) {
+        const nyb = @as(u4, @intCast(tmp & 0xF));
+        hex[idx - 1] = "0123456789abcdef"[nyb];
+        tmp >>= 4;
+    }
+    var prefix: [7]u8 = undefined;
+    std.mem.copyForwards(u8, prefix[0..], hex[0..7]);
+    return prefix;
+}
+
+fn computeFingerprint(rows: []const StatusRow) u64 {
+    var h: u64 = 0xcbf29ce484222325;
+    for (rows) |row| {
         if (!row.applied) continue;
-        // mix version bytes
         var vtmp: u64 = @intCast(@as(i64, row.version));
         inline for (0..8) |_| {
             const b: u8 = @intCast(vtmp & 0xFF);
@@ -294,19 +145,460 @@ fn computeFingerprint() u64 {
     return h;
 }
 
-pub fn driftCheck(_: *std.mem.Allocator) MigrationError!bool {
-    ensureLedgerInit();
-    const current = computeFingerprint();
-    return current == baseline_fingerprint;
+fn ledgerPath(alloc: std.mem.Allocator, cfg: MigrationConfig) ![]u8 {
+    return std.fs.path.join(alloc, &.{ cfg.migrations_dir, cfg.ledger_filename });
 }
 
-// ------------------ Resume Token Data Migration (Incremental Progress) ------------------
-pub const ResumeState = struct {
-    token: []const u8,
-    total_batches: u32,
-    completed_batches: u32,
-    done: bool,
-};
+fn ensureDir(cfg: MigrationConfig) !void {
+    std.fs.cwd().makePath(cfg.migrations_dir) catch |err| {
+        if (err != error.PathAlreadyExists) return err;
+    };
+}
+
+fn initLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Ledger {
+    ensureDir(cfg) catch return error.FileSystemError;
+    // Create empty ledger - no fake "init_schema" stub
+    const rows = std.ArrayList(StatusRow).initCapacity(alloc, 4) catch return error.OutOfMemory;
+    return Ledger{ .rows = rows, .baseline_fingerprint = 0, .metrics = .{}, .alloc = alloc };
+}
+
+fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Ledger {
+    const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
+    defer alloc.free(path);
+
+    var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        if (err == error.FileNotFound) return initLedger(alloc, cfg);
+        return error.FileSystemError;
+    };
+    defer file.close();
+
+    const data = file.readToEndAlloc(alloc, 4 * 1024 * 1024) catch return error.OutOfMemory;
+    defer alloc.free(data);
+
+    var parsed = std.json.parseFromSlice(LedgerFile, alloc, data, .{ .duplicate_field_behavior = .use_last }) catch {
+        return error.LedgerCorrupt;
+    };
+    defer parsed.deinit();
+
+    var rows = std.ArrayList(StatusRow).initCapacity(alloc, parsed.value.rows.len) catch return error.OutOfMemory;
+    for (parsed.value.rows) |row| {
+        const name_copy = alloc.dupe(u8, row.name) catch return error.OutOfMemory;
+        rows.append(alloc, .{
+            .version = row.version,
+            .name = name_copy,
+            .applied = row.applied,
+            .checksum_prefix = row.checksum_prefix,
+        }) catch return error.OutOfMemory;
+    }
+
+    return Ledger{
+        .rows = rows,
+        .baseline_fingerprint = parsed.value.baseline_fingerprint,
+        .metrics = parsed.value.metrics,
+        .alloc = alloc,
+    };
+}
+
+fn writeLedgerJson(buffer: *std.ArrayList(u8), alloc: std.mem.Allocator, ledger: *const Ledger) !void {
+    buffer.appendSlice(alloc, "{\"baseline_fingerprint\":") catch return error.OutOfMemory;
+    var num_buf: [32]u8 = undefined;
+    const fp_slice = std.fmt.bufPrint(&num_buf, "{d}", .{ledger.baseline_fingerprint}) catch return error.OutOfMemory;
+    buffer.appendSlice(alloc, fp_slice) catch return error.OutOfMemory;
+    buffer.appendSlice(alloc, ",\"rows\":[") catch return error.OutOfMemory;
+
+    for (ledger.rows.items, 0..) |row, i| {
+        if (i > 0) buffer.appendSlice(alloc, ",") catch return error.OutOfMemory;
+        buffer.appendSlice(alloc, "{\"version\":") catch return error.OutOfMemory;
+        const ver_slice = std.fmt.bufPrint(&num_buf, "{d}", .{row.version}) catch return error.OutOfMemory;
+        buffer.appendSlice(alloc, ver_slice) catch return error.OutOfMemory;
+        buffer.appendSlice(alloc, ",\"name\":\"") catch return error.OutOfMemory;
+        buffer.appendSlice(alloc, row.name) catch return error.OutOfMemory;
+        buffer.appendSlice(alloc, "\",\"applied\":") catch return error.OutOfMemory;
+        buffer.appendSlice(alloc, if (row.applied) "true" else "false") catch return error.OutOfMemory;
+        buffer.appendSlice(alloc, ",\"checksum_prefix\":\"") catch return error.OutOfMemory;
+        buffer.appendSlice(alloc, &row.checksum_prefix) catch return error.OutOfMemory;
+        buffer.appendSlice(alloc, "\"}") catch return error.OutOfMemory;
+    }
+
+    buffer.appendSlice(alloc, "],\"metrics\":{\"applied_total\":") catch return error.OutOfMemory;
+    const at_slice = std.fmt.bufPrint(&num_buf, "{d}", .{ledger.metrics.applied_total}) catch return error.OutOfMemory;
+    buffer.appendSlice(alloc, at_slice) catch return error.OutOfMemory;
+    buffer.appendSlice(alloc, ",\"failed_total\":") catch return error.OutOfMemory;
+    const ft_slice = std.fmt.bufPrint(&num_buf, "{d}", .{ledger.metrics.failed_total}) catch return error.OutOfMemory;
+    buffer.appendSlice(alloc, ft_slice) catch return error.OutOfMemory;
+    buffer.appendSlice(alloc, ",\"drift_detected_total\":") catch return error.OutOfMemory;
+    const dt_slice = std.fmt.bufPrint(&num_buf, "{d}", .{ledger.metrics.drift_detected_total}) catch return error.OutOfMemory;
+    buffer.appendSlice(alloc, dt_slice) catch return error.OutOfMemory;
+    buffer.appendSlice(alloc, "}}") catch return error.OutOfMemory;
+}
+
+fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const Ledger) MigrationError!void {
+    ensureDir(cfg) catch return error.FileSystemError;
+    const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
+    defer alloc.free(path);
+
+    const tmp_path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, ".migration_ledger.tmp" }) catch return error.OutOfMemory;
+    defer alloc.free(tmp_path);
+
+    var tmp = std.fs.cwd().createFile(tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
+    defer tmp.close();
+
+    // Serialize to a buffer manually
+    var buffer = std.ArrayList(u8).initCapacity(alloc, 4096) catch return error.OutOfMemory;
+    defer buffer.deinit(alloc);
+    writeLedgerJson(&buffer, alloc, ledger) catch return error.OutOfMemory;
+
+    // Write to file
+    tmp.writeAll(buffer.items) catch return error.FileSystemError;
+    tmp.sync() catch return error.FileSystemError;
+    std.fs.cwd().rename(tmp_path, path) catch return error.FileSystemError;
+}
+
+fn versionExists(rows: []const StatusRow, v: i64) bool {
+    for (rows) |r| {
+        if (r.version == v and r.applied) return true;
+    }
+    return false;
+}
+
+fn latestApplied(rows: []const StatusRow) ?StatusRow {
+    var best: ?StatusRow = null;
+    for (rows) |r| {
+        if (!r.applied or r.version <= 1) continue;
+        if (best == null or r.version > best.?.version) best = r;
+    }
+    return best;
+}
+
+fn joinPath(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8) ![]u8 {
+    return std.fs.path.join(alloc, &.{ cfg.migrations_dir, name });
+}
+
+// ------------------ Lock management ------------------
+
+var global_lock: ?LockHandle = null;
+
+pub fn acquireLock(_: std.mem.Allocator, ttl_ms: u64) MigrationError!LockHandle {
+    const now = nowMs();
+    if (global_lock) |lh| {
+        if (lh.expires_at_ms > now) {
+            return error.AlreadyLocked;
+        } else {
+            global_lock = null;
+        }
+    }
+    const handle = LockHandle{ .id = 1, .owner = "local", .acquired_at_ms = now, .expires_at_ms = now + ttl_ms };
+    global_lock = handle;
+    return handle;
+}
+
+pub fn heartbeatLock(h: *LockHandle) MigrationError!void {
+    const now = nowMs();
+    if (global_lock) |*lh| {
+        if (lh.id != h.id) return error.NoLockHeld;
+        if (lh.expires_at_ms <= now) return error.LockExpired;
+        const ttl = lh.expires_at_ms - lh.acquired_at_ms;
+        lh.expires_at_ms = now + ttl;
+        h.* = lh.*;
+    } else return error.NoLockHeld;
+}
+
+pub fn releaseLock(h: *LockHandle) MigrationError!void {
+    if (global_lock) |lh| {
+        if (lh.id != h.id) return error.NoLockHeld;
+        global_lock = null;
+    } else return error.NoLockHeld;
+}
+
+// ------------------ Apply / Status ------------------
+
+pub fn applyUpMigrations(
+    alloc: std.mem.Allocator,
+    cfg: MigrationConfig,
+    names: []const []const u8,
+    executor: QueryExecutor,
+) MigrationError!void {
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+
+    // Collect and sort unique, not-yet-applied versions.
+    var staged = std.ArrayList(StagedMigration).initCapacity(alloc, names.len) catch return error.OutOfMemory;
+    defer staged.deinit(alloc);
+
+    names_loop: for (names) |nm| {
+        const ver = parseVersion(nm) orelse return error.InvalidMigrationName;
+        if (versionExists(ledger.rows.items, ver)) continue;
+        for (staged.items) |s| {
+            if (s.version == ver) continue :names_loop;
+        }
+        staged.append(alloc, .{ .version = ver, .name = nm }) catch return error.OutOfMemory;
+    }
+
+    if (staged.items.len == 0) return;
+
+    std.sort.heap(StagedMigration, staged.items, {}, struct {
+        fn lessThan(_: void, a: StagedMigration, b: StagedMigration) bool {
+            return a.version < b.version;
+        }
+    }.lessThan);
+
+    for (staged.items) |entry| {
+        const path = joinPath(alloc, cfg, entry.name) catch return error.OutOfMemory;
+        defer alloc.free(path);
+        const script = std.fs.cwd().readFileAlloc(alloc, path, 8 * 1024 * 1024) catch return error.MigrationFileMissing;
+        defer alloc.free(script);
+
+        executor.execFn(executor.context, script) catch {
+            ledger.metrics.failed_total += 1;
+            return error.ApplyFailed;
+        };
+
+        const prefix = checksumPrefix(script);
+        const new_name = alloc.alloc(u8, entry.name.len) catch return error.OutOfMemory;
+        std.mem.copyForwards(u8, new_name, entry.name);
+        ledger.rows.append(alloc, .{
+            .version = entry.version,
+            .name = new_name,
+            .applied = true,
+            .checksum_prefix = prefix,
+        }) catch return error.OutOfMemory;
+        ledger.metrics.applied_total += 1;
+    }
+
+    ledger.baseline_fingerprint = computeFingerprint(ledger.rows.items);
+    try saveLedger(alloc, cfg, &ledger);
+}
+
+pub fn applyDownMigrations(
+    alloc: std.mem.Allocator,
+    cfg: MigrationConfig,
+    _: []const []const u8,
+    executor: QueryExecutor,
+) MigrationError!void {
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+
+    const latest = latestApplied(ledger.rows.items) orelse return;
+    // Down scripts convention: <name>.down.gql
+    const down_name = std.fmt.allocPrint(alloc, "{s}.down.gql", .{latest.name}) catch return error.OutOfMemory;
+    defer alloc.free(down_name);
+    const path = joinPath(alloc, cfg, down_name) catch return error.OutOfMemory;
+    defer alloc.free(path);
+
+    const script = std.fs.cwd().readFileAlloc(alloc, path, 8 * 1024 * 1024) catch return error.DownScriptMissing;
+    defer alloc.free(script);
+
+    executor.execFn(executor.context, script) catch {
+        ledger.metrics.failed_total += 1;
+        return error.ApplyFailed;
+    };
+
+    // Mark latest as unapplied (keep history)
+    for (ledger.rows.items) |*row| {
+        if (row.version == latest.version and row.applied) {
+            row.applied = false;
+            break;
+        }
+    }
+
+    ledger.baseline_fingerprint = computeFingerprint(ledger.rows.items);
+    try saveLedger(alloc, cfg, &ledger);
+}
+
+pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError![]StatusRow {
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+
+    // Scan migrations directory for .gql files (excluding .down.gql)
+    var dir = std.fs.cwd().openDir(cfg.migrations_dir, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) {
+            // No migrations directory - return empty
+            const empty_slice = alloc.alloc(StatusRow, 0) catch return error.OutOfMemory;
+            return empty_slice;
+        }
+        return error.FileSystemError;
+    };
+    defer dir.close();
+
+    var migration_files = std.ArrayList([]const u8).initCapacity(alloc, 16) catch return error.OutOfMemory;
+    defer {
+        for (migration_files.items) |f| alloc.free(f);
+        migration_files.deinit(alloc);
+    }
+
+    var dir_iter = dir.iterate();
+    while (dir_iter.next() catch null) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".gql") and !std.mem.endsWith(u8, entry.name, ".down.gql")) {
+            const name_copy = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
+            migration_files.append(alloc, name_copy) catch {
+                alloc.free(name_copy);
+                return error.OutOfMemory;
+            };
+        }
+    }
+
+    // Create status rows - merge ledger with discovered files
+    var result = std.ArrayList(StatusRow).initCapacity(alloc, migration_files.items.len) catch return error.OutOfMemory;
+    errdefer {
+        for (result.items) |r| alloc.free(r.name);
+        result.deinit(alloc);
+    }
+
+    for (migration_files.items) |filename| {
+        // Extract version from filename (e.g., "001_foo.gql" -> 1)
+        var version: i64 = 0;
+        var j: usize = 0;
+        while (j < filename.len and filename[j] >= '0' and filename[j] <= '9') : (j += 1) {
+            version = version * 10 + @as(i64, filename[j] - '0');
+        }
+
+        // Check if this migration is in the ledger as applied
+        var applied = false;
+        var checksum: [7]u8 = "0000000".*;
+        for (ledger.rows.items) |row| {
+            if (std.mem.eql(u8, row.name, filename) and row.applied) {
+                applied = true;
+                checksum = row.checksum_prefix;
+                break;
+            }
+        }
+
+        const name_copy = alloc.dupe(u8, filename) catch return error.OutOfMemory;
+        result.append(alloc, .{
+            .version = version,
+            .name = name_copy,
+            .applied = applied,
+            .checksum_prefix = checksum,
+        }) catch {
+            alloc.free(name_copy);
+            return error.OutOfMemory;
+        };
+    }
+
+    // Convert to owned slice and return
+    const slice = result.toOwnedSlice(alloc) catch return error.OutOfMemory;
+    return slice;
+}
+
+pub fn freeStatusRows(alloc: std.mem.Allocator, rows: []StatusRow) void {
+    for (rows) |row| alloc.free(row.name);
+    alloc.free(rows);
+}
+
+// ------------------ Policy / Drift / Checksums ------------------
+
+pub const PolicyMode = enum { strict, lenient };
+var policy_mode: PolicyMode = .lenient;
+
+pub fn enforcePolicy(mode: []const u8) MigrationError!void {
+    if (std.mem.eql(u8, mode, "STRICT")) {
+        policy_mode = .strict;
+        return;
+    } else if (std.mem.eql(u8, mode, "LENIENT")) {
+        policy_mode = .lenient;
+        return;
+    }
+    return error.NotImplemented;
+}
+
+pub fn isStrictPolicy() bool {
+    return policy_mode == .strict;
+}
+
+pub fn checksumValidate(alloc: std.mem.Allocator, cfg: MigrationConfig, manifest: []const u8) MigrationError!bool {
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+
+    var it = std.mem.tokenizeAny(u8, manifest, "\n\r");
+    var matched: usize = 0;
+    while (it.next()) |line_raw| {
+        const line = std.mem.trim(u8, line_raw, " \t");
+        if (line.len == 0 or line[0] == '#') continue;
+        var parts = std.mem.tokenizeScalar(u8, line, ' ');
+        const ver_txt = parts.next() orelse continue;
+        const chk_txt = parts.next() orelse continue;
+
+        var ver: i64 = 0;
+        for (ver_txt) |c| {
+            if (c < '0' or c > '9') {
+                ver = -1;
+                break;
+            }
+            ver = ver * 10 + @as(i64, c - '0');
+        }
+        if (ver <= 0) continue;
+
+        for (ledger.rows.items) |row| {
+            if (row.version == ver) {
+                if (!row.applied) return false;
+                if (!std.mem.startsWith(u8, &row.checksum_prefix, chk_txt)) return false;
+                matched += 1;
+                break;
+            }
+        }
+    }
+
+    var applied_count: usize = 0;
+    for (ledger.rows.items) |row| {
+        if (row.applied) applied_count += 1;
+    }
+    return matched == applied_count;
+}
+
+pub fn driftCheck(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!bool {
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+    const current = computeFingerprint(ledger.rows.items);
+    const expected = baseline_override orelse ledger.baseline_fingerprint;
+    const ok = current == expected;
+    if (!ok) {
+        ledger.metrics.drift_detected_total += 1;
+        try saveLedger(alloc, cfg, &ledger);
+    }
+    return ok;
+}
+
+// ------------------ Planning ------------------
+
+pub fn planDryRun(alloc: std.mem.Allocator, cfg: MigrationConfig, names: []const []const u8) MigrationError!MigrationPlan {
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+
+    var pending_up = std.ArrayList([]const u8).initCapacity(alloc, names.len) catch return error.OutOfMemory;
+    errdefer pending_up.deinit(alloc);
+    var pending_down = std.ArrayList([]const u8).initCapacity(alloc, ledger.rows.items.len) catch return error.OutOfMemory;
+    errdefer pending_down.deinit(alloc);
+
+    for (names) |nm| {
+        const ver = parseVersion(nm) orelse continue;
+        if (!versionExists(ledger.rows.items, ver)) {
+            pending_up.append(alloc, nm) catch return error.OutOfMemory;
+        }
+    }
+
+    var idx: isize = @intCast(ledger.rows.items.len);
+    while (idx > 0) : (idx -= 1) {
+        const row = ledger.rows.items[@intCast(idx - 1)];
+        if (row.applied and row.version > 1) {
+            pending_down.append(alloc, row.name) catch return error.OutOfMemory;
+        }
+    }
+
+    if (pending_up.items.len > 1) {
+        std.sort.heap([]const u8, pending_up.items, {}, struct {
+            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                return (parseVersion(a) orelse 0) < (parseVersion(b) orelse 0);
+            }
+        }.lessThan);
+    }
+
+    return MigrationPlan{
+        .up = pending_up.toOwnedSlice(alloc) catch return error.OutOfMemory,
+        .down = pending_down.toOwnedSlice(alloc) catch return error.OutOfMemory,
+    };
+}
+
+// ------------------ Resume Token Data Migration ------------------
 
 var resume_slots: [8]ResumeState = undefined;
 var resume_slots_len: usize = 0;
@@ -316,15 +608,14 @@ fn getOrInitResume(token: []const u8) *ResumeState {
     while (i < resume_slots_len) : (i += 1) {
         if (std.mem.eql(u8, resume_slots[i].token, token)) return &resume_slots[i];
     }
-    if (resume_slots_len == resume_slots.len) return &resume_slots[resume_slots_len - 1]; // clamp for slice
+    if (resume_slots_len == resume_slots.len) return &resume_slots[resume_slots_len - 1];
     resume_slots[resume_slots_len] = .{ .token = token, .total_batches = 5, .completed_batches = 0, .done = false };
     resume_slots_len += 1;
     return &resume_slots[resume_slots_len - 1];
 }
 
-pub fn resumeDataMigration(_: *std.mem.Allocator, token: []const u8) MigrationError!ResumeState {
-    ensureLedgerInit();
-    var rs = getOrInitResume(token);
+pub fn resumeDataMigration(_: std.mem.Allocator, token: []const u8) MigrationError!ResumeState {
+    const rs = getOrInitResume(token);
     if (!rs.done) {
         if (rs.completed_batches < rs.total_batches) rs.completed_batches += 1;
         if (rs.completed_batches >= rs.total_batches) rs.done = true;
@@ -332,139 +623,22 @@ pub fn resumeDataMigration(_: *std.mem.Allocator, token: []const u8) MigrationEr
     return rs.*;
 }
 
-var ledger_initialized = false;
-var ledger_storage: [8]StatusRow = undefined; // minimal fixed-size ledger for first promotion slice
-var ledger_len: usize = 0;
+// ------------------ Metrics ------------------
 
-fn ensureLedgerInit() void {
-    if (!ledger_initialized) {
-        // Seed with a single fake applied migration (version 1) to exercise schema & reporting path.
-        ledger_storage[0] = StatusRow{ .version = 1, .name = "init_schema", .applied = true, .checksum_prefix = "deadbee" };
-        ledger_len = 1;
-        ledger_initialized = true;
-        baseline_fingerprint = computeFingerprint();
-    }
-}
-
-pub fn statusReport(alloc: *std.mem.Allocator) MigrationError![]StatusRow {
-    ensureLedgerInit();
-    const slice = try alloc.alloc(StatusRow, ledger_len);
-    // copy
-    for (slice, 0..) |*dest, i| dest.* = ledger_storage[i];
-    return slice;
-}
-
-pub fn metricsSnapshot() MigrationError!Metrics {
-    ensureLedgerInit();
-    return global_metrics;
-}
-
-pub fn planDryRun(alloc: *std.mem.Allocator, names: []const []const u8) MigrationError!MigrationPlan {
-    // GAP-0042: Implement actual dry-run planning without mutating ledger
-    // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PlanDryRunIntegrity; STATUS=IMPL; OWNER=migration; UPDATED=2026-01-10
-    ensureLedgerInit();
-
-    const Planner = struct {
-        fn parseVersion(name: []const u8) ?i64 {
-            var i: usize = 0;
-            var value: i64 = 0;
-            while (i < name.len and name[i] >= '0' and name[i] <= '9') : (i += 1) {
-                if (i > 17) return null;
-                value = value * 10 + @as(i64, name[i] - '0');
-            }
-            if (i == 0) return null;
-            return value;
-        }
-        fn isApplied(v: i64) bool {
-            for (ledger_storage[0..ledger_len]) |row| {
-                if (row.version == v and row.applied) return true;
-            }
-            return false;
-        }
-    };
-
-    // Collect migrations that would be applied (not yet in ledger)
-    var pending_up = std.ArrayList([]const u8).init(alloc.*);
-    errdefer pending_up.deinit();
-
-    // Collect migrations that could be rolled back (in ledger and applied, version > 1)
-    var pending_down = std.ArrayList([]const u8).init(alloc.*);
-    errdefer pending_down.deinit();
-
-    // Analyze input migrations for up plan
-    for (names) |nm| {
-        const ver_opt = Planner.parseVersion(nm) orelse continue;
-        if (!Planner.isApplied(ver_opt)) {
-            // Check not already in pending list
-            var exists = false;
-            for (pending_up.items) |existing| {
-                if (std.mem.eql(u8, existing, nm)) {
-                    exists = true;
-                    break;
-                }
-            }
-            if (!exists) {
-                try pending_up.append(nm);
-            }
-        }
-    }
-
-    // Analyze ledger for down plan (reversible migrations)
-    var idx: isize = @as(isize, @intCast(ledger_len)) - 1;
-    while (idx >= 0) : (idx -= 1) {
-        const row = ledger_storage[@intCast(idx)];
-        if (row.applied and row.version > 1) {
-            try pending_down.append(row.name);
-        }
-    }
-
-    // Sort up migrations by version ascending
-    const Ctx = struct {};
-    if (pending_up.items.len > 1) {
-        std.sort.heap([]const u8, pending_up.items, Ctx{}, struct {
-            fn lessThan(_: Ctx, a: []const u8, b: []const u8) bool {
-                const va = Planner.parseVersion(a) orelse return false;
-                const vb = Planner.parseVersion(b) orelse return true;
-                return va < vb;
-            }
-        }.lessThan);
-    }
-
-    return MigrationPlan{
-        .up = try pending_up.toOwnedSlice(),
-        .down = try pending_down.toOwnedSlice(),
-    };
+pub fn metricsSnapshot(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Metrics {
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+    return ledger.metrics;
 }
 
 pub fn testSimulateDrift() void {
-    if (!@import("builtin").is_test) return; // no-op outside tests
-    // Perturb baseline so computed fingerprint no longer matches.
-    baseline_fingerprint ^= 0x9e3779b97f4a7c15; // xor with golden ratio constant
+    if (!builtin.is_test) return;
+    baseline_override = (baseline_override orelse 0xcbf29ce484222325) ^ 0x9e3779b97f4a7c15;
 }
 
-// ------------------ Metrics (ObservabilityMetrics) ------------------
-var global_metrics: Metrics = .{};
-
-// Instrument selected functions (lightweight) by wrapping original logic. We retroactively
-// adjust existing functions where feasible via small helper calls.
-
-// Add minimal hooks by redefining certain functions with instrumentation where needed.
-// NOTE: For simplicity and to avoid refactors, we increment counters directly in existing
-// functions above (future refactor can consolidate). Below we provide small inline helpers
-// invoked manually in places not yet instrumented.
-
-inline fn incApplied(n: usize) void {
-    global_metrics.applied_total += @intCast(n);
-}
-inline fn incDriftDetected() void {
-    global_metrics.drift_detected_total += 1;
-}
-inline fn incLockStealAttempt() void {
-    global_metrics.lock_steal_attempts_total += 1;
-}
-
-// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=ObservabilityMetrics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_ObservabilityMetrics; OWNER=migration; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DownReversalSafety; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_DownReversalSafety; OWNER=migration; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PlanDryRunIntegrity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_PlanDryRunIntegrity; OWNER=migration; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=CliParityStatusCommand; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_CliParityStatusCommand; OWNER=migration; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DriftPolicyOutcomeStrict; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict; OWNER=migration; UPDATED=2025-09-26
+// ------------------ CANARY markers ------------------
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=ObservabilityMetrics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_ObservabilityMetrics; OWNER=migration; UPDATED=2026-01-11
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DownReversalSafety; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_DownReversalSafety; OWNER=migration; UPDATED=2026-01-11
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PlanDryRunIntegrity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_PlanDryRunIntegrity; OWNER=migration; UPDATED=2026-01-11
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=CliParityStatusCommand; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_CliParityStatusCommand; OWNER=migration; UPDATED=2026-01-11
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DriftPolicyOutcomeStrict; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict; OWNER=migration; UPDATED=2026-01-11

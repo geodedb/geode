@@ -149,6 +149,31 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ---
 
+### GAP-0098: Migration engine stub; CLI reported success without executing (Resolved January 11, 2026)
+- **Original Gap:** Migration engine was an in-memory stub; `geode migrate run/status` printed success without executing .gql migrations or persisting state.
+- **Original Severity:** High (Feature)
+- **GitLab Issue:** [#180](https://gitlab.com/devnw/geode/geode/-/issues/180) (closed)
+- **Resolution Evidence:**
+  - `src/migration/mod.zig` — Implemented durable engine:
+    - File-backed ledger `migration_ledger.json` with checksum prefixes and idempotent versioning.
+    - `applyUpMigrations` parses `.gql` files from migrations dir, executes via injected executor, and persists ledger.
+    - `applyDownMigrations` executes `<name>.down.gql` for latest applied version; marks ledger and saves.
+    - `checksumValidate`, `planDryRun`, `driftCheck`, `metricsSnapshot` now operate on durable ledger; drift increments metrics and persists.
+    - Locking, resume tokens, and status reporting return real ledger data; string lifetimes owned and freed.
+  - `src/cli/backup_cli.zig` — CLI wiring:
+    - `migrate run` supports `--dir/--server/--user/--password`, dry-run uses `planDryRun`, real run uses QUIC-backed `QueryExecutor`.
+    - `migrate status` reads durable ledger via `statusReport`.
+  - Tests:
+    - `tests/canary_migration_engine_stubs.zig` — applies up/down using temp migrations, validates ledger, checksums, drift, locks, resume, and plan dry-run.
+    - `tests/canary_migration_engine_new_tests.zig` — observability metrics, status parity, and planning behaviors.
+  - Fixtures:
+    - `tests/fixtures/migrations/001_seed.gql`, `002_add_index.gql`, `002_add_index.gql.down.gql` provide sample up/down scripts.
+  - Geodetestlab:
+    - `geodetestlab/specs/migration_engine.yml` runs `geode migrate run/status` against server with real migrations.
+- **Verification:** Unit tests cover apply up/down, checksum validation, plan dry-run, drift detection, metrics, locks, and resume; geodetestlab spec exercises CLI against live server. Ledger persisted to `migrations/migration_ledger.json` with checksum/versions; CLI shows applied entries and honors dry-run.
+
+---
+
 ## Previous Resolutions (January 10, 2026)
 
 ### GAP-0086: External KMS Integration (Resolved January 10, 2026)

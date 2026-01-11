@@ -1,0 +1,2 @@
+// Drop index for rollback
+DROP INDEX migration_seed_name_idx;

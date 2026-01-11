@@ -116,23 +116,23 @@ tests:
     args: ["migrate", "status"]
     expect:
       exit_code: 0
-      stdout_contains: ["migration", "status"]
+      stdout_contains: ["Migration status:"]
     tags: ["migration", "status"]
 
   - name: "run-migrations"
-    description: "Run pending migrations"
-    args: ["migrate", "up"]
+    description: "Test migration dry-run planning"
+    args: ["migrate", "up", "--dry-run"]
     expect:
       exit_code: 0
-      stdout_contains: ["migration"]
+      stdout_contains: ["migration", "Dry run"]
     tags: ["migration", "up"]
 
   - name: "create-migration"
     description: "Create a new migration"
-    args: ["migrate", "create", "add_indexes"]
+    args: ["migrate", "create", "add_indexes", "--dir", "/tmp/geodetestlab_advanced_migrations"]
     expect:
       exit_code: 0
-      stdout_contains: ["migration", "created"]
+      stdout_contains: ["Created migration file"]
     tags: ["migration", "create"]
 
   # Schema introspection

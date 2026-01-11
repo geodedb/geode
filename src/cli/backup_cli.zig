@@ -28,6 +28,23 @@ fn getStdinFile() std.fs.File {
     }
 }
 
+// Cross-platform stdout helper for Zig 0.15.2 compatibility
+fn getStdoutFile() std.fs.File {
+    if (builtin.os.tag == .windows) {
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
+        return std.fs.File{ .handle = handle };
+    } else {
+        return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    }
+}
+
+// Helper to print formatted output to stdout
+fn printStdout(comptime fmt: []const u8, args: anytype) void {
+    var buf: [4096]u8 = undefined;
+    const slice = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    getStdoutFile().writeAll(slice) catch {};
+}
+
 /// Backup command handler - routes to specific backup subcommands
 /// Handles: backup create, backup list, backup info, backup cleanup
 pub fn cmdBackup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -729,18 +746,148 @@ fn printMigrateUsage() void {
         "Use 'geode migrate <subcommand> --help' for detailed usage\n", .{});
 }
 
+const MigrationExecContext = struct {
+    allocator: std.mem.Allocator,
+    quic_client: *quic.QuicClient,
+    username: ?[]const u8,
+    password: ?[]const u8,
+};
+
+fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8) !quic.QuicClient {
+    var client = quic.QuicClient.init(allocator);
+    const colon = std.mem.lastIndexOf(u8, server_addr, ":") orelse return error.InvalidArgument;
+    const host = server_addr[0..colon];
+    const port = try std.fmt.parseInt(u16, server_addr[colon + 1 ..], 10);
+    try client.connectInsecure(host, port, true);
+    try client.waitForHandshake(10);
+    return client;
+}
+
+fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var escape_count: usize = 0;
+    for (input) |c| switch (c) {
+        '"', '\\', '\n', '\r', '\t' => escape_count += 1,
+        else => {},
+    };
+    if (escape_count == 0) return allocator.dupe(u8, input);
+    const result = try allocator.alloc(u8, input.len + escape_count);
+    var write_idx: usize = 0;
+    for (input) |c| {
+        switch (c) {
+            '"' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = '"';
+                write_idx += 2;
+            },
+            '\\' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = '\\';
+                write_idx += 2;
+            },
+            '\n' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = 'n';
+                write_idx += 2;
+            },
+            '\r' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = 'r';
+                write_idx += 2;
+            },
+            '\t' => {
+                result[write_idx] = '\\';
+                result[write_idx + 1] = 't';
+                write_idx += 2;
+            },
+            else => {
+                result[write_idx] = c;
+                write_idx += 1;
+            },
+        }
+    }
+    return result;
+}
+
+fn readLineWithPoll(quic_client: *quic.QuicClient, stream: *quic.QuicClientStream, max_size: usize, timeout_ms: u64) ![]u8 {
+    const start = std.time.milliTimestamp();
+    while (true) {
+        const line = stream.readLine(max_size) catch |err| {
+            if (err == error.WouldBlock or err == error.EndOfStream) {
+                if (std.time.milliTimestamp() - start >= timeout_ms) return err;
+                quic_client.poll(50) catch {};
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        return line;
+    }
+}
+
+fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
+    const ctx = @as(*MigrationExecContext, @ptrCast(@alignCast(ctx_ptr orelse return error.ApplyFailed)));
+    var stream = ctx.quic_client.getStream() catch |err| return err;
+    defer stream.deinit();
+
+    const hello_msg = if (ctx.username != null and ctx.password != null)
+        try std.fmt.allocPrint(ctx.allocator, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\",\"username\":\"{s}\",\"password\":\"{s}\"}}\n", .{ ctx.username.?, ctx.password.? })
+    else
+        try std.fmt.allocPrint(ctx.allocator, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\"}}\n", .{});
+    defer ctx.allocator.free(hello_msg);
+    try stream.writeAll(hello_msg);
+
+    const hello_resp = readLineWithPoll(ctx.quic_client, stream, 65536, 5000) catch |err| return err;
+    defer ctx.allocator.free(hello_resp);
+    if (std.mem.indexOf(u8, hello_resp, "\"type\":\"ERROR\"") != null) return error.ApplyFailed;
+
+    const escaped = try escapeJsonString(ctx.allocator, script);
+    defer ctx.allocator.free(escaped);
+    const query_msg = try std.fmt.allocPrint(ctx.allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped});
+    defer ctx.allocator.free(query_msg);
+    try stream.writeAll(query_msg);
+
+    const schema_response = readLineWithPoll(ctx.quic_client, stream, 65536, 5000) catch |err| return err;
+    defer ctx.allocator.free(schema_response);
+    if (std.mem.indexOf(u8, schema_response, "\"type\":\"ERROR\"") != null) return error.ApplyFailed;
+
+    const pull_msg = "{\"type\":\"PULL\",\"page_size\":1000}\n";
+    try stream.writeAll(pull_msg);
+
+    const result_line = readLineWithPoll(ctx.quic_client, stream, 65536, 5000) catch |err| return err;
+    defer ctx.allocator.free(result_line);
+    if (std.mem.indexOf(u8, result_line, "\"type\":\"ERROR\"") != null) return error.ApplyFailed;
+}
+
 // CANARY: REQ=REQ-CLI-MIGRATE-STATUS-001; FEATURE="CLIMigrateStatus"; ASPECT=MigrationModule; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
 fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = argv;
-    _ = start_idx;
+    var migrations_dir: []const u8 = "migrations";
+
+    var i: usize = start_idx;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
+            printStdout("geode migrate status - Show migration status\n" ++
+                "\n" ++
+                "Usage: geode migrate status [options]\n" ++
+                "\n" ++
+                "Options:\n" ++
+                "  --dir <path>           Migrations directory (default: ./migrations)\n" ++
+                "  -h, --help             Show this help\n" ++
+                "\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        } else if (std.mem.eql(u8, argv[i], "--dir") and i + 1 < argv.len) {
+            i += 1;
+            migrations_dir = argv[i];
+        }
+    }
+
+    const cfg = migration.MigrationConfig{ .migrations_dir = migrations_dir };
 
     // Get actual migration status from migration module
-    var alloc = allocator;
-    const status_rows = migration.statusReport(&alloc) catch |err| {
+    const status_rows = migration.statusReport(allocator, cfg) catch |err| {
         std.debug.print("Error: Failed to get migration status: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer allocator.free(status_rows);
+    defer migration.freeStatusRows(allocator, status_rows);
 
     // Count applied vs total
     var applied_count: usize = 0;
@@ -751,17 +898,17 @@ fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     const total = status_rows.len;
     const pending = total - applied_count;
 
-    std.debug.print("Migration status:\n", .{});
-    std.debug.print("  Applied: {}\n", .{applied_count});
-    std.debug.print("  Pending: {}\n", .{pending});
-    std.debug.print("  Total: {}\n", .{total});
+    printStdout("Migration status:\n", .{});
+    printStdout("  Applied: {}\n", .{applied_count});
+    printStdout("  Pending: {}\n", .{pending});
+    printStdout("  Total: {}\n", .{total});
 
     // List individual migrations if any exist
     if (total > 0) {
-        std.debug.print("\nMigrations:\n", .{});
+        printStdout("\nMigrations:\n", .{});
         for (status_rows) |row| {
             const status_str = if (row.applied) "[applied]" else "[pending]";
-            std.debug.print("  {d:>6} {s} {s}\n", .{ row.version, status_str, row.name });
+            printStdout("  {d:>6} {s} {s}\n", .{ row.version, status_str, row.name });
         }
     }
 
@@ -773,16 +920,22 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     // Parse arguments to find migration directory (default: ./migrations)
     var migrations_dir: []const u8 = "migrations";
     var dry_run = false;
+    var server: []const u8 = "127.0.0.1:3141";
+    var username: ?[]const u8 = null;
+    var password: ?[]const u8 = null;
 
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
-            std.debug.print("geode migrate run - Apply pending migrations\n" ++
+            printStdout("geode migrate run - Apply pending migrations\n" ++
                 "\n" ++
                 "Usage: geode migrate run [options]\n" ++
                 "\n" ++
                 "Options:\n" ++
                 "  --dir <path>           Migrations directory (default: ./migrations)\n" ++
+                "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
+                "  --user <username>      Username for authentication\n" ++
+                "  --password <password>  Password for authentication\n" ++
                 "  --dry-run              Show what would be applied without applying\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n", .{});
@@ -792,12 +945,33 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             migrations_dir = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--dry-run")) {
             dry_run = true;
+        } else if (std.mem.eql(u8, argv[i], "--server")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --server requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            server = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--user")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --user requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            username = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--password")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --password requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            password = argv[i];
         }
     }
 
-    std.debug.print("Running migrations from: {s}\n", .{migrations_dir});
+    printStdout("Running migrations from: {s}\n", .{migrations_dir});
 
-    // Scan migrations directory for .gql files
+    // Scan migrations directory for .gql files (excluding .down.gql rollback files)
     var dir = std.fs.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
         std.debug.print("Error: Cannot open migrations directory '{s}': {}\n", .{ migrations_dir, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -814,7 +988,8 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     var dir_iter = dir.iterate();
     while (dir_iter.next() catch null) |entry| {
         if (entry.kind == .file) {
-            if (std.mem.endsWith(u8, entry.name, ".gql")) {
+            // Match .gql files but exclude .down.gql rollback files
+            if (std.mem.endsWith(u8, entry.name, ".gql") and !std.mem.endsWith(u8, entry.name, ".down.gql")) {
                 const name_copy = allocator.dupe(u8, entry.name) catch continue;
                 migration_names.append(allocator, name_copy) catch {
                     allocator.free(name_copy);
@@ -825,28 +1000,49 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     }
 
     if (migration_names.items.len == 0) {
-        std.debug.print("No migration files found in '{s}'\n", .{migrations_dir});
+        printStdout("No migration files found in '{s}'\n", .{migrations_dir});
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
-    std.debug.print("Found {} migration files\n", .{migration_names.items.len});
+    printStdout("Found {} migration files\n", .{migration_names.items.len});
 
     if (dry_run) {
-        std.debug.print("\nDry run mode - showing what would be applied:\n", .{});
-        for (migration_names.items) |name| {
-            std.debug.print("  Would apply: {s}\n", .{name});
+        printStdout("\nDry run mode - showing what would be applied:\n", .{});
+        const cfg = migration.MigrationConfig{ .migrations_dir = migrations_dir };
+        const plan = migration.planDryRun(allocator, cfg, migration_names.items) catch |err| {
+            std.debug.print("Error: Failed to plan migrations: {}\n", .{err});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        defer {
+            allocator.free(plan.up);
+            allocator.free(plan.down);
         }
+        for (plan.up) |name| printStdout("  Would apply: {s}\n", .{name});
+        for (plan.down) |name| printStdout("  Could rollback: {s}\n", .{name});
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
-    // Apply migrations using the migration module
-    var alloc = allocator;
-    migration.applyUpMigrations(&alloc, migration_names.items) catch |err| {
+    const cfg = migration.MigrationConfig{ .migrations_dir = migrations_dir };
+    var quic_client = connectMigrationClient(allocator, server) catch |err| {
+        std.debug.print("Error: Failed to connect to server {s}: {}\n", .{ server, err });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer quic_client.deinit();
+
+    var exec_ctx = MigrationExecContext{
+        .allocator = allocator,
+        .quic_client = &quic_client,
+        .username = username,
+        .password = password,
+    };
+    const executor = migration.QueryExecutor{ .context = @ptrCast(&exec_ctx), .execFn = &execMigrationScript };
+
+    migration.applyUpMigrations(allocator, cfg, migration_names.items, executor) catch |err| {
         std.debug.print("Error: Failed to apply migrations: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
-    std.debug.print("Migrations applied successfully\n", .{});
+    printStdout("Migrations applied successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
@@ -859,7 +1055,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
-            std.debug.print("geode migrate create - Create a new migration file\n" ++
+            printStdout("geode migrate create - Create a new migration file\n" ++
                 "\n" ++
                 "Usage: geode migrate create <name> [options]\n" ++
                 "\n" ++
@@ -950,7 +1146,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
-    std.debug.print("Created migration: {s}\n", .{filename});
+    printStdout("Created migration file: {s}\n", .{filename});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
@@ -1098,22 +1294,6 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
     }
 
     std.debug.print("Backup completed: {s} ({} bytes)\n", .{ dest, bytes_received });
-}
-
-fn readLineWithPoll(client: *quic.QuicClient, stream: *quic.QuicClientStream, max_size: usize, timeout_ms: u64) ![]u8 {
-    const start = std.time.milliTimestamp();
-    while (true) {
-        const line = stream.readLine(max_size) catch |err| {
-            if (err == error.WouldBlock or err == error.EndOfStream) {
-                if (std.time.milliTimestamp() - start >= timeout_ms) return err;
-                client.poll(50) catch {};
-                std.Thread.sleep(50 * std.time.ns_per_ms);
-                continue;
-            }
-            return err;
-        };
-        return line;
-    }
 }
 
 fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {

@@ -1,0 +1,2 @@
+// Add index to ensure schema change is visible
+CREATE INDEX IF NOT EXISTS migration_seed_name_idx ON :MigrationSeed(name);
