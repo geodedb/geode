@@ -1091,12 +1091,12 @@ REQ-GQL-086,InteractiveRepl,ReplLaunchPrompt,TESTED,TestCANARY_REQ_GQL_086_ReplL
 REQ-GQL-086,InteractiveRepl,TxnPromptIndicator,TESTED,TestCANARY_REQ_GQL_086_TxnPromptIndicator,,client,2025-09-23,src/client/repl.zig
 REQ-GQL-086,Temporal Types,DateParsing,TESTED,TestCANARY_REQ_GQL_086_DateParsing,,types,2025-09-27,src/canary.zig
 REQ-GQL-086,TypeConversionFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval.zig
-REQ-GQL-087,MigrationEngine,CliParityStatusCommand,TESTED,TestCANARY_REQ_GQL_087_CliParityStatusCommand,,migration,2025-09-26,src/migration/mod.zig
-REQ-GQL-087,MigrationEngine,DownReversalSafety,TESTED,TestCANARY_REQ_GQL_087_DownReversalSafety,,migration,2025-09-26,src/migration/mod.zig
-REQ-GQL-087,MigrationEngine,DriftPolicyOutcomeStrict,TESTED,TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict,,migration,2025-09-26,src/migration/mod.zig
-REQ-GQL-087,MigrationEngine,ObservabilityMetrics,TESTED,TestCANARY_REQ_GQL_087_ObservabilityMetrics,,migration,2025-09-26,src/migration/mod.zig
-REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,IMPL,,,migration,2026-01-10,src/migration/mod.zig
-REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,TestCANARY_REQ_GQL_087_PlanDryRunIntegrity,,migration,2025-09-26,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,CliParityStatusCommand,TESTED,TestCANARY_REQ_GQL_087_CliParityStatusCommand,,migration,2026-01-11,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,Core,IMPL,,,migration,2026-01-11,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,DownReversalSafety,TESTED,TestCANARY_REQ_GQL_087_DownReversalSafety,,migration,2026-01-11,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,DriftPolicyOutcomeStrict,TESTED,TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict,,migration,2026-01-11,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,ObservabilityMetrics,TESTED,TestCANARY_REQ_GQL_087_ObservabilityMetrics,,migration,2026-01-11,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,TestCANARY_REQ_GQL_087_PlanDryRunIntegrity,,migration,2026-01-11,src/migration/mod.zig
 REQ-GQL-087,NamespacedFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval.zig
 REQ-GQL-087,Temporal Types,TimestampTZNormalization,TESTED,TestCANARY_REQ_GQL_087_TimestampTZNorm,,types,2025-09-27,src/canary.zig
 REQ-GQL-088,GraphSimilarityFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval.zig
