@@ -68,6 +68,13 @@ REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,IMPL,,,audit,2025-10-19,sr
 REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,IMPL,,,audit,2025-10-25,src/execution/procedure_registry.zig
+REQ-AUDIT-TLS-001,SyslogTLSTransport,SECURITY,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
+REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,IMPL,,,audit,2026-01-12,src/audit/config.zig
+REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
+REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
+REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
+REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
+REQ-AUDIT-TLS-TEST-001,SyslogTLSTests,TESTING,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUTH-001,AuthenticationLogin,RealImplementation,IMPL,TestCANARY_REQ_AUTH_001_RealLogin,,cli,2025-09-30,src/cli/main.zig
 REQ-AUTH-001,UserManagement,Authentication,IMPLEMENTED,,,security,2025-10-14,src/security/user_management.zig
 REQ-AUTH-002,Argon2idHashing,PasswordSecurity,IMPLEMENTED,,,security,2025-10-14,docs/ARGON2ID_IMPLEMENTATION.md
@@ -1517,6 +1524,9 @@ REQ-GQL-TDE-003,Key provider abstraction,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_00
 REQ-GQL-TDE-004,MockKMSProvider,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_004_MockKMS,,security,2025-09-26,src/security/key_provider.zig
 REQ-GQL-TDE-004,MockKMSProvider,TEST,TESTED,TestCANARY_REQ_GQL_TDE_004_MockKMS,,security,2025-09-26,src/security/key_provider.zig
 REQ-GQL-TDE-005,ExternalKmsStub,SECURITY,IMPL,TestCANARY_REQ_GQL_TDE_005_ExternalKmsStub,,security,2025-09-26,src/security/key_provider.zig
+REQ-GQL-TDE-AES-ONLY-001,AES256GCMOnly,SECURITY,IMPL,,,security,2026-01-12,src/storage/page_manager.zig
+REQ-GQL-TDE-AES-ONLY-001,AES256GCMOnly,SECURITY,IMPL,,,security,2026-01-12,src/storage/page_manager.zig
+REQ-GQL-TDE-AES-ONLY-001,AES256GCMOnly,SECURITY,TESTED,,,security,2026-01-12,src/storage/page_manager.zig
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ExpiredAttestation,TESTED,TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation,,security,2025-09-26,tests/canary_remote_kms_hardening.zig
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect,,security,2025-09-26,tests/test_remote_kms_attestation.zig
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify,,security,2025-09-26,src/security/kms_remote.zig

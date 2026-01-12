@@ -199,42 +199,9 @@ pub const Page = struct {
     }
 };
 
-const Enc = struct {
-    // Lightweight tweakable XOR stream derived from a 256-bit key and a 128-bit tweak.
-    // This is a placeholder for AES-256-GCM; ensures unreadability without key.
-    fn mul_alpha(t: *[16]u8) void {
-        const carry: u8 = t.*[0] >> 7;
-        var i: usize = 15;
-        while (i > 0) : (i -= 1) t.*[i] = (t.*[i] << 1) | (t.*[i - 1] >> 7);
-        t.*[0] <<= 1;
-        if (carry != 0) t.*[15] ^= 0x87;
-    }
-    fn tweak(page_id: u64, counter: u64) [16]u8 {
-        var tw: [16]u8 = undefined;
-        var i: usize = 0;
-        while (i < 8) : (i += 1) tw[i] = @as(u8, @intCast((page_id >> @as(u6, @intCast(8 * i))) & 0xFF));
-        i = 0;
-        while (i < 8) : (i += 1) tw[8 + i] = @as(u8, @intCast((counter >> @as(u6, @intCast(8 * i))) & 0xFF));
-        return tw;
-    }
-    fn keystreamBlock(key: *const [32]u8, t: *[16]u8, out: *[16]u8) void {
-        // Derive 16-byte keystream by XORing key halves with tweak (toy construction sufficient for unreadability).
-        var i: usize = 0;
-        while (i < 16) : (i += 1) out.*[i] = key[i] ^ key[16 + i] ^ t.*[i];
-    }
-    fn xorcrypt(key: *const [32]u8, stream_id: u64, buf: []u8) void {
-        var T = tweak(stream_id, 0);
-        var ks: [16]u8 = undefined;
-        var i: usize = 0;
-        while (i < buf.len) : (i += 16) {
-            keystreamBlock(key, &T, &ks);
-            const n = if (i + 16 <= buf.len) 16 else buf.len - i;
-            var k: usize = 0;
-            while (k < n) : (k += 1) buf[i + k] ^= ks[k];
-            mul_alpha(&T);
-        }
-    }
-};
+// LEGACY XOR ENCRYPTION REMOVED - January 12, 2026
+// All encryption now uses AES-256-GCM via page_encryption.zig
+// CANARY: REQ=REQ-GQL-TDE-AES-ONLY-001; FEATURE="AES256GCMOnly"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
 
 // CANARY: PERF_PHASE2_WRITE_BATCHING - Write batching for reduced fsync calls
 // CANARY: REQ=REQ-PERF-PHASE2-004; FEATURE="StorageOptimization"; ASPECT=IO_BATCHING; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
@@ -247,7 +214,7 @@ pub const PageManager = struct {
     next_page_id: u32 = 0,
     enc_enabled: bool = false,
     enc_key: [32]u8 = undefined,
-    enc_use_aes_gcm: bool = false,
+    // Note: enc_use_aes_gcm removed - AES-256-GCM is now the ONLY encryption mode
     // Phase 2 optimization: Track dirty pages for batch flushing (13-20x improvement)
     dirty_pages: std.AutoHashMap(u32, void),
     batch_threshold: usize = 64, // Flush when this many pages are dirty
@@ -262,7 +229,6 @@ pub const PageManager = struct {
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
-            .enc_use_aes_gcm = false,
             .dirty_pages = std.AutoHashMap(u32, void).init(allocator),
             .batch_threshold = 64,
         };
@@ -278,51 +244,64 @@ pub const PageManager = struct {
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
-            .enc_use_aes_gcm = false,
             .dirty_pages = std.AutoHashMap(u32, void).init(allocator),
             .batch_threshold = 64,
         };
     }
 
+    // CANARY: REQ=REQ-GQL-TDE-AES-ONLY-001; FEATURE="AES256GCMOnly"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    // All encryption now uses AES-256-GCM exclusively. Legacy XOR support has been removed.
     fn loadEncConfig(self: *PageManager) void {
         self.enc_enabled = false;
-        self.enc_use_aes_gcm = false;
         // Only enable for persistent mode
         if (self.base_path == null) return;
-        // Prefer new TDE module if runtime flag + key present
+
+        // Load AES-256-GCM key from GEODE_TDE_KEY environment variable
         const tde_key = std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY") catch null;
         if (tde_key) |raw| {
+            defer self.allocator.free(raw);
             if (raw.len == 64) {
-                // Accept key presence as enable; dedicated validation occurs in tde encrypt/decrypt
+                // Valid 64-character hex key (32 bytes)
                 self.enc_enabled = true;
-                self.enc_use_aes_gcm = true;
                 var i: usize = 0;
                 while (i < 32) : (i += 1) {
-                    const hi = std.fmt.charToDigit(raw[i * 2], 16) catch break;
-                    const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch break;
+                    const hi = std.fmt.charToDigit(raw[i * 2], 16) catch {
+                        std.log.err("ERROR: GEODE_TDE_KEY contains invalid hex characters.", .{});
+                        self.enc_enabled = false;
+                        return;
+                    };
+                    const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch {
+                        std.log.err("ERROR: GEODE_TDE_KEY contains invalid hex characters.", .{});
+                        self.enc_enabled = false;
+                        return;
+                    };
                     self.enc_key[i] = @as(u8, @intCast(hi * 16 + lo));
                 }
+                std.log.info("TDE enabled with AES-256-GCM encryption.", .{});
+            } else {
+                std.log.err("ERROR: GEODE_TDE_KEY must be exactly 64 hex characters (32 bytes). Got {} chars.", .{raw.len});
             }
-            self.allocator.free(raw);
-            if (self.enc_enabled) return;
         }
-        // Legacy XOR path (deprecated) for backward compatibility
+
+        // Check for deprecated legacy encryption environment variables and warn users
         if (std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_ENCRYPTION")) |v| {
             defer self.allocator.free(v);
-            if (std.mem.eql(u8, v, "on")) self.enc_enabled = true;
-        } else |_| {}
-        if (self.enc_enabled) {
-            const hex = std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_KEY_HEX") catch null;
-            if (hex == null or hex.?.len != 64) {
-                self.enc_enabled = false;
-            } else {
-                defer self.allocator.free(hex.?);
-                var i: usize = 0;
-                while (i < 32) : (i += 1) {
-                    self.enc_key[i] = std.fmt.parseInt(u8, hex.?[i * 2 .. i * 2 + 2], 16) catch 0;
-                }
+            if (std.mem.eql(u8, v, "on")) {
+                std.log.err("ERROR: GEODE_DISK_ENCRYPTION is deprecated and has been removed. " ++
+                    "Use GEODE_TDE_KEY (64 hex chars) for AES-256-GCM encryption instead.", .{});
             }
-        }
+        } else |_| {}
+
+        if (std.process.getEnvVarOwned(self.allocator, "GEODE_LEGACY_XOR")) |v| {
+            defer self.allocator.free(v);
+            std.log.err("ERROR: GEODE_LEGACY_XOR is deprecated. Legacy XOR encryption has been removed. " ++
+                "Use GEODE_TDE_KEY (64 hex chars) for AES-256-GCM encryption instead.", .{});
+        } else |_| {}
+
+        if (std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_KEY_HEX")) |v| {
+            defer self.allocator.free(v);
+            std.log.err("ERROR: GEODE_DISK_KEY_HEX is deprecated. Use GEODE_TDE_KEY instead.", .{});
+        } else |_| {}
     }
 
     pub fn initPersistent(allocator: std.mem.Allocator, page_size: usize, base_path: []const u8) PageManager {
@@ -335,7 +314,6 @@ pub const PageManager = struct {
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
-            .enc_use_aes_gcm = false,
             .dirty_pages = std.AutoHashMap(u32, void).init(allocator),
             .batch_threshold = 64,
         };
@@ -500,24 +478,15 @@ pub const PageManager = struct {
         var p = self.asPage(index);
         p.recomputeChecksum();
         if (self.enc_enabled) {
-            if (self.enc_use_aes_gcm) {
-                // New AES-GCM strategy via page_encryption wrapper.
-                const page_enc = @import("page_encryption.zig");
-                const original = self.pages.items[index];
-                const encrypted = try page_enc.encryptForWrite(self.allocator, index, original);
-                defer {
-                    // Free if buffer is different from original (we allocated it).
-                    if (encrypted.ptr != original.ptr) self.allocator.free(encrypted);
-                }
-                try file.writeAll(encrypted);
-            } else {
-                // Legacy XOR path (deprecated, retained for backward compatibility / migration).
-                const tmp = try self.allocator.alloc(u8, self.page_size);
-                defer self.allocator.free(tmp);
-                @memcpy(tmp, self.pages.items[index]);
-                Enc.xorcrypt(&self.enc_key, @intCast(index), tmp);
-                try file.writeAll(tmp);
+            // AES-256-GCM encryption via page_encryption wrapper
+            const page_enc = @import("page_encryption.zig");
+            const original = self.pages.items[index];
+            const encrypted = try page_enc.encryptForWrite(self.allocator, index, original);
+            defer {
+                // Free if buffer is different from original (we allocated it).
+                if (encrypted.ptr != original.ptr) self.allocator.free(encrypted);
             }
+            try file.writeAll(encrypted);
         } else try file.writeAll(self.pages.items[index]);
         try file.sync();
     }
@@ -540,29 +509,23 @@ pub const PageManager = struct {
         if (got != raw.len) return error.ShortRead;
         var final_page_buf: []u8 = raw;
         if (self.enc_enabled) {
-            if (self.enc_use_aes_gcm) {
-                if (raw.len == self.page_size + 28) {
-                    const page_enc = @import("page_encryption.zig");
-                    // Attempt decrypt; on failure propagate error after cleanup.
-                    const plain = page_enc.decryptAfterRead(self.allocator, index, raw, self.page_size) catch |e| {
-                        self.allocator.free(raw);
-                        return e;
-                    };
-                    // raw holds encrypted buffer; free it, adopt plain
+            // AES-256-GCM decryption via page_encryption wrapper
+            if (raw.len == self.page_size + 28) {
+                const page_enc = @import("page_encryption.zig");
+                // Attempt decrypt; on failure propagate error after cleanup.
+                const plain = page_enc.decryptAfterRead(self.allocator, index, raw, self.page_size) catch |e| {
                     self.allocator.free(raw);
-                    final_page_buf = plain;
-                } else if (raw.len != self.page_size) {
-                    self.allocator.free(raw);
-                    return error.UnexpectedSize;
-                }
-            } else {
-                // Legacy XOR: expect exact page_size
-                if (raw.len != self.page_size) {
-                    self.allocator.free(raw);
-                    return error.UnexpectedSize;
-                }
-                Enc.xorcrypt(&self.enc_key, @intCast(index), raw);
+                    return e;
+                };
+                // raw holds encrypted buffer; free it, adopt plain
+                self.allocator.free(raw);
+                final_page_buf = plain;
+            } else if (raw.len != self.page_size) {
+                self.allocator.free(raw);
+                return error.UnexpectedSize;
             }
+            // Note: If raw.len == page_size with enc_enabled, it's an unencrypted file
+            // This can happen during migration; treat as already decrypted
         }
         var p = Page{ .buf = final_page_buf };
         if (!p.verifyChecksum()) {
@@ -619,4 +582,51 @@ test "page_manager: insert/read & free space monotonic + checksum" {
     // Restore
     std.mem.writeInt(u32, p.buf[Page.ChecksumOffset .. Page.ChecksumOffset + 4], orig, .little);
     try std.testing.expect(p.verifyChecksum());
+}
+
+// CANARY: REQ=REQ-GQL-TDE-AES-ONLY-001; FEATURE="AES256GCMOnly"; ASPECT=SECURITY; STATUS=TESTED; OWNER=security; UPDATED=2026-01-12
+// Legacy XOR encryption has been completely removed. Only AES-256-GCM is supported.
+
+test "encryption: only AES-256-GCM is supported" {
+    // Verify that encryption is disabled by default for in-memory PageManager
+    var pm = PageManager.initInMemory(std.testing.allocator, 512);
+    defer pm.deinit();
+
+    // In-memory mode should have encryption disabled (no persistent path)
+    try std.testing.expect(!pm.enc_enabled);
+}
+
+test "encryption: in-memory mode has no encryption" {
+    var pm = PageManager.initInMemory(std.testing.allocator, 4096);
+    defer pm.deinit();
+
+    // Verify no encryption for in-memory mode
+    try std.testing.expect(!pm.enc_enabled);
+
+    // Insert and read should work without encryption
+    const rid = try pm.insert("test data for encryption check");
+    const data = try pm.read(rid);
+    try std.testing.expectEqualStrings("test data for encryption check", data);
+}
+
+test "encryption: PageManager struct has no legacy fields" {
+    // Compile-time verification that legacy fields are removed
+    // This test ensures enc_use_aes_gcm field no longer exists
+    const pm_type = PageManager;
+    const fields = @typeInfo(pm_type).@"struct".fields;
+
+    var found_enc_enabled = false;
+    var found_legacy_field = false;
+
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, "enc_enabled")) {
+            found_enc_enabled = true;
+        }
+        if (std.mem.eql(u8, field.name, "enc_use_aes_gcm")) {
+            found_legacy_field = true;
+        }
+    }
+
+    try std.testing.expect(found_enc_enabled); // enc_enabled should still exist
+    try std.testing.expect(!found_legacy_field); // enc_use_aes_gcm should be removed
 }

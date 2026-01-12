@@ -89,12 +89,33 @@ pub const SyslogRfc5424Config = struct {
     facility: SyslogFacility,
 };
 
+// CANARY: REQ=REQ-AUDIT-TLS-PIN-001; FEATURE="SyslogTLSCertPinning"; ASPECT=SECURITY; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-12
+pub const SyslogTlsConfig = struct {
+    // Optional SHA-256 hash of the expected server certificate's public key (64 hex chars)
+    // If set, the TLS handshake will verify the server's cert matches this pin
+    pinned_cert_hash: ?[]const u8 = null,
+
+    // Optional path to CA bundle file for certificate verification
+    // If null, uses system default CA store
+    ca_bundle_path: ?[]const u8 = null,
+
+    // Whether to verify the server hostname matches the certificate
+    verify_hostname: bool = true,
+
+    // Connection pool size (0 = no pooling, create new connection each time)
+    pool_size: u8 = 4,
+
+    // Connection idle timeout in milliseconds before being closed
+    idle_timeout_ms: u32 = 30000,
+};
+
 pub const SyslogSinkConfig = struct {
     enabled: bool,
     protocol: SyslogProtocol,
     host: []const u8,
     port: u16,
     rfc5424: SyslogRfc5424Config,
+    tls: SyslogTlsConfig = .{},
 };
 
 pub const SinksConfig = struct {
