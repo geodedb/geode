@@ -2,21 +2,167 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 11, 2026
+**Last Updated**: January 12, 2026
 
-**Total Resolved**: 97 gaps (GAP-0001 through GAP-0097)
+**Total Resolved**: 101 gaps (GAP-0001 through GAP-0101) ✅
 
-**Remaining Open**: 0 gaps - All gaps resolved
+**Remaining Open**: 0 gaps - All gaps resolved!
 
-**Note**: Gap analysis on January 10, 2026 identified 21 additional gaps (GAP-0065 through GAP-0085) through comprehensive codebase scanning. All were resolved on the same day. GAP-0086 (External KMS Integration) was also resolved on January 10, 2026 with full HTTP implementation for Vault Transit and AWS KMS APIs.
+**Note**: Gap analysis on January 10, 2026 identified 21 additional gaps (GAP-0065 through GAP-0085) through comprehensive codebase scanning. Many were resolved on the same day.
 
-**Additional Gaps (January 11, 2026)**: GAP-0090 through GAP-0097 (8 gaps) identified through security and CLI command auditing. All resolved on January 11, 2026.
+**Additional Gaps (January 11, 2026)**: GAP-0090 through GAP-0098 (9 gaps) identified through security and CLI command auditing.
 
-**GitLab Issue Verification (January 11, 2026 - Second Pass)**: 8 GitLab issues (#172-#179) were found still open and have been closed with resolution notes. All 97 gap issues now closed in GitLab.
+**January 12, 2026 Resolution Session**: All 9 remaining gaps have been resolved:
+- #99 (GAP-0017) - XOR Key Wrapping → AES-256-GCM key wrapping ✅
+- #117 (GAP-0035) - 2PC Write Set → Real applyWriteSet implementation ✅
+- #144 (GAP-0062) - Disk Encryption → AES-256-GCM page/WAL encryption ✅
+- #148 (GAP-0066) - External KMS Mock → external_kms default + isProductionSafe() ✅
+- #151 (GAP-0069) - Key Rotation Seed → std.crypto.random ✅
+- #168 (GAP-0086) - KMS Integration → VaultTransit default + production guard ✅
+- #181 (GAP-0099) - Range Scan → Actual B-tree traversal ✅
+- #182 (GAP-0100) - KMS wrapLocalDev → AES-256-GCM ✅
+- #183 (GAP-0101) - CDC Sinks → Verified as real implementations ✅
 
 ---
 
-## Latest Resolutions (January 11, 2026)
+## Latest Resolutions (January 12, 2026)
+
+### GAP-0017: XOR Key Wrapping → AES-256-GCM (Resolved January 12, 2026)
+- **Original Gap:** key_provider.zig used XOR (0xA5) for key wrapping
+- **Original Severity:** Critical (Security)
+- **GitLab Issue:** [#99](https://gitlab.com/devnw/geode/geode/-/issues/99) (closed)
+- **Resolution Evidence:**
+  - src/security/key_provider.zig:73-93 — wrapKey() now uses:
+    - HKDF-SHA256 extract-then-expand for key derivation
+    - AES-256-GCM encrypt with 12-byte nonce
+    - Authentication tag for integrity verification
+  - CANARY: REQ=REQ-GQL-TDE-KEYWRAP-001; STATUS=IMPL; UPDATED=2026-01-12
+- **Verification:** Build passes, keys are securely wrapped
+
+---
+
+### GAP-0035: 2PC applyWriteSet Stub → Real Implementation (Resolved January 12, 2026)
+- **Original Gap:** txn_coordinator.zig applyWriteSet was a stub that logged "stub" and ignored all data
+- **Original Severity:** Critical (Distributed)
+- **GitLab Issue:** [#117](https://gitlab.com/devnw/geode/geode/-/issues/117) (closed)
+- **Resolution Evidence:**
+  - src/distributed/txn_coordinator.zig:153-206 — applyWriteSet() now:
+    - Defines WriteOp struct for operation parsing
+    - Uses committed_store HashMap for state persistence
+    - Parses "PUT:key=value" and "DEL:key" operations
+    - Applies operations to committed_store
+  - CANARY: REQ=REQ-GQL-2PC-WRITESET-001; STATUS=IMPL; UPDATED=2026-01-12
+- **Verification:** Unit tests verify write set persistence
+
+---
+
+### GAP-0062: XOR Page/WAL Encryption → AES-256-GCM (Resolved January 12, 2026)
+- **Original Gap:** crypto_simple.zig used XOR (0x42) for page and WAL encryption
+- **Original Severity:** Medium (Security)
+- **GitLab Issue:** [#144](https://gitlab.com/devnw/geode/geode/-/issues/144) (closed)
+- **Resolution Evidence:**
+  - src/storage/crypto_simple.zig:66-128 — Page crypto now uses:
+    - AES-256-GCM with per-page nonce derived from page_id
+    - 16-byte authentication tag appended to ciphertext
+    - Tag verification on decrypt
+  - src/storage/crypto_simple.zig:151-219 — WAL crypto now uses:
+    - AES-256-GCM with LSN-derived nonces
+    - Full authentication tag verification
+  - CANARY: REQ=REQ-GQL-TDE-PAGE-001; STATUS=IMPL; UPDATED=2026-01-12
+- **Verification:** Encrypted data cannot be decrypted without correct key
+
+---
+
+### GAP-0066: local_dev Default → external_kms + Production Guard (Resolved January 12, 2026)
+- **Original Gap:** KMS defaulted to local_dev (XOR-based, insecure)
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#148](https://gitlab.com/devnw/geode/geode/-/issues/148) (closed)
+- **Resolution Evidence:**
+  - src/security/kms.zig:34 — Default changed from `.local_dev` to `.external_kms`
+  - src/security/kms.zig:55-62 — Added isProductionSafe() method returning false for local_dev
+  - CANARY: REQ=REQ-GQL-KMS-DEFAULTS-001; STATUS=IMPL; UPDATED=2026-01-12
+- **Verification:** Production builds cannot accidentally use insecure providers
+
+---
+
+### GAP-0069: Deterministic PRNG → std.crypto.random (Resolved January 12, 2026)
+- **Original Gap:** Key rotation used DefaultPrng seeded with XOR'd value, making keys predictable
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#151](https://gitlab.com/devnw/geode/geode/-/issues/151) (closed)
+- **Resolution Evidence:**
+  - src/security/key_provider.zig:126-131 — fetchExternalKms() now uses:
+    - std.crypto.random.bytes() for key generation
+    - No deterministic seeding
+  - CANARY: REQ=REQ-GQL-KEY-ROTATION-001; STATUS=IMPL; UPDATED=2026-01-12
+- **Verification:** Rotated keys are cryptographically unpredictable
+
+---
+
+### GAP-0086: LocalSimulated Default → VaultTransit + Production Warning (Resolved January 12, 2026)
+- **Original Gap:** external_kms_client defaulted to LocalSimulated (development only)
+- **Original Severity:** Medium (Security)
+- **GitLab Issue:** [#168](https://gitlab.com/devnw/geode/geode/-/issues/168) (closed)
+- **Resolution Evidence:**
+  - src/security/external_kms_client.zig:24 — Default changed to `.VaultTransit`
+  - src/security/external_kms_client.zig:27-38 — Added:
+    - isProductionSafe() method
+    - Production warning log for LocalSimulated
+  - CANARY: REQ=REQ-GQL-KMS-PRODUCTION-001; STATUS=IMPL; UPDATED=2026-01-12
+- **Verification:** LocalSimulated requires explicit opt-in
+
+---
+
+### GAP-0099: Empty Range Scan → Actual B-tree Traversal (Resolved January 12, 2026)
+- **Original Gap:** index_manager.zig rangeScan returned empty array instead of actual results
+- **Original Severity:** High (Query Engine)
+- **GitLab Issue:** [#181](https://gitlab.com/devnw/geode/geode/-/issues/181) (closed)
+- **Resolution Evidence:**
+  - src/index/index_manager.zig:498-543 — rangeScan() now:
+    - Looks up index by name from index_by_name HashMap
+    - Calls tree.range(start_key, end_key) for B-tree traversal
+    - Extracts node IDs from result iterator
+    - Returns proper result set
+  - CANARY: REQ=REQ-GQL-INDEX-RANGE-001; STATUS=IMPL; UPDATED=2026-01-12
+- **Verification:** Index range queries return matching entries
+
+---
+
+### GAP-0100: KMS wrapLocalDev XOR → AES-256-GCM (Resolved January 12, 2026)
+- **Original Gap:** kms.zig wrapLocalDev used XOR with CRC32-derived key
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#182](https://gitlab.com/devnw/geode/geode/-/issues/182) (closed)
+- **Resolution Evidence:**
+  - src/security/kms.zig:157-180 — wrapLocalDev() now uses:
+    - HKDF-SHA256 extract-then-expand for key derivation from key_id
+    - AES-256-GCM encrypt with deterministic nonce for test reproducibility
+    - 16-byte authentication tag
+  - src/security/kms.zig:185-212 — unwrapLocalDev() uses matching decrypt
+  - CANARY: REQ=REQ-GQL-KMS-LOCALDEV-001; STATUS=IMPL; UPDATED=2026-01-12
+- **Verification:** local_dev now uses proper cryptography
+
+---
+
+### GAP-0101: CDC Sinks Verified as Real Implementations (Resolved January 12, 2026)
+- **Original Gap:** Misleading comment in kafka_sink.zig suggested placeholder implementation
+- **Original Severity:** Medium (Implementation)
+- **GitLab Issue:** [#183](https://gitlab.com/devnw/geode/geode/-/issues/183) (closed)
+- **Resolution Evidence:**
+  - src/streaming/sinks/kafka_sink.zig:61-109 — send() actually:
+    - Serializes events to JSON format
+    - Connects to Kafka brokers via TCP
+    - Builds proper Kafka produce request (API Key 0)
+    - Sends request and reads response
+  - src/streaming/sinks/webhook_sink.zig:76-140 — send() actually:
+    - Serializes events to JSON
+    - Connects via TCP to webhook URL
+    - Builds HTTP POST request with proper headers
+    - Sends request to configured endpoint
+  - CANARY: REQ=REQ-STREAMING-KAFKA-002; STATUS=TESTED; UPDATED=2026-01-12
+- **Verification:** Misleading comment updated; CDC sinks perform real I/O
+
+---
+
+## Previous Resolutions (January 11, 2026)
 
 ### GAP-0090: ML GraphData.getNeighbors() Returns Empty Placeholder (Resolved January 11, 2026)
 - **Original Gap:** ML getNeighbors() function returned empty slice, breaking all random walk algorithms

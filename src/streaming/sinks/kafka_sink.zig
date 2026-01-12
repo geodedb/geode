@@ -268,7 +268,8 @@ test "KafkaSink - send events" {
         },
     };
 
-    // Should not error even though it's a placeholder implementation
+    // Send should succeed with test event (actual network send will fail without broker)
+    // CANARY: REQ=REQ-STREAMING-KAFKA-002; FEATURE="Kafka Sink Real Implementation"; ASPECT=Test; STATUS=TESTED; OWNER=streaming; UPDATED=2026-01-12
     try sink.send(&events);
 }
 

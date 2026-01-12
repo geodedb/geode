@@ -22,19 +22,38 @@ pub const Lock = struct {
     holder_xid: u64,
 };
 
-/// Distributed Transaction Coordinator
+/// Write operation type for 2PC write sets
+pub const WriteOp = struct {
+    op_type: enum { put, delete },
+    key: []const u8,
+    value: ?[]const u8, // null for delete operations
+};
+
+/// Distributed Transaction Coordinator with durable storage integration
+/// CANARY: REQ=REQ-GQL-2PC-APPLY-001; FEATURE="2PC Write Set Application"; ASPECT=2PC; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-12
 pub const TxnCoordinator = struct {
     allocator: Allocator,
     prepared_txns: std.AutoHashMap(u64, PreparedTxn),
     lock_table: std.StringHashMap(Lock),
     timeout_ms: u64 = 10_000, // Default 10 seconds
+    // Key-value store for committed data (in production, this integrates with storage engine)
+    committed_store: std.StringHashMap([]const u8),
+    // Callback for external storage integration (optional)
+    storage_callback: ?*const fn ([]const WriteOp) anyerror!void = null,
 
     pub fn init(allocator: Allocator) !TxnCoordinator {
         return TxnCoordinator{
             .allocator = allocator,
             .prepared_txns = std.AutoHashMap(u64, PreparedTxn).init(allocator),
             .lock_table = std.StringHashMap(Lock).init(allocator),
+            .committed_store = std.StringHashMap([]const u8).init(allocator),
+            .storage_callback = null,
         };
+    }
+
+    /// Set external storage callback for production integration
+    pub fn setStorageCallback(self: *TxnCoordinator, callback: *const fn ([]const WriteOp) anyerror!void) void {
+        self.storage_callback = callback;
     }
 
     pub fn deinit(self: *TxnCoordinator) void {
@@ -51,6 +70,19 @@ pub const TxnCoordinator = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.lock_table.deinit();
+
+        // Clean up committed store
+        var store_it = self.committed_store.iterator();
+        while (store_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.committed_store.deinit();
+    }
+
+    /// Get a committed value (for testing/verification)
+    pub fn getCommittedValue(self: *TxnCoordinator, key: []const u8) ?[]const u8 {
+        return self.committed_store.get(key);
     }
 
     /// Handle txn_prepare command from Raft
@@ -157,12 +189,79 @@ pub const TxnCoordinator = struct {
         return keys.toOwnedSlice(self.allocator);
     }
 
+    /// Parse and apply write set operations to storage
+    /// Write set format: "OP:key=value\n" where OP is PUT or DEL
+    /// Example: "PUT:user:1=Alice\nPUT:user:2=Bob\nDEL:user:3=\n"
+    /// For backward compatibility, plain "key" lines are treated as PUT:key=key
+    /// CANARY: REQ=REQ-GQL-2PC-APPLY-002; FEATURE="Write Set Parser and Applicator"; ASPECT=2PC; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-12
     fn applyWriteSet(self: *TxnCoordinator, write_set: []const u8) !void {
-        // Apply the operations in write_set to storage
-        // This would integrate with the storage layer
-        _ = self;
-        _ = write_set;
-        log.debug("Applying write set (stub)", .{});
+        // Parse write set into operations
+        var ops = std.ArrayList(WriteOp).init(self.allocator);
+        defer ops.deinit();
+
+        var lines = std.mem.tokenizeScalar(u8, write_set, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+
+            // Parse operation format: "OP:key=value" or legacy "key" format
+            if (std.mem.startsWith(u8, line, "PUT:")) {
+                const rest = line[4..];
+                if (std.mem.indexOf(u8, rest, "=")) |eq_pos| {
+                    try ops.append(self.allocator, WriteOp{
+                        .op_type = .put,
+                        .key = rest[0..eq_pos],
+                        .value = rest[eq_pos + 1 ..],
+                    });
+                }
+            } else if (std.mem.startsWith(u8, line, "DEL:")) {
+                const rest = line[4..];
+                const key = if (std.mem.indexOf(u8, rest, "=")) |eq_pos| rest[0..eq_pos] else rest;
+                try ops.append(self.allocator, WriteOp{
+                    .op_type = .delete,
+                    .key = key,
+                    .value = null,
+                });
+            } else {
+                // Legacy format: treat plain key as PUT:key=key (for backward compatibility)
+                try ops.append(self.allocator, WriteOp{
+                    .op_type = .put,
+                    .key = line,
+                    .value = line, // Use key as value for legacy format
+                });
+            }
+        }
+
+        // Call external storage callback if configured
+        if (self.storage_callback) |callback| {
+            try callback(ops.items);
+        }
+
+        // Apply to internal committed store
+        for (ops.items) |op| {
+            switch (op.op_type) {
+                .put => {
+                    // Remove old value if exists
+                    if (self.committed_store.fetchRemove(op.key)) |old| {
+                        self.allocator.free(old.key);
+                        self.allocator.free(old.value);
+                    }
+                    // Insert new value
+                    const key_copy = try self.allocator.dupe(u8, op.key);
+                    const val_copy = try self.allocator.dupe(u8, op.value orelse "");
+                    try self.committed_store.put(key_copy, val_copy);
+                    log.debug("2PC applied PUT: {s}={s}", .{ op.key, op.value orelse "" });
+                },
+                .delete => {
+                    if (self.committed_store.fetchRemove(op.key)) |old| {
+                        self.allocator.free(old.key);
+                        self.allocator.free(old.value);
+                        log.debug("2PC applied DEL: {s}", .{op.key});
+                    }
+                },
+            }
+        }
+
+        log.info("2PC applied {} operations from write set", .{ops.items.len});
     }
 };
 
@@ -229,4 +328,76 @@ test "TestCANARY_2PC_Idempotent repeated prepare" {
 
     const result2 = try coordinator.handlePrepare(prepare2);
     try std.testing.expect(!result2); // Should fail due to lock conflict
+}
+
+// CANARY: REQ=REQ-GQL-2PC-APPLY-003; FEATURE="2PC Write Set Persistence Test"; ASPECT=2PC; STATUS=TESTED; OWNER=distributed; UPDATED=2026-01-12
+test "TestCANARY_2PC_WriteSetApplied verifies data is persisted" {
+    const allocator = std.testing.allocator;
+
+    var coordinator = try TxnCoordinator.init(allocator);
+    defer coordinator.deinit();
+
+    // Prepare transaction with structured write set
+    const prepare = raft_consensus.TxnPrepare{
+        .xid = 100,
+        .shard_id = 0,
+        .write_set = "PUT:user:alice=Alice Smith\nPUT:user:bob=Bob Jones\nPUT:counter=42",
+        .metadata = "test_persistence",
+    };
+
+    const can_commit = try coordinator.handlePrepare(prepare);
+    try std.testing.expect(can_commit);
+
+    // Commit transaction
+    try coordinator.handleDecide(.{ .xid = 100, .commit = true });
+
+    // Verify data was actually persisted
+    const alice = coordinator.getCommittedValue("user:alice");
+    try std.testing.expect(alice != null);
+    try std.testing.expectEqualStrings("Alice Smith", alice.?);
+
+    const bob = coordinator.getCommittedValue("user:bob");
+    try std.testing.expect(bob != null);
+    try std.testing.expectEqualStrings("Bob Jones", bob.?);
+
+    const counter = coordinator.getCommittedValue("counter");
+    try std.testing.expect(counter != null);
+    try std.testing.expectEqualStrings("42", counter.?);
+
+    // Verify non-existent key returns null
+    const missing = coordinator.getCommittedValue("nonexistent");
+    try std.testing.expect(missing == null);
+}
+
+test "TestCANARY_2PC_WriteSetDelete verifies delete operations" {
+    const allocator = std.testing.allocator;
+
+    var coordinator = try TxnCoordinator.init(allocator);
+    defer coordinator.deinit();
+
+    // First transaction: insert data
+    const prepare1 = raft_consensus.TxnPrepare{
+        .xid = 200,
+        .shard_id = 0,
+        .write_set = "PUT:temp:data=temporary",
+        .metadata = "insert",
+    };
+    _ = try coordinator.handlePrepare(prepare1);
+    try coordinator.handleDecide(.{ .xid = 200, .commit = true });
+
+    // Verify data exists
+    try std.testing.expect(coordinator.getCommittedValue("temp:data") != null);
+
+    // Second transaction: delete data
+    const prepare2 = raft_consensus.TxnPrepare{
+        .xid = 201,
+        .shard_id = 0,
+        .write_set = "DEL:temp:data",
+        .metadata = "delete",
+    };
+    _ = try coordinator.handlePrepare(prepare2);
+    try coordinator.handleDecide(.{ .xid = 201, .commit = true });
+
+    // Verify data was deleted
+    try std.testing.expect(coordinator.getCommittedValue("temp:data") == null);
 }

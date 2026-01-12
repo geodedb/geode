@@ -12,16 +12,33 @@ const crypto = std.crypto;
 
 /// KMS Backend Type
 pub const KmsBackend = enum {
-    LocalSimulated, // Development/testing only
+    LocalSimulated, // Development/testing only - NOT FOR PRODUCTION
     VaultTransit, // HashiCorp Vault Transit
     AwsKms, // AWS Key Management Service
     AzureKeyVault, // Azure Key Vault (future)
     GcpKms, // Google Cloud KMS (future)
+
+    /// Check if this backend is safe for production use
+    /// CANARY: REQ=REQ-GQL-KMS-BACKEND-001; FEATURE="KMS Backend Safety Check"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    pub fn isProductionSafe(self: KmsBackend) bool {
+        return switch (self) {
+            .LocalSimulated => false, // Never safe for production
+            .VaultTransit => true, // Enterprise-grade
+            .AwsKms => true, // Enterprise-grade
+            .AzureKeyVault => true, // Enterprise-grade
+            .GcpKms => true, // Enterprise-grade
+        };
+    }
 };
 
+/// Detect production builds at compile time
+pub const is_production_build = @import("builtin").mode == .ReleaseFast or
+    @import("builtin").mode == .ReleaseSafe;
+
 /// KMS Configuration for enterprise backends
+/// CANARY: REQ=REQ-GQL-KMS-CONFIG-001; FEATURE="KMS Configuration"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
 pub const KmsConfig = struct {
-    backend: KmsBackend = .LocalSimulated,
+    backend: KmsBackend = .VaultTransit, // Default to Vault (requires configuration)
     // Vault Transit configuration
     vault_addr: ?[]const u8 = null, // e.g., "http://127.0.0.1:8200"
     vault_token: ?[]const u8 = null, // Vault authentication token
@@ -710,16 +727,40 @@ pub const Envelope = struct {
     ct: [32]u8, // wrapped 32-byte data key (or hash reference for external KMS)
 };
 
+/// LocalSimulated KMS Client - FOR DEVELOPMENT/TESTING ONLY
+/// Uses local AES-256-GCM with deterministic key derived from seed
+/// WARNING: This is NOT a real KMS integration. Production must use VaultTransit or AwsKms.
+/// CANARY: REQ=REQ-GQL-KMS-LOCALSIM-001; FEATURE="LocalSimulated KMS Client"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
 pub const Client = struct {
     allocator: std.mem.Allocator,
     kek: [32]u8, // simulated Key Encryption Key (would be remote / HSM-controlled)
     prng: std.Random.DefaultPrng,
 
+    /// Initialize LocalSimulated client with production safety warning
+    /// In production builds, this will log a security warning
     pub fn init(allocator: std.mem.Allocator, seed: u64) Client {
+        // Production safety warning
+        if (is_production_build) {
+            std.log.warn("SECURITY WARNING: Using LocalSimulated KMS client in production build. " ++
+                "This is NOT secure. Configure VaultTransit or AwsKms for production.", .{});
+        }
+
         var prng = std.Random.DefaultPrng.init(seed);
         var kek: [32]u8 = undefined;
         prng.random().bytes(&kek);
         return .{ .allocator = allocator, .kek = kek, .prng = prng };
+    }
+
+    /// Create a client with cryptographically secure key (for testing without deterministic seed)
+    pub fn initSecure(allocator: std.mem.Allocator) Client {
+        if (is_production_build) {
+            std.log.warn("SECURITY WARNING: Using LocalSimulated KMS client in production build. " ++
+                "This is NOT secure. Configure VaultTransit or AwsKms for production.", .{});
+        }
+
+        var kek: [32]u8 = undefined;
+        std.crypto.random.bytes(&kek);
+        return .{ .allocator = allocator, .kek = kek, .prng = std.Random.DefaultPrng.init(0) };
     }
 
     pub fn wrap(self: *Client, data_key: [32]u8) !Envelope {

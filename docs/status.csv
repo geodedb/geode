@@ -1145,6 +1145,9 @@ REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,IMPL,TestCANARY_2PC_Coor
 REQ-GQL-2PC-003,2PC Idempotence,2PC,IMPL,TestCANARY_2PC_Idempotent,,distributed,2025-09-29,src/distributed/txn_coordinator.zig
 REQ-GQL-2PC-004,2PC Raft Integration,2PC,IMPL,TestCANARY_2PC_RaftIntegration,,distributed,2025-09-29,src/distributed/raft_consensus.zig
 REQ-GQL-2PC-005,Distributed Query Processing,Distributed,IMPL,TestCANARY_DistributedQuery,,distributed,2025-09-29,src/distributed/cluster.zig
+REQ-GQL-2PC-APPLY-001,2PC Write Set Application,2PC,IMPL,,,distributed,2026-01-12,src/distributed/txn_coordinator.zig
+REQ-GQL-2PC-APPLY-002,Write Set Parser and Applicator,2PC,IMPL,,,distributed,2026-01-12,src/distributed/txn_coordinator.zig
+REQ-GQL-2PC-APPLY-003,2PC Write Set Persistence Test,2PC,TESTED,,,distributed,2026-01-12,src/distributed/txn_coordinator.zig
 REQ-GQL-2PC-TEST,2PC Test Suite,Testing,TESTED,TestCANARY_2PC_Suite,,test,2025-09-29,tests/test_2pc_distributed.zig
 REQ-GQL-ADVANCED-INDEX-INTEGRATION,Advanced Types Index Integration,Index,IMPL,TestCANARY_REQ_GQL_ADVANCED_INDEX_INTEGRATION_All,,index,2025-01-03,src/index/advanced_types_index.zig
 REQ-GQL-ADVANCED-TYPES-INTEGRATION,Advanced Types Integration Tests,Testing,IMPL,TestCANARY_REQ_GQL_ADVANCED_TYPES_INTEGRATION_All,,testing,2025-01-03,geodetestlab/specs/legacy/advanced_types_integration.yml
@@ -1300,6 +1303,7 @@ REQ-GQL-IN-LISTEXPR-002,NotInListExpr,FunctionCall,IMPL,,,parser,2025-12-27,src/
 REQ-GQL-INDEGREE-001,IndegreeFunction,NodeDegree,IMPL,,,eval,2026-01-03,src/eval.zig
 "REQ-GQL-INDEX-PERFORMANCE"" {
     // CANARY: REQ=REQ-GQL-INDEX-PERFORMANCE",IndexPerformance,Performance,TESTED,TestCANARY_REQ_GQL_INDEX_PERFORMANCE,,team,2025-10-02,tests/integration/test_index_performance.zig
+REQ-GQL-INDEX-RANGE-001,B-Tree Range Scan,QUERY,IMPL,,,storage,2026-01-12,src/index/index_manager.zig
 REQ-GQL-INTEGRATION-001,October2025Features,Integration,TESTED,,,engine,2025-10-09,tests/test_october_2025_features_integration.zig
 "REQ-GQL-IOT-NETWORK"" {
     // CANARY: REQ=REQ-GQL-IOT-NETWORK",IoTNetwork,Domain,TESTED,TestCANARY_REQ_GQL_IOT_NETWORK,,team,2025-10-02,tests/integration/test_iot_network_dataset.zig
@@ -1310,6 +1314,13 @@ REQ-GQL-KEYS-002,KeysFunction,NodeEdgeMapKeys,IMPL,,,eval,2025-12-28,src/eval.zi
 REQ-GQL-KEYS-003,KeysFunction,NodeEdgeMapKeys,IMPL,,,eval,2025-12-28,src/eval.zig
 REQ-GQL-KEYWORD-001,GQL Keyword Handling,Parser,TESTED,TestCANARY_REQ_GQL_KEYWORD_001_Parser,,parser,2025-01-03,tests/gql_keyword_regression_test.zig
 REQ-GQL-KEYWORDS-001,GQL Reserved Words,ISO39075Compliance,IMPL,,,parser,2026-01-03,src/gql/token.zig
+REQ-GQL-KMS-BACKEND-001,KMS Backend Safety Check,SECURITY,IMPL,,,security,2026-01-12,src/security/external_kms_client.zig
+REQ-GQL-KMS-CONFIG-001,KMS Configuration,SECURITY,IMPL,,,security,2026-01-12,src/security/external_kms_client.zig
+REQ-GQL-KMS-LOCALDEV-001,AES-GCM Local KMS,SECURITY,IMPL,,,security,2026-01-12,src/security/kms.zig
+REQ-GQL-KMS-LOCALDEV-002,AES-GCM Local KMS Unwrap,SECURITY,IMPL,,,security,2026-01-12,src/security/kms.zig
+REQ-GQL-KMS-LOCALSIM-001,LocalSimulated KMS Client,SECURITY,IMPL,,,security,2026-01-12,src/security/external_kms_client.zig
+REQ-GQL-KMS-PRODSAFE-001,Production KMS Safety Check,SECURITY,IMPL,,,security,2026-01-12,src/security/kms.zig
+REQ-GQL-KMS-PRODSAFE-002,KMS Provider Init Safety,SECURITY,IMPL,,,security,2026-01-12,src/security/kms.zig
 REQ-GQL-KSHELL-001,KShellDecomposition,Community,IMPL,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
 "REQ-GQL-LARGE-DATASET"" {
     // CANARY: REQ=REQ-GQL-LARGE-DATASET",LargeDataset,Scalability,TESTED,TestCANARY_REQ_GQL_LARGE_DATASET,,team,2025-10-02,tests/integration/test_large_social_network.zig
@@ -1528,6 +1539,9 @@ REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,TestCANARY_REQ
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26,tests/test_external_kms_remote.zig
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26,tests/canary_remote_kms.zig
+REQ-GQL-TDE-EXTKS-001,External KMS with Crypto Random,SECURITY,IMPL,,,security,2026-01-12,src/security/key_provider.zig
+REQ-GQL-TDE-KEYWRAP-001,AES-GCM Key Wrapping,SECURITY,IMPL,,,security,2026-01-12,src/security/key_provider.zig
+REQ-GQL-TDE-KEYWRAP-002,AES-GCM Key Unwrapping,SECURITY,IMPL,,,security,2026-01-12,src/security/key_provider.zig
 REQ-GQL-TDE-KMS-001,TDEKMSIntegration,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_KMS_001_ComprehensiveTDEKMS,,security,2025-10-05,tests/test_tde_kms_integration.zig
 REQ-GQL-TDE-KMS-001,TDEKMSIntegration,SECURITY,IMPL,tests/test_tde_kms_integration.zig,,security,2025-10-05,src/security/tde_kms_integration.zig
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,TESTED,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold,,perf,2025-09-26,tests/test_tde_oltp_overhead_threshold.zig
@@ -1538,9 +1552,14 @@ REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,STUB,BenchmarkCANARY_REQ_GQL_TDE
 REQ-GQL-TDE-OVERHEAD-002,TDE real-path overhead benchmark,PERF,BENCHED,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_002_RealPath,,security,2025-09-26,benchmarks/benchmark_tde_overhead_realpath.zig
 REQ-GQL-TDE-OVERHEAD-003,TDE real AEAD overhead benchmark,PERF,BENCHED,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_003_AEAD,,security,2025-09-26,benchmarks/benchmark_tde_overhead_aead.zig
 REQ-GQL-TDE-OVERHEAD-THRESH-001,TDE AEAD overhead threshold,PERF,TESTED,TestCANARY_REQ_GQL_TDE_OVERHEAD_THRESH_001,,security,2025-09-26,tests/test_tde_aead_overhead_threshold.zig
+REQ-GQL-TDE-PAGE-001,AES-GCM Page Encryption,SECURITY,IMPL,,,security,2026-01-12,src/storage/crypto_simple.zig
 REQ-GQL-TDE-PAGE-001,PageEncryption,SECURITY,TESTED,TestPageEncryptionRoundTrip,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-TDE-PAGE-002,AES-GCM Page Decryption,SECURITY,IMPL,,,security,2026-01-12,src/storage/crypto_simple.zig
 REQ-GQL-TDE-PERF-001,TDEOverheadBenchmark,PERFORMANCE,TESTED,Test_tde_aead_overhead_threshold,,perf,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-TDE-RANDOM-001,Cryptographic Key Generation,SECURITY,IMPL,,,security,2026-01-12,src/security/key_provider.zig
+REQ-GQL-TDE-WAL-001,AES-GCM WAL Encryption,SECURITY,IMPL,,,security,2026-01-12,src/storage/crypto_simple.zig
 REQ-GQL-TDE-WAL-001,WalEncryption,SECURITY,TESTED,TestWalEncryptedSegment,,security,2025-09-26,docs/SECURITY_PROGRESS.md
+REQ-GQL-TDE-WAL-002,AES-GCM WAL Decryption,SECURITY,IMPL,,,security,2026-01-12,src/storage/crypto_simple.zig
 REQ-GQL-TOBOOLEAN-001,TypeConversionFunctions,ToBooleanConversion,IMPL,,,eval,2025-12-24,src/eval.zig
 REQ-GQL-TRIANGLE-COUNT-001,TriangleCounting,Statistics,IMPL,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
 REQ-GQL-TYPE-CONV-001,TypeConversionFunctions,Functionality,IMPL,TestCANARY_REQ_GQL_TYPE_CONV_001_TypeConversionFunctions,,eval,2025-01-05,docs/TYPE_CONVERSION_FUNCTIONS.md
@@ -2047,6 +2066,7 @@ REQ-SPATIAL-WKB-ENDIAN-001,WKBByteOrderParsing,UnitTest,IMPL,,,spatial,2026-01-1
 REQ-SPATIAL-X-001,SpatialX,CoordinateExtraction,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-Y-001,SpatialY,CoordinateExtraction,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-STREAMING-KAFKA-001,Kafka Sink Implementation,ProducerSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/kafka_sink.zig
+REQ-STREAMING-KAFKA-002,Kafka Sink Real Implementation,Test,TESTED,,,streaming,2026-01-12,src/streaming/sinks/kafka_sink.zig
 REQ-STREAMING-KEYROT-REENCRYPT-001,Page Re-encryption,ReEncryption,IMPL,,,security,2025-12-30,src/security/key_rotation.zig
 REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,IMPL,,,streaming,2025-12-30,src/streaming/sinks/webhook_sink.zig
 REQ-STRING-MINMAX-001,StringMinMax,MinAggregation,IMPL,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig

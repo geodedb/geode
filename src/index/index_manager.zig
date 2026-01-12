@@ -493,13 +493,15 @@ pub const IndexManager = struct {
         return null;
     }
 
-    // Range scan on property index
+    /// Range scan on property index using B-tree range query
+    /// Returns all node IDs where the indexed value is between start_key and end_key
+    /// CANARY: REQ=REQ-GQL-INDEX-RANGE-001; FEATURE="B-Tree Range Scan"; ASPECT=QUERY; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-12
     pub fn rangeScan(
         self: *IndexManager,
         index_name: []const u8,
-        _: []const u8, // start_key
-        _: []const u8, // end_key
-        _: bool, // inclusive
+        start_key: []const u8,
+        end_key: []const u8,
+        inclusive: bool,
     ) ![]u64 {
         if (self.property_indexes.getPtr(index_name)) |index| {
             index.statistics.read_count += 1;
@@ -507,9 +509,34 @@ pub const IndexManager = struct {
             if (index.btree_index) |tree_ptr| {
                 const BTreeType = btree.BTree([]const u8, u64, 32);
                 const tree: *BTreeType = @ptrCast(@alignCast(tree_ptr));
-                // For now, return empty array as range scan needs more complex implementation
-                _ = tree;
-                return try self.allocator.alloc(u64, 0);
+
+                // Perform actual B-tree range scan
+                const results = try tree.range(start_key, end_key);
+                defer self.allocator.free(results);
+
+                // Extract node IDs from results
+                var node_ids = std.ArrayList(u64).init(self.allocator);
+
+                for (results) |r| {
+                    const key_cmp_start = std.mem.order(u8, r.key, start_key);
+                    const key_cmp_end = std.mem.order(u8, r.key, end_key);
+
+                    // Check inclusivity
+                    const in_range = if (inclusive)
+                        (key_cmp_start != .lt and key_cmp_end != .gt)
+                    else
+                        (key_cmp_start == .gt and key_cmp_end == .lt);
+
+                    if (in_range or inclusive) {
+                        try node_ids.append(self.allocator, r.value);
+                    }
+                }
+
+                // Update statistics
+                index.statistics.cache_hits += node_ids.items.len;
+                self.statistics.index_hits += node_ids.items.len;
+
+                return try node_ids.toOwnedSlice(self.allocator);
             }
         }
 

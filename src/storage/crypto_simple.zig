@@ -63,34 +63,68 @@ pub const PageCrypto = struct {
         self.data_keys.deinit();
     }
 
+    /// Encrypt a page using AES-256-GCM
+    /// Derives per-page nonce from page_id for deterministic encryption
+    /// CANARY: REQ=REQ-GQL-TDE-PAGE-001; FEATURE="AES-GCM Page Encryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
     pub fn encryptPage(self: *Self, page_id: u32, plaintext: []const u8, ciphertext: []u8, additional_data: []const u8) !void {
-        _ = self;
-        _ = page_id;
-        _ = additional_data;
-
-        if (plaintext.len > ciphertext.len) {
+        // Need room for ciphertext + 16-byte auth tag
+        if (plaintext.len + 16 > ciphertext.len) {
             return error.BufferTooSmall;
         }
 
-        // Simple XOR encryption for demonstration
-        for (plaintext, 0..) |byte, i| {
-            ciphertext[i] = byte ^ 0x42;
-        }
+        // Derive per-page nonce from page_id (deterministic for re-encryption consistency)
+        var nonce: [12]u8 = undefined;
+        @memset(&nonce, 0);
+        std.mem.writeInt(u32, nonce[0..4], page_id, .little);
+
+        // Use master key for encryption
+        var tag: [16]u8 = undefined;
+        std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(
+            ciphertext[0..plaintext.len],
+            &tag,
+            plaintext,
+            additional_data,
+            nonce,
+            self.master_key.data,
+        );
+
+        // Append tag to ciphertext
+        @memcpy(ciphertext[plaintext.len..][0..16], &tag);
     }
 
+    /// Decrypt a page using AES-256-GCM
+    /// CANARY: REQ=REQ-GQL-TDE-PAGE-002; FEATURE="AES-GCM Page Decryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
     pub fn decryptPage(self: *Self, page_id: u32, ciphertext: []const u8, plaintext: []u8, additional_data: []const u8) !void {
-        _ = self;
-        _ = page_id;
-        _ = additional_data;
+        // Minimum 16 bytes for auth tag
+        if (ciphertext.len < 16) {
+            return error.InvalidCiphertext;
+        }
 
-        if (ciphertext.len > plaintext.len) {
+        const plaintext_len = ciphertext.len - 16;
+        if (plaintext_len > plaintext.len) {
             return error.BufferTooSmall;
         }
 
-        // Simple XOR decryption
-        for (ciphertext, 0..) |byte, i| {
-            plaintext[i] = byte ^ 0x42;
-        }
+        // Reconstruct nonce from page_id
+        var nonce: [12]u8 = undefined;
+        @memset(&nonce, 0);
+        std.mem.writeInt(u32, nonce[0..4], page_id, .little);
+
+        // Extract tag from end of ciphertext
+        const ct = ciphertext[0..plaintext_len];
+        const tag: *const [16]u8 = @ptrCast(ciphertext[plaintext_len..][0..16]);
+
+        // Decrypt with authentication
+        std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(
+            plaintext[0..plaintext_len],
+            ct,
+            tag.*,
+            additional_data,
+            nonce,
+            self.master_key.data,
+        ) catch {
+            return error.DecryptionFailed;
+        };
     }
 
     pub fn rotateKeys(self: *Self, new_master_key: EncryptionKey) !void {
@@ -114,31 +148,103 @@ pub const WALCrypto = struct {
         };
     }
 
+    /// Encrypt a WAL record using AES-256-GCM
+    /// Uses LSN to derive unique nonce for each record
+    /// CANARY: REQ=REQ-GQL-TDE-WAL-001; FEATURE="AES-GCM WAL Encryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
     pub fn encryptRecord(self: *Self, record: []const u8, encrypted: []u8, lsn: u64) !void {
-        _ = self;
-        _ = lsn;
-
-        if (record.len > encrypted.len) {
+        // Need room for ciphertext + 16-byte auth tag
+        if (record.len + 16 > encrypted.len) {
             return error.BufferTooSmall;
         }
 
-        // Simple XOR
-        for (record, 0..) |byte, i| {
-            encrypted[i] = byte ^ 0x42;
-        }
+        // Derive nonce from LSN (unique per record)
+        var nonce: [12]u8 = undefined;
+        @memset(&nonce, 0);
+        std.mem.writeInt(u64, nonce[0..8], lsn, .little);
+
+        // Encrypt with authentication
+        var tag: [16]u8 = undefined;
+        std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(
+            encrypted[0..record.len],
+            &tag,
+            record,
+            "", // No additional data for WAL records
+            nonce,
+            self.key.data,
+        );
+
+        // Append tag
+        @memcpy(encrypted[record.len..][0..16], &tag);
+
+        self.sequence = lsn + 1;
     }
 
+    /// Decrypt a WAL record using AES-256-GCM
+    /// Note: LSN must be provided externally for decryption
+    /// CANARY: REQ=REQ-GQL-TDE-WAL-002; FEATURE="AES-GCM WAL Decryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
     pub fn decryptRecord(self: *Self, encrypted: []const u8, record: []u8) !void {
-        _ = self;
+        // Minimum 16 bytes for auth tag
+        if (encrypted.len < 16) {
+            return error.InvalidCiphertext;
+        }
 
-        if (encrypted.len > record.len) {
+        const record_len = encrypted.len - 16;
+        if (record_len > record.len) {
             return error.BufferTooSmall;
         }
 
-        // Simple XOR
-        for (encrypted, 0..) |byte, i| {
-            record[i] = byte ^ 0x42;
+        // Reconstruct nonce from sequence (caller should track LSN)
+        var nonce: [12]u8 = undefined;
+        @memset(&nonce, 0);
+        std.mem.writeInt(u64, nonce[0..8], self.sequence, .little);
+
+        // Extract tag
+        const ct = encrypted[0..record_len];
+        const tag: *const [16]u8 = @ptrCast(encrypted[record_len..][0..16]);
+
+        // Decrypt with authentication
+        std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(
+            record[0..record_len],
+            ct,
+            tag.*,
+            "",
+            nonce,
+            self.key.data,
+        ) catch {
+            return error.DecryptionFailed;
+        };
+
+        self.sequence += 1;
+    }
+
+    /// Decrypt with explicit LSN (for recovery scenarios)
+    pub fn decryptRecordWithLsn(self: *Self, encrypted: []const u8, record: []u8, lsn: u64) !void {
+        if (encrypted.len < 16) {
+            return error.InvalidCiphertext;
         }
+
+        const record_len = encrypted.len - 16;
+        if (record_len > record.len) {
+            return error.BufferTooSmall;
+        }
+
+        var nonce: [12]u8 = undefined;
+        @memset(&nonce, 0);
+        std.mem.writeInt(u64, nonce[0..8], lsn, .little);
+
+        const ct = encrypted[0..record_len];
+        const tag: *const [16]u8 = @ptrCast(encrypted[record_len..][0..16]);
+
+        std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(
+            record[0..record_len],
+            ct,
+            tag.*,
+            "",
+            nonce,
+            self.key.data,
+        ) catch {
+            return error.DecryptionFailed;
+        };
     }
 };
 
@@ -285,3 +391,175 @@ pub const KMSClient = struct {
         return new_key;
     }
 };
+
+// =============================================================================
+// GAP-0062 Regression Tests: AES-256-GCM Page/WAL Encryption
+// Verify that encryption is real AES-256-GCM, not XOR obfuscation
+// =============================================================================
+
+test "GAP-0062: page encryption is not XOR obfuscation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create master key
+    var master_key_data: [32]u8 = undefined;
+    for (&master_key_data, 0..) |*b, i| b.* = @as(u8, @truncate(i * 17 + 42));
+
+    const master_key = EncryptionKey{
+        .data = master_key_data,
+        .algorithm = .aes_256_gcm,
+        .provenance = .{
+            .source = .local_file,
+            .key_id = "test-key",
+            .created_at = 0,
+            .rotated_at = null,
+            .version = 1,
+        },
+    };
+
+    var crypto = try PageCrypto.init(allocator, master_key, null);
+    defer crypto.deinit();
+
+    // Test data: all zeros (XOR with constant would be detectable)
+    const plaintext = [_]u8{0x00} ** 100;
+    var ciphertext: [116]u8 = undefined; // 100 + 16 tag
+
+    try crypto.encryptPage(1, &plaintext, &ciphertext, "");
+
+    // XOR with any constant would produce that constant repeated
+    // AES-GCM should produce pseudo-random looking output
+    var has_variation = false;
+    for (ciphertext[0..100], 0..) |b, i| {
+        if (i > 0 and b != ciphertext[0]) {
+            has_variation = true;
+            break;
+        }
+    }
+    try testing.expect(has_variation);
+}
+
+test "GAP-0062: page encrypt/decrypt roundtrip preserves data" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var master_key_data: [32]u8 = undefined;
+    std.crypto.random.bytes(&master_key_data);
+
+    const master_key = EncryptionKey{
+        .data = master_key_data,
+        .algorithm = .aes_256_gcm,
+        .provenance = .{
+            .source = .local_file,
+            .key_id = "roundtrip-test",
+            .created_at = 0,
+            .rotated_at = null,
+            .version = 1,
+        },
+    };
+
+    var crypto = try PageCrypto.init(allocator, master_key, null);
+    defer crypto.deinit();
+
+    const plaintext = "This is sensitive data that must survive encryption roundtrip!";
+    var ciphertext: [plaintext.len + 16]u8 = undefined;
+    var recovered: [plaintext.len]u8 = undefined;
+
+    try crypto.encryptPage(42, plaintext, &ciphertext, "");
+    try crypto.decryptPage(42, &ciphertext, &recovered, "");
+
+    try testing.expectEqualSlices(u8, plaintext, &recovered);
+}
+
+test "GAP-0062: different page IDs produce different ciphertext" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var master_key_data: [32]u8 = undefined;
+    @memset(&master_key_data, 0xAB);
+
+    const master_key = EncryptionKey{
+        .data = master_key_data,
+        .algorithm = .aes_256_gcm,
+        .provenance = .{
+            .source = .local_file,
+            .key_id = "nonce-test",
+            .created_at = 0,
+            .rotated_at = null,
+            .version = 1,
+        },
+    };
+
+    var crypto = try PageCrypto.init(allocator, master_key, null);
+    defer crypto.deinit();
+
+    const plaintext = [_]u8{0x55} ** 32;
+    var ciphertext1: [48]u8 = undefined;
+    var ciphertext2: [48]u8 = undefined;
+
+    try crypto.encryptPage(1, &plaintext, &ciphertext1, "");
+    try crypto.encryptPage(2, &plaintext, &ciphertext2, "");
+
+    // Same plaintext, different page IDs should produce different ciphertext
+    try testing.expect(!std.mem.eql(u8, &ciphertext1, &ciphertext2));
+}
+
+test "GAP-0062: WAL encryption roundtrip preserves data" {
+    const testing = std.testing;
+
+    var key_data: [32]u8 = undefined;
+    std.crypto.random.bytes(&key_data);
+
+    const key = EncryptionKey{
+        .data = key_data,
+        .algorithm = .aes_256_gcm,
+        .provenance = .{
+            .source = .local_file,
+            .key_id = "wal-test",
+            .created_at = 0,
+            .rotated_at = null,
+            .version = 1,
+        },
+    };
+
+    var wal_crypto = WALCrypto.init(testing.allocator, key);
+
+    const record = "WAL record with transaction data";
+    var encrypted: [record.len + 16]u8 = undefined;
+    var decrypted: [record.len]u8 = undefined;
+
+    try wal_crypto.encryptRecord(record, &encrypted, 100);
+    try wal_crypto.decryptRecordWithLsn(&encrypted, &decrypted, 100);
+
+    try testing.expectEqualSlices(u8, record, &decrypted);
+}
+
+test "GAP-0062: ciphertext differs from plaintext" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var master_key_data: [32]u8 = undefined;
+    @memset(&master_key_data, 0x12);
+
+    const master_key = EncryptionKey{
+        .data = master_key_data,
+        .algorithm = .aes_256_gcm,
+        .provenance = .{
+            .source = .local_file,
+            .key_id = "diff-test",
+            .created_at = 0,
+            .rotated_at = null,
+            .version = 1,
+        },
+    };
+
+    var crypto = try PageCrypto.init(allocator, master_key, null);
+    defer crypto.deinit();
+
+    const plaintext = [_]u8{0xDE, 0xAD, 0xBE, 0xEF} ** 8;
+    var ciphertext: [48]u8 = undefined;
+
+    try crypto.encryptPage(999, &plaintext, &ciphertext, "");
+
+    // Ciphertext should differ from plaintext
+    try testing.expect(!std.mem.eql(u8, plaintext[0..32], ciphertext[0..32]));
+}
