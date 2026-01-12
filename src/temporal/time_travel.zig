@@ -203,9 +203,73 @@ pub const TemporalStorage = struct {
             return null;
         }
 
-        // Return node with properties as of the specified time
-        // TODO: Filter properties to show only values valid at that time
-        return node;
+        // GAP-0119 FIX: Filter properties to show only values valid at the specified time
+        // CANARY: REQ=REQ-TEMPORAL-PROP-001; FEATURE="TemporalPropertyFiltering"; STATUS=IMPL; OWNER=temporal; UPDATED=2026-01-12
+        const filtered_node = self.filterNodePropertiesAsOf(node, as_of) catch return null;
+        return filtered_node;
+    }
+
+    // GAP-0119: Filter node properties to show only values valid at specified time
+    fn filterNodePropertiesAsOf(self: *Self, node: *TemporalNode, as_of: AsOfClause) !*TemporalNode {
+        const as_of_time = self.asOfToTimestamp(as_of);
+
+        // Create a copy of the node with filtered properties
+        const filtered_node = try self.allocator.create(TemporalNode);
+        filtered_node.* = .{
+            .id = node.id,
+            .labels = node.labels,
+            .properties = std.StringHashMap(VersionedValue).init(self.allocator),
+            .versions = node.versions,
+            .created_at = node.created_at,
+            .deleted_at = node.deleted_at,
+        };
+
+        // Filter each property to find the version valid at as_of time
+        var prop_it = node.properties.iterator();
+        while (prop_it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const versioned_value = entry.value_ptr.*;
+
+            // Find the version valid at the specified time
+            if (self.findPropertyVersionAsOf(versioned_value, as_of_time)) |valid_value| {
+                try filtered_node.properties.put(key, valid_value);
+            }
+            // If no valid version found, property is omitted (didn't exist at that time)
+        }
+
+        return filtered_node;
+    }
+
+    // Find the property version that was valid at a specific timestamp
+    fn findPropertyVersionAsOf(self: *Self, versioned_value: VersionedValue, as_of_time: i64) ?VersionedValue {
+        _ = self;
+
+        // Check if current version was created before or at as_of time
+        if (versioned_value.version.timestamp <= as_of_time) {
+            return versioned_value;
+        }
+
+        // Traverse previous versions to find one valid at as_of time
+        var current = versioned_value.previous_version;
+        while (current) |prev| {
+            if (prev.version.timestamp <= as_of_time) {
+                return prev.*;
+            }
+            current = prev.previous_version;
+        }
+
+        // No version existed at the specified time
+        return null;
+    }
+
+    // Convert AsOfClause to timestamp
+    fn asOfToTimestamp(self: *Self, as_of: AsOfClause) i64 {
+        _ = self;
+        return switch (as_of) {
+            .timestamp => |t| t,
+            .transaction_id => |tid| @as(i64, @intCast(tid * 1000)),
+            .system_time => |t| t,
+        };
     }
 
     pub fn getNodeVersions(self: *Self, id: u64) ![]TemporalVersion {

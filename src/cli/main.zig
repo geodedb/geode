@@ -314,14 +314,14 @@ fn printServeUsage() void {
         "  --cert <path>          TLS certificate path (auto-generated if missing)\n" ++
         "  --key <path>           TLS private key path (auto-generated if missing)\n" ++
         "  --log-level <level>    Log level: debug|info|warn|error (default: info)\n" ++
-        "  --enable-auth          Enable user authentication (default: disabled)\n" ++
+        "  --disable-auth         Disable user authentication (default: enabled) [SECURITY WARNING]\n" ++
         "  --stdio                Use stdio for communication (development mode)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode serve\n" ++
         "  geode serve --data-dir /var/lib/geode --listen 0.0.0.0:3141\n" ++
-        "  geode serve --enable-auth --log-level info\n" ++
+        "  geode serve --log-level info  # Auth enabled by default\n" ++
         "  geode serve --stdio --log-level debug\n" ++
         "\n", .{});
 }
@@ -334,6 +334,9 @@ fn printQueryUsage() void {
         "Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  --insecure             Skip TLS certificate verification\n" ++
+        "  --ca-cert <path>       CA certificate path for server verification\n" ++
+        "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
+        "  --client-key <path>    Client private key path for mutual TLS\n" ++
         "  --format <fmt>         Output format: json|table|csv (default: json)\n" ++
         "  --json-param <name> <value>  Add JSON parameter\n" ++
         "  --page-size <n>        Page size for results (default: 1000)\n" ++
@@ -347,6 +350,10 @@ fn printQueryUsage() void {
         "  --no-saved-session     Don't auto-load saved session token\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
+        "TLS Certificate Options:\n" ++
+        "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
+        "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
+        "\n" ++
         "Session Management:\n" ++
         "  By default, queries auto-load saved session from ~/.geode/credentials.json\n" ++
         "  Use --no-saved-session to require explicit credentials\n" ++
@@ -359,6 +366,8 @@ fn printQueryUsage() void {
         "Examples:\n" ++
         "  geode query \"MATCH (n) RETURN n LIMIT 10\"\n" ++
         "  geode query --server localhost:3141 --insecure \"RETURN 1 AS x\"\n" ++
+        "  geode query --ca-cert /etc/ssl/ca.crt --server secure.example.com:3141 \"RETURN 1\"\n" ++
+        "  geode query --ca-cert /etc/ssl/ca.crt --client-cert /etc/ssl/client.crt --client-key /etc/ssl/client.key --server secure.example.com:3141 \"RETURN 1\"\n" ++
         "  geode query --format table \"MATCH (u:User) RETURN u.name, u.email\"\n" ++
         "  geode query --json-param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
         "  geode query --server remote:3141 --timeout 5 --retry 3 \"RETURN 1 AS x\"\n" ++
@@ -396,6 +405,11 @@ const ClientConfig = struct {
     insecure: bool = false,
     server_args: [][]const u8 = &.{},
     json_params: std.StringHashMap([]const u8) = undefined,
+    // GAP-0113 SECURITY FIX: TLS certificate verification options
+    // CANARY: REQ=REQ-TLS-CERT-001; FEATURE="TLSCertVerification"; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-12
+    ca_cert_path: ?[]const u8 = null,
+    client_cert_path: ?[]const u8 = null,
+    client_key_path: ?[]const u8 = null,
 };
 
 const MAX_LINE_SIZE: usize = 65_536;
@@ -1870,14 +1884,22 @@ fn printShellUsage() void {
         "Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  --insecure             Skip TLS certificate verification\n" ++
+        "  --ca-cert <path>       CA certificate path for server verification\n" ++
+        "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
+        "  --client-key <path>    Client private key path for mutual TLS\n" ++
         "  --no-history           Disable command history\n" ++
         "  --format <fmt>         Default output format: json|table|csv (default: table)\n" ++
         "  --keymap <mode>        Keymap mode: emacs|vi (default: emacs)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
+        "TLS Certificate Options:\n" ++
+        "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
+        "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
+        "\n" ++
         "Examples:\n" ++
         "  geode shell\n" ++
         "  geode shell --server localhost:3141 --insecure\n" ++
+        "  geode shell --ca-cert /etc/ssl/ca.crt --server secure.example.com:3141\n" ++
         "  geode shell --no-history --format json\n" ++
         "\n", .{});
 }
@@ -2539,7 +2561,8 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var listen_addr: []const u8 = "0.0.0.0:3141";
     var log_level: []const u8 = "info";
     var use_stdio = false;
-    var enable_auth = false;
+    // GAP-0106 SECURITY FIX: Authentication enabled by default
+    var enable_auth = true;
 
     i = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -2556,7 +2579,12 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             i += 1;
         } else if (std.mem.eql(u8, arg, "--stdio")) {
             use_stdio = true;
+        } else if (std.mem.eql(u8, arg, "--disable-auth")) {
+            // GAP-0106: Allow disabling auth with explicit flag and security warning
+            std.log.warn("SECURITY WARNING: Authentication disabled. Do not use in production!", .{});
+            enable_auth = false;
         } else if (std.mem.eql(u8, arg, "--enable-auth")) {
+            // Keep for backward compatibility (now a no-op since auth is enabled by default)
             enable_auth = true;
         } else if (std.mem.eql(u8, arg, "--cert") and i + 1 < argv.len) {
             try server_args.append(allocator, "--cert");
@@ -2683,6 +2711,10 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var timeout_secs: u32 = 10; // Default 10 second timeout
     var retry_count: u32 = 0; // Default no retries
     var use_saved_session = true; // Auto-load saved session by default
+    // GAP-0113: TLS certificate verification options
+    var ca_cert_path: ?[]const u8 = null;
+    var client_cert_path: ?[]const u8 = null;
+    var client_key_path: ?[]const u8 = null;
 
     i = start_idx + 1;
     while (i < argv.len) : (i += 1) {
@@ -2705,6 +2737,30 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             i += 1;
         } else if (std.mem.eql(u8, arg, "--insecure")) {
             insecure = true;
+        } else if (std.mem.eql(u8, arg, "--ca-cert")) {
+            // GAP-0113: CA certificate path for server verification
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            ca_cert_path = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--client-cert")) {
+            // GAP-0113: Client certificate path for mutual TLS
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            client_cert_path = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--client-key")) {
+            // GAP-0113: Client private key path for mutual TLS
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-key requires a key path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            client_key_path = argv[i + 1];
+            i += 1;
         } else if (std.mem.eql(u8, arg, "--user") or std.mem.eql(u8, arg, "-U")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --user requires a username\n", .{});
@@ -2874,8 +2930,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Default to connecting to localhost:3141 if no --server specified
     const server_addr = server orelse "127.0.0.1:3141";
 
-    // Execute query via QUIC connection to server
-    try executeQuicQuery(allocator, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password);
+    // GAP-0113: Execute query via QUIC connection with optional certificate verification
+    try executeQuicQuery(allocator, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password, ca_cert_path, client_cert_path, client_key_path);
 }
 
 /// Escape a string for safe embedding in JSON
@@ -2935,9 +2991,10 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return result;
 }
 
-fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8) !void {
+// GAP-0113 SECURITY FIX: Add TLS certificate verification support
+// CANARY: REQ=REQ-TLS-CERT-002; FEATURE="TLSCertVerification"; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-12
+fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {
     const stderr = std.fs.File{ .handle = getStderrHandle() };
-    _ = insecure; // Using insecure connect by default for test friendliness
 
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
     const host = addr_port.next() orelse "127.0.0.1";
@@ -2947,6 +3004,15 @@ fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
+    // GAP-0113: Determine connection mode based on certificate options
+    const use_certs = ca_cert_path != null or client_cert_path != null or client_key_path != null;
+
+    // Validate mutual TLS: if any client cert/key provided, both must be provided
+    if ((client_cert_path != null) != (client_key_path != null)) {
+        _ = stderr.writeAll("Error: Both --client-cert and --client-key must be provided for mutual TLS\n") catch {};
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+
     var attempts: u32 = 0;
     const max_attempts = retry_count + 1;
     var last_error: ?[]const u8 = null;
@@ -2955,8 +3021,17 @@ fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query
         var quic_client = quic.QuicClient.init(allocator);
         defer quic_client.deinit();
 
-        // Prefer insecure connect for local test environments to avoid cert validation issues.
-        const connect_err = quic_client.connectInsecure(host, port, true);
+        // GAP-0113: Choose connection method based on security options
+        // Priority: explicit certs > insecure flag > default secure
+        const connect_err = if (use_certs)
+            // Use explicit certificates for enterprise PKI/mutual TLS
+            quic_client.connectEx(host, port, ca_cert_path, client_cert_path, client_key_path)
+        else if (insecure)
+            // Use insecure connect only when explicitly requested
+            quic_client.connectInsecure(host, port, true)
+        else
+            // Default: secure connection without explicit certs (system CA store)
+            quic_client.connectInsecure(host, port, false);
 
         if (connect_err) |_| {
             const handshake_timeout = @max(1, timeout_secs);
@@ -3111,6 +3186,10 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var verbose = false;
     var insecure = false;
     var non_interactive = false;
+    // GAP-0113: TLS certificate verification options
+    var ca_cert_path: ?[]const u8 = null;
+    var client_cert_path: ?[]const u8 = null;
+    var client_key_path: ?[]const u8 = null;
 
     const stdin_handle = getStdinHandle();
     const stdin_is_tty = switch (builtin.os.tag) {
@@ -3173,6 +3252,30 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             history_enabled = false;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             insecure = true;
+        } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
+            // GAP-0113: CA certificate path for server verification
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            ca_cert_path = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--client-cert")) {
+            // GAP-0113: Client certificate path for mutual TLS
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            client_cert_path = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--client-key")) {
+            // GAP-0113: Client private key path for mutual TLS
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-key requires a key path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            client_key_path = argv[i + 1];
+            i += 1;
         } else if (std.mem.eql(u8, argv[i], "--verbose")) {
             verbose = true;
         } else if (std.mem.eql(u8, argv[i], "--non-interactive")) {
@@ -3198,12 +3301,24 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
+    // GAP-0113: Validate mutual TLS configuration
+    if ((client_cert_path != null) != (client_key_path != null)) {
+        std.debug.print("Error: Both --client-cert and --client-key must be provided for mutual TLS\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+
     // For testing - simulate a simple shell without full REPL
     std.debug.print("Geode Shell v0.16.0\n", .{});
+    // GAP-0113: Display TLS certificate status
     if (insecure) {
-        std.debug.print("Connected to {s} (insecure mode)\n", .{server});
+        std.debug.print("Connected to {s} (insecure mode - TLS verification disabled)\n", .{server});
+    } else if (ca_cert_path != null or client_cert_path != null) {
+        std.debug.print("Connected to {s} (TLS with custom certificates)\n", .{server});
+        if (ca_cert_path) |ca| std.debug.print("  CA cert: {s}\n", .{ca});
+        if (client_cert_path) |cert| std.debug.print("  Client cert: {s}\n", .{cert});
+        if (client_key_path) |key| std.debug.print("  Client key: {s}\n", .{key});
     } else {
-        std.debug.print("Connected to {s}\n", .{server});
+        std.debug.print("Connected to {s} (TLS enabled)\n", .{server});
     }
     std.debug.print("Type 'help' for help, 'exit' to quit.\n", .{});
 
@@ -3541,13 +3656,8 @@ fn connectToServer(allocator: std.mem.Allocator, _: []const u8, username: []cons
         } else {
             return error.InvalidCredentials;
         }
-    } else if (std.mem.eql(u8, username, "admin") and std.mem.eql(u8, password, "admin123")) {
-        // Legacy admin user - check against current policy
-        const password_meets_policy = blk: {
-            validatePasswordAgainstPolicy(password) catch break :blk false;
-            break :blk true;
-        };
-        return AuthResult{ .session_token = token, .requires_password_reset = !password_meets_policy };
+    // GAP-0104 SECURITY FIX: Removed hardcoded admin:admin123 credentials
+    // All authentication must now use environment-configured credentials or proper user management
     } else if (username.len > 0 and password.len >= 8) {
         // Any other user - validate against current policy
         const password_meets_policy = blk: {

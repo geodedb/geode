@@ -621,6 +621,22 @@ fn evaluateExpressionInBinding(
         .Int => |i| .{ .Value = .{ .Int = i } },
         .Bool => |b| .{ .Value = .{ .Bool = b } },
         .Null => .Null,
+        // GAP-0120 FIX: Add support for more expression types
+        // CANARY: REQ=REQ-EXPR-TYPE-003; FEATURE="ExprTypeCoverage"; STATUS=IMPL; OWNER=exec; UPDATED=2026-01-12
+        .Decimal => |d| .{ .Value = .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } },
+        .DoubleLit => |f| blk_double: {
+            // Convert f64 to Decimal for PropertyValue (PropertyValue doesn't have Float)
+            // Use 6 decimal places of precision
+            const scale: u8 = 6;
+            const coeff: i128 = @intFromFloat(f * 1_000_000.0);
+            break :blk_double .{ .Value = .{ .Decimal = .{ .coeff = coeff, .scale = scale } } };
+        },
+        .RealLit => |f| blk_real: {
+            // Convert f32 to Decimal for PropertyValue
+            const scale: u8 = 6;
+            const coeff: i128 = @intFromFloat(@as(f64, f) * 1_000_000.0);
+            break :blk_real .{ .Value = .{ .Decimal = .{ .coeff = coeff, .scale = scale } } };
+        },
         .Call => |call| blk_call: {
             // Handle function calls in binding context
             // This enables toString(n.name), type(n.property), etc.
@@ -796,8 +812,8 @@ fn evaluateExpressionInBinding(
                 break :blk_call .Null;
             }
         },
-        // For other complex expressions, return null for now
-        // TODO: implement more expression types as needed
+        // GAP-0120: Common expression types (String, Int, Bool, Decimal, DoubleLit, RealLit) are handled above.
+        // Other complex expressions (Binary, Unary, etc.) return null as they require full evaluation context.
         else => .Null,
     };
 }

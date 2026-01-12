@@ -715,7 +715,7 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
     
     return True, "PASSED"
 
-def start_server(binary, data_dir, port, args, timeout_ms=30000):
+def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=None):
     """Start a geode server for test execution.
 
     Returns (process, port) tuple or (None, None) on failure.
@@ -734,6 +734,11 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000):
         "--listen", f"127.0.0.1:{port}"
     ] + args
 
+    # Build environment with overrides
+    server_env = os.environ.copy()
+    if env_overrides:
+        server_env.update(env_overrides)
+
     # Start server process
     # Use DEVNULL for stdout/stderr to prevent server from hanging when pipe buffers fill
     # (The server produces extensive QUIC debug output that would fill pipe buffers)
@@ -741,7 +746,8 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000):
         server_proc = subprocess.Popen(
             server_cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            env=server_env
         )
     except Exception as e:
         print(f"  Failed to start server: {e}")
@@ -837,6 +843,21 @@ def main():
                 spec_server_enabled = server_config.get("enabled", False)
                 spec_server_args = server_config.get("args", [])
                 startup_timeout = server_config.get("startup_timeout_ms", 30000)
+                # GAP-0106: Auth is enabled by default, add --disable-auth for tests unless explicitly requiring auth
+                # Don't add --disable-auth if spec already has --enable-auth or --disable-auth in args
+                has_auth_flag = "--disable-auth" in spec_server_args or "--enable-auth" in spec_server_args
+                if spec_server_enabled and not has_auth_flag and not server_config.get("auth", False):
+                    spec_server_args = ["--disable-auth"] + spec_server_args
+
+        # Build server env overrides
+        server_env_overrides = {}
+        # If auth is enabled, set test credentials so tests can authenticate
+        # These must match the ${secret:*} substitutions (admin123, password123)
+        if "--enable-auth" in spec_server_args:
+            if "GEODE_ADMIN_PASSWORD" not in os.environ:
+                server_env_overrides["GEODE_ADMIN_PASSWORD"] = "admin123"
+            if "GEODE_ADMIN_USERNAME" not in os.environ:
+                server_env_overrides["GEODE_ADMIN_USERNAME"] = "admin"
 
         # Start server if required
         if spec_server_enabled:
@@ -846,7 +867,8 @@ def main():
 
             print(f"Starting server for {spec_file.name} on port {server_port}...")
             server_proc, server_port = start_server(
-                binary, server_data_dir, server_port, spec_server_args, startup_timeout
+                binary, server_data_dir, server_port, spec_server_args, startup_timeout,
+                env_overrides=server_env_overrides if server_env_overrides else None
             )
 
             if server_proc is None:

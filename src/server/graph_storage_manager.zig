@@ -79,13 +79,22 @@ pub fn tryLoadGraphFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !
     var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
     defer dir.close();
     // nodes.jsonl and edges.jsonl simple line-delimited json
+    // GAP-0117 SECURITY FIX: JSON parsing with proper limits and error logging
+    const json_max_depth: usize = 32;
+
     if (dir.openFile("nodes.jsonl", .{})) |nf| {
         defer nf.close();
         const content = try nf.readToEndAlloc(allocator, 1024 * 1024 * 10); // 10MB max
         defer allocator.free(content);
         var lines = std.mem.tokenizeScalar(u8, content, '\n');
         while (lines.next()) |line| {
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch continue;
+            // GAP-0117: Add depth limit and log parse errors instead of silent continue
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{
+                .max_depth = json_max_depth,
+            }) catch |err| {
+                std.log.warn("graph_storage: JSON parse error in nodes.jsonl: {}", .{err});
+                continue;
+            };
             defer parsed.deinit();
             if (parsed.value != .object) continue;
             const obj = parsed.value.object;

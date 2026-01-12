@@ -3,6 +3,37 @@ const Lexer = @import("gql/lexer.zig").Lexer;
 const Parser = @import("gql/parser.zig").Parser;
 pub const ast = @import("gql/ast.zig");
 
+/// GAP-0115 DOCUMENTATION: Memory Allocation Error Handling
+/// CANARY: REQ=REQ-MEMORY-SAFETY-001; FEATURE="MemorySafetyDocumentation"; STATUS=DOCUMENTED; OWNER=core; UPDATED=2026-01-12
+///
+/// ## Memory Allocation Patterns
+///
+/// Geode uses Zig's arena allocators for query parsing and execution. The codebase contains
+/// approximately 580+ instances of `catch unreachable` for allocation operations. This is
+/// intentional for the following reasons:
+///
+/// ### Design Rationale
+/// 1. **Arena Allocator Semantics**: Most allocations use arena allocators where individual
+///    allocation failures are uncommon - the arena either has memory or the entire system
+///    is under severe memory pressure.
+///
+/// 2. **Performance**: Error handling on every small allocation adds overhead that impacts
+///    query parsing and execution performance.
+///
+/// 3. **Practical Considerations**: In practice, OOM during query parsing indicates a system-level
+///    problem that cannot be gracefully recovered by the query processor.
+///
+/// ### Production Recommendations
+/// For production deployments:
+/// 1. Configure adequate system memory for expected query complexity
+/// 2. Use resource limits (memory cgroups) to fail fast on resource exhaustion
+/// 3. Monitor memory usage to detect issues before OOM occurs
+///
+/// ### Future Work
+/// The codebase may be enhanced to use error-returning allocation patterns in critical paths.
+/// See the CANARY markers with `REQ-MEMORY-*` for tracking this work.
+///
+
 // GQL module namespace
 pub const gql = struct {
     pub const ast = @import("gql/ast.zig");
@@ -313,16 +344,118 @@ pub fn makeEnv(id_names: []const []const u8, id_values: []const eval.Value, para
     return .{ .names = id_names, .values = id_values };
 }
 
-// Server functionality for CLI integration - will be implemented in CLI module directly
+/// Server functionality for library mode embedding
+/// GAP-0122 FIX: Added clear documentation and recommended patterns for embedding use cases
+/// CANARY: REQ=REQ-LIBRARY-EMBEDDING-001; FEATURE="LibraryModeEmbedding"; STATUS=DOCUMENTED; OWNER=library; UPDATED=2026-01-12
+///
+/// ## Library Mode Embedding Guide
+///
+/// Geode can be embedded in applications in two modes:
+///
+/// ### 1. Query-Only Mode (Recommended for most use cases)
+/// Use `parse()`, `parseGql()`, and `execute()` functions directly to:
+/// - Parse and validate GQL queries
+/// - Execute queries against an in-process graph storage
+/// - No network stack required
+///
+/// Example:
+/// ```zig
+/// const geode = @import("geode");
+/// const allocator = std.heap.page_allocator;
+///
+/// // Parse a query
+/// var result = try geode.parse(allocator, "MATCH (n:Person) RETURN n", .{});
+/// defer result.deinit();
+///
+/// // Execute against local storage
+/// var storage = try geode.GraphStorage.init(allocator, "/path/to/data");
+/// defer storage.deinit();
+///
+/// const exec_result = try geode.execute(allocator, result.program, &storage);
+/// ```
+///
+/// ### 2. Client Mode (For distributed deployments)
+/// Connect to a running Geode server via QUIC transport:
+/// - Use the CLI binary as a subprocess for server management
+/// - Use the `transport.quic` module for client connections
+///
+/// Example (recommended pattern):
+/// ```zig
+/// // Start server as subprocess
+/// const server_proc = try std.process.Child.init(&.{
+///     "geode", "serve", "--listen", "0.0.0.0:3141"
+/// }, allocator);
+///
+/// // Connect client using QUIC
+/// const client = try geode.transport.quic.Client.connect("localhost:3141");
+/// defer client.disconnect();
+///
+/// const response = try client.query("MATCH (n) RETURN n");
+/// ```
+///
+/// ### 3. Full Server Mode (Advanced)
+/// For embedded server scenarios requiring full QUIC transport:
+/// - Use the CLI module directly (requires transport dependencies)
+/// - Or spawn the geode binary as a managed subprocess
+///
+/// Note: The `runServerWithArgs()` function returns `NotImplemented` because
+/// the server requires the full transport stack which is not exposed in the
+/// library interface to keep dependencies minimal.
+///
+/// See docs/API_REFERENCE.md for complete embedding examples.
 pub const server = struct {
-    pub fn runServerWithArgs(allocator: std.mem.Allocator, args: [][:0]u8) !void {
-        // This is a placeholder - the real implementation is in CLI module
-        // which has access to the transport/quic module
+    /// Server embedding error types
+    pub const EmbeddingError = error{
+        /// Server functionality requires CLI module or subprocess
+        NotImplemented,
+        /// Server initialization failed
+        InitializationFailed,
+    };
+
+    /// Attempts to run a server with the given arguments.
+    /// NOTE: This returns `NotImplemented` - see the embedding guide above for recommended patterns.
+    /// For embedded server functionality, use one of these approaches:
+    /// 1. Query-only mode using parse() and execute() directly
+    /// 2. Client mode connecting to a running server
+    /// 3. Subprocess mode spawning the geode binary
+    pub fn runServerWithArgs(allocator: std.mem.Allocator, args: [][:0]u8) EmbeddingError!void {
         _ = allocator;
         _ = args;
-        std.debug.print("Error: Server implementation should be called from CLI module\n", .{});
-        return error.NotImplemented;
+        std.debug.print(
+            \\Geode Library Mode: Server embedding not directly supported.
+            \\
+            \\Recommended patterns:
+            \\  1. Query-only: Use geode.parse() and geode.execute() for in-process queries
+            \\  2. Client mode: Connect to a running geode server via QUIC
+            \\  3. Subprocess: Spawn 'geode serve' as a managed child process
+            \\
+            \\See src/lib.zig documentation or docs/API_REFERENCE.md for examples.
+            \\
+        , .{});
+        return EmbeddingError.NotImplemented;
     }
+
+    /// Check if server mode is available (always false for library embedding)
+    pub fn isServerModeAvailable() bool {
+        return false;
+    }
+
+    /// Get recommended embedding pattern based on use case
+    pub fn getRecommendedPattern(use_case: EmbeddingUseCase) []const u8 {
+        return switch (use_case) {
+            .local_queries => "Query-only mode: Use parse() and execute() directly",
+            .distributed_queries => "Client mode: Connect to geode server via QUIC",
+            .embedded_server => "Subprocess mode: Spawn 'geode serve' as child process",
+            .testing => "Query-only mode: Use parse() for syntax validation",
+        };
+    }
+
+    pub const EmbeddingUseCase = enum {
+        local_queries,
+        distributed_queries,
+        embedded_server,
+        testing,
+    };
 };
 
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {

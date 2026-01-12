@@ -1992,6 +1992,8 @@ pub const FullTextOptimizer = struct {
     // CANARY: REQ=REQ-DISTRIBUTED-INDEX-OPTIMIZER-001; FEATURE="Distributed IndexOptimizer"; ASPECT=FederationAwareCostEstimation; STATUS=IMPL; TEST=TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001; OWNER=distributed; UPDATED=2025-10-05
 
     /// Distributed query planning cost estimation for federation-aware optimization
+    /// GAP-0114 FIX: Added per-shard cost breakdown for EXPLAIN output
+    /// CANARY: REQ=REQ-DISTRIBUTED-COST-BREAKDOWN-001; FEATURE="PerShardCostBreakdown"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-12
     pub fn estimateDistributedQueryCost(
         self: *IndexOptimizer,
         labels: []const []const u8,
@@ -2046,15 +2048,78 @@ pub const FullTextOptimizer = struct {
             }
         };
 
+        // GAP-0114 FIX: Generate detailed per-shard cost breakdown
+        const shard_distribution = self.generateShardCostBreakdown(
+            shard_count,
+            per_shard_cost,
+            network_cost,
+            local_plan.estimated_rows,
+            local_plan.scan_type,
+        );
+
         return DistributedCostEstimate{
             .total_cost = total_distributed_cost,
             .local_cost = per_shard_cost,
             .coordination_cost = coordination_overhead,
             .network_cost = network_cost,
             .parallelism_factor = parallelism_factor,
-            .shard_distribution = &[_]ShardCostBreakdown{}, // TODO: Implement detailed per-shard breakdown
+            .shard_distribution = shard_distribution,
             .optimization_strategy = optimization_strategy,
         };
+    }
+
+    /// GAP-0114 FIX: Generate per-shard cost breakdown for EXPLAIN output
+    fn generateShardCostBreakdown(
+        self: *IndexOptimizer,
+        shard_count: u32,
+        base_per_shard_cost: f64,
+        base_network_cost: f64,
+        total_estimated_rows: u64,
+        scan_type: ScanType,
+    ) []const ShardCostBreakdown {
+        // Allocate breakdown array
+        var breakdowns = self.allocator.alloc(ShardCostBreakdown, shard_count) catch {
+            return &[_]ShardCostBreakdown{};
+        };
+
+        // Calculate rows per shard (assume uniform distribution with some variance)
+        const rows_per_shard = total_estimated_rows / @as(u64, shard_count);
+        const variance_factor: f64 = 0.15; // 15% variance between shards
+
+        // Calculate index utilization based on scan type
+        const base_index_utilization: f64 = switch (scan_type) {
+            .index_scan => 0.95, // High utilization for index scans
+            .range_scan => 0.75, // Medium-high for range scans
+            .full_scan => 0.0, // No index utilization for full scans
+        };
+
+        for (0..shard_count) |i| {
+            // Add realistic variance to simulate non-uniform data distribution
+            // Shards in the middle tend to have slightly more data (bell curve approximation)
+            const shard_position = @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(shard_count));
+            const position_factor = 1.0 + variance_factor * (0.5 - @abs(shard_position - 0.5));
+
+            // Calculate shard-specific costs
+            const shard_local_cost = base_per_shard_cost * position_factor;
+            const shard_rows = @as(u64, @intFromFloat(@as(f64, @floatFromInt(rows_per_shard)) * position_factor));
+
+            // Data transfer cost varies by shard position (farther shards = higher latency)
+            const latency_factor = 1.0 + @as(f64, @floatFromInt(i)) * 0.05; // 5% increase per shard distance
+            const shard_transfer_cost = (base_network_cost / @as(f64, @floatFromInt(shard_count))) * latency_factor;
+
+            // Index utilization varies slightly by shard
+            const shard_index_util = base_index_utilization * (1.0 - variance_factor * 0.5 + variance_factor * position_factor);
+
+            breakdowns[i] = ShardCostBreakdown{
+                .shard_id = @intCast(i),
+                .local_cost = shard_local_cost,
+                .data_transfer_cost = shard_transfer_cost,
+                .estimated_rows = shard_rows,
+                .index_utilization = @min(1.0, shard_index_util),
+            };
+        }
+
+        return breakdowns;
     }
 
     /// Estimate cost for cross-shard index operations
@@ -2090,18 +2155,197 @@ pub const FullTextOptimizer = struct {
     }
 
     /// Get federation-aware index recommendations
+    /// GAP-0114 FIX: Implement federation-aware index recommendations
+    /// CANARY: REQ=REQ-FEDERATION-INDEX-REC-001; FEATURE="FederationIndexRecommendations"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-12
     pub fn getFederationIndexRecommendations(
         self: *IndexOptimizer,
         query_patterns: []const QueryPattern,
         shard_topology: ShardTopology,
     ) []IndexRecommendation {
-        _ = self;
-        _ = query_patterns;
-        _ = shard_topology;
+        if (query_patterns.len == 0) {
+            return &[_]IndexRecommendation{};
+        }
 
-        // TODO: Implement detailed federation-aware index recommendations
-        // This would analyze query patterns across shards and recommend optimal index placement
-        return &[_]IndexRecommendation{};
+        // Allocate recommendations array - max one per pattern
+        var recommendations = self.allocator.alloc(IndexRecommendation, query_patterns.len) catch {
+            return &[_]IndexRecommendation{};
+        };
+        var rec_count: usize = 0;
+
+        for (query_patterns) |pattern| {
+            // Skip low-frequency patterns (threshold: 10% of max frequency)
+            if (pattern.frequency < 0.1) continue;
+
+            // Determine optimal index type based on selectivity
+            const index_type = self.selectOptimalIndexTypeForPattern(pattern);
+
+            // Calculate target shards based on data distribution strategy
+            const target_shards = self.calculateTargetShardsForPattern(pattern, shard_topology) catch continue;
+
+            // Calculate estimated benefit based on pattern characteristics
+            const estimated_benefit = self.calculateIndexBenefit(pattern, shard_topology);
+
+            // Skip if benefit is too low
+            if (estimated_benefit < 0.1) {
+                if (target_shards.len > 0) self.allocator.free(target_shards);
+                continue;
+            }
+
+            // Generate reason string
+            const reason = self.generateRecommendationReason(pattern, index_type, shard_topology) catch "Index recommended for query pattern";
+
+            recommendations[rec_count] = IndexRecommendation{
+                .index_type = index_type,
+                .properties = pattern.properties,
+                .target_shards = target_shards,
+                .priority = pattern.frequency * estimated_benefit,
+                .estimated_benefit = estimated_benefit,
+                .reason = reason,
+            };
+            rec_count += 1;
+        }
+
+        // Return slice with actual count
+        if (rec_count == 0) {
+            self.allocator.free(recommendations);
+            return &[_]IndexRecommendation{};
+        }
+
+        return recommendations[0..rec_count];
+    }
+
+    /// Select optimal index type based on query pattern characteristics
+    fn selectOptimalIndexTypeForPattern(self: *IndexOptimizer, pattern: QueryPattern) IndexType {
+        _ = self;
+
+        // High selectivity (< 0.01) benefits from B-tree for point lookups
+        if (pattern.selectivity < 0.01) {
+            return .btree;
+        }
+
+        // Low selectivity (> 0.3) might benefit from bitmap for set operations
+        if (pattern.selectivity > 0.3) {
+            return .bitmap;
+        }
+
+        // Medium selectivity - B-tree is generally a good default
+        return .btree;
+    }
+
+    /// Calculate target shards for index placement based on data distribution
+    fn calculateTargetShardsForPattern(
+        self: *IndexOptimizer,
+        pattern: QueryPattern,
+        topology: ShardTopology,
+    ) ![]const u32 {
+        _ = pattern;
+
+        // For hash-based distribution, index should be on all shards
+        // For range-based, we might target specific shards
+        switch (topology.data_distribution) {
+            .hash_based => {
+                // All shards need the index for hash-based distribution
+                var shards = try self.allocator.alloc(u32, topology.shard_count);
+                for (0..topology.shard_count) |i| {
+                    shards[i] = @intCast(i);
+                }
+                return shards;
+            },
+            .range_based => {
+                // For range-based, recommend on primary and one replica
+                const target_count = @min(topology.replication_factor + 1, topology.shard_count);
+                var shards = try self.allocator.alloc(u32, target_count);
+                for (0..target_count) |i| {
+                    shards[i] = @intCast(i);
+                }
+                return shards;
+            },
+            .geographic => {
+                // Geographic: one index per geographic region (assume shard_count / replication_factor regions)
+                const region_count = @max(1, topology.shard_count / @max(1, topology.replication_factor));
+                var shards = try self.allocator.alloc(u32, region_count);
+                for (0..region_count) |i| {
+                    shards[i] = @intCast(i * @max(1, topology.replication_factor));
+                }
+                return shards;
+            },
+            .custom => {
+                // Custom: default to all shards
+                var shards = try self.allocator.alloc(u32, topology.shard_count);
+                for (0..topology.shard_count) |i| {
+                    shards[i] = @intCast(i);
+                }
+                return shards;
+            },
+        }
+    }
+
+    /// Calculate estimated benefit of creating an index for a pattern
+    fn calculateIndexBenefit(self: *IndexOptimizer, pattern: QueryPattern, topology: ShardTopology) f64 {
+        _ = self;
+
+        // Base benefit from frequency (higher frequency = more benefit)
+        var benefit = pattern.frequency;
+
+        // Selectivity factor - very selective queries benefit more from indexes
+        const selectivity_factor = if (pattern.selectivity < 0.01)
+            2.0 // Very selective - high benefit
+        else if (pattern.selectivity < 0.1)
+            1.5 // Moderately selective
+        else if (pattern.selectivity < 0.3)
+            1.0 // Average
+        else
+            0.5; // Low selectivity - less benefit
+
+        benefit *= selectivity_factor;
+
+        // Distributed benefit - more shards means more benefit from proper indexing
+        const shard_factor = 1.0 + @log(@as(f64, @floatFromInt(topology.shard_count))) / 5.0;
+        benefit *= shard_factor;
+
+        // Cap benefit at 1.0
+        return @min(1.0, benefit);
+    }
+
+    /// Generate human-readable reason for the recommendation
+    fn generateRecommendationReason(
+        self: *IndexOptimizer,
+        pattern: QueryPattern,
+        index_type: IndexType,
+        topology: ShardTopology,
+    ) ![]const u8 {
+        const index_type_str = switch (index_type) {
+            .btree => "B-tree",
+            .hash => "Hash",
+            .bitmap => "Bitmap",
+            .composite => "Composite",
+            .fulltext => "Full-text",
+            .geospatial, .rtree => "Geospatial",
+            .vector_hnsw, .vector_f32 => "Vector",
+            else => "Standard",
+        };
+
+        const dist_str = switch (topology.data_distribution) {
+            .hash_based => "hash-distributed",
+            .range_based => "range-partitioned",
+            .geographic => "geographically-distributed",
+            .custom => "custom-distributed",
+        };
+
+        // Format: "B-tree index recommended for high-frequency (0.85) pattern on hash-distributed topology (4 shards)"
+        const reason = try std.fmt.allocPrint(
+            self.allocator,
+            "{s} index recommended for {s}-frequency ({d:.2}) pattern on {s} topology ({d} shards)",
+            .{
+                index_type_str,
+                if (pattern.frequency > 0.7) "high" else if (pattern.frequency > 0.3) "medium" else "low",
+                pattern.frequency,
+                dist_str,
+                topology.shard_count,
+            },
+        );
+
+        return reason;
     }
 };
 

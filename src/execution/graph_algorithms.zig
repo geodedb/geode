@@ -382,11 +382,13 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
 
                         // Check if node has this property with matching value
                         if (node.properties.get(prop.key)) |node_prop_val| {
+                            // GAP-0120 FIX: Proper type coverage for property values
+                            // CANARY: REQ=REQ-EXPR-TYPE-001; FEATURE="ExprTypeCoverage"; STATUS=IMPL; OWNER=exec; UPDATED=2026-01-12
                             const node_val = switch (node_prop_val) {
                                 .String => |s| Value{ .Str = s },
                                 .Int => |i| Value{ .Int = i },
                                 .Bool => |b| Value{ .Bool = b },
-                                .Float => Value{ .Null = {} }, // TODO: Add float support to Value
+                                .Float => |f| Value{ .Double = f }, // GAP-0120: Map Float (f64) to Double
                                 .Null => Value{ .Null = {} },
                                 .ExtValue => |ext| Value{ .ExtValue = ext },
                             };

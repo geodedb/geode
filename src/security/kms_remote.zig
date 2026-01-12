@@ -168,11 +168,12 @@ pub const RemoteKmsServer = struct {
     pub fn start(self: *RemoteKmsServer, port: u16) !void {
         self.port = port;
 
-        // Initialize QUIC transport
+        // GAP-0105 SECURITY FIX: Use secure TLS by default for KMS transport
+        // Initialize QUIC transport with certificate validation enabled
         var qt = try quic.QuicTransport.init(self.allocator, .{
             .port = port,
             .address = "0.0.0.0",
-            .allow_insecure = true,
+            .allow_insecure = false, // Security: require valid TLS certificates
         });
         errdefer qt.deinit();
 

@@ -2384,7 +2384,7 @@ pub fn rewriteExprWithAggregates(
             defer allocator.free(key_s);
             if (key_map.get(key_s)) |idx| {
                 const v = row[idx];
-                break :blk_key try bindingValueToExpr(v);
+                break :blk_key try bindingValueToExpr(allocator, v);
             }
             break :blk_key .{ .Null = {} };
         },
@@ -2413,7 +2413,7 @@ pub fn rewriteExprWithAggregates(
             const sig = sig_buf.items;
             if (agg_map.get(sig)) |rel| {
                 const v = row[key_len + rel];
-                break :blk_call try bindingValueToExpr(v);
+                break :blk_call try bindingValueToExpr(allocator, v);
             }
             break :blk_call .{ .Null = {} };
         },
@@ -2438,14 +2438,26 @@ pub fn rewriteExprWithAggregates(
     };
 }
 
-fn bindingValueToExpr(v: BindingValue) !ast.Expr {
+// GAP-0120 FIX: Added allocator parameter for List to ArrayLit conversion
+// CANARY: REQ=REQ-EXPR-TYPE-002; FEATURE="ExprTypeCoverage"; STATUS=IMPL; OWNER=exec; UPDATED=2026-01-12
+fn bindingValueToExpr(allocator: std.mem.Allocator, v: BindingValue) !ast.Expr {
     return switch (v) {
         .Null => ast.Expr{ .Null = {} },
         .Int => |n| ast.Expr{ .Int = n },
         .Decimal => |d| ast.Expr{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         .Str => |s| ast.Expr{ .String = s },
         .Bool => |b| ast.Expr{ .Bool = b },
-        .List => ast.Expr{ .Null = {} }, // TODO: Convert List to ArrayLit expression
+        .List => |list| blk_list: {
+            // GAP-0120 FIX: Properly convert List to ArrayLit expression
+            var exprs = try allocator.alloc(*ast.Expr, list.len);
+            for (list, 0..) |item, i| {
+                const converted = try bindingValueToExpr(allocator, item);
+                const expr_ptr = try allocator.create(ast.Expr);
+                expr_ptr.* = converted;
+                exprs[i] = expr_ptr;
+            }
+            break :blk_list ast.Expr{ .ArrayLit = exprs };
+        },
         // GAP-0045: Complex types return Null for expression conversion (handled at graph layer)
         .Node => ast.Expr{ .Null = {} },
         .Edge => ast.Expr{ .Null = {} },

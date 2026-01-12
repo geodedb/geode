@@ -12,11 +12,16 @@ const testing = std.testing; // global for test blocks
 /// GCM standard 96-bit nonce
 pub const NonceBytes = 12;
 
+/// GAP-0109 SECURITY FIX: Production build detection
+const is_production_build = @import("builtin").mode == .ReleaseFast or
+    @import("builtin").mode == .ReleaseSafe;
+
 /// Nonce generation mode
 pub const NonceMode = enum {
     /// Cryptographically secure random nonces (production mode)
     Random,
     /// Deterministic nonces for testing only (NEVER use in production)
+    /// GAP-0109 FIX: This mode is blocked in production builds
     Deterministic,
 };
 
@@ -25,7 +30,14 @@ pub const NonceGenerator = struct {
     mode: NonceMode,
     deterministic_counter: u64,
 
+    /// GAP-0109 SECURITY FIX: Block deterministic mode in production builds
     pub fn init(mode: NonceMode) NonceGenerator {
+        // In production builds, deterministic mode is blocked at runtime
+        if (is_production_build and mode == .Deterministic) {
+            std.log.err("SECURITY ERROR: Deterministic nonce mode is blocked in production builds. " ++
+                "This would allow catastrophic IV reuse attacks.", .{});
+            @panic("GAP-0109: Deterministic nonce mode blocked in production");
+        }
         return NonceGenerator{
             .mode = mode,
             .deterministic_counter = 0,

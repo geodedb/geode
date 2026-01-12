@@ -227,6 +227,10 @@ pub fn writeJsonValue(w: anytype, v: eval.Value) !void {
 
 /// Parse JSON parameters into parameter names and row matrix
 /// Supports both object params ({"id": 8, "name": "Alice"}) and array params ({"values": [1,2,3]})
+/// GAP-0117 SECURITY FIX: JSON parsing limits to prevent DoS
+const JSON_MAX_SIZE: usize = 10 * 1024 * 1024; // 10 MB max
+const JSON_MAX_DEPTH: usize = 32; // 32 levels max nesting
+
 pub fn parseParams(allocator: std.mem.Allocator, params_json: ?[]const u8, out_names: *[][]const u8, out_rows: *[][]const eval.Value) void {
     std.log.err("[parseParams ENTRY] params_json is {s}", .{if (params_json) |p| p else "NULL"});
     if (params_json == null) {
@@ -234,8 +238,18 @@ pub fn parseParams(allocator: std.mem.Allocator, params_json: ?[]const u8, out_n
         return;
     }
     const src = params_json.?;
+
+    // GAP-0117 SECURITY FIX: Validate JSON size before parsing
+    if (src.len > JSON_MAX_SIZE) {
+        std.log.err("[parseParams] JSON too large: {d} bytes (max: {d})", .{ src.len, JSON_MAX_SIZE });
+        return;
+    }
+
     std.log.err("[parseParams] Will parse: {s}", .{src});
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, src, .{}) catch |err| {
+    // GAP-0117: Use max_depth option to prevent stack exhaustion
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, src, .{
+        .max_depth = JSON_MAX_DEPTH,
+    }) catch |err| {
         std.log.err("[parseParams] JSON parse FAILED: {}", .{err});
         return;
     };

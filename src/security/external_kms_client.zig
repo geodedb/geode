@@ -752,20 +752,25 @@ pub const Client = struct {
     }
 
     /// Create a client with cryptographically secure key (for testing without deterministic seed)
-    pub fn initSecure(allocator: std.mem.Allocator) Client {
+    /// GAP-0107 SECURITY FIX: Use cryptographic random for all operations
+    /// GAP-0116 SECURITY FIX: Block LocalSimulated KMS in production builds
+    pub fn initSecure(allocator: std.mem.Allocator) !Client {
         if (is_production_build) {
-            std.log.warn("SECURITY WARNING: Using LocalSimulated KMS client in production build. " ++
-                "This is NOT secure. Configure VaultTransit or AwsKms for production.", .{});
+            std.log.err("SECURITY ERROR: LocalSimulated KMS cannot be used in production builds. " ++
+                "Configure VaultTransit or AwsKms for production.", .{});
+            return error.InsecureKmsInProduction;
         }
 
         var kek: [32]u8 = undefined;
         std.crypto.random.bytes(&kek);
+        // GAP-0107 FIX: PRNG field retained for backward compatibility but NOT used for nonces
         return .{ .allocator = allocator, .kek = kek, .prng = std.Random.DefaultPrng.init(0) };
     }
 
     pub fn wrap(self: *Client, data_key: [32]u8) !Envelope {
         var nonce: [12]u8 = undefined;
-        self.prng.random().bytes(&nonce);
+        // GAP-0107 SECURITY FIX: Use cryptographic random for nonces, not deterministic PRNG
+        std.crypto.random.bytes(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
         crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ct, &tag, &data_key, &.{}, nonce, self.kek);

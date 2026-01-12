@@ -826,7 +826,19 @@ class ParallelTestRunner:
         scenario_server_flags = scenario.server_default_flags or []
         # Combine both, with spec args taking precedence (added last to override)
         server_args_override = scenario_server_flags + spec_server_args
+        # GAP-0106: Auth is enabled by default, add --disable-auth for tests unless explicitly requiring auth
+        # Don't add --disable-auth if spec already has --enable-auth or --disable-auth in args
+        has_auth_flag = "--disable-auth" in server_args_override or "--enable-auth" in server_args_override
+        if server_enabled and not has_auth_flag and not server_config.get("auth", False):
+            server_args_override = ["--disable-auth"] + server_args_override
         server_env_overrides = server_config.get("env", {}) or {}
+        # If auth is enabled, set test credentials so tests can authenticate
+        # These must match the ${secret:*} substitutions in build_command (admin123, password123)
+        if "--enable-auth" in server_args_override:
+            if "GEODE_ADMIN_PASSWORD" not in server_env_overrides and "GEODE_ADMIN_PASSWORD" not in os.environ:
+                server_env_overrides["GEODE_ADMIN_PASSWORD"] = "admin123"  # Must match ${secret:admin_password}
+            if "GEODE_ADMIN_USERNAME" not in server_env_overrides and "GEODE_ADMIN_USERNAME" not in os.environ:
+                server_env_overrides["GEODE_ADMIN_USERNAME"] = "admin"
 
         # Allocate unique port for this spec from the port pool
         port = None

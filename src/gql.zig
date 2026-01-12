@@ -333,10 +333,32 @@ test "parameters in GROUP BY, ORDER BY, and RETURN print" {
     try std.testing.expect(result.program.statements.len == 1);
 }
 
-test "eval acceptance: WHERE and RETURN via unit harness" {
-    // Skip this test for now due to parsing issue with string literals being treated as identifiers
-    // TODO: Fix the parser to properly handle quoted strings in STARTS WITH expressions
-    return error.SkipZigTest;
+// GAP-0121 FIX: Added proper test case for STARTS WITH with various quote scenarios
+// CANARY: REQ=REQ-GQL-STARTS-WITH-001; FEATURE="StartsWithQuotes"; STATUS=TESTED; OWNER=parser; UPDATED=2026-01-12
+test "STARTS WITH with various quote scenarios" {
+    // Single-quoted string
+    const src1 = "MATCH (n) WHERE n.name STARTS WITH 'Al' RETURN n";
+    var result1 = try lib.parse(std.testing.allocator, src1, .{});
+    defer result1.deinit();
+    try std.testing.expect(result1.program.statements.len == 1);
+
+    // Double-quoted string
+    const src2 = "MATCH (n) WHERE n.name STARTS WITH \"Al\" RETURN n";
+    var result2 = try lib.parse(std.testing.allocator, src2, .{});
+    defer result2.deinit();
+    try std.testing.expect(result2.program.statements.len == 1);
+
+    // String with special characters (hyphen)
+    const src3 = "MATCH (n) WHERE n.name STARTS WITH 'A-B' RETURN n";
+    var result3 = try lib.parse(std.testing.allocator, src3, .{});
+    defer result3.deinit();
+    try std.testing.expect(result3.program.statements.len == 1);
+
+    // Numeric string
+    const src4 = "RETURN 'test123' STARTS WITH '123'";
+    var result4 = try lib.parse(std.testing.allocator, src4, .{});
+    defer result4.deinit();
+    try std.testing.expect(result4.program.statements.len == 1);
 }
 
 test "multi-hop and multiple MATCH patterns" {

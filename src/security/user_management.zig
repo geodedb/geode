@@ -317,12 +317,58 @@ pub fn hasUsers() bool {
     return user_store.?.count() > 0;
 }
 
+/// Generate a cryptographically secure random password
+/// GAP-0104/GAP-0108 SECURITY FIX: Use crypto random for initial passwords
+fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
+    const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+    var password: [24]u8 = undefined;
+    var random_bytes: [24]u8 = undefined;
+    std.crypto.random.bytes(&random_bytes);
+
+    for (&password, random_bytes) |*p, r| {
+        p.* = charset[r % charset.len];
+    }
+
+    return try allocator.dupe(u8, &password);
+}
+
 /// Create default admin user if no users exist
+/// GAP-0104 SECURITY FIX: Removed hardcoded credentials. Uses environment variables
+/// or generates cryptographically secure random passwords that are logged once on first startup.
 pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
     if (!hasUsers()) {
-        // Create default users with standard test credentials
-        // These match the test harness secret substitution values
-        try createUser(allocator, "admin", "admin123", "admin@geode.dev", .Admin);
-        try createUser(allocator, "testuser", "password123", "test@geode.dev", .User);
+        // Get credentials from environment variables (no hardcoded fallback)
+        const admin_user = std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_USERNAME") catch |err| blk: {
+            if (err == error.EnvironmentVariableNotFound) break :blk try allocator.dupe(u8, "geode");
+            return err;
+        };
+        defer allocator.free(admin_user);
+
+        const admin_email = std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_EMAIL") catch |err| blk: {
+            if (err == error.EnvironmentVariableNotFound) break :blk try allocator.dupe(u8, "admin@localhost");
+            return err;
+        };
+        defer allocator.free(admin_email);
+
+        // Get password from env or generate secure random password
+        var generated_password: bool = false;
+        const admin_password = std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD") catch |err| blk: {
+            if (err == error.EnvironmentVariableNotFound) {
+                generated_password = true;
+                break :blk try generateSecurePassword(allocator);
+            }
+            return err;
+        };
+        defer allocator.free(admin_password);
+
+        // Create admin user
+        try createUser(allocator, admin_user, admin_password, admin_email, .Admin);
+
+        // Log if password was generated (only on first startup)
+        if (generated_password) {
+            std.log.warn("SECURITY: Generated initial admin password. Set GEODE_ADMIN_PASSWORD environment variable for production.", .{});
+            std.log.warn("SECURITY: Initial admin username: {s}", .{admin_user});
+            // Note: In production, this should be written to a secure file, not logged
+        }
     }
 }

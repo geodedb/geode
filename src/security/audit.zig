@@ -122,10 +122,10 @@ pub const AuditLogger = struct {
             return error.SigningKeysMissing;
         }
 
-        // Generate deterministic key pair for testing
+        // GAP-0110 SECURITY FIX: Use cryptographic random for test key generation
+        // Generate random key pair for testing (not deterministic)
         var seed_bytes: [32]u8 = undefined;
-        var prng = std.Random.DefaultPrng.init(42);
-        prng.fill(&seed_bytes);
+        std.crypto.random.bytes(&seed_bytes);
         self.signing_key = try Ed25519.KeyPair.generateDeterministic(seed_bytes);
     }
 
