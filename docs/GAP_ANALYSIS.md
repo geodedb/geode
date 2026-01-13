@@ -12,48 +12,23 @@
 
 | Severity | Count | Status |
 |----------|-------|--------|
-| Critical | 0 | Resolved |
-| High | 0 | Resolved |
-| Medium | 0 | Resolved |
-| Low | 0 | Resolved |
+| Critical | 0 | - |
+| High | 0 | - |
+| Medium | 0 | - |
+| Low | 0 | - |
 
 **Total Open Gaps**: 0
 
-**Resolved Sessions**:
+**Previous Resolution Sessions**:
 - **January 12, 2026**: 9 gaps (GAP-0112 through GAP-0122) - All verified with CANARY markers
 - **January 13, 2026**: 14 gaps (GAP-0123 through GAP-0136) - All implemented with CANARY markers
+- **January 13, 2026**: 3 gaps (GAP-0137 through GAP-0139) - All implemented with CANARY markers and geodetestlab specs
 
 ---
 
-## All Gaps Resolved
+## Open Gaps
 
-All previously identified gaps have been addressed. See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for full resolution history.
-
-### January 13, 2026 Resolutions Summary
-
-| Gap ID | Description | Resolution |
-|--------|-------------|------------|
-| GAP-0134 | Shell REPL TLS configuration | Added ShellTlsConfig, quicConnect respects TLS flags |
-| GAP-0123/0136 | CSR property offset | Added EdgeInput struct with properties_offset field |
-| GAP-0124 | Decimal overflow guard | Added @mulWithOverflow/@addWithOverflow checks |
-| GAP-0130 | ORDER BY in federation | Added OrderByKey struct, proper distributed sorting |
-| GAP-0135 | KMS TLS production guard | Added validateForProduction() with release mode check |
-| GAP-0125 | Subquery imported variables | Added CALL { WITH $var } parsing |
-| GAP-0126 | User metadata handling | Changed from silent drop to error.MetadataFieldDeprecated |
-| GAP-0127 | SHOW statement types | Added explicit switch for all ShowType values |
-| GAP-0128 | Unknown statement errors | Added @tagName for specific error messages |
-| GAP-0129 | TopK heap optimization | Implemented O(n log k) heap-based selection |
-| GAP-0131 | Deprecated global catalog | Added CANARY deprecation markers |
-| GAP-0132 | Planner cost benchmarks | Added CANARY markers for synthetic data |
-| GAP-0133 | Raft variance benchmarks | Added CANARY markers for synthetic model |
-
-### Evidence Summary
-
-All implementations include:
-- CANARY markers with requirement IDs
-- Unit tests where applicable
-- Regression tests in `geodetestlab/specs/gap_0123_0136_regression.yml`
-- Build verification (`make clean && make` passes)
+**No open gaps at this time.**
 
 ---
 
@@ -66,12 +41,12 @@ New gaps should be identified through:
 4. Security audits
 
 For each gap:
-1. Create GitLab issue with Gap-ID label
+1. Create GitLab issue with Gap-ID in title
 2. Add entry to this document
 3. Implement fix with CANARY marker
 4. Add regression test
 5. Update documentation
-6. Close GitLab issue
+6. Close GitLab issue and move entry to GAP_ANALYSIS_RESOLVED.md
 
 ---
 

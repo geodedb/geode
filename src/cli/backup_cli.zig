@@ -11,11 +11,36 @@ const migration = @import("migration");
 // CANARY: REQ=REQ-M4.3-BACKUP-CLI-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
 // Phase 4 M4.3: Extract backup/restore/migrate commands from cli/main.zig
 
+// GAP-0137 SECURITY FIX: Add TLS certificate verification support for backup/migrate CLI
+// CANARY: REQ=REQ-BACKUP-TLS-001; FEATURE="BackupTLSCertVerification"; ASPECT=Security; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-13
+
 // Exit codes for consistency with main CLI
 const ExitCode = enum(u8) {
     success = 0,
     general_error = 1,
     usage_error = 2,
+};
+
+// GAP-0137: TLS configuration for backup/migrate operations
+const TlsConfig = struct {
+    insecure: bool = false,
+    ca_cert_path: ?[]const u8 = null,
+    client_cert_path: ?[]const u8 = null,
+    client_key_path: ?[]const u8 = null,
+
+    // Validate mutual TLS configuration
+    pub fn validate(self: TlsConfig) bool {
+        // If either client cert or key is provided, both must be provided
+        if ((self.client_cert_path != null) != (self.client_key_path != null)) {
+            return false;
+        }
+        return true;
+    }
+
+    // Check if custom certificates are configured
+    pub fn hasCerts(self: TlsConfig) bool {
+        return self.ca_cert_path != null or self.client_cert_path != null or self.client_key_path != null;
+    }
 };
 
 // Cross-platform stdin helper (matches pattern in main.zig)
@@ -96,12 +121,15 @@ fn printBackupUsage() void {
         "Use 'geode backup <subcommand> --help' for detailed usage\n", .{});
 }
 
+// GAP-0137: Updated to support TLS certificate verification
 fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var output: ?[]const u8 = null;
     var backup_type: []const u8 = "full";
     var parent_id: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
     var compress: bool = false;
+    // GAP-0137: TLS configuration options
+    var tls_config = TlsConfig{};
 
     // Parse arguments
     var i: usize = start_idx;
@@ -117,11 +145,21 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "  --parent <id>          Parent backup ID (for incremental)\n" ++
                 "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
                 "  --compress             Compress backup file\n" ++
+                "  --insecure             Skip TLS certificate verification\n" ++
+                "  --ca-cert <path>       CA certificate path for server verification\n" ++
+                "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
+                "  --client-key <path>    Client private key path for mutual TLS\n" ++
                 "  -h, --help             Show this help\n" ++
+                "\n" ++
+                "TLS Certificate Options:\n" ++
+                "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
+                "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
                 "\n" ++
                 "Examples:\n" ++
                 "  geode backup create --type full --output ./backup.gz --compress\n" ++
                 "  geode backup create --type incremental --output ./incr.gz --parent abc123\n" ++
+                "  geode backup create --output ./backup.gz --insecure\n" ++
+                "  geode backup create --output ./backup.gz --ca-cert /etc/ssl/ca.crt\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--output")) {
@@ -154,12 +192,41 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             server = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--compress")) {
             compress = true;
+        } else if (std.mem.eql(u8, argv[i], "--insecure")) {
+            tls_config.insecure = true;
+        } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.ca_cert_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--client-cert")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.client_cert_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--client-key")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-key requires a key path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.client_key_path = argv[i];
         }
     }
 
     if (output == null) {
         std.debug.print("Error: --output is required\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+
+    // GAP-0137: Validate TLS configuration
+    if (!tls_config.validate()) {
+        std.debug.print("Error: Both --client-cert and --client-key must be provided for mutual TLS\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
     // Validate type
@@ -169,7 +236,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     }
 
     // Execute backup
-    try executeBackup(allocator, output.?, backup_type, parent_id, server, compress);
+    try executeBackup(allocator, output.?, backup_type, parent_id, server, compress, tls_config);
 
     std.debug.print("Backup created successfully: {s}\n", .{output.?});
     if (compress) {
@@ -530,11 +597,14 @@ fn cmdBackupCleanup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
+// GAP-0137: Updated legacy backup to support TLS options
 fn cmdBackupCreateLegacy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var dest: ?[]const u8 = null;
     var mode: []const u8 = "full";
     var parent_id: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
+    // GAP-0137: TLS configuration options
+    var tls_config = TlsConfig{};
 
     // Parse arguments
     var i: usize = start_idx;
@@ -567,12 +637,41 @@ fn cmdBackupCreateLegacy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx
             }
             i += 1;
             server = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--insecure")) {
+            tls_config.insecure = true;
+        } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.ca_cert_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--client-cert")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.client_cert_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--client-key")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-key requires a key path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.client_key_path = argv[i];
         }
     }
 
     if (dest == null) {
         std.debug.print("Error: --dest is required\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+
+    // GAP-0137: Validate TLS configuration
+    if (!tls_config.validate()) {
+        std.debug.print("Error: Both --client-cert and --client-key must be provided for mutual TLS\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
     // Validate mode
@@ -582,7 +681,7 @@ fn cmdBackupCreateLegacy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx
     }
 
     // Execute backup (legacy call without compression)
-    try executeBackup(allocator, dest.?, mode, parent_id, server, false);
+    try executeBackup(allocator, dest.?, mode, parent_id, server, false, tls_config);
 
     std.debug.print("Backup completed successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
@@ -590,11 +689,14 @@ fn cmdBackupCreateLegacy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx
 
 /// Restore command handler
 /// Handles: restore <backup_file> [options]
+// GAP-0137: Updated to support TLS certificate verification
 pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var source: ?[]const u8 = null;
     var target_time: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
     var skip_confirmation: bool = false;
+    // GAP-0137: TLS configuration options
+    var tls_config = TlsConfig{};
 
     // Parse arguments
     var i: usize = start_idx;
@@ -614,11 +716,21 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
                 "  --yes                  Skip confirmation prompts\n" ++
                 "  --confirm              Skip confirmation prompts (alias for --yes)\n" ++
+                "  --insecure             Skip TLS certificate verification\n" ++
+                "  --ca-cert <path>       CA certificate path for server verification\n" ++
+                "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
+                "  --client-key <path>    Client private key path for mutual TLS\n" ++
                 "  -h, --help             Show this help\n" ++
+                "\n" ++
+                "TLS Certificate Options:\n" ++
+                "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
+                "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
                 "\n" ++
                 "Examples:\n" ++
                 "  geode restore ./backup.gql --confirm\n" ++
                 "  geode restore --source s3://bucket/backup.gql --yes\n" ++
+                "  geode restore ./backup.gql --yes --insecure\n" ++
+                "  geode restore ./backup.gql --yes --ca-cert /etc/ssl/ca.crt\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--source")) {
@@ -644,6 +756,29 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             server = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--yes") or std.mem.eql(u8, argv[i], "--confirm")) {
             skip_confirmation = true;
+        } else if (std.mem.eql(u8, argv[i], "--insecure")) {
+            tls_config.insecure = true;
+        } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.ca_cert_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--client-cert")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.client_cert_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--client-key")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-key requires a key path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.client_key_path = argv[i];
         } else if (source == null and !std.mem.startsWith(u8, argv[i], "--")) {
             // Positional argument for backup file
             source = argv[i];
@@ -654,6 +789,12 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         std.debug.print("Error: --source is required\n", .{});
         std.debug.print("Use 'geode restore --help' for usage information\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+
+    // GAP-0137: Validate TLS configuration
+    if (!tls_config.validate()) {
+        std.debug.print("Error: Both --client-cert and --client-key must be provided for mutual TLS\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
     // Confirmation prompt unless --yes is specified
@@ -693,8 +834,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         std.debug.print("Proceeding with restore...\n", .{});
     }
 
-    // Execute restore
-    try executeRestore(allocator, source.?, target_time, server);
+    // Execute restore (GAP-0137: pass TLS config)
+    try executeRestore(allocator, source.?, target_time, server, tls_config);
 
     std.debug.print("Restore completed successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
@@ -753,12 +894,27 @@ const MigrationExecContext = struct {
     password: ?[]const u8,
 };
 
-fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8) !quic.QuicClient {
+// GAP-0137: Updated to support TLS certificate verification
+fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8, tls_config: TlsConfig) !quic.QuicClient {
     var client = quic.QuicClient.init(allocator);
     const colon = std.mem.lastIndexOf(u8, server_addr, ":") orelse return error.InvalidArgument;
     const host = server_addr[0..colon];
     const port = try std.fmt.parseInt(u16, server_addr[colon + 1 ..], 10);
-    try client.connectInsecure(host, port, true);
+
+    // GAP-0137: Choose connection method based on TLS configuration
+    // Priority: explicit certs > insecure flag > default secure
+    if (tls_config.hasCerts()) {
+        // Use explicit certificates for enterprise PKI/mutual TLS
+        try client.connectEx(host, port, tls_config.ca_cert_path, tls_config.client_cert_path, tls_config.client_key_path);
+    } else if (tls_config.insecure) {
+        // Use insecure connect only when explicitly requested
+        std.debug.print("Warning: TLS verification disabled (--insecure flag)\n", .{});
+        try client.connectInsecure(host, port, true);
+    } else {
+        // Default: secure connection with system CA store
+        try client.connectInsecure(host, port, false);
+    }
+
     try client.waitForHandshake(10);
     return client;
 }
@@ -916,6 +1072,7 @@ fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 }
 
 // CANARY: REQ=REQ-CLI-MIGRATE-RUN-001; FEATURE="CLIMigrateRun"; ASPECT=MigrationModule; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
+// GAP-0137: Updated to support TLS certificate verification
 fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Parse arguments to find migration directory (default: ./migrations)
     var migrations_dir: []const u8 = "migrations";
@@ -923,6 +1080,8 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     var server: []const u8 = "127.0.0.1:3141";
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
+    // GAP-0137: TLS configuration options
+    var tls_config = TlsConfig{};
 
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -937,6 +1096,10 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 "  --user <username>      Username for authentication\n" ++
                 "  --password <password>  Password for authentication\n" ++
                 "  --dry-run              Show what would be applied without applying\n" ++
+                "  --insecure             Skip TLS certificate verification\n" ++
+                "  --ca-cert <path>       CA certificate path for server verification\n" ++
+                "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
+                "  --client-key <path>    Client private key path for mutual TLS\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
@@ -945,6 +1108,29 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             migrations_dir = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--dry-run")) {
             dry_run = true;
+        } else if (std.mem.eql(u8, argv[i], "--insecure")) {
+            tls_config.insecure = true;
+        } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.ca_cert_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--client-cert")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-cert requires a certificate path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.client_cert_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--client-key")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --client-key requires a key path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            tls_config.client_key_path = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --server requires a value\n", .{});
@@ -967,6 +1153,12 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             i += 1;
             password = argv[i];
         }
+    }
+
+    // GAP-0137: Validate TLS configuration
+    if (!tls_config.validate()) {
+        std.debug.print("Error: Both --client-cert and --client-key must be provided for mutual TLS\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
     printStdout("Running migrations from: {s}\n", .{migrations_dir});
@@ -1023,7 +1215,8 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     }
 
     const cfg = migration.MigrationConfig{ .migrations_dir = migrations_dir };
-    var quic_client = connectMigrationClient(allocator, server) catch |err| {
+    // GAP-0137: Pass TLS configuration to connection function
+    var quic_client = connectMigrationClient(allocator, server, tls_config) catch |err| {
         std.debug.print("Error: Failed to connect to server {s}: {}\n", .{ server, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -1155,8 +1348,9 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 // ============================================================================
 
 // CANARY: REQ=REQ-BACKUP-REMOTE-001; FEATURE="RemoteBackup"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// GAP-0137: Updated to support TLS certificate verification
 // Remote server backup execution function using QUIC protocol
-fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
+fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
     // Parse server address
     const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidAddress;
     const host = server[0..colon_idx];
@@ -1166,11 +1360,25 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
     var client = quic.QuicClient.init(allocator);
     defer client.deinit();
 
-    // Connect to remote server (insecure mode for now)
-    _ = client.connectInsecure(host, port, true) catch |err| {
-        std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
-        return err;
-    };
+    // GAP-0137: Choose connection method based on TLS configuration
+    if (tls_config.hasCerts()) {
+        _ = client.connectEx(host, port, tls_config.ca_cert_path, tls_config.client_cert_path, tls_config.client_key_path) catch |err| {
+            std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
+            return err;
+        };
+    } else if (tls_config.insecure) {
+        std.debug.print("Warning: TLS verification disabled (--insecure flag)\n", .{});
+        _ = client.connectInsecure(host, port, true) catch |err| {
+            std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
+            return err;
+        };
+    } else {
+        // Default: secure connection with system CA store
+        _ = client.connectInsecure(host, port, false) catch |err| {
+            std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
+            return err;
+        };
+    }
 
     // Wait for handshake
     _ = client.waitForHandshake(10) catch |err| {
@@ -1296,12 +1504,13 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
     std.debug.print("Backup completed: {s} ({} bytes)\n", .{ dest, bytes_received });
 }
 
-fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool) !void {
+// GAP-0137: Updated to support TLS certificate verification
+fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
 
     // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=ServerConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
     // Always try to connect to server via QUIC first - this ensures we get real data
-    executeRemoteBackup(allocator, dest, mode, parent_id, server, compress) catch |err| {
+    executeRemoteBackup(allocator, dest, mode, parent_id, server, compress, tls_config) catch |err| {
         std.debug.print("Warning: Could not connect to server {s}: {}\n", .{ server, err });
         std.debug.print("Attempting local data directory backup...\n", .{});
 
@@ -1755,8 +1964,9 @@ fn generateBackupId() u128 {
 }
 
 // CANARY: REQ=REQ-BACKUP-RESTORE-001; FEATURE="Backup Restore"; ASPECT=RemoteRestore; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// GAP-0137: Updated to support TLS certificate verification
 // Remote server restore execution function - sends restore request via QUIC
-fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
+fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8, tls_config: TlsConfig) !void {
     std.debug.print("RESTORE: Connecting to server {s} for remote restore...\n", .{server});
 
     // Parse server address
@@ -1775,10 +1985,25 @@ fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target
     var client = quic.QuicClient.init(allocator);
     defer client.deinit();
 
-    client.connectInsecure(host, port, true) catch |err| {
-        std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
-        return error.ConnectionFailed;
-    };
+    // GAP-0137: Choose connection method based on TLS configuration
+    if (tls_config.hasCerts()) {
+        client.connectEx(host, port, tls_config.ca_cert_path, tls_config.client_cert_path, tls_config.client_key_path) catch |err| {
+            std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
+            return error.ConnectionFailed;
+        };
+    } else if (tls_config.insecure) {
+        std.debug.print("Warning: TLS verification disabled (--insecure flag)\n", .{});
+        client.connectInsecure(host, port, true) catch |err| {
+            std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
+            return error.ConnectionFailed;
+        };
+    } else {
+        // Default: secure connection with system CA store
+        client.connectInsecure(host, port, false) catch |err| {
+            std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
+            return error.ConnectionFailed;
+        };
+    }
 
     client.waitForHandshake(10) catch |err| {
         std.debug.print("RESTORE: TLS handshake failed: {}\n", .{err});
@@ -1840,8 +2065,9 @@ fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target
 }
 
 // CANARY: REQ=REQ-BACKUP-RESTORE-002; FEATURE="Backup Restore"; ASPECT=LocalRestore; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// GAP-0137: Updated to support TLS certificate verification
 // Local restore execution - handles local file restoration
-fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8) !void {
+fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8, tls_config: TlsConfig) !void {
     std.debug.print("RESTORE: Initiating restore from '{s}'\n", .{source});
 
     // Check if source is a remote URI (s3://, https://, etc.)
@@ -1849,8 +2075,8 @@ fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time:
         std.mem.startsWith(u8, source, "https://") or
         std.mem.startsWith(u8, source, "http://"))
     {
-        // Remote restore via server
-        return executeRemoteRestore(allocator, source, target_time, server);
+        // Remote restore via server (GAP-0137: pass TLS config)
+        return executeRemoteRestore(allocator, source, target_time, server, tls_config);
     }
 
     // Local restore

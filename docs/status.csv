@@ -117,6 +117,7 @@ REQ-BACKUP-REMOTE-001,RemoteBackup,QUICProtocol,IMPL,,,cli,2026-01-09,src/cli/ba
 REQ-BACKUP-RESTORE-001,Backup Restore,RemoteRestore,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-BACKUP-RESTORE-003,Backup Restore Manager,LocalRestoreImpl,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
+REQ-BACKUP-TLS-001,BackupTLSCertVerification,Security,IMPL,,,cli,2026-01-13,src/cli/backup_cli.zig
 REQ-BM25-INDEX-OPTIMIZER-001,BM25 IndexOptimizer Integration,CostEstimation,TESTED,TestCANARY_REQ_BM25_INDEX_OPTIMIZER_001_CostEstimation,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
 REQ-BM25-INDEX-OPTIMIZER-002,BM25 IndexOptimizer Integration,FulltextOptimization,TESTED,TestCANARY_REQ_BM25_INDEX_OPTIMIZER_002_FulltextOptimization,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
 REQ-BM25-INDEX-OPTIMIZER-003,BM25 IndexOptimizer Integration,StatisticsIntegration,TESTED,TestCANARY_REQ_BM25_INDEX_OPTIMIZER_003_StatisticsIntegration,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
@@ -172,7 +173,6 @@ REQ-CLI-MIGRATE-CREATE-001,CLIMigrateCreate,FileCreation,IMPL,,,cli,2026-01-11,s
 REQ-CLI-MIGRATE-RUN-001,CLIMigrateRun,MigrationModule,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-POLICY-CMD-001,Policy CLI Commands,PolicyManagement,IMPL,,,security,2026-01-10,src/security/user_manager.zig
-REQ-CLI-QUERY-001,CLIQueryExecution,QUIC,IMPL,,,cli,2026-01-11,src/cli/main.zig
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,IMPL,,,security,2026-01-10,src/security/user_manager.zig
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,TestCANARY_REQ_CLI_ROUTE_001_OptionRouting,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedBinary,IMPL,TestCANARY_REQ_CLI_SUBPROCESS_ELIMINATION_001_UnifiedBinary,,cli,2025-10-05,src/cli/main.zig
@@ -187,6 +187,7 @@ REQ-CLI-WD-001,CLI Working Directory Handling,TestInfrastructure,TESTED,TestCANA
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,IntegrationTests,TESTED,TestCANARY_ClientEnvVar_Integration,,clients,2025-10-04,tests/test_environment_variables_integration.zig
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,VariableResolution,IMPL,TestCANARY_ClientCli_EnvVarResolution,,clients,2025-10-04,src/client/main.zig
 REQ-CLIENT-INTEGRATION-001,range() function,BuiltinFunctions,IMPL,,,eval,2025-11-15,src/eval.zig
+REQ-CODE-QUALITY-001,DeadCodeRemoval,Maintenance,IMPL,,,cli,2026-01-13,src/cli/main.zig
 REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-001,Compilation Fixes Integration,CrossAlgorithmConsistency,TESTED,test_cross_algorithm_consistency_post_fix,,build,2025-10-05,tests/test_compilation_fixes_integration_october_2025.zig
 REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-002,Compilation Fixes Integration,LargeScaleStability,TESTED,test_large_scale_stability_post_fix,,build,2025-10-05,tests/test_compilation_fixes_integration_october_2025.zig
 REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-003,Compilation Fixes Integration,MemoryLeakPrevention,TESTED,test_memory_leak_prevention_post_fix,,build,2025-10-05,tests/test_compilation_fixes_integration_october_2025.zig
@@ -2064,6 +2065,15 @@ REQ-SERVER-STARTUP-INTEGRATION-001,Server Startup Integration Tests,EndToEndServ
 REQ-SERVER-STARTUP-REGRESSION-001,Server Startup Regression Tests,UnifiedBinaryServerStartup,TESTED,TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup,,server,2025-10-05,tests/test_server_startup_regression.zig
 REQ-SET-RETURN-FIX-001,SetReturnFix,NoReturnClause,IMPL,,,engine,2025-12-23,src/execution/match_operations.zig
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,IMPL,,,distributed,2026-01-09,src/distributed/query_coordinator.zig
+REQ-SHOW-CONSTRAINTS-001,SHOW CONSTRAINTS,CatalogList,IMPL,,,catalog,2026-01-13,src/schema/catalog.zig
+REQ-SHOW-CONSTRAINTS-002,SHOW CONSTRAINTS,StatementHandler,IMPL,,,execution,2026-01-13,src/execution/statement_handlers.zig
+REQ-SHOW-FUNCTIONS-001,SHOW FUNCTIONS,StatementHandler,IMPL,,,execution,2026-01-13,src/execution/statement_handlers.zig
+REQ-SHOW-INDEXES-001,SHOW INDEXES,CatalogList,IMPL,,,catalog,2026-01-13,src/schema/catalog.zig
+REQ-SHOW-PROCEDURES-001,SHOW PROCEDURES,StatementHandler,IMPL,,,execution,2026-01-13,src/execution/statement_handlers.zig
+REQ-SHOW-SCHEMAS-001,SHOW SCHEMAS,CatalogList,IMPL,,,catalog,2026-01-13,src/schema/catalog.zig
+REQ-SHOW-STMT-TEST-001,SHOW Statements,TestCoverage,IMPL,,,testing,2026-01-13,geodetestlab/specs/gap_139_show_statements.yml
+REQ-SHOW-TABLES-001,SHOW TABLES,StatementHandler,IMPL,,,execution,2026-01-13,src/execution/statement_handlers.zig
+REQ-SHOW-TABLES-002,SHOW TABLES,GraphStorageList,IMPL,,,engine,2026-01-13,src/server/graph_storage_manager.zig
 REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
@@ -2144,6 +2154,7 @@ REQ-TEST-001,RegressionTests,ExitCodeHandling,IMPLEMENTED,,,test,2025-10-18,src/
 REQ-TEST-002,RegressionTests,ProcedureRegistry,IMPLEMENTED,,,test,2025-10-18,src/test_regression_fixes.zig
 REQ-TEST-CALL-REGRESSION,CallProcedureRegression,Testing,ACTIVE,,,test,2025-10-18,src/test_call_regression.zig
 REQ-TEST-SUITE-001,Comprehensive Regression Test Suite,QualityAssurance,TESTED,TestCANARY_REQ_TEST_SUITE_001_AllRegressionTests,,testing,2025-10-04,scripts/test/run_all_regression_tests.sh
+REQ-TLS-BACKUP-TEST-001,Backup TLS,TestCoverage,IMPL,,,testing,2026-01-13,geodetestlab/specs/gap_137_backup_tls.yml
 REQ-TXN-ISOLATION-001,Enhanced Transaction Isolation,IsolationLevels,IMPL,TestCANARY_REQ_TXN_ISOLATION_001_IsolationLevels,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig
 REQ-TXN-ISOLATION-002,Advanced Phantom Read Prevention,PhantomReadPrevention,IMPL,TestCANARY_REQ_TXN_ISOLATION_002_PhantomReadPrevention,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig
 REQ-TXN-ISOLATION-003,Serializable Snapshot Isolation,SerializableSSI,IMPL,TestCANARY_REQ_TXN_ISOLATION_003_SerializableSSI,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig

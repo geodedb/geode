@@ -424,6 +424,63 @@ pub fn listGraphNames(allocator: std.mem.Allocator) ![][]const u8 {
     return names.toOwnedSlice(allocator);
 }
 
+// GAP-0139: SHOW TABLES implementation helper
+// CANARY: REQ=REQ-SHOW-TABLES-002; FEATURE="SHOW TABLES"; ASPECT=GraphStorageList; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-13
+/// List all unique node labels from all graphs
+/// In graph databases, node labels serve as the equivalent of "tables"
+pub fn listNodeLabels(allocator: std.mem.Allocator) ![][]const u8 {
+    var label_set = std.StringHashMap(void).init(allocator);
+    defer label_set.deinit();
+
+    // Collect labels from all graphs
+    if (g_graph_storages) |storages| {
+        var it = storages.valueIterator();
+        while (it.next()) |storage_ptr| {
+            // Dereference the pointer to GraphStorage
+            const storage = storage_ptr.*;
+            // Iterate over all nodes in this graph storage
+            var node_it = storage.nodes.iterator();
+            while (node_it.next()) |entry| {
+                const node = entry.value_ptr.*;
+                for (node.labels) |label| {
+                    // Use put to track unique labels
+                    const label_copy = try allocator.dupe(u8, label);
+                    errdefer allocator.free(label_copy);
+                    const result = try label_set.getOrPut(label_copy);
+                    if (result.found_existing) {
+                        // Already have this label, free the copy
+                        allocator.free(label_copy);
+                    }
+                }
+            }
+        }
+    } else if (g_graph_storage) |storage| {
+        var node_it = storage.nodes.iterator();
+        while (node_it.next()) |entry| {
+            const node = entry.value_ptr.*;
+            for (node.labels) |label| {
+                const label_copy = try allocator.dupe(u8, label);
+                errdefer allocator.free(label_copy);
+                const result = try label_set.getOrPut(label_copy);
+                if (result.found_existing) {
+                    allocator.free(label_copy);
+                }
+            }
+        }
+    }
+
+    // Convert label set to array
+    var labels = try std.ArrayList([]const u8).initCapacity(allocator, label_set.count());
+    errdefer labels.deinit(allocator);
+
+    var key_it = label_set.keyIterator();
+    while (key_it.next()) |key| {
+        try labels.append(allocator, key.*);
+    }
+
+    return labels.toOwnedSlice(allocator);
+}
+
 /// Drop a graph storage by name
 pub fn dropGraphStorage(name: []const u8) !void {
     // Debug: Log entry to function

@@ -4,11 +4,17 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Last Updated**: January 13, 2026
 **Last Verified**: January 13, 2026
-**GitLab Issues**: 136 closed gap-labeled issues
+**GitLab Issues**: 139 closed gap-labeled issues
 
-**Total Resolved**: 136 gaps (GAP-0001 through GAP-0136) ✅
+**Total Resolved**: 139 gaps (GAP-0001 through GAP-0139) ✅
 
-**Current Status**: ALL GAPS RESOLVED! See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for current status.
+**Current Status**: All gaps resolved. See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for process documentation.
+
+**January 13, 2026 Gap Resolution Session (PM)**:
+3 gaps identified and resolved with CANARY markers and geodetestlab specs:
+- #219 (GAP-0137) - Backup/Migrate CLI TLS → **TlsConfig struct + CLI args + validation** ✅
+- #220 (GAP-0138) - Dead code removal → **runEmbeddedClient and ClientConfig removed** ✅
+- #221 (GAP-0139) - SHOW statement types → **executeShow() implements all SHOW types** ✅
 
 **Note**: Gap analysis on January 10, 2026 identified 21 additional gaps (GAP-0065 through GAP-0085) through comprehensive codebase scanning. Many were resolved on the same day.
 
@@ -69,6 +75,54 @@ This document contains gaps that have been verified as resolved from previous ga
 - #181 (GAP-0099) - Range Scan → Actual B-tree traversal ✅
 - #182 (GAP-0100) - KMS wrapLocalDev → AES-256-GCM ✅
 - #183 (GAP-0101) - CDC Sinks → Verified as real implementations ✅
+
+---
+
+## Latest Resolutions (January 13, 2026 PM Session)
+
+### GAP-0137: Backup/Migrate CLI TLS Certificate Verification (Resolved January 13, 2026)
+- **Original Gap:** Backup/Migrate CLI commands used `connectInsecure()` without TLS verification
+- **Original Severity:** Medium (Security)
+- **GitLab Issue:** [#219](https://gitlab.com/devnw/geode/geode/-/issues/219)
+- **Resolution Evidence:**
+  - src/cli/backup_cli.zig — Added `TlsConfig` struct with insecure, ca_cert_path, client_cert_path, client_key_path fields
+  - All connection functions updated to accept TLS config
+  - CLI commands (backup create, restore, migrate run) support --insecure, --ca-cert, --client-cert, --client-key
+  - Validation ensures both client-cert and client-key provided together
+  - Security warning displayed when --insecure used
+  - CANARY: REQ=REQ-BACKUP-TLS-001; STATUS=IMPL; UPDATED=2026-01-13
+- **Verification:** `make geodetestlab-comprehensive` passes, geodetestlab/specs/gap_137_backup_tls.yml 100%
+
+---
+
+### GAP-0138: Dead Code Removal - runEmbeddedClient (Resolved January 13, 2026)
+- **Original Gap:** `runEmbeddedClient()` function and `ClientConfig` struct were dead code
+- **Original Severity:** Low (Code Quality)
+- **GitLab Issue:** [#220](https://gitlab.com/devnw/geode/geode/-/issues/220)
+- **Resolution Evidence:**
+  - src/cli/main.zig — Removed `ClientConfig` struct (lines 430-449)
+  - src/cli/main.zig — Removed `runEmbeddedClient()` function (lines 1817-1913)
+  - Replaced with CANARY comments documenting removal
+  - CANARY: REQ=REQ-CODE-QUALITY-001; STATUS=IMPL; UPDATED=2026-01-13
+- **Verification:** `zig build` passes, no grep matches for removed code
+
+---
+
+### GAP-0139: SHOW Statement Types Implementation (Resolved January 13, 2026)
+- **Original Gap:** SHOW INDEXES/CONSTRAINTS/TABLES/PROCEDURES/FUNCTIONS returned "NotImplemented"
+- **Original Severity:** Low (GQL Compliance)
+- **GitLab Issue:** [#221](https://gitlab.com/devnw/geode/geode/-/issues/221)
+- **Resolution Evidence:**
+  - src/schema/catalog.zig — Added `listAllIndexes()`, `listAllConstraints()`, `listAllSchemas()` methods
+  - src/server/graph_storage_manager.zig — Added `listNodeLabels()` function for SHOW TABLES
+  - src/execution/statement_handlers.zig — `executeShow()` now implements all SHOW types:
+    - SHOW INDEXES: Returns index metadata from catalog
+    - SHOW CONSTRAINTS: Returns constraint metadata from catalog
+    - SHOW TABLES: Returns node labels (graph database equivalent)
+    - SHOW PROCEDURES: Returns empty (Geode has no stored procedures)
+    - SHOW FUNCTIONS: Returns comprehensive list of 60+ built-in functions
+  - CANARY markers: REQ=REQ-SHOW-INDEXES-001, REQ-SHOW-CONSTRAINTS-002, REQ-SHOW-TABLES-001/002, REQ-SHOW-PROCEDURES-001, REQ-SHOW-FUNCTIONS-001
+- **Verification:** `make geodetestlab-comprehensive` passes, geodetestlab/specs/gap_139_show_statements.yml 100%
 
 ---
 

@@ -426,27 +426,9 @@ const ServerConfig = struct {
     test_exit_after_first: bool = false,
 };
 
-// Client configuration structure
-const ClientConfig = struct {
-    query_text: []const u8,
-    server: []const u8 = "127.0.0.1:3141",
-    format: []const u8 = "json",
-    page_size: usize = 1,
-    pull_all: bool = false,
-    extra_pull: usize = 0,
-    begin: bool = false,
-    commit: bool = false,
-    rollback: bool = false,
-    process_path: ?[]const u8 = null,
-    insecure: bool = false,
-    server_args: [][]const u8 = &.{},
-    json_params: std.StringHashMap([]const u8) = undefined,
-    // GAP-0113 SECURITY FIX: TLS certificate verification options
-    // CANARY: REQ=REQ-TLS-CERT-001; FEATURE="TLSCertVerification"; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-12
-    ca_cert_path: ?[]const u8 = null,
-    client_cert_path: ?[]const u8 = null,
-    client_key_path: ?[]const u8 = null,
-};
+// GAP-0138 CODE CLEANUP: Removed unused ClientConfig struct
+// Previously defined at lines 430-449, was only used by dead code runEmbeddedClient function
+// The query command now uses executeQuicQuery() with inline parameters (GAP-0113 fix)
 
 const MAX_LINE_SIZE: usize = 65_536;
 
@@ -1814,103 +1796,11 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
-// Direct client function (eliminates subprocess spawning)
-fn runEmbeddedClient(allocator: std.mem.Allocator, config: ClientConfig) !void {
-    // Unified binary approach - no subprocess spawning required
-    // Direct function calls replace geodec subprocess spawning
-
-    // Build argument array for client
-    var client_args = std.ArrayList([]const u8).initCapacity(allocator, 16) catch return error.OutOfMemory;
-    defer client_args.deinit(allocator);
-
-    // Find geodec binary path
-    const self_exe_path = try std.fs.selfExePathAlloc(allocator);
-    defer allocator.free(self_exe_path);
-
-    const self_dir_path = std.fs.path.dirname(self_exe_path) orelse ".";
-    const geodec_path = try std.fs.path.join(allocator, &.{ self_dir_path, "geodec" });
-    defer allocator.free(geodec_path);
-
-    // Check if geodec exists in the same directory
-    if (std.fs.accessAbsolute(geodec_path, .{})) |_| {
-        try client_args.append(allocator, geodec_path);
-    } else |_| {
-        try client_args.append(allocator, "geodec");
-    }
-
-    try client_args.append(allocator, "--server");
-    try client_args.append(allocator, config.server);
-
-    try client_args.append(allocator, "--format");
-    try client_args.append(allocator, config.format);
-
-    if (config.page_size != 1) {
-        try client_args.append(allocator, "--page-size");
-        const page_size_str = try std.fmt.allocPrint(allocator, "{d}", .{config.page_size});
-        defer allocator.free(page_size_str);
-        try client_args.append(allocator, page_size_str);
-    }
-
-    if (config.pull_all) {
-        try client_args.append(allocator, "--pull-all");
-    }
-
-    if (config.extra_pull > 0) {
-        try client_args.append(allocator, "--extra-pull");
-        const extra_pull_str = try std.fmt.allocPrint(allocator, "{d}", .{config.extra_pull});
-        defer allocator.free(extra_pull_str);
-        try client_args.append(allocator, extra_pull_str);
-    }
-
-    if (config.begin) try client_args.append(allocator, "--begin");
-    if (config.commit) try client_args.append(allocator, "--commit");
-    if (config.rollback) try client_args.append(allocator, "--rollback");
-
-    if (config.process_path) |process_path| {
-        try client_args.append(allocator, "--process");
-        try client_args.append(allocator, process_path);
-    }
-
-    // Add server arguments
-    for (config.server_args) |server_arg| {
-        try client_args.append(allocator, "--server-arg");
-        try client_args.append(allocator, server_arg);
-    }
-
-    // Add query text last
-    try client_args.append(allocator, config.query_text);
-
-    // CANARY: REQ=REQ-CLI-QUERY-001; FEATURE="CLIQueryExecution"; ASPECT=QUIC; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
-    // Execute query via QUIC connection (unified binary architecture)
-    const colon_idx = std.mem.lastIndexOf(u8, config.server, ":") orelse {
-        std.debug.print("Error: Invalid server address format (expected host:port): {s}\n", .{config.server});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    const host = config.server[0..colon_idx];
-    const port = std.fmt.parseInt(u16, config.server[colon_idx + 1 ..], 10) catch {
-        std.debug.print("Error: Invalid port number in server address: {s}\n", .{config.server});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-
-    // Create QUIC client and connect
-    var quic_client = quic.QuicClient.init(allocator);
-    defer quic_client.deinit();
-
-    // Connect to server (insecure mode for now - TODO: add TLS certificate verification option)
-    _ = quic_client.connectInsecure(host, port, true) catch |err| {
-        std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-
-    // Execute query on the connection
-    executeQueryOnConnection(allocator, &quic_client, config.query_text, config.format, config.user, config.password) catch |err| {
-        std.debug.print("Error: Query execution failed: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-
-    // Exit successfully
-    std.process.exit(@intFromEnum(ExitCode.success));
-}
+// GAP-0138 CODE CLEANUP: Removed dead code runEmbeddedClient function
+// CANARY: REQ=REQ-CODE-QUALITY-001; FEATURE="DeadCodeRemoval"; ASPECT=Maintenance; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-13
+// This function was defined but never called anywhere in the codebase.
+// It was superseded by executeQuicQuery() which properly implements TLS certificate verification (GAP-0113).
+// The misleading TODO comment "add TLS certificate verification option" has been resolved by this removal.
 
 fn printShellUsage() void {
     std.debug.print("geode shell - Interactive GQL shell\n" ++

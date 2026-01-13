@@ -560,6 +560,63 @@ pub const Catalog = struct {
 
         return self.graphs.contains(name);
     }
+
+    // GAP-0139: SHOW INDEXES implementation
+    // CANARY: REQ=REQ-SHOW-INDEXES-001; FEATURE="SHOW INDEXES"; ASPECT=CatalogList; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-13
+    /// List all indexes in the catalog
+    /// Returns a dynamically allocated slice of IndexInfo. Caller owns the returned slice.
+    pub fn listAllIndexes(self: *Catalog, allocator: std.mem.Allocator) ![]IndexInfo {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        var result = std.ArrayList(IndexInfo).init(allocator);
+        errdefer result.deinit();
+
+        var iter = self.indexes.iterator();
+        while (iter.next()) |entry| {
+            try result.append(entry.value_ptr.*);
+        }
+
+        return result.toOwnedSlice();
+    }
+
+    // GAP-0139: SHOW CONSTRAINTS implementation
+    // CANARY: REQ=REQ-SHOW-CONSTRAINTS-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=CatalogList; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-13
+    /// List all constraints in the catalog
+    /// Returns a dynamically allocated slice of ConstraintInfo. Caller owns the returned slice.
+    pub fn listAllConstraints(self: *Catalog, allocator: std.mem.Allocator) ![]ConstraintInfo {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        var result = std.ArrayList(ConstraintInfo).init(allocator);
+        errdefer result.deinit();
+
+        var iter = self.constraints.iterator();
+        while (iter.next()) |entry| {
+            try result.append(entry.value_ptr.*);
+        }
+
+        return result.toOwnedSlice();
+    }
+
+    // GAP-0139: SHOW SCHEMAS implementation
+    // CANARY: REQ=REQ-SHOW-SCHEMAS-001; FEATURE="SHOW SCHEMAS"; ASPECT=CatalogList; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-13
+    /// List all schemas in the catalog
+    /// Returns a dynamically allocated slice of schema names. Caller owns the returned slice.
+    pub fn listAllSchemas(self: *Catalog, allocator: std.mem.Allocator) ![][]const u8 {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        var result = std.ArrayList([]const u8).init(allocator);
+        errdefer result.deinit();
+
+        var iter = self.schemas.iterator();
+        while (iter.next()) |entry| {
+            try result.append(entry.key_ptr.*);
+        }
+
+        return result.toOwnedSlice();
+    }
 };
 
 // GAP-0131: Global catalog state maintained for backward compatibility

@@ -88,8 +88,151 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 try rows_list.append(allocator, row);
             }
         },
-        else => {
-            // Other show types not yet implemented
+        .constraints => {
+            // GAP-0139: SHOW CONSTRAINTS implementation
+            // CANARY: REQ=REQ-SHOW-CONSTRAINTS-002; FEATURE="SHOW CONSTRAINTS"; ASPECT=StatementHandler; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-13
+            // Return constraint data from catalog
+            var iter = cat.constraints.iterator();
+            while (iter.next()) |entry| {
+                const info = entry.value_ptr.*;
+                var row = try allocator.alloc(Value, 4);
+                row[0] = Value{ .Str = try allocator.dupe(u8, info.name) };
+
+                // Convert constraint type enum to string
+                const type_str = switch (info.constraint_type) {
+                    .unique => "UNIQUE",
+                    .node_key => "NODE KEY",
+                    .not_null => "NOT NULL",
+                    .exists => "EXISTS",
+                };
+                row[1] = Value{ .Str = try allocator.dupe(u8, type_str) };
+                row[2] = Value{ .Str = try allocator.dupe(u8, info.label) };
+
+                // Join properties with comma
+                var props_str = try std.ArrayList(u8).initCapacity(allocator, 0);
+                for (info.properties, 0..) |prop, i| {
+                    if (i > 0) try props_str.appendSlice(allocator, ", ");
+                    try props_str.appendSlice(allocator, prop);
+                }
+                row[3] = Value{ .Str = try props_str.toOwnedSlice(allocator) };
+
+                try rows_list.append(allocator, row);
+            }
+        },
+        .tables => {
+            // GAP-0139: SHOW TABLES implementation
+            // CANARY: REQ=REQ-SHOW-TABLES-001; FEATURE="SHOW TABLES"; ASPECT=StatementHandler; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-13
+            // In a graph database, node labels act as "tables"
+            // Return unique node labels from the graph storage
+            const labels = graph_storage_manager.listNodeLabels(allocator) catch &.{};
+            defer {
+                for (labels) |label| {
+                    allocator.free(label);
+                }
+                allocator.free(labels);
+            }
+            for (labels) |label| {
+                var row = try allocator.alloc(Value, 2);
+                row[0] = Value{ .Str = try allocator.dupe(u8, label) };
+                row[1] = Value{ .Str = try allocator.dupe(u8, "NODE") }; // All are node labels
+                try rows_list.append(allocator, row);
+            }
+        },
+        .procedures => {
+            // GAP-0139: SHOW PROCEDURES implementation
+            // CANARY: REQ=REQ-SHOW-PROCEDURES-001; FEATURE="SHOW PROCEDURES"; ASPECT=StatementHandler; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-13
+            // Geode currently has no user-defined stored procedures
+            // Return empty result set (procedures might be added in future)
+        },
+        .functions => {
+            // GAP-0139: SHOW FUNCTIONS implementation
+            // CANARY: REQ=REQ-SHOW-FUNCTIONS-001; FEATURE="SHOW FUNCTIONS"; ASPECT=StatementHandler; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-13
+            // Return built-in functions list
+            const builtin_functions = [_]struct { name: []const u8, signature: []const u8, return_type: []const u8 }{
+                // String functions
+                .{ .name = "substring", .signature = "(string, start, [length])", .return_type = "STRING" },
+                .{ .name = "replace", .signature = "(string, search, replace)", .return_type = "STRING" },
+                .{ .name = "trim", .signature = "(string)", .return_type = "STRING" },
+                .{ .name = "ltrim", .signature = "(string)", .return_type = "STRING" },
+                .{ .name = "rtrim", .signature = "(string)", .return_type = "STRING" },
+                .{ .name = "left", .signature = "(string, length)", .return_type = "STRING" },
+                .{ .name = "right", .signature = "(string, length)", .return_type = "STRING" },
+                .{ .name = "upper", .signature = "(string)", .return_type = "STRING" },
+                .{ .name = "lower", .signature = "(string)", .return_type = "STRING" },
+                .{ .name = "reverse", .signature = "(string)", .return_type = "STRING" },
+                .{ .name = "split", .signature = "(string, delimiter)", .return_type = "LIST" },
+                .{ .name = "toString", .signature = "(value)", .return_type = "STRING" },
+                // Collection functions
+                .{ .name = "size", .signature = "(list|map|string)", .return_type = "INTEGER" },
+                .{ .name = "length", .signature = "(list|path)", .return_type = "INTEGER" },
+                .{ .name = "keys", .signature = "(map|node)", .return_type = "LIST" },
+                .{ .name = "values", .signature = "(map)", .return_type = "LIST" },
+                .{ .name = "head", .signature = "(list)", .return_type = "ANY" },
+                .{ .name = "tail", .signature = "(list)", .return_type = "LIST" },
+                .{ .name = "last", .signature = "(list)", .return_type = "ANY" },
+                .{ .name = "range", .signature = "(start, end, [step])", .return_type = "LIST" },
+                .{ .name = "reduce", .signature = "(acc, list, expr)", .return_type = "ANY" },
+                // Numeric functions
+                .{ .name = "abs", .signature = "(number)", .return_type = "NUMBER" },
+                .{ .name = "ceil", .signature = "(number)", .return_type = "INTEGER" },
+                .{ .name = "floor", .signature = "(number)", .return_type = "INTEGER" },
+                .{ .name = "round", .signature = "(number, [precision])", .return_type = "NUMBER" },
+                .{ .name = "sign", .signature = "(number)", .return_type = "INTEGER" },
+                .{ .name = "sqrt", .signature = "(number)", .return_type = "FLOAT" },
+                .{ .name = "log", .signature = "(number)", .return_type = "FLOAT" },
+                .{ .name = "log10", .signature = "(number)", .return_type = "FLOAT" },
+                .{ .name = "exp", .signature = "(number)", .return_type = "FLOAT" },
+                .{ .name = "sin", .signature = "(number)", .return_type = "FLOAT" },
+                .{ .name = "cos", .signature = "(number)", .return_type = "FLOAT" },
+                .{ .name = "tan", .signature = "(number)", .return_type = "FLOAT" },
+                .{ .name = "rand", .signature = "()", .return_type = "FLOAT" },
+                // Aggregation functions
+                .{ .name = "count", .signature = "(expr)", .return_type = "INTEGER" },
+                .{ .name = "sum", .signature = "(expr)", .return_type = "NUMBER" },
+                .{ .name = "avg", .signature = "(expr)", .return_type = "FLOAT" },
+                .{ .name = "min", .signature = "(expr)", .return_type = "ANY" },
+                .{ .name = "max", .signature = "(expr)", .return_type = "ANY" },
+                .{ .name = "collect", .signature = "(expr)", .return_type = "LIST" },
+                .{ .name = "stdev", .signature = "(expr)", .return_type = "FLOAT" },
+                .{ .name = "percentileCont", .signature = "(expr, percentile)", .return_type = "NUMBER" },
+                .{ .name = "percentileDisc", .signature = "(expr, percentile)", .return_type = "ANY" },
+                // Predicate functions
+                .{ .name = "all", .signature = "(var IN list WHERE predicate)", .return_type = "BOOLEAN" },
+                .{ .name = "any", .signature = "(var IN list WHERE predicate)", .return_type = "BOOLEAN" },
+                .{ .name = "none", .signature = "(var IN list WHERE predicate)", .return_type = "BOOLEAN" },
+                .{ .name = "single", .signature = "(var IN list WHERE predicate)", .return_type = "BOOLEAN" },
+                .{ .name = "exists", .signature = "(pattern)", .return_type = "BOOLEAN" },
+                // Type functions
+                .{ .name = "type", .signature = "(relationship)", .return_type = "STRING" },
+                .{ .name = "labels", .signature = "(node)", .return_type = "LIST" },
+                .{ .name = "id", .signature = "(node|relationship)", .return_type = "INTEGER" },
+                .{ .name = "elementId", .signature = "(node|relationship)", .return_type = "STRING" },
+                .{ .name = "properties", .signature = "(node|relationship|map)", .return_type = "MAP" },
+                // Path functions
+                .{ .name = "nodes", .signature = "(path)", .return_type = "LIST" },
+                .{ .name = "relationships", .signature = "(path)", .return_type = "LIST" },
+                // Temporal functions
+                .{ .name = "date", .signature = "([map|string])", .return_type = "DATE" },
+                .{ .name = "time", .signature = "([map|string])", .return_type = "TIME" },
+                .{ .name = "datetime", .signature = "([map|string])", .return_type = "DATETIME" },
+                .{ .name = "localtime", .signature = "([map|string])", .return_type = "LOCAL_TIME" },
+                .{ .name = "localdatetime", .signature = "([map|string])", .return_type = "LOCAL_DATETIME" },
+                .{ .name = "duration", .signature = "(map|string)", .return_type = "DURATION" },
+                // Spatial functions
+                .{ .name = "point", .signature = "(map)", .return_type = "POINT" },
+                .{ .name = "distance", .signature = "(point1, point2)", .return_type = "FLOAT" },
+                // Coalesce/null handling
+                .{ .name = "coalesce", .signature = "(expr...)", .return_type = "ANY" },
+                .{ .name = "nullIf", .signature = "(value1, value2)", .return_type = "ANY" },
+            };
+
+            for (builtin_functions) |func| {
+                var row = try allocator.alloc(Value, 3);
+                row[0] = Value{ .Str = try allocator.dupe(u8, func.name) };
+                row[1] = Value{ .Str = try allocator.dupe(u8, func.signature) };
+                row[2] = Value{ .Str = try allocator.dupe(u8, func.return_type) };
+                try rows_list.append(allocator, row);
+            }
         },
     }
 
