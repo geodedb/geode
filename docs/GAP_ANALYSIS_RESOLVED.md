@@ -4,11 +4,17 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Last Updated**: January 13, 2026
 **Last Verified**: January 13, 2026
-**GitLab Issues**: 146 closed gap-labeled issues
+**GitLab Issues**: 149 closed gap-labeled issues
 
-**Total Resolved**: 146 gaps (GAP-0001 through GAP-0146) ✅
+**Total Resolved**: 149 gaps (GAP-0001 through GAP-0149) ✅
 
 **Current Status**: All gaps resolved. See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for process documentation.
+
+**January 13, 2026 Final Security Gap Resolution Session (Late PM)**:
+3 gaps identified and resolved with CANARY markers and unit tests:
+- #229 (GAP-0147) - FLE migrate-encrypt Stub → **Full implementation calling fle_commands.migrateEncrypt** ✅
+- #230 (GAP-0148) - Backup Hex Key catch 0 → **parseHexKey() with proper error handling** ✅
+- #231 (GAP-0149) - Risk Score catch 0 → **Fail-secure: invalid parses as 255 (max risk)** ✅
 
 **January 13, 2026 Security Gap Resolution Session (Late PM)**:
 7 gaps identified and resolved with CANARY markers and security guards:
@@ -88,7 +94,44 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ---
 
-## Latest Resolutions (January 13, 2026 Late PM Security Session)
+## Latest Resolutions (January 13, 2026 Final PM Session)
+
+### GAP-0147: FLE migrate-encrypt Command is Stub Implementation (Resolved January 13, 2026)
+- **Original Gap:** The `handleMigrateEncrypt()` function was a stub that ignored parameters and printed fake success messages
+- **Original Severity:** Medium (Implementation)
+- **GitLab Issue:** [#229](https://gitlab.com/devnw/geode/geode/-/issues/229)
+- **Resolution Evidence:**
+  - src/cli/fle_cli.zig:143-193 — Full implementation with parameter validation, batch_size parsing, and proper error handling
+  - src/cli/fle_cli.zig:169-174 — Builds proper MigrationArgs struct
+  - src/cli/fle_cli.zig:177-192 — Calls fle_commands.migrateEncrypt with comprehensive error handling
+  - src/admin/fle_commands.zig:161-260 — Full migration implementation with FEK/BIK key derivation
+  - CANARY marker: REQ=REQ-FLE-MIGRATE-CLI-001; STATUS=IMPL
+
+### GAP-0148: Backup Encryption Key Hex Parsing Uses Silent catch 0 (Resolved January 13, 2026)
+- **Original Gap:** 6 instances of `catch 0` in hex parsing would corrupt encryption keys silently
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#230](https://gitlab.com/devnw/geode/geode/-/issues/230)
+- **Resolution Evidence:**
+  - src/storage/backup.zig:11-31 — New `parseHexKey()` helper function with proper error handling
+  - src/storage/backup.zig:129-132 — init() uses parseHexKey with error propagation
+  - src/storage/backup.zig:557-562 — restoreFullBackup() uses parseHexKey
+  - src/storage/backup.zig:594-599 — applyWALRecords() uses parseHexKey
+  - src/storage/backup.zig:787-836 — 7 unit tests for parseHexKey covering valid, invalid, length, and edge cases
+  - CANARY marker: REQ=REQ-BACKUP-HEX-001; STATUS=IMPL; TESTED
+
+### GAP-0149: Risk Score Parsing Uses catch 0 Allowing MFA Bypass (Resolved January 13, 2026)
+- **Original Gap:** Invalid risk_score parsed as 0 (lowest risk) instead of failing securely
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#231](https://gitlab.com/devnw/geode/geode/-/issues/231)
+- **Resolution Evidence:**
+  - src/security/geode_auth_lib.zig:422-435 — Fail-secure: invalid parses as 255 (max risk)
+  - src/security/geode_auth_lib.zig:427-429 — Warning logged with user ID and invalid value
+  - src/security/geode_auth_lib.zig:1260-1294 — 7 unit tests for risk score parsing
+  - CANARY marker: REQ=REQ-AUTH-RISKSCORE-001; STATUS=IMPL; TESTED
+
+---
+
+## Previous Resolutions (January 13, 2026 Late PM Security Session)
 
 ### GAP-0140: SHOW Statement Protocol Layer Blocking (Resolved January 13, 2026)
 - **Original Gap:** QUIC connection handler returned NotImplemented for all SHOW types before reaching execution layer

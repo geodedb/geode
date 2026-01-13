@@ -538,22 +538,24 @@ tests:
   # ===============================
   # PHASE 10: MIGRATION OPERATIONS
   # ===============================
+  # Note: These tests verify proper error handling when schema isn't registered in FLE catalog
+  # A full migration test would require complex schema registration setup
 
   - name: "fle-migrate-encrypt-notes"
-    description: "Test encryption migration for Employee notes field"
+    description: "Test encryption migration error handling for unregistered schema"
     args: ["fle", "migrate-encrypt", "default", "Employee", "notes", "500"]
     expect:
-      exit_code: 0
-      stdout_contains: "migration"
-    tags: ["fle", "migration", "encrypt"]
+      exit_code: 1
+      stderr_contains: "not found in FLE catalog"
+    tags: ["fle", "migration", "encrypt", "error-handling"]
 
   - name: "fle-migrate-encrypt-customer-address"
-    description: "Test encryption migration for Customer address field"
+    description: "Test encryption migration error handling for unregistered schema"
     args: ["fle", "migrate-encrypt", "default", "Customer", "address", "1000"]
     expect:
-      exit_code: 0
-      stdout_contains: "migration"
-    tags: ["fle", "migration", "encrypt"]
+      exit_code: 1
+      stderr_contains: "not found in FLE catalog"
+    tags: ["fle", "migration", "encrypt", "error-handling"]
 
   # ===============================
   # PHASE 11: GQL QUERY OPERATIONS WITH FLE

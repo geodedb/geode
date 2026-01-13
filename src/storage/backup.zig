@@ -3,6 +3,33 @@ const wal = @import("wal");
 const catalog = @import("storage_catalog");
 const page_manager = @import("storage_page_manager");
 
+// CANARY: REQ=REQ-BACKUP-HEX-001; FEATURE="SecureHexKeyParsing"; ASPECT=SECURITY; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-13
+// GAP-0148 SECURITY FIX: Proper error handling for hex key parsing instead of silent catch 0
+
+/// Parse a 64-character hex string into a 32-byte key with proper error handling.
+/// GAP-0148: Replaces unsafe `catch 0` pattern that could corrupt encryption keys.
+fn parseHexKey(hex_str: []const u8) ![32]u8 {
+    if (hex_str.len != 64) {
+        std.log.err("SECURITY ERROR: GEODE_TDE_KEY must be exactly 64 hex characters (32 bytes), got {d}", .{hex_str.len});
+        return error.InvalidTdeKeyLength;
+    }
+
+    var key: [32]u8 = undefined;
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        const hi = std.fmt.charToDigit(hex_str[i * 2], 16) catch {
+            std.log.err("SECURITY ERROR: Invalid hex character at position {d} in GEODE_TDE_KEY", .{i * 2});
+            return error.InvalidTdeKeyHex;
+        };
+        const lo = std.fmt.charToDigit(hex_str[i * 2 + 1], 16) catch {
+            std.log.err("SECURITY ERROR: Invalid hex character at position {d} in GEODE_TDE_KEY", .{i * 2 + 1});
+            return error.InvalidTdeKeyHex;
+        };
+        key[i] = @as(u8, @intCast(hi * 16 + lo));
+    }
+    return key;
+}
+
 /// Backup configuration
 pub const BackupConfig = struct {
     /// Maximum size of incremental backup before triggering full backup
@@ -94,18 +121,17 @@ pub const BackupManager = struct {
         };
 
         // Load encryption key if enabled
+        // GAP-0148 SECURITY FIX: Use parseHexKey with proper error handling
         var enc_key: [32]u8 = .{0} ** 32;
         if (config.encryption) {
             if (std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY")) |raw| {
                 defer allocator.free(raw);
-                if (raw.len == 64) {
-                    var i: usize = 0;
-                    while (i < 32) : (i += 1) {
-                        const hi = std.fmt.charToDigit(raw[i * 2], 16) catch 0;
-                        const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch 0;
-                        enc_key[i] = @as(u8, @intCast(hi * 16 + lo));
-                    }
-                }
+                enc_key = parseHexKey(raw) catch |err| {
+                    std.log.err("Failed to parse GEODE_TDE_KEY: {}", .{err});
+                    return err;
+                };
+            } else |_| {
+                std.log.warn("SECURITY WARNING: Encryption enabled but GEODE_TDE_KEY not set", .{});
             }
         }
 
@@ -524,19 +550,18 @@ pub const BackupManager = struct {
         const Wal = @import("wal").Wal;
         var recovery_wal = Wal.init(self.allocator);
 
-        // Configure encryption if needed (best effort: replicate env check)
+        // Configure encryption if needed
+        // GAP-0148 SECURITY FIX: Use parseHexKey with proper error handling
         if (self.config.encryption) {
             recovery_wal.enc_enabled = true;
             if (std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY")) |raw| {
                 defer self.allocator.free(raw);
-                if (raw.len == 64) {
-                    var i: usize = 0;
-                    while (i < 32) : (i += 1) {
-                        const hi = std.fmt.charToDigit(raw[i * 2], 16) catch 0;
-                        const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch 0;
-                        recovery_wal.enc_key[i] = @as(u8, @intCast(hi * 16 + lo));
-                    }
-                }
+                recovery_wal.enc_key = parseHexKey(raw) catch |err| {
+                    std.log.err("Failed to parse GEODE_TDE_KEY during restore: {}", .{err});
+                    return err;
+                };
+            } else |_| {
+                std.log.warn("SECURITY WARNING: Encryption enabled but GEODE_TDE_KEY not set for restore", .{});
             }
         }
 
@@ -563,18 +588,17 @@ pub const BackupManager = struct {
         // Replay each
         var recovery_wal = wal.Wal.init(self.allocator);
 
+        // GAP-0148 SECURITY FIX: Use parseHexKey with proper error handling
         if (self.config.encryption) {
             recovery_wal.enc_enabled = true;
             if (std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY")) |raw| {
                 defer self.allocator.free(raw);
-                if (raw.len == 64) {
-                    var i: usize = 0;
-                    while (i < 32) : (i += 1) {
-                        const hi = std.fmt.charToDigit(raw[i * 2], 16) catch 0;
-                        const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch 0;
-                        recovery_wal.enc_key[i] = @as(u8, @intCast(hi * 16 + lo));
-                    }
-                }
+                recovery_wal.enc_key = parseHexKey(raw) catch |err| {
+                    std.log.err("Failed to parse GEODE_TDE_KEY during WAL recovery: {}", .{err});
+                    return err;
+                };
+            } else |_| {
+                std.log.warn("SECURITY WARNING: Encryption enabled but GEODE_TDE_KEY not set for WAL recovery", .{});
             }
         }
 
@@ -753,4 +777,60 @@ fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
     };
 
     return plaintext;
+}
+
+// ============================================================================
+// Unit Tests for GAP-0148: Secure Hex Key Parsing
+// CANARY: REQ=REQ-BACKUP-HEX-001; FEATURE="SecureHexKeyParsing"; ASPECT=TEST; STATUS=TESTED; OWNER=storage; UPDATED=2026-01-13
+// ============================================================================
+
+test "parseHexKey: valid 64-char hex string" {
+    const valid_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const key = try parseHexKey(valid_hex);
+
+    // Verify first and last bytes
+    try std.testing.expectEqual(@as(u8, 0x01), key[0]);
+    try std.testing.expectEqual(@as(u8, 0x23), key[1]);
+    try std.testing.expectEqual(@as(u8, 0xef), key[31]);
+}
+
+test "parseHexKey: uppercase hex is valid" {
+    const valid_hex = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+    const key = try parseHexKey(valid_hex);
+
+    try std.testing.expectEqual(@as(u8, 0xAB), key[5]);
+    try std.testing.expectEqual(@as(u8, 0xCD), key[6]);
+    try std.testing.expectEqual(@as(u8, 0xEF), key[7]);
+}
+
+test "parseHexKey: rejects too short key" {
+    const short_hex = "0123456789abcdef";
+    const result = parseHexKey(short_hex);
+    try std.testing.expectError(error.InvalidTdeKeyLength, result);
+}
+
+test "parseHexKey: rejects too long key" {
+    const long_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0000";
+    const result = parseHexKey(long_hex);
+    try std.testing.expectError(error.InvalidTdeKeyLength, result);
+}
+
+test "parseHexKey: rejects invalid hex character 'g'" {
+    // 'g' at position 4 is invalid hex
+    const invalid_hex = "0123g56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const result = parseHexKey(invalid_hex);
+    try std.testing.expectError(error.InvalidTdeKeyHex, result);
+}
+
+test "parseHexKey: rejects invalid hex character space" {
+    // space at position 2 is invalid
+    const invalid_hex = "01 3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const result = parseHexKey(invalid_hex);
+    try std.testing.expectError(error.InvalidTdeKeyHex, result);
+}
+
+test "parseHexKey: rejects empty string" {
+    const empty_hex = "";
+    const result = parseHexKey(empty_hex);
+    try std.testing.expectError(error.InvalidTdeKeyLength, result);
 }

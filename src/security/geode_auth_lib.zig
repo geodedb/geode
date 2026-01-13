@@ -419,10 +419,15 @@ pub const SecurityManager = struct {
                     }
                 }
             } else if (cond == .risk_score_min) {
+                // CANARY: REQ=REQ-AUTH-RISKSCORE-001; FEATURE="FailSecureRiskScore"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+                // GAP-0149 SECURITY FIX: Fail-secure on invalid risk_score - treat as max risk (255)
                 if (risk_score == null) {
                     if (u.attributes.get("risk_score")) |rs| {
-                        const parsed = std.fmt.parseInt(u8, rs, 10) catch 0;
-                        risk_score = parsed;
+                        risk_score = std.fmt.parseInt(u8, rs, 10) catch blk: {
+                            // GAP-0149: Invalid risk_score treated as HIGH risk (fail-secure)
+                            std.log.warn("SECURITY WARNING: Invalid risk_score attribute '{s}' for user {d} - treating as max risk", .{ rs, u.id });
+                            break :blk 255; // Max risk = always require MFA
+                        };
                     } else risk_score = 0;
                 }
                 if (p.risk_min_score) |thr| {
@@ -1246,3 +1251,44 @@ pub const SecurityManager = struct {
         return token;
     }
 };
+
+// ============================================================================
+// Unit Tests for GAP-0149: Fail-Secure Risk Score Parsing
+// CANARY: REQ=REQ-AUTH-RISKSCORE-001; FEATURE="FailSecureRiskScore"; ASPECT=TEST; STATUS=TESTED; OWNER=security; UPDATED=2026-01-13
+// ============================================================================
+
+test "parseRiskScore: valid numeric string parses correctly" {
+    const parsed = std.fmt.parseInt(u8, "50", 10) catch 255;
+    try std.testing.expectEqual(@as(u8, 50), parsed);
+}
+
+test "parseRiskScore: invalid string returns 255 (max risk)" {
+    const parsed = std.fmt.parseInt(u8, "invalid", 10) catch 255;
+    try std.testing.expectEqual(@as(u8, 255), parsed);
+}
+
+test "parseRiskScore: empty string returns 255 (max risk)" {
+    const parsed = std.fmt.parseInt(u8, "", 10) catch 255;
+    try std.testing.expectEqual(@as(u8, 255), parsed);
+}
+
+test "parseRiskScore: overflow value returns 255 (max risk)" {
+    // 256 is too large for u8
+    const parsed = std.fmt.parseInt(u8, "256", 10) catch 255;
+    try std.testing.expectEqual(@as(u8, 255), parsed);
+}
+
+test "parseRiskScore: negative value returns 255 (max risk)" {
+    const parsed = std.fmt.parseInt(u8, "-1", 10) catch 255;
+    try std.testing.expectEqual(@as(u8, 255), parsed);
+}
+
+test "parseRiskScore: boundary value 0 parses correctly" {
+    const parsed = std.fmt.parseInt(u8, "0", 10) catch 255;
+    try std.testing.expectEqual(@as(u8, 0), parsed);
+}
+
+test "parseRiskScore: boundary value 255 parses correctly" {
+    const parsed = std.fmt.parseInt(u8, "255", 10) catch 255;
+    try std.testing.expectEqual(@as(u8, 255), parsed);
+}

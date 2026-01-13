@@ -140,21 +140,54 @@ fn handleGrantPlaintext(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx:
     std.debug.print("\n✓ Privilege granted successfully\n", .{});
 }
 
+// CANARY: REQ=REQ-FLE-MIGRATE-CLI-001; FEATURE="FLEMigrateCLI"; ASPECT=CLI; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+// GAP-0147 FIX: Properly delegate to fle_commands.migrateEncrypt with full validation
 fn handleMigrateEncrypt(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = allocator;
     if (start_idx + 2 >= argv.len) {
         std.debug.print("Error: migrate-encrypt requires: <tenant> <schema> <field> [batch_size]\n", .{});
         return error.InvalidArguments;
     }
-    // const tenant = argv[start_idx]; // Unused in stub
+
+    const tenant = argv[start_idx];
     const schema = argv[start_idx + 1];
     const field = argv[start_idx + 2];
 
-    // Call admin/fle_commands implementation if available or placeholder
-    // Currently main.zig had a stub logic. Let's delegate if possible, otherwise print stub.
-    // Assuming fle_commands has migrate logic?
-    // If not, we print the stub from main.zig
-    std.debug.print("Starting encryption migration for {s}.{s}...\n", .{ schema, field });
-    std.debug.print("Scanning for plaintext values...\n", .{});
-    std.debug.print("✓ Encrypted 0 records (simulation)\n", .{});
+    // Parse optional batch_size parameter (default: 1000)
+    var batch_size: usize = 1000;
+    if (start_idx + 3 < argv.len) {
+        batch_size = std.fmt.parseInt(usize, argv[start_idx + 3], 10) catch {
+            std.debug.print("Error: Invalid batch_size '{s}' - must be a positive integer\n", .{argv[start_idx + 3]});
+            return error.InvalidArguments;
+        };
+        if (batch_size == 0) {
+            std.debug.print("Error: batch_size must be greater than 0\n", .{});
+            return error.InvalidArguments;
+        }
+    }
+
+    // Build migration arguments
+    const args = fle_commands.MigrationArgs{
+        .tenant_id = tenant,
+        .schema_name = schema,
+        .field_name = field,
+        .batch_size = batch_size,
+    };
+
+    // GAP-0147: Call the actual fle_commands implementation
+    fle_commands.migrateEncrypt(allocator, args) catch |err| {
+        switch (err) {
+            error.SchemaNotFound => {
+                std.debug.print("\n❌ Migration failed: Schema '{s}' not found in FLE catalog\n", .{schema});
+                std.debug.print("Hint: Ensure the schema has FLE annotations defined.\n", .{});
+            },
+            error.FieldNotFound => {
+                std.debug.print("\n❌ Migration failed: Field '{s}' not found in schema '{s}'\n", .{ field, schema });
+                std.debug.print("Hint: Check field name and ensure encryption is configured.\n", .{});
+            },
+            else => {
+                std.debug.print("\n❌ Migration failed: {any}\n", .{err});
+            },
+        }
+        return err;
+    };
 }

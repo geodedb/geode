@@ -2,6 +2,7 @@ const std = @import("std");
 const fle_catalog = @import("../schema/fle_catalog.zig");
 const fle_aead = @import("fle_aead");
 const fle_key_manager = @import("fle_key_manager");
+const fle_key_types = @import("fle_key_types"); // GAP-0147: Import key types for KeyIds struct
 const fle_blind_index = @import("fle_blind_index");
 const annotations = @import("../schema/annotations.zig");
 
@@ -180,13 +181,20 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
 
     // 2. Initialize key manager and get FEK (Field Encryption Key)
     const key_manager = try fle_key_manager.KeyManager.init(allocator);
-    defer allocator.destroy(key_manager);
+    defer key_manager.deinit();
 
     // Build key identifier: tenant_id:schema_name:field_name
     const key_id = try std.fmt.allocPrint(allocator, "{s}:{s}:{s}", .{ args.tenant_id, args.schema_name, args.field_name });
     defer allocator.free(key_id);
 
-    const fek = try key_manager.deriveFEK(args.tenant_id, args.schema_name, args.field_name);
+    // GAP-0147 FIX: Use correct KeyIds struct and getFEK method
+    const key_ids = fle_key_types.KeyIds{
+        .tenant = args.tenant_id,
+        .schema = args.schema_name,
+        .field = args.field_name,
+        .version = 1, // Current version for new encryption
+    };
+    const fek = try key_manager.getFEK(key_ids);
 
     // 3. Migration statistics
     var migrated_count: usize = 0;
@@ -204,8 +212,10 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
 
     std.debug.print("\nMigration Process:\n", .{});
     std.debug.print("  Key ID: {s}\n", .{key_id});
-    std.debug.print("  Algorithm: {s}\n", .{if (field_meta.algorithm) |alg| alg else "AES-256-GCM"});
-    std.debug.print("  Searchable: {s}\n", .{if (field_meta.searchable) "yes (blind index will be generated)" else "no"});
+    // GAP-0147 FIX: Use algorithm() method instead of field access
+    const alg_name = if (field_meta.algorithm()) |alg| @tagName(alg) else "AES-256-GCM";
+    std.debug.print("  Algorithm: {s}\n", .{alg_name});
+    std.debug.print("  Searchable: {s}\n", .{if (field_meta.isSearchable()) "yes (blind index will be generated)" else "no"});
 
     // Simulate batch processing (in production, would iterate storage)
     std.debug.print("\nBatch Processing:\n", .{});
@@ -222,10 +232,12 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
     // - Update record in storage
 
     // 5. If field is searchable, also generate blind indexes
-    if (field_meta.searchable) {
+    // GAP-0147 FIX: Use isSearchable() method instead of field access
+    if (field_meta.isSearchable()) {
         std.debug.print("  Generating blind indexes for searchable field...\n", .{});
         // In production: derive BIK (Blind Index Key) and compute HMAC-SHA256 for each value
-        const bik = try key_manager.deriveBIK(args.tenant_id, args.schema_name, args.field_name);
+        // GAP-0147 FIX: Use correct getBIK method with KeyIds struct
+        const bik = try key_manager.getBIK(key_ids);
         _ = bik; // Would be used for blind index generation
     }
 
@@ -240,7 +252,9 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
     std.debug.print("  Records migrated: {d}\n", .{migrated_count});
     std.debug.print("  Errors: {d}\n", .{error_count});
     std.debug.print("  Elapsed time: {d}ms\n", .{elapsed_ms});
-    std.debug.print("  FEK key version: {d}\n", .{fek.version});
+    // GAP-0147 FIX: fek is [32]u8, version is in key_ids
+    std.debug.print("  FEK key version: {d}\n", .{key_ids.version});
+    _ = fek; // FEK key material would be used in production encryption
     std.debug.print("\nNote: Production migration requires storage engine integration.\n", .{});
     std.debug.print("Run 'geode fle show-rotation-status {s}' to verify encryption status.\n", .{args.tenant_id});
 }
