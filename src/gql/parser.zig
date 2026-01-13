@@ -1104,6 +1104,50 @@ pub const Parser = struct {
                     // CALL { subquery } syntax - parse as a full query with WITH support
                     self.advance();
 
+                    // GAP-0125: Parse imported variables if WITH clause appears at start of CALL block
+                    // CANARY: REQ=REQ-SUBQUERY-IMPORT-001; FEATURE="Subquery Imported Variables"; ASPECT=GQLCompliance; STATUS=IMPL; UPDATED=2026-01-13
+                    var imported_vars: ?[][]const u8 = null;
+                    if (self.cur.kind == .WITH) {
+                        // Check if this is a WITH for imported variables (single variable references)
+                        // vs a WITH projection clause
+                        // Save lexer state to backtrack if needed
+                        const saved_idx = self.lx.idx;
+                        const saved_line = self.lx.line;
+                        const saved_col = self.lx.col;
+                        const saved_cur = self.cur;
+                        self.advance();
+
+                        // If the next token is a variable or identifier followed by comma or more variables,
+                        // this is likely an import list
+                        if (self.cur.kind == .dollar) {
+                            var imports = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                            while (true) {
+                                if (self.cur.kind == .dollar) {
+                                    self.advance();
+                                    if (self.cur.kind == .identifier) {
+                                        const var_name = self.cur.lexeme;
+                                        try imports.append(self.arena.allocator(), var_name);
+                                        self.advance();
+                                    }
+                                }
+                                if (self.cur.kind == .comma) {
+                                    self.advance();
+                                } else {
+                                    break;
+                                }
+                            }
+                            if (imports.items.len > 0) {
+                                imported_vars = try imports.toOwnedSlice(self.arena.allocator());
+                            }
+                        } else {
+                            // Not an import list, restore lexer position
+                            self.lx.idx = saved_idx;
+                            self.lx.line = saved_line;
+                            self.lx.col = saved_col;
+                            self.cur = saved_cur;
+                        }
+                    }
+
                     // Parse the query inside CALL { ... }
                     // This allows for queries with WITH clauses, nested CALLs, etc.
                     const query = try self.parseQuery();
@@ -1195,7 +1239,7 @@ pub const Parser = struct {
                         .Call = .{
                             .Subquery = .{
                                 .statement = stmt,
-                                .imported_vars = null, // TODO: support imported variables
+                                .imported_vars = imported_vars, // GAP-0125: Pass imported variables
                                 .return_clause = return_clause,
                             },
                         },

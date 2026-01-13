@@ -1,5 +1,6 @@
 const std = @import("std");
 const crypto = std.crypto;
+const builtin = @import("builtin");
 
 // external_kms_client.zig
 // External KMS client providing abstraction over multiple KMS backends:
@@ -53,6 +54,42 @@ pub const KmsConfig = struct {
     // TLS configuration
     tls_ca_cert: ?[]const u8 = null, // CA certificate for TLS verification
     tls_skip_verify: bool = false, // Skip TLS verification (insecure, testing only)
+
+    // GAP-0135: Production safety check for TLS configuration
+    // CANARY: REQ=REQ-KMS-TLS-SAFETY-001; FEATURE="KMS TLS Production Guard"; ASPECT=Security; STATUS=IMPL; UPDATED=2026-01-13
+    /// Check if this configuration is safe for production use
+    pub fn isSecureForProduction(self: KmsConfig) bool {
+        // tls_skip_verify should never be true in production
+        if (self.tls_skip_verify) {
+            return false;
+        }
+        // LocalSimulated backend is never production-safe
+        if (self.backend == .LocalSimulated) {
+            return false;
+        }
+        return true;
+    }
+
+    /// Validate configuration for production use - fails in release builds if insecure
+    pub fn validateForProduction(self: KmsConfig) !void {
+        if (self.tls_skip_verify) {
+            // In release/production builds, block insecure TLS configuration
+            if (builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSmall) {
+                std.log.err("SECURITY ERROR: tls_skip_verify=true is not allowed in production builds", .{});
+                return error.InsecureTlsConfigurationBlocked;
+            } else {
+                // In debug builds, emit a warning
+                std.log.warn("SECURITY WARNING: tls_skip_verify=true is enabled - TLS MITM attacks are possible", .{});
+            }
+        }
+
+        if (self.backend == .LocalSimulated) {
+            if (builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSmall) {
+                std.log.err("SECURITY ERROR: LocalSimulated KMS backend is not allowed in production builds", .{});
+                return error.InsecureKmsBackendBlocked;
+            }
+        }
+    }
 };
 
 /// KMS Provider interface for pluggable backends

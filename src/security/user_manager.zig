@@ -96,10 +96,13 @@ pub const UserManager = struct {
             }
         }
 
-        // Set metadata if provided
-        if (request.metadata) |meta| {
-            // Metadata field removed from auth.User in current schema; ignore or store elsewhere (TODO).
-            _ = meta;
+        // GAP-0126: Handle metadata field properly - return error instead of silently dropping
+        // CANARY: REQ=REQ-USER-METADATA-001; FEATURE="User Metadata Handling"; ASPECT=DataIntegrity; STATUS=IMPL; UPDATED=2026-01-13
+        if (request.metadata) |_| {
+            // Metadata field was removed from auth.User schema
+            // Return error to inform callers that metadata is no longer supported
+            std.log.warn("User metadata field is deprecated and not supported", .{});
+            return error.MetadataFieldDeprecated;
         }
 
         // Persist to storage

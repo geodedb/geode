@@ -1495,35 +1495,97 @@ pub const HashAggregator = struct {
             dst.CountDistinctState.values = new_vals.toOwnedSlice();
             dst.CountDistinctState.count = @intCast(dst.CountDistinctState.values.len);
         } else if (dst.* == .DecSum and src == .DecSum) {
+            // GAP-0124: Decimal scale alignment with overflow protection
+            // CANARY: REQ=REQ-DECIMAL-OVERFLOW-001; FEATURE="Decimal Overflow Guard"; ASPECT=DataIntegrity; STATUS=IMPL; UPDATED=2026-01-13
             if (dst.DecSum.scale == src.DecSum.scale) {
-                dst.DecSum.coeff += src.DecSum.coeff;
+                const add_result = @addWithOverflow(dst.DecSum.coeff, src.DecSum.coeff);
+                if (add_result[1] != 0) {
+                    // Overflow in addition - saturate to max
+                    dst.DecSum.coeff = std.math.maxInt(i128);
+                } else {
+                    dst.DecSum.coeff = add_result[0];
+                }
             } else {
                 const maxs: u8 = if (dst.DecSum.scale > src.DecSum.scale) dst.DecSum.scale else src.DecSum.scale;
-                // naive scale alignment ignoring overflow for now (TODO: guard)
-                // scale up dst
+                // Scale up with overflow checking
                 var dcoeff = dst.DecSum.coeff;
                 var ds = dst.DecSum.scale;
-                while (ds < maxs) : (ds += 1) dcoeff *= 10;
+                var overflow_detected = false;
+                while (ds < maxs) : (ds += 1) {
+                    const mul_result = @mulWithOverflow(dcoeff, 10);
+                    if (mul_result[1] != 0) {
+                        overflow_detected = true;
+                        break;
+                    }
+                    dcoeff = mul_result[0];
+                }
                 var scoeff = src.DecSum.coeff;
                 var ss = src.DecSum.scale;
-                while (ss < maxs) : (ss += 1) scoeff *= 10;
-                dst.DecSum.coeff = dcoeff + scoeff;
+                while (ss < maxs and !overflow_detected) : (ss += 1) {
+                    const mul_result = @mulWithOverflow(scoeff, 10);
+                    if (mul_result[1] != 0) {
+                        overflow_detected = true;
+                        break;
+                    }
+                    scoeff = mul_result[0];
+                }
+                if (overflow_detected) {
+                    // On overflow, saturate to max value
+                    dst.DecSum.coeff = std.math.maxInt(i128);
+                } else {
+                    const add_result = @addWithOverflow(dcoeff, scoeff);
+                    if (add_result[1] != 0) {
+                        dst.DecSum.coeff = std.math.maxInt(i128);
+                    } else {
+                        dst.DecSum.coeff = add_result[0];
+                    }
+                }
                 dst.DecSum.scale = maxs;
             }
             dst.DecSum.count += src.DecSum.count;
         } else if (dst.* == .DecAvg and src == .DecAvg) {
-            // Treat like DecSum + counts
+            // GAP-0124: Decimal scale alignment with overflow protection for averages
+            // CANARY: REQ=REQ-DECIMAL-OVERFLOW-002; FEATURE="Decimal Avg Overflow Guard"; ASPECT=DataIntegrity; STATUS=IMPL; UPDATED=2026-01-13
             if (dst.DecAvg.scale == src.DecAvg.scale) {
-                dst.DecAvg.coeff += src.DecAvg.coeff;
+                const add_result = @addWithOverflow(dst.DecAvg.coeff, src.DecAvg.coeff);
+                if (add_result[1] != 0) {
+                    dst.DecAvg.coeff = std.math.maxInt(i128);
+                } else {
+                    dst.DecAvg.coeff = add_result[0];
+                }
             } else {
                 const maxs: u8 = if (dst.DecAvg.scale > src.DecAvg.scale) dst.DecAvg.scale else src.DecAvg.scale;
                 var dcoeff2 = dst.DecAvg.coeff;
                 var s1 = dst.DecAvg.scale;
-                while (s1 < maxs) : (s1 += 1) dcoeff2 *= 10;
+                var overflow_detected = false;
+                while (s1 < maxs) : (s1 += 1) {
+                    const mul_result = @mulWithOverflow(dcoeff2, 10);
+                    if (mul_result[1] != 0) {
+                        overflow_detected = true;
+                        break;
+                    }
+                    dcoeff2 = mul_result[0];
+                }
                 var scoeff2 = src.DecAvg.coeff;
                 var s2 = src.DecAvg.scale;
-                while (s2 < maxs) : (s2 += 1) scoeff2 *= 10;
-                dst.DecAvg.coeff = dcoeff2 + scoeff2;
+                while (s2 < maxs and !overflow_detected) : (s2 += 1) {
+                    const mul_result = @mulWithOverflow(scoeff2, 10);
+                    if (mul_result[1] != 0) {
+                        overflow_detected = true;
+                        break;
+                    }
+                    scoeff2 = mul_result[0];
+                }
+                if (overflow_detected) {
+                    dst.DecAvg.coeff = std.math.maxInt(i128);
+                } else {
+                    const add_result = @addWithOverflow(dcoeff2, scoeff2);
+                    if (add_result[1] != 0) {
+                        dst.DecAvg.coeff = std.math.maxInt(i128);
+                    } else {
+                        dst.DecAvg.coeff = add_result[0];
+                    }
+                }
                 dst.DecAvg.scale = maxs;
             }
             dst.DecAvg.count += src.DecAvg.count;

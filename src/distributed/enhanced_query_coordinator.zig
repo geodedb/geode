@@ -417,7 +417,9 @@ pub const EnhancedQueryCoordinator = struct {
         };
     }
 
-    /// Top-K results with distributed optimization
+    /// Top-K results with distributed optimization using heap-based selection
+    /// GAP-0129: Uses O(n log k) heap selection instead of O(n log n) full sort
+    /// CANARY: REQ=REQ-DIST-TOPK-001; FEATURE="Heap-based Top-K Selection"; ASPECT=Performance; STATUS=IMPL; UPDATED=2026-01-13
     fn topKResults(
         self: *EnhancedQueryCoordinator,
         shard_results: []federation.QueryResults,
@@ -425,25 +427,150 @@ pub const EnhancedQueryCoordinator = struct {
     ) !federation.QueryResults {
         const k = (options.limit orelse 100) + (options.offset orelse 0);
 
-        // Collect all rows and sort
-        var all_rows = std.ArrayList(protocol.BindingRow).init(self.allocator);
-        defer all_rows.deinit();
-
+        // Count total rows to decide strategy
+        var total_rows: usize = 0;
         for (shard_results) |result| {
-            try all_rows.appendSlice(result.rows);
+            total_rows += result.rows.len;
         }
 
-        // Sort and take top K
-        // TODO: Use actual sort comparator based on order keys
-        std.sort.heap(protocol.BindingRow, all_rows.items, {}, simpleRowCompare);
+        // If total rows <= k, no need for heap selection - just collect and sort
+        if (total_rows <= k) {
+            var all_rows = std.ArrayList(protocol.BindingRow).init(self.allocator);
+            defer all_rows.deinit();
 
-        const actual_k = @min(k, all_rows.items.len);
+            for (shard_results) |result| {
+                try all_rows.appendSlice(result.rows);
+            }
+
+            // GAP-0130: Sort using ORDER BY keys if provided
+            if (options.order_by.len > 0) {
+                const sort_context = OrderBySortContext{ .order_by = options.order_by };
+                std.sort.heap(protocol.BindingRow, all_rows.items, sort_context, orderByCompare);
+            } else {
+                std.sort.heap(protocol.BindingRow, all_rows.items, {}, simpleRowCompare);
+            }
+
+            const start = options.offset orelse 0;
+            const end = @min(start + (options.limit orelse all_rows.items.len), all_rows.items.len);
+
+            return federation.QueryResults{
+                .rows = if (start < all_rows.items.len)
+                    try self.allocator.dupe(protocol.BindingRow, all_rows.items[start..end])
+                else
+                    &.{},
+                .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+                .execution_time_ms = 0,
+                .ordered = true,
+            };
+        }
+
+        // GAP-0129: Use max-heap for O(n log k) top-K selection
+        // CANARY: REQ=REQ-DIST-TOPK-002; FEATURE="Max-Heap Top-K"; ASPECT=Performance; STATUS=IMPL; UPDATED=2026-01-13
+        // We maintain a max-heap of size k containing the smallest k elements seen so far
+        // For ascending order: keep smallest k elements using a max-heap (pop largest when full)
+        // For descending order: keep largest k elements using a min-heap (pop smallest when full)
+        const HeapContext = struct {
+            order_by: []const OrderByKey,
+            ascending_heap: bool, // If true, max-heap for ascending result (pop largest)
+
+            fn compare(ctx: @This(), a: protocol.BindingRow, b: protocol.BindingRow) std.math.Order {
+                // For ascending result, we want a max-heap to track the k smallest
+                // so we invert the comparison (larger elements have higher priority to be popped)
+                var col_indices: [32]usize = undefined;
+                var ascending: [32]bool = undefined;
+
+                const num_keys = if (ctx.order_by.len > 32) 32 else ctx.order_by.len;
+                if (num_keys == 0) {
+                    // Default comparison
+                    const max_cols = if (a.cols.len > b.cols.len) a.cols.len else b.cols.len;
+                    const actual_cols = if (max_cols > 32) 32 else max_cols;
+                    for (0..actual_cols) |i| {
+                        col_indices[i] = i;
+                        ascending[i] = true;
+                    }
+                    const cmp = protocol.compareBindingRows(a, b, col_indices[0..actual_cols], ascending[0..actual_cols], true);
+                    // Invert for max-heap behavior
+                    return if (ctx.ascending_heap) switch (cmp) {
+                        .lt => .gt,
+                        .gt => .lt,
+                        .eq => .eq,
+                    } else cmp;
+                }
+
+                for (0..num_keys) |i| {
+                    col_indices[i] = ctx.order_by[i].column_index;
+                    ascending[i] = ctx.order_by[i].ascending;
+                }
+
+                const nulls_first = if (ctx.order_by.len > 0) ctx.order_by[0].nulls_first else true;
+                const cmp = protocol.compareBindingRows(a, b, col_indices[0..num_keys], ascending[0..num_keys], nulls_first);
+
+                // For max-heap (ascending result), invert so largest elements rise to top for removal
+                return if (ctx.ascending_heap) switch (cmp) {
+                    .lt => .gt,
+                    .gt => .lt,
+                    .eq => .eq,
+                } else cmp;
+            }
+        };
+
+        // Determine if primary sort is ascending
+        const primary_ascending = if (options.order_by.len > 0) options.order_by[0].ascending else true;
+
+        var heap = std.PriorityQueue(protocol.BindingRow, HeapContext, HeapContext.compare).init(self.allocator, HeapContext{
+            .order_by = options.order_by,
+            .ascending_heap = primary_ascending,
+        });
+        defer heap.deinit();
+
+        // Reserve capacity for k elements
+        try heap.ensureTotalCapacity(k);
+
+        // Process all rows through the heap - O(n log k)
+        for (shard_results) |result| {
+            for (result.rows) |row| {
+                if (heap.count() < k) {
+                    try heap.add(row);
+                } else {
+                    // Compare with top of heap (the "worst" of current top-k)
+                    const top = heap.peek().?;
+                    const ctx = HeapContext{
+                        .order_by = options.order_by,
+                        .ascending_heap = primary_ascending,
+                    };
+                    // If new row is better than top, replace top
+                    const cmp = HeapContext.compare(ctx, row, top);
+                    if (cmp == .gt) {
+                        _ = heap.removeOrNull();
+                        try heap.add(row);
+                    }
+                }
+            }
+        }
+
+        // Extract results from heap and sort them (k elements, O(k log k))
+        var result_rows = std.ArrayList(protocol.BindingRow).init(self.allocator);
+        defer result_rows.deinit();
+
+        while (heap.removeOrNull()) |row| {
+            try result_rows.append(row);
+        }
+
+        // Sort the k results for correct order
+        // CANARY: REQ=REQ-DIST-ORDERBY-002; FEATURE="Distributed ORDER BY Sort"; ASPECT=QueryCorrectness; STATUS=IMPL; UPDATED=2026-01-13
+        if (options.order_by.len > 0) {
+            const sort_context = OrderBySortContext{ .order_by = options.order_by };
+            std.sort.heap(protocol.BindingRow, result_rows.items, sort_context, orderByCompare);
+        } else {
+            std.sort.heap(protocol.BindingRow, result_rows.items, {}, simpleRowCompare);
+        }
+
         const start = options.offset orelse 0;
-        const end = @min(start + (options.limit orelse actual_k), actual_k);
+        const end = @min(start + (options.limit orelse result_rows.items.len), result_rows.items.len);
 
         return federation.QueryResults{
-            .rows = if (start < actual_k)
-                try self.allocator.dupe(protocol.BindingRow, all_rows.items[start..end])
+            .rows = if (start < result_rows.items.len)
+                try self.allocator.dupe(protocol.BindingRow, result_rows.items[start..end])
             else
                 &.{},
             .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
@@ -479,6 +606,40 @@ pub const EnhancedQueryCoordinator = struct {
         return cmp == .lt;
     }
 
+    // GAP-0130: Context for ORDER BY-aware sorting
+    // CANARY: REQ=REQ-DIST-ORDERBY-003; FEATURE="ORDER BY Sort Context"; ASPECT=QueryCorrectness; STATUS=IMPL; UPDATED=2026-01-13
+    const OrderBySortContext = struct {
+        order_by: []const OrderByKey,
+    };
+
+    /// Compare rows using ORDER BY keys
+    fn orderByCompare(context: OrderBySortContext, a: protocol.BindingRow, b: protocol.BindingRow) bool {
+        // Extract column indices and ascending flags from ORDER BY keys
+        var col_indices: [32]usize = undefined;
+        var ascending: [32]bool = undefined;
+
+        const num_keys = if (context.order_by.len > 32) 32 else context.order_by.len;
+        for (0..num_keys) |i| {
+            col_indices[i] = context.order_by[i].column_index;
+            ascending[i] = context.order_by[i].ascending;
+        }
+
+        // Use NULLS FIRST from first ORDER BY key (or default true)
+        const nulls_first = if (context.order_by.len > 0)
+            context.order_by[0].nulls_first
+        else
+            true;
+
+        const cmp = protocol.compareBindingRows(
+            a,
+            b,
+            col_indices[0..num_keys],
+            ascending[0..num_keys],
+            nulls_first,
+        );
+        return cmp == .lt;
+    }
+
     /// Hash a row for deduplication
     fn hashRow(self: *EnhancedQueryCoordinator, row: protocol.BindingRow) ![]u8 {
         var hasher = std.hash_map.DefaultHasher.init();
@@ -510,6 +671,14 @@ pub const EnhancedQueryCoordinator = struct {
 
 // Supporting types and structures
 
+// GAP-0130: ORDER BY key for distributed query sorting
+// CANARY: REQ=REQ-DIST-ORDERBY-001; FEATURE="Distributed ORDER BY"; ASPECT=QueryCorrectness; STATUS=IMPL; UPDATED=2026-01-13
+const OrderByKey = struct {
+    column_index: usize,
+    ascending: bool = true,
+    nulls_first: bool = true,
+};
+
 const QueryOptions = struct {
     consistency_level: federation.ConsistencyLevel = .eventual,
     use_cache: bool = true,
@@ -517,6 +686,8 @@ const QueryOptions = struct {
     limit: ?usize = null,
     offset: ?usize = null,
     timeout_ms: u32 = 30000,
+    // GAP-0130: ORDER BY keys for result sorting
+    order_by: []const OrderByKey = &.{},
 };
 
 const QueryAnalysis = struct {

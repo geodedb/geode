@@ -831,32 +831,51 @@ pub fn processMessage(
                             return protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
                         },
                         .Show => |sh| {
-                            // Handle SHOW GRAPHS
-                            if (sh.show_type == .graphs) {
-                                std.debug.print("[QUIC] SHOW GRAPHS handler\n", .{});
-                                const graph_names = graph_storage_mgr.listGraphNames(gpa) catch &.{};
-                                std.debug.print("[QUIC] listGraphNames returned {d} graphs\n", .{graph_names.len});
-                                defer gpa.free(graph_names);
-                                var rows = std.ArrayList([]const u8).init(gpa);
-                                for (graph_names) |name| {
-                                    const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\"}}", .{name}) catch continue;
-                                    rows.append(gpa, row) catch continue;
-                                }
-                                const cols: []const protocol.SchemaCol = &.{.{ .name = "name", .type = "STRING" }};
-                                state.last_columns = cols;
-                                state.last_ordered = false;
-                                state.last_order_keys = &.{};
-                                state.last_distinct = false;
-                                state.page_items = rows.toOwnedSlice(gpa) catch &.{};
-                                state.page_index = 0;
-                                state.active_result = true;
-                                return protocol.buildSchemaLine(gpa, cols, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                            // GAP-0127: Handle all SHOW statement types with explicit messages
+                            // CANARY: REQ=REQ-SHOW-STMT-001; FEATURE="SHOW Statement Types"; ASPECT=GQLCompliance; STATUS=IMPL; UPDATED=2026-01-13
+                            switch (sh.show_type) {
+                                .graphs => {
+                                    std.debug.print("[QUIC] SHOW GRAPHS handler\n", .{});
+                                    const graph_names = graph_storage_mgr.listGraphNames(gpa) catch &.{};
+                                    std.debug.print("[QUIC] listGraphNames returned {d} graphs\n", .{graph_names.len});
+                                    defer gpa.free(graph_names);
+                                    var rows = std.ArrayList([]const u8).init(gpa);
+                                    for (graph_names) |name| {
+                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\"}}", .{name}) catch continue;
+                                        rows.append(gpa, row) catch continue;
+                                    }
+                                    const cols: []const protocol.SchemaCol = &.{.{ .name = "name", .type = "STRING" }};
+                                    state.last_columns = cols;
+                                    state.last_ordered = false;
+                                    state.last_order_keys = &.{};
+                                    state.last_distinct = false;
+                                    state.page_items = rows.toOwnedSlice(gpa) catch &.{};
+                                    state.page_index = 0;
+                                    state.active_result = true;
+                                    return protocol.buildSchemaLine(gpa, cols, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
+                                },
+                                .indexes => {
+                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW INDEXES not yet implemented", "") catch try gpa.dupe(u8, "");
+                                },
+                                .constraints => {
+                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW CONSTRAINTS not yet implemented", "") catch try gpa.dupe(u8, "");
+                                },
+                                .tables => {
+                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW TABLES not yet implemented", "") catch try gpa.dupe(u8, "");
+                                },
+                                .procedures => {
+                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW PROCEDURES not yet implemented", "") catch try gpa.dupe(u8, "");
+                                },
+                                .functions => {
+                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW FUNCTIONS not yet implemented", "") catch try gpa.dupe(u8, "");
+                                },
                             }
-                            return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW type not yet supported", "") catch try gpa.dupe(u8, "");
                         },
-                        else => {
-                            // Return error for unsupported statement types
-                            return protocol.buildErrorLine(gpa, "NotImplemented", "Statement type not yet supported", "") catch try gpa.dupe(u8, "");
+                        else => |stmt| {
+                            // GAP-0128: Specific error for unsupported statement types
+                            const stmt_name = @tagName(stmt);
+                            const msg = std.fmt.allocPrint(gpa, "Statement type '{s}' not yet supported", .{stmt_name}) catch "Statement type not yet supported";
+                            return protocol.buildErrorLine(gpa, "NotImplemented", msg, "") catch try gpa.dupe(u8, "");
                         },
                     }
                 },

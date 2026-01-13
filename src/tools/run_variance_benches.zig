@@ -23,8 +23,11 @@ fn stats(allocator: std.mem.Allocator, values: []u64) struct { mean: f64, stddev
 }
 
 fn runPathMultiBranch(allocator: std.mem.Allocator) !void {
+    // GAP-0132: Planner cost benchmarks use synthetic BFS workload
+    // CANARY: REQ=REQ-BENCH-PLANNER-001; FEATURE="Planner Cost Benchmarks"; ASPECT=PerformanceTesting; STATUS=SYNTHETIC; UPDATED=2026-01-13
     // TODO(planner-cost-hooks): Replace synthetic BFS workload with real planner path multi-branch expansion timings
     // once NodeScan/Expand operators expose micro-timing hooks (planned under REQ-GQL-021 cost model integration).
+    // Synthetic data provides consistent reproducible results but may not reflect real-world performance.
     // Thresholds (can be overridden via env VARIANCE_CV_MAX / VARIANCE_P95_OVER_MEAN_MAX)
     const default_cv_max: f64 = 0.23;
     const default_ratio_max: f64 = 2.60;
@@ -293,17 +296,22 @@ fn runPathMultiBranch(allocator: std.mem.Allocator) !void {
     std.debug.print("{s}", .{fbs2.getWritten()});
 }
 
-// Placeholder: Raft variance currently skipped due to incomplete replication state init in standalone mode.
+// GAP-0133: Raft variance benchmarks use synthetic quorum delay model
+// CANARY: REQ=REQ-BENCH-RAFT-001; FEATURE="Raft Variance Benchmarks"; ASPECT=DistributedTesting; STATUS=SYNTHETIC; UPDATED=2026-01-13
+// Placeholder: Real Raft variance currently skipped due to incomplete replication state init in standalone mode.
+// Synthetic model provides bounded latency estimates but not actual replication behavior.
 fn lcg_step(s: *u64) u32 {
     s.* = s.* *% 6364136223846793005 +% 1;
     return @intCast((s.* >> 32) & 0xffffffff);
 }
 
 fn runSyntheticRaftCommitVariance(allocator: std.mem.Allocator) !void {
+    // GAP-0133: Synthetic Raft commit variance model
     // Synthetic model: we simulate a leader appending entries and advancing commit index after quorum acks.
     // We model N followers with random (bounded) ack delays from a deterministic LCG.
     // TODO(raft-real): Swap synthetic quorum delay model with real raft.Partition commit advancement once
     // replication state initialization and AppendEntries scheduling are safe in standalone runner context.
+    // CANARY: REQ=REQ-BENCH-RAFT-002; FEATURE="Synthetic Raft Commit Variance"; ASPECT=DistributedTesting; STATUS=SYNTHETIC; UPDATED=2026-01-13
     const followers: usize = 4; // quorum = 3 of 5 (leader + 4 followers)
     const iterations: usize = 200;
     const warmup: usize = 10;

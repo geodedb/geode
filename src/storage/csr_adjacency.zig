@@ -164,8 +164,19 @@ pub const CSRAdjacency = struct {
         try self.page_manager.flushPage(self.neighbors_page_id.?);
     }
 
+    // GAP-0123/GAP-0136: Edge input structure with property offset support
+    // CANARY: REQ=REQ-CSR-PROP-001; FEATURE="CSR Property Storage"; ASPECT=DataIntegrity; STATUS=IMPL; UPDATED=2026-01-13
+    pub const EdgeInput = struct {
+        from: u64,
+        to: u64,
+        edge_id: u64,
+        edge_type: u32,
+        properties_offset: u64 = 0, // Default to 0 for backwards compatibility
+    };
+
     /// Build CSR from edge list (typically done during bulk loading)
-    pub fn buildFromEdges(self: *CSRAdjacency, edges: []const struct { from: u64, to: u64, edge_id: u64, edge_type: u32 }) !void {
+    /// GAP-0123/GAP-0136: Now correctly stores property offsets
+    pub fn buildFromEdges(self: *CSRAdjacency, edges: []const EdgeInput) !void {
         if (edges.len == 0) return;
 
         // Find max node ID to determine array size
@@ -198,11 +209,13 @@ pub const CSRAdjacency = struct {
 
         for (edges) |edge| {
             const pos = temp_offsets[edge.from];
+            // GAP-0123/GAP-0136: Store actual property offset from input
+            // CANARY: REQ=REQ-CSR-PROP-002; FEATURE="CSR Property Offset"; ASPECT=DataIntegrity; STATUS=IMPL; UPDATED=2026-01-13
             self.neighbors.items[pos] = EdgeEntry{
                 .target_node = edge.to,
                 .edge_id = edge.edge_id,
                 .edge_type = edge.edge_type,
-                .properties_offset = 0, // TODO: Link to property storage
+                .properties_offset = edge.properties_offset,
             };
             temp_offsets[edge.from] += 1;
         }
@@ -231,32 +244,40 @@ pub const CSRAdjacency = struct {
     }
 
     /// Add a single edge (less efficient than bulk loading)
-    pub fn addEdge(self: *CSRAdjacency, from: u64, to: u64, edge_id: u64, edge_type: u32) !void {
+    /// GAP-0123/GAP-0136: Now supports properties_offset parameter
+    pub fn addEdge(self: *CSRAdjacency, from: u64, to: u64, edge_id: u64, edge_type: u32, properties_offset: u64) !void {
         // For simplicity, rebuild the entire CSR structure
         // In a production system, you'd want incremental updates
 
-        // Collect existing edges
-        var edges = std.ArrayList(struct { from: u64, to: u64, edge_id: u64, edge_type: u32 }){};
+        // Collect existing edges - preserving their properties_offset
+        // CANARY: REQ=REQ-CSR-PROP-003; FEATURE="CSR Property Preservation"; ASPECT=DataIntegrity; STATUS=IMPL; UPDATED=2026-01-13
+        var edges = std.ArrayList(EdgeInput).init(self.allocator);
         defer edges.deinit();
 
         for (0..self.node_count) |node_id| {
-            if (self.getNeighbors(node_id)) |neighbors| {
+            if (self.getNeighbors(@intCast(node_id))) |neighbors| {
                 for (neighbors.neighbors) |neighbor| {
                     try edges.append(.{
-                        .from = node_id,
+                        .from = @intCast(node_id),
                         .to = neighbor.target_node,
                         .edge_id = neighbor.edge_id,
                         .edge_type = neighbor.edge_type,
+                        .properties_offset = neighbor.properties_offset, // Preserve existing offset
                     });
                 }
             }
         }
 
-        // Add new edge
-        try edges.append(.{ .from = from, .to = to, .edge_id = edge_id, .edge_type = edge_type });
+        // Add new edge with its properties_offset
+        try edges.append(.{ .from = from, .to = to, .edge_id = edge_id, .edge_type = edge_type, .properties_offset = properties_offset });
 
         // Rebuild CSR
         try self.buildFromEdges(edges.items);
+    }
+
+    /// Add a single edge without properties (backwards compatibility)
+    pub fn addEdgeSimple(self: *CSRAdjacency, from: u64, to: u64, edge_id: u64, edge_type: u32) !void {
+        try self.addEdge(from, to, edge_id, edge_type, 0);
     }
 };
 
@@ -270,12 +291,12 @@ test "CSR adjacency: build and query" {
     var csr = CSRAdjacency.init(allocator, &page_manager);
     defer csr.deinit();
 
-    // Build CSR from edge list
-    const edges = [_]struct { from: u64, to: u64, edge_id: u64, edge_type: u32 }{
-        .{ .from = 0, .to = 1, .edge_id = 101, .edge_type = 1 },
-        .{ .from = 0, .to = 2, .edge_id = 102, .edge_type = 1 },
-        .{ .from = 1, .to = 2, .edge_id = 103, .edge_type = 2 },
-        .{ .from = 2, .to = 0, .edge_id = 104, .edge_type = 1 },
+    // GAP-0123/GAP-0136: Build CSR from edge list with property offsets
+    const edges = [_]CSRAdjacency.EdgeInput{
+        .{ .from = 0, .to = 1, .edge_id = 101, .edge_type = 1, .properties_offset = 1000 },
+        .{ .from = 0, .to = 2, .edge_id = 102, .edge_type = 1, .properties_offset = 2000 },
+        .{ .from = 1, .to = 2, .edge_id = 103, .edge_type = 2, .properties_offset = 3000 },
+        .{ .from = 2, .to = 0, .edge_id = 104, .edge_type = 1, .properties_offset = 4000 },
     };
 
     try csr.buildFromEdges(&edges);
@@ -285,10 +306,14 @@ test "CSR adjacency: build and query" {
     try std.testing.expect(neighbors_0.neighbors.len == 2);
     try std.testing.expect(neighbors_0.neighbors[0].target_node == 1);
     try std.testing.expect(neighbors_0.neighbors[1].target_node == 2);
+    // GAP-0123/GAP-0136: Verify property offsets are stored correctly
+    try std.testing.expect(neighbors_0.neighbors[0].properties_offset == 1000);
+    try std.testing.expect(neighbors_0.neighbors[1].properties_offset == 2000);
 
     const neighbors_1 = csr.getNeighbors(1).?;
     try std.testing.expect(neighbors_1.neighbors.len == 1);
     try std.testing.expect(neighbors_1.neighbors[0].target_node == 2);
+    try std.testing.expect(neighbors_1.neighbors[0].properties_offset == 3000);
 
     // Test degree queries
     try std.testing.expect(csr.getDegree(0) == 2);
@@ -312,10 +337,10 @@ test "CSR adjacency: persistence" {
     var csr = CSRAdjacency.init(allocator, &page_manager);
     defer csr.deinit();
 
-    // Build and save CSR
-    const edges = [_]struct { from: u64, to: u64, edge_id: u64, edge_type: u32 }{
-        .{ .from = 0, .to = 1, .edge_id = 101, .edge_type = 1 },
-        .{ .from = 1, .to = 0, .edge_id = 102, .edge_type = 1 },
+    // GAP-0123/GAP-0136: Build and save CSR with property offsets
+    const edges = [_]CSRAdjacency.EdgeInput{
+        .{ .from = 0, .to = 1, .edge_id = 101, .edge_type = 1, .properties_offset = 5000 },
+        .{ .from = 1, .to = 0, .edge_id = 102, .edge_type = 1, .properties_offset = 6000 },
     };
 
     try csr.buildFromEdges(&edges);

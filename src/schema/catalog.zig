@@ -562,11 +562,12 @@ pub const Catalog = struct {
     }
 };
 
-// Backward compatibility: Keep old function signatures that use global state
-// These will be removed in Phase 3 of refactoring
-
-// DEPRECATED: Global catalog for backward compatibility
-// TODO: Remove in Phase 3 after all callers updated
+// GAP-0131: Global catalog state maintained for backward compatibility
+// CANARY: REQ=REQ-CATALOG-DEPRECATION-001; FEATURE="Legacy Global Catalog"; ASPECT=BackwardCompatibility; STATUS=DEPRECATED; UPDATED=2026-01-13
+// WARNING: These globals are DEPRECATED. New code should use Catalog instance methods.
+// Migration path: Replace initCatalog() with Catalog.init(allocator) and use instance methods
+// Callers to migrate: execution.zig (5 call sites)
+// Target removal: After all callers migrated to instance-based API
 pub var catalog_rwlock = std.Thread.RwLock{};
 pub var catalog_initialized = false;
 pub var last_catalog_data_dir: ?[]u8 = null;
