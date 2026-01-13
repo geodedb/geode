@@ -156,6 +156,8 @@ pub const Connection = struct {
     }
 
     /// GAP-0044: Initialize QUIC client and establish connection to remote federation node
+    // GAP-0144: Secure TLS connections for federation
+    // CANARY: REQ=REQ-FED-TLS-001; FEATURE="Federation TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
     pub fn connect(self: *Connection, endpoint: []const u8) !void {
         // Parse endpoint like "host:port"
         const colon = std.mem.indexOfScalar(u8, endpoint, ':') orelse return error.InvalidEndpoint;
@@ -165,9 +167,28 @@ pub const Connection = struct {
         // Initialize QUIC client
         self.client = quic.QuicClient.init(self.allocator);
 
-        // Connect to remote federation node with insecure mode for internal federation traffic
-        // Federation nodes use mutual TLS in production but allow insecure for testing
-        try self.client.?.connectInsecure(host, port, true);
+        // GAP-0144: Use TLS verification for federation by default
+        // Check if insecure mode is explicitly allowed via environment variable
+        const builtin = @import("builtin");
+        const allow_insecure = blk: {
+            if (builtin.mode == .Debug) {
+                // Debug builds allow insecure for testing
+                break :blk true;
+            }
+            // Production builds require explicit env var to skip TLS
+            const env = std.process.getEnvVarOwned(self.allocator, "GEODE_FEDERATION_INSECURE") catch null;
+            if (env) |v| {
+                defer self.allocator.free(v);
+                if (std.mem.eql(u8, v, "1")) {
+                    std.log.warn("SECURITY WARNING: Federation TLS verification disabled via GEODE_FEDERATION_INSECURE", .{});
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        };
+
+        // Connect to remote federation node with TLS verification by default (skip_verify=false)
+        try self.client.?.connectInsecure(host, port, allow_insecure);
 
         // Wait for TLS handshake to complete (5 second timeout)
         try self.client.?.waitForHandshake(5);

@@ -347,14 +347,21 @@ pub const KeyRegistry = struct {
                 const first_quote = std.mem.indexOfScalar(u8, line, '"') orelse continue;
                 const second_quote = std.mem.indexOfScalarPos(u8, line, first_quote + 1, '"') orelse continue;
                 const third_quote = std.mem.indexOfScalarPos(u8, line, second_quote + 1, '"') orelse continue;
+                // GAP-0141: Safe hex parsing with proper error handling
+                // CANARY: REQ=REQ-HEX-PARSE-KEYROT-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
                 const fourth_quote = std.mem.indexOfScalarPos(u8, line, third_quote + 1, '"') orelse continue;
                 const hex_slice = line[third_quote + 1 .. fourth_quote];
                 if (hex_slice.len == 32) {
                     var j: usize = 0;
+                    var checksum_valid = true;
                     while (j < 16) : (j += 1) {
-                        parsed_checksum[j] = std.fmt.parseInt(u8, hex_slice[j * 2 .. j * 2 + 2], 16) catch 0;
+                        parsed_checksum[j] = std.fmt.parseInt(u8, hex_slice[j * 2 .. j * 2 + 2], 16) catch {
+                            std.log.warn("Invalid hex in checksum at position {d}", .{j * 2});
+                            checksum_valid = false;
+                            break;
+                        };
                     }
-                    have_checksum = true;
+                    have_checksum = checksum_valid;
                 }
             } else if (std.mem.indexOf(u8, line, "\"id\"")) |idx2| {
                 // parse history entry line simplistic
@@ -381,15 +388,24 @@ pub const KeyRegistry = struct {
                             if (j == 0) break :blk 0;
                         }
                     };
+                    // GAP-0141: Safe hex parsing with proper error handling
+                    // CANARY: REQ=REQ-HEX-PARSE-KEYROT-002; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
                     const hex_slice = line[second_last_quote + 1 .. hex_quote];
                     if (hex_slice.len == 64) {
                         var material: [32]u8 = undefined;
                         var k: usize = 0;
+                        var material_valid = true;
                         while (k < 32) : (k += 1) {
-                            material[k] = std.fmt.parseInt(u8, hex_slice[k * 2 .. k * 2 + 2], 16) catch 0;
+                            material[k] = std.fmt.parseInt(u8, hex_slice[k * 2 .. k * 2 + 2], 16) catch {
+                                std.log.warn("Invalid hex in key material at position {d}", .{k * 2});
+                                material_valid = false;
+                                break;
+                            };
                         }
-                        const entry = DataKeyRef{ .id = id_parsed, .created_unix_epoch = created_parsed, .material = material, .envelope_json = null, .is_wrapped = false };
-                        try self.history.append(entry);
+                        if (material_valid) {
+                            const entry = DataKeyRef{ .id = id_parsed, .created_unix_epoch = created_parsed, .material = material, .envelope_json = null, .is_wrapped = false };
+                            try self.history.append(entry);
+                        }
                     }
                 } else if (std.mem.indexOf(u8, line, "\"envelope\"")) |_| {
                     // expect envelope JSON starts after : and may span single line

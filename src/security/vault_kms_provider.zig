@@ -286,20 +286,26 @@ pub const VaultKMSProvider = struct {
         const key_name_end = std.mem.indexOfScalarPos(u8, json, key_name_begin, '"') orelse return error.InvalidEnvelope;
         envelope.master_key_name = json[key_name_begin..key_name_end];
 
+        // GAP-0141: Safe hex parsing with proper error handling
+        // CANARY: REQ=REQ-HEX-PARSE-VAULT-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
         // Extract nonce
         const nonce_start = std.mem.indexOf(u8, json, "\"nonce\":\"") orelse return error.InvalidEnvelope;
         const nonce_begin = nonce_start + 9;
+        // Bounds check for nonce
+        if (nonce_begin + 24 > json.len) return error.InvalidEnvelope;
         for (0..12) |i| {
             const hex_start = nonce_begin + i * 2;
-            envelope.nonce[i] = std.fmt.parseInt(u8, json[hex_start .. hex_start + 2], 16) catch 0;
+            envelope.nonce[i] = std.fmt.parseInt(u8, json[hex_start .. hex_start + 2], 16) catch return error.InvalidHexInNonce;
         }
 
         // Extract tag
         const tag_start = std.mem.indexOf(u8, json, "\"tag\":\"") orelse return error.InvalidEnvelope;
         const tag_begin = tag_start + 7;
+        // Bounds check for tag
+        if (tag_begin + 32 > json.len) return error.InvalidEnvelope;
         for (0..16) |i| {
             const hex_start = tag_begin + i * 2;
-            envelope.tag[i] = std.fmt.parseInt(u8, json[hex_start .. hex_start + 2], 16) catch 0;
+            envelope.tag[i] = std.fmt.parseInt(u8, json[hex_start .. hex_start + 2], 16) catch return error.InvalidHexInTag;
         }
 
         envelope.version = 1;

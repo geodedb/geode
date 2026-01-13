@@ -542,13 +542,18 @@ pub const RLSEngine = struct {
                 continue;
             }
 
+            // GAP-0141: Safe integer parsing with error logging
+            // CANARY: REQ=REQ-INT-PARSE-RLS-001; FEATURE="Safe Integer Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
             // Check for integer literal
             if (std.ascii.isDigit(expr[i]) or (expr[i] == '-' and i + 1 < expr.len and std.ascii.isDigit(expr[i + 1]))) {
                 const num_start = i;
                 if (expr[i] == '-') i += 1;
                 while (i < expr.len and std.ascii.isDigit(expr[i])) : (i += 1) {}
                 const num_str = expr[num_start..i];
-                const num_value = std.fmt.parseInt(i64, num_str, 10) catch 0;
+                const num_value = std.fmt.parseInt(i64, num_str, 10) catch {
+                    std.log.warn("Invalid integer literal in RLS expression: '{s}'", .{num_str});
+                    return error.InvalidRlsExpression;
+                };
                 try constants.append(self.allocator, .{ .integer = num_value });
                 try bytecode.append(self.allocator, @intFromEnum(Opcode.push_const));
                 try bytecode.append(self.allocator, @intCast(constants.items.len - 1));

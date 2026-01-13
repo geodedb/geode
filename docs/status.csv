@@ -5,6 +5,8 @@ REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,IMPL,,,distributed,2026
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
 REQ-2PC-STORAGE-001,2PC Storage Interface,Interface,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,,,distributed,2026-01-09,src/distributed/twophase.zig
+REQ-2PC-TLS-001,2PC TLS,Security,IMPL,,,distributed,2026-01-13,src/distributed/twophase.zig
+REQ-2PC-TLS-002,2PC TLS One-shot,Security,IMPL,,,distributed,2026-01-13,src/distributed/twophase.zig
 REQ-AGG-COLLECT-001,AggregationFunctions,COLLECT,IMPL,,,aggregation,2025-12-22,src/execution/aggregation_evaluation.zig
 REQ-AGG-COLLECT-002,AggregationFunctions,COLLECT_STORE,IMPL,,,aggregation,2025-12-22,src/execution/aggregation_evaluation.zig
 REQ-AGG-COLLECT-003,AggregationFunctions,COLLECT_NULL_SKIP,IMPL,,,aggregation,2025-12-28,src/execution/aggregation_evaluation.zig
@@ -83,6 +85,7 @@ REQ-AUTH-CLI-001,CLIUserManagement,FileStorage,IMPL,,,cli,2025-10-26,src/cli/use
 REQ-AUTH-CLI-001,CLIUserManagement,SecureStorage,IMPL,,,cli,2026-01-09,src/cli/user_storage_secure.zig
 REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-DEFAULT-001,Default User Creation,Security,IMPL,TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-GUARD-001,Production Auth Guard,Security,IMPL,,,security,2026-01-13,src/cli/main.zig
 REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,IMPL,TestCANARY_REQ_AUTH_HASH_001_Argon2id,,security,2025-10-16,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-001,Password Reset Tracking,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_001_ForceReset,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-002,Enhanced Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_002_PassphrasePolicy,,security,2025-09-30,src/security/geode_auth_lib.zig
@@ -168,6 +171,7 @@ REQ-CLI-BACKUP-002,CLI Backup Integration,IntegrationTests,TESTED,TestCLI_Backup
 REQ-CLI-BACKUP-INFO-001,CLIBackupInfo,FileMetadata,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-BACKUP-INTEGRATION-001,Remote Backup/Restore Operations,IntegrationTesting,IMPL,TestCANARY_REQ_CLI_BACKUP_INTEGRATION_001,,claude,2025-10-05,tests/test_server_backup_api_integration.zig
 REQ-CLI-BACKUP-LIST-001,CLIBackupList,DirectoryScan,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
+REQ-CLI-DEFAULT-PASSWORD-001,CLI Default Password,Security,IMPL,,,security,2026-01-13,src/cli/main.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,TestCANARY_REQ_CLI_EXIT_001_ExitCodes,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
 REQ-CLI-MIGRATE-CREATE-001,CLIMigrateCreate,FileCreation,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-MIGRATE-RUN-001,CLIMigrateRun,MigrationModule,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
@@ -226,6 +230,7 @@ REQ-DATETIME-001,DateTimeFunctions,duration,IMPL,,,datetime,2026-01-09,src/eval.
 REQ-DATETIME-001,DateTimeFunctions,duration_parsing,IMPL,,,datetime,2025-12-22,src/eval.zig
 REQ-DATETIME-001,DateTimeFunctions,localdatetime,IMPL,,,datetime,2025-12-22,src/eval.zig
 REQ-DATETIME-001,DateTimeFunctions,timestamp,IMPL,,,datetime,2025-12-22,src/eval.zig
+REQ-DEFAULT-PASSWORD-001,Secure Default Password,Security,IMPL,,,security,2026-01-13,src/security/geode_auth_lib.zig
 REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,IMPL,,,crud_operations,2026-01-09,src/execution/crud_operations.zig
 REQ-DISK-AES-001,AES-256 Disk Encryption,Security,IMPL,,,storage,2026-01-10,src/storage/disk.zig
 REQ-DISK-AES-001,AES-256 XTS Page Decryption,Security,IMPL,,,storage,2026-01-10,src/storage/disk.zig
@@ -256,6 +261,7 @@ REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,IMPL,,,distributed,2026-01-
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-REGISTRY-001,Node Registry,NodeLookup,IMPL,,,distributed,2026-01-10,src/distributed/query_transport.zig
 REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,IMPL,,,distributed,2026-01-08,src/distributed/sharding.zig
+REQ-DIST-TLS-001,Distributed TLS,Security,IMPL,,,distributed,2026-01-13,src/distributed/query_transport.zig
 REQ-DISTRIBUTED-INDEX-OPTIMIZER-001,Distributed IndexOptimizer,FederationAwareCostEstimation,TESTED,TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001_FederationAwareCostEstimation,,distributed,2025-10-05,tests/test_index_optimizer_distributed.zig
 REQ-DISTRIBUTED-INDEX-OPTIMIZER-001,Distributed IndexOptimizer,FederationAwareCostEstimation,IMPL,TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001,,distributed,2025-10-05,src/server/index_optimizer.zig
 REQ-DISTRIBUTED-INDEX-OPTIMIZER-002,Distributed IndexOptimizer,CrossShardOperationCosts,TESTED,TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_002_CrossShardOperationCosts,,distributed,2025-10-05,tests/test_index_optimizer_distributed.zig
@@ -296,6 +302,7 @@ REQ-EXEC-REFACTOR-009,FileModularization,ReturnAndSorting,IMPL,,,refactoring,202
 REQ-EXEC-REFACTOR-010,FileModularization,StatementDispatcher,IMPL,,,refactoring,2025-10-17,src/execution/statement_dispatcher.zig
 REQ-EXEC-REFACTOR-011,FileModularization,QueryExecution,IMPL,,,refactoring,2025-10-17,src/execution/query_execution.zig
 REQ-FED-QUIC-001,FederationQUICConnection,Connection,IMPL,,,federation,2026-01-10,src/distributed/federation.zig
+REQ-FED-TLS-001,Federation TLS,Security,IMPL,,,distributed,2026-01-13,src/distributed/federation.zig
 REQ-FLE-ADMIN-001,FieldLevelEncryption,ADMIN,IMPL,,,security,2026-01-09,src/admin/fle_commands.zig
 REQ-FLE-AEAD-001,FieldLevelEncryption,SECURITY,IMPL,,,security,2025-10-15,src/crypto/aead.zig
 REQ-FLE-AST-001,FieldLevelEncryption,AST,IMPL,,,security,2025-10-15,src/gql/ast.zig
@@ -1691,11 +1698,20 @@ REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,TypeDefinition,IMPL,,,catalog,2026
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,TypeManagement,IMPL,,,catalog,2026-01-10,src/server/server_state.zig
 REQ-GRAPHSAGE-INDUCTIVE-001,GraphSAGE Inductive Learning,GraphStorage,IMPL,,,ml,2026-01-10,src/ml/graph_embeddings.zig
 REQ-GRAPHSAGE-INDUCTIVE-002,GraphSAGE Inductive Learning,Prediction,IMPL,,,ml,2026-01-10,src/ml/graph_embeddings.zig
+REQ-HEX-PARSE-001,Safe Hex Parsing,Security,IMPL,,,security,2026-01-13,src/security/external_kms_client.zig
+REQ-HEX-PARSE-BACKUP-001,Safe Hex Parsing,Security,IMPL,,,security,2026-01-13,src/security/backup_key_envelope.zig
+REQ-HEX-PARSE-KEYPROV-001,Safe Hex Parsing,Security,IMPL,,,security,2026-01-13,src/security/key_provider.zig
+REQ-HEX-PARSE-KEYROT-001,Safe Hex Parsing,Security,IMPL,,,security,2026-01-13,src/security/key_rotation.zig
+REQ-HEX-PARSE-KEYROT-002,Safe Hex Parsing,Security,IMPL,,,security,2026-01-13,src/security/key_rotation.zig
+REQ-HEX-PARSE-KMS-001,Safe Hex Parsing,Security,IMPL,,,security,2026-01-13,src/security/kms_remote.zig
+REQ-HEX-PARSE-VAULT-001,Safe Hex Parsing,Security,IMPL,,,security,2026-01-13,src/security/vault_kms_provider.zig
 REQ-HNSW-INDEX-OPTIMIZER-ENHANCEMENT-001,Enhanced HNSW Vector Index Integration,DynamicIndexSelection,TESTED,TestCANARY_REQ_HNSW_INDEX_OPTIMIZER_ENHANCEMENT_001_DynamicIndexSelection,,vector,2025-10-05,tests/test_hnsw_index_optimizer_enhancement.zig
 REQ-HNSW-INDEX-OPTIMIZER-INTEGRATION-001,HNSW IndexOptimizer Integration,ProductionIntegration,TESTED,TestCANARY_REQ_HNSW_INDEX_OPTIMIZER_INTEGRATION_001_ProductionIntegration,,vector,2025-10-05,tests/test_hnsw_index_optimizer_integration.zig
 REQ-INDEX-001,IndexManagement,Catalog,IMPLEMENTED,,,storage,2025-10-14,src/schema/catalog.zig
 REQ-INDEX-002,IndexManagement,ScopedCreation,IMPLEMENTED,,,storage,2025-10-14,src/execution/statement_dispatcher.zig
 REQ-INDEX-003,IndexManagement,ScopedDeletion,IMPLEMENTED,,,storage,2025-10-14,src/execution/statement_dispatcher.zig
+REQ-INT-PARSE-RLS-001,Safe Integer Parsing,Security,IMPL,,,security,2026-01-13,src/security/rls_core.zig
+REQ-JSON-PARSE-KMS-001,Safe JSON Parsing,Security,IMPL,,,security,2026-01-13,src/security/kms_remote.zig
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,NETWORK,IMPL,,,security,2026-01-09,src/security/kms_remote.zig
 REQ-LEXER-METADATA-001,MetadataIntegration,KeywordLookup,IMPL,,,lexer,2026-01-03,src/gql/token.zig
 REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,IMPL,,,lexer,2026-01-03,src/gql/token.zig
@@ -1976,6 +1992,7 @@ REQ-PITR-LOAD-001,PITR Data Loading,DataRestore,IMPL,,,backup,2026-01-10,src/ser
 REQ-PITR-LOAD-002,PITR Data Loading,StateRestore,IMPL,,,backup,2026-01-10,src/server/query_executor.zig
 REQ-PITR-WAL-001,Point-in-Time Recovery,WALReplay,IMPL,,,backup,2026-01-09,src/cli/backup_cli.zig
 REQ-PLANNER-CARD-001,Cardinality Estimator,RealImplementation,IMPL,test_cardinality_scan_estimation,,planner,2025-10-05,tests/test_cardinality_estimator.zig
+REQ-PRNG-CRYPTO-001,Cryptographic PRNG,Security,IMPL,,,security,2026-01-13,src/security/kms_remote.zig
 REQ-QP-FILTER-001,QueryPlannerOptimization,FilterMerging,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
 REQ-QP-PARALLEL-001,QueryPlannerOptimization,Parallelization,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
 REQ-QP-PUSH-001,QueryPlannerOptimization,PredicatePushdown,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
@@ -2067,13 +2084,18 @@ REQ-SET-RETURN-FIX-001,SetReturnFix,NoReturnClause,IMPL,,,engine,2025-12-23,src/
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,IMPL,,,distributed,2026-01-09,src/distributed/query_coordinator.zig
 REQ-SHOW-CONSTRAINTS-001,SHOW CONSTRAINTS,CatalogList,IMPL,,,catalog,2026-01-13,src/schema/catalog.zig
 REQ-SHOW-CONSTRAINTS-002,SHOW CONSTRAINTS,StatementHandler,IMPL,,,execution,2026-01-13,src/execution/statement_handlers.zig
+REQ-SHOW-CONSTRAINTS-QUIC-001,SHOW CONSTRAINTS,QUICProtocol,IMPL,,,server,2026-01-13,src/server/quic_connection_handler.zig
 REQ-SHOW-FUNCTIONS-001,SHOW FUNCTIONS,StatementHandler,IMPL,,,execution,2026-01-13,src/execution/statement_handlers.zig
+REQ-SHOW-FUNCTIONS-QUIC-001,SHOW FUNCTIONS,QUICProtocol,IMPL,,,server,2026-01-13,src/server/quic_connection_handler.zig
 REQ-SHOW-INDEXES-001,SHOW INDEXES,CatalogList,IMPL,,,catalog,2026-01-13,src/schema/catalog.zig
+REQ-SHOW-INDEXES-QUIC-001,SHOW INDEXES,QUICProtocol,IMPL,,,server,2026-01-13,src/server/quic_connection_handler.zig
 REQ-SHOW-PROCEDURES-001,SHOW PROCEDURES,StatementHandler,IMPL,,,execution,2026-01-13,src/execution/statement_handlers.zig
+REQ-SHOW-PROCEDURES-QUIC-001,SHOW PROCEDURES,QUICProtocol,IMPL,,,server,2026-01-13,src/server/quic_connection_handler.zig
 REQ-SHOW-SCHEMAS-001,SHOW SCHEMAS,CatalogList,IMPL,,,catalog,2026-01-13,src/schema/catalog.zig
 REQ-SHOW-STMT-TEST-001,SHOW Statements,TestCoverage,IMPL,,,testing,2026-01-13,geodetestlab/specs/gap_139_show_statements.yml
 REQ-SHOW-TABLES-001,SHOW TABLES,StatementHandler,IMPL,,,execution,2026-01-13,src/execution/statement_handlers.zig
 REQ-SHOW-TABLES-002,SHOW TABLES,GraphStorageList,IMPL,,,engine,2026-01-13,src/server/graph_storage_manager.zig
+REQ-SHOW-TABLES-QUIC-001,SHOW TABLES,QUICProtocol,IMPL,,,server,2026-01-13,src/server/quic_connection_handler.zig
 REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,IMPL,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,IMPL,,,spatial,2026-01-10,src/eval_extended.zig

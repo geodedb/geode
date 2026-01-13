@@ -47,6 +47,8 @@ pub fn import(allocator: std.mem.Allocator, blob: []const u8) !ImportResult {
     errdefer tmp_entries.deinit();
     while (lines.next()) |line| {
         if (std.mem.indexOf(u8, line, "\"checksum\"")) |_| {
+            // GAP-0141: Safe hex parsing with proper error handling
+            // CANARY: REQ=REQ-HEX-PARSE-BACKUP-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
             const first = std.mem.indexOfScalar(u8, line, '"') orelse continue;
             const second = std.mem.indexOfScalarPos(u8, line, first + 1, '"') orelse continue;
             const third = std.mem.indexOfScalarPos(u8, line, second + 1, '"') orelse continue;
@@ -54,8 +56,15 @@ pub fn import(allocator: std.mem.Allocator, blob: []const u8) !ImportResult {
             const hex = line[third + 1 .. fourth];
             if (hex.len == 32) {
                 var k: usize = 0;
-                while (k < 16) : (k += 1) checksum[k] = std.fmt.parseInt(u8, hex[k * 2 .. k * 2 + 2], 16) catch 0;
-                have_checksum = true;
+                var checksum_valid = true;
+                while (k < 16) : (k += 1) {
+                    checksum[k] = std.fmt.parseInt(u8, hex[k * 2 .. k * 2 + 2], 16) catch {
+                        std.log.warn("Invalid hex in backup checksum at position {d}", .{k * 2});
+                        checksum_valid = false;
+                        break;
+                    };
+                }
+                have_checksum = checksum_valid;
             }
         } else if (std.mem.indexOf(u8, line, "\"id\"")) |idx| {
             if (std.mem.indexOf(u8, line, "payload\")") == null) continue;

@@ -855,19 +855,201 @@ pub fn processMessage(
                                     return protocol.buildSchemaLine(gpa, cols, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
                                 },
                                 .indexes => {
-                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW INDEXES not yet implemented", "") catch try gpa.dupe(u8, "");
+                                    // GAP-0140: SHOW INDEXES implementation
+                                    // CANARY: REQ=REQ-SHOW-INDEXES-QUIC-001; FEATURE="SHOW INDEXES"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    std.debug.print("[QUIC] SHOW INDEXES handler\n", .{});
+                                    const catalog_instance = execution.ensureCatalogInstance(gpa) catch {
+                                        return protocol.buildErrorLine(gpa, "CatalogError", "Failed to access catalog", "") catch try gpa.dupe(u8, "");
+                                    };
+                                    const indexes = catalog_instance.listAllIndexes(gpa) catch &.{};
+                                    defer gpa.free(indexes);
+                                    var rows = std.ArrayList([]const u8).init(gpa);
+                                    for (indexes) |idx| {
+                                        // Join columns with comma
+                                        var cols_str = std.ArrayList(u8).init(gpa);
+                                        for (idx.columns, 0..) |col, i| {
+                                            if (i > 0) cols_str.appendSlice(gpa, ", ") catch {};
+                                            cols_str.appendSlice(gpa, col) catch {};
+                                        }
+                                        const columns_joined = cols_str.toOwnedSlice(gpa) catch "";
+                                        defer gpa.free(columns_joined);
+                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\",\"type\":\"{s}\",\"table\":\"{s}\",\"columns\":\"{s}\"}}", .{ idx.name, idx.index_type, idx.table_name, columns_joined }) catch continue;
+                                        rows.append(gpa, row) catch continue;
+                                    }
+                                    const cols: []const protocol.SchemaCol = &.{
+                                        .{ .name = "name", .type = "STRING" },
+                                        .{ .name = "type", .type = "STRING" },
+                                        .{ .name = "table", .type = "STRING" },
+                                        .{ .name = "columns", .type = "STRING" },
+                                    };
+                                    state.last_columns = cols;
+                                    state.last_ordered = false;
+                                    state.last_order_keys = &.{};
+                                    state.last_distinct = false;
+                                    state.page_items = rows.toOwnedSlice(gpa) catch &.{};
+                                    state.page_index = 0;
+                                    state.active_result = true;
+                                    return protocol.buildSchemaLine(gpa, cols, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
                                 },
                                 .constraints => {
-                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW CONSTRAINTS not yet implemented", "") catch try gpa.dupe(u8, "");
+                                    // GAP-0140: SHOW CONSTRAINTS implementation
+                                    // CANARY: REQ=REQ-SHOW-CONSTRAINTS-QUIC-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    std.debug.print("[QUIC] SHOW CONSTRAINTS handler\n", .{});
+                                    const catalog_instance = execution.ensureCatalogInstance(gpa) catch {
+                                        return protocol.buildErrorLine(gpa, "CatalogError", "Failed to access catalog", "") catch try gpa.dupe(u8, "");
+                                    };
+                                    const constraints = catalog_instance.listAllConstraints(gpa) catch &.{};
+                                    defer gpa.free(constraints);
+                                    var rows = std.ArrayList([]const u8).init(gpa);
+                                    for (constraints) |con| {
+                                        const type_str = switch (con.constraint_type) {
+                                            .unique => "UNIQUE",
+                                            .node_key => "NODE KEY",
+                                            .not_null => "NOT NULL",
+                                            .exists => "EXISTS",
+                                        };
+                                        // Join properties with comma
+                                        var props_str = std.ArrayList(u8).init(gpa);
+                                        for (con.properties, 0..) |prop, i| {
+                                            if (i > 0) props_str.appendSlice(gpa, ", ") catch {};
+                                            props_str.appendSlice(gpa, prop) catch {};
+                                        }
+                                        const props_joined = props_str.toOwnedSlice(gpa) catch "";
+                                        defer gpa.free(props_joined);
+                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\",\"type\":\"{s}\",\"table\":\"{s}\",\"columns\":\"{s}\"}}", .{ con.name, type_str, con.label, props_joined }) catch continue;
+                                        rows.append(gpa, row) catch continue;
+                                    }
+                                    const cols: []const protocol.SchemaCol = &.{
+                                        .{ .name = "name", .type = "STRING" },
+                                        .{ .name = "type", .type = "STRING" },
+                                        .{ .name = "table", .type = "STRING" },
+                                        .{ .name = "columns", .type = "STRING" },
+                                    };
+                                    state.last_columns = cols;
+                                    state.last_ordered = false;
+                                    state.last_order_keys = &.{};
+                                    state.last_distinct = false;
+                                    state.page_items = rows.toOwnedSlice(gpa) catch &.{};
+                                    state.page_index = 0;
+                                    state.active_result = true;
+                                    return protocol.buildSchemaLine(gpa, cols, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
                                 },
                                 .tables => {
-                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW TABLES not yet implemented", "") catch try gpa.dupe(u8, "");
+                                    // GAP-0140: SHOW TABLES implementation
+                                    // CANARY: REQ=REQ-SHOW-TABLES-QUIC-001; FEATURE="SHOW TABLES"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    // In graph databases, node labels serve as the equivalent of "tables"
+                                    std.debug.print("[QUIC] SHOW TABLES handler\n", .{});
+                                    const labels = graph_storage_mgr.listNodeLabels(gpa) catch &.{};
+                                    defer {
+                                        for (labels) |label| gpa.free(label);
+                                        gpa.free(labels);
+                                    }
+                                    var rows = std.ArrayList([]const u8).init(gpa);
+                                    for (labels) |label| {
+                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\",\"type\":\"NODE\"}}", .{label}) catch continue;
+                                        rows.append(gpa, row) catch continue;
+                                    }
+                                    const cols: []const protocol.SchemaCol = &.{
+                                        .{ .name = "name", .type = "STRING" },
+                                        .{ .name = "type", .type = "STRING" },
+                                    };
+                                    state.last_columns = cols;
+                                    state.last_ordered = false;
+                                    state.last_order_keys = &.{};
+                                    state.last_distinct = false;
+                                    state.page_items = rows.toOwnedSlice(gpa) catch &.{};
+                                    state.page_index = 0;
+                                    state.active_result = true;
+                                    return protocol.buildSchemaLine(gpa, cols, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
                                 },
                                 .procedures => {
-                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW PROCEDURES not yet implemented", "") catch try gpa.dupe(u8, "");
+                                    // GAP-0140: SHOW PROCEDURES implementation
+                                    // CANARY: REQ=REQ-SHOW-PROCEDURES-QUIC-001; FEATURE="SHOW PROCEDURES"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    // Geode currently has no user-defined stored procedures - returns empty result
+                                    std.debug.print("[QUIC] SHOW PROCEDURES handler\n", .{});
+                                    const cols: []const protocol.SchemaCol = &.{
+                                        .{ .name = "name", .type = "STRING" },
+                                        .{ .name = "signature", .type = "STRING" },
+                                    };
+                                    state.last_columns = cols;
+                                    state.last_ordered = false;
+                                    state.last_order_keys = &.{};
+                                    state.last_distinct = false;
+                                    state.page_items = &.{};
+                                    state.page_index = 0;
+                                    state.active_result = true;
+                                    return protocol.buildSchemaLine(gpa, cols, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
                                 },
                                 .functions => {
-                                    return protocol.buildErrorLine(gpa, "NotImplemented", "SHOW FUNCTIONS not yet implemented", "") catch try gpa.dupe(u8, "");
+                                    // GAP-0140: SHOW FUNCTIONS implementation
+                                    // CANARY: REQ=REQ-SHOW-FUNCTIONS-QUIC-001; FEATURE="SHOW FUNCTIONS"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    std.debug.print("[QUIC] SHOW FUNCTIONS handler\n", .{});
+                                    // Built-in functions list
+                                    const builtin_functions = [_]struct { name: []const u8, signature: []const u8, return_type: []const u8 }{
+                                        // String functions
+                                        .{ .name = "substring", .signature = "(string, start, [length])", .return_type = "STRING" },
+                                        .{ .name = "replace", .signature = "(string, search, replace)", .return_type = "STRING" },
+                                        .{ .name = "trim", .signature = "(string)", .return_type = "STRING" },
+                                        .{ .name = "upper", .signature = "(string)", .return_type = "STRING" },
+                                        .{ .name = "lower", .signature = "(string)", .return_type = "STRING" },
+                                        .{ .name = "toString", .signature = "(value)", .return_type = "STRING" },
+                                        .{ .name = "split", .signature = "(string, delimiter)", .return_type = "LIST" },
+                                        // Collection functions
+                                        .{ .name = "size", .signature = "(list|map|string)", .return_type = "INTEGER" },
+                                        .{ .name = "length", .signature = "(list|path)", .return_type = "INTEGER" },
+                                        .{ .name = "keys", .signature = "(map|node)", .return_type = "LIST" },
+                                        .{ .name = "head", .signature = "(list)", .return_type = "ANY" },
+                                        .{ .name = "tail", .signature = "(list)", .return_type = "LIST" },
+                                        .{ .name = "range", .signature = "(start, end, [step])", .return_type = "LIST" },
+                                        // Numeric functions
+                                        .{ .name = "abs", .signature = "(number)", .return_type = "NUMBER" },
+                                        .{ .name = "ceil", .signature = "(number)", .return_type = "INTEGER" },
+                                        .{ .name = "floor", .signature = "(number)", .return_type = "INTEGER" },
+                                        .{ .name = "round", .signature = "(number, [precision])", .return_type = "NUMBER" },
+                                        .{ .name = "sqrt", .signature = "(number)", .return_type = "FLOAT" },
+                                        .{ .name = "log", .signature = "(number)", .return_type = "FLOAT" },
+                                        .{ .name = "rand", .signature = "()", .return_type = "FLOAT" },
+                                        // Aggregation functions
+                                        .{ .name = "count", .signature = "(expr)", .return_type = "INTEGER" },
+                                        .{ .name = "sum", .signature = "(expr)", .return_type = "NUMBER" },
+                                        .{ .name = "avg", .signature = "(expr)", .return_type = "FLOAT" },
+                                        .{ .name = "min", .signature = "(expr)", .return_type = "ANY" },
+                                        .{ .name = "max", .signature = "(expr)", .return_type = "ANY" },
+                                        .{ .name = "collect", .signature = "(expr)", .return_type = "LIST" },
+                                        // Graph functions
+                                        .{ .name = "id", .signature = "(node|relationship)", .return_type = "INTEGER" },
+                                        .{ .name = "type", .signature = "(relationship)", .return_type = "STRING" },
+                                        .{ .name = "labels", .signature = "(node)", .return_type = "LIST" },
+                                        .{ .name = "nodes", .signature = "(path)", .return_type = "LIST" },
+                                        .{ .name = "relationships", .signature = "(path)", .return_type = "LIST" },
+                                        .{ .name = "startNode", .signature = "(relationship)", .return_type = "NODE" },
+                                        .{ .name = "endNode", .signature = "(relationship)", .return_type = "NODE" },
+                                        // Type functions
+                                        .{ .name = "toInteger", .signature = "(value)", .return_type = "INTEGER" },
+                                        .{ .name = "toFloat", .signature = "(value)", .return_type = "FLOAT" },
+                                        .{ .name = "toBoolean", .signature = "(value)", .return_type = "BOOLEAN" },
+                                        // Predicate functions
+                                        .{ .name = "exists", .signature = "(pattern)", .return_type = "BOOLEAN" },
+                                        .{ .name = "coalesce", .signature = "(value, ...)", .return_type = "ANY" },
+                                    };
+                                    var rows = std.ArrayList([]const u8).init(gpa);
+                                    for (builtin_functions) |func| {
+                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\",\"signature\":\"{s}\",\"return_type\":\"{s}\"}}", .{ func.name, func.signature, func.return_type }) catch continue;
+                                        rows.append(gpa, row) catch continue;
+                                    }
+                                    const cols: []const protocol.SchemaCol = &.{
+                                        .{ .name = "name", .type = "STRING" },
+                                        .{ .name = "signature", .type = "STRING" },
+                                        .{ .name = "return_type", .type = "STRING" },
+                                    };
+                                    state.last_columns = cols;
+                                    state.last_ordered = false;
+                                    state.last_order_keys = &.{};
+                                    state.last_distinct = false;
+                                    state.page_items = rows.toOwnedSlice(gpa) catch &.{};
+                                    state.page_index = 0;
+                                    state.active_result = true;
+                                    return protocol.buildSchemaLine(gpa, cols, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
                                 },
                             }
                         },

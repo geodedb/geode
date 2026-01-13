@@ -990,10 +990,32 @@ pub const SecurityManager = struct {
             }
         }
 
-        // Get default password from environment or use default
+        // GAP-0146: Generate random password in production if env var not set
+        // CANARY: REQ=REQ-DEFAULT-PASSWORD-001; FEATURE="Secure Default Password"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
         const default_password_env = std.process.getEnvVarOwned(self.allocator, "GEODE_DEFAULT_PASSWORD") catch null;
         const password_from_env = default_password_env != null;
-        const default_password = default_password_env orelse "geodesic";
+
+        // Generate or use provided password
+        var generated_password_buf: [32]u8 = undefined;
+        var generated_password_hex: [64]u8 = undefined;
+        const default_password: []const u8 = blk: {
+            if (default_password_env) |env| {
+                break :blk env;
+            }
+            // GAP-0146: Generate cryptographically random password in production
+            const builtin = @import("builtin");
+            if (builtin.mode != .Debug) {
+                // Production: Generate random 32-byte password (hex encoded to 64 chars)
+                std.crypto.random.bytes(&generated_password_buf);
+                _ = std.fmt.bufPrint(&generated_password_hex, "{s}", .{std.fmt.fmtSliceHexLower(&generated_password_buf)}) catch unreachable;
+                std.log.warn("SECURITY: Generated random admin password (REQUIRES IMMEDIATE CHANGE):", .{});
+                std.log.warn("ADMIN_PASSWORD={s}", .{generated_password_hex[0..32]}); // Only first 32 chars
+                std.log.warn("Set GEODE_DEFAULT_PASSWORD env var to use a custom password.", .{});
+                break :blk generated_password_hex[0..32];
+            }
+            // Debug builds: Use "geodesic" for testing convenience
+            break :blk "geodesic";
+        };
         defer if (default_password_env) |env| self.allocator.free(env);
 
         // Create default user

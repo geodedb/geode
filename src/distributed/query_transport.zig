@@ -317,6 +317,8 @@ const Connection = struct {
         }
     }
 
+    // GAP-0144: Secure TLS connections for distributed queries
+    // CANARY: REQ=REQ-DIST-TLS-001; FEATURE="Distributed TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
     fn connect(self: *Connection) !void {
         // Get node address from registry if available, otherwise use default pattern
         const node_info = self.getNodeAddress();
@@ -324,9 +326,28 @@ const Connection = struct {
         // Initialize QUIC client
         self.quic_client = quic.QuicClient.init(self.allocator);
 
-        // Connect to the remote node using insecure connection for cluster-internal communication
-        // In production, use proper TLS with cluster certificates
-        self.quic_client.?.connectInsecure(node_info.host, node_info.port, true) catch |err| {
+        // GAP-0144: Use TLS verification for inter-node communication
+        // Check if insecure mode is explicitly allowed via environment variable
+        const builtin = @import("builtin");
+        const allow_insecure = blk: {
+            if (builtin.mode == .Debug) {
+                // Debug builds allow insecure for testing
+                break :blk true;
+            }
+            // Production builds require explicit env var to skip TLS
+            const env = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INSECURE") catch null;
+            if (env) |v| {
+                defer self.allocator.free(v);
+                if (std.mem.eql(u8, v, "1")) {
+                    std.log.warn("SECURITY WARNING: Inter-node TLS verification disabled via GEODE_CLUSTER_INSECURE", .{});
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        };
+
+        // Connect with TLS verification by default (skip_verify=false)
+        self.quic_client.?.connectInsecure(node_info.host, node_info.port, allow_insecure) catch |err| {
             // Log connection failure
             std.log.err("Failed to connect to node {d} at {s}:{d}: {}", .{ self.node_id, node_info.host, node_info.port, err });
             return error.ConnectionFailed;

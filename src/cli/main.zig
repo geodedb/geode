@@ -2506,9 +2506,29 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         } else if (std.mem.eql(u8, arg, "--stdio")) {
             use_stdio = true;
         } else if (std.mem.eql(u8, arg, "--disable-auth")) {
-            // GAP-0106: Allow disabling auth with explicit flag and security warning
-            std.log.warn("SECURITY WARNING: Authentication disabled. Do not use in production!", .{});
-            enable_auth = false;
+            // GAP-0143: Block --disable-auth in production builds
+            // CANARY: REQ=REQ-AUTH-GUARD-001; FEATURE="Production Auth Guard"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+            if (builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) {
+                std.log.err("SECURITY ERROR: --disable-auth is blocked in production builds", .{});
+                std.log.err("If this is intentional for testing, use a Debug build or set GEODE_ALLOW_NO_AUTH=1", .{});
+                // Check for explicit override environment variable
+                const allow_no_auth = std.process.getEnvVarOwned(allocator, "GEODE_ALLOW_NO_AUTH") catch null;
+                if (allow_no_auth) |v| {
+                    allocator.free(v);
+                    if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "true")) {
+                        std.log.warn("SECURITY WARNING: Authentication disabled via GEODE_ALLOW_NO_AUTH override!", .{});
+                        enable_auth = false;
+                    } else {
+                        return error.AuthenticationBypassBlockedInProduction;
+                    }
+                } else {
+                    return error.AuthenticationBypassBlockedInProduction;
+                }
+            } else {
+                // Debug builds allow --disable-auth with warning
+                std.log.warn("SECURITY WARNING: Authentication disabled. Do not use in production!", .{});
+                enable_auth = false;
+            }
         } else if (std.mem.eql(u8, arg, "--enable-auth")) {
             // Keep for backward compatibility (now a no-op since auth is enabled by default)
             enable_auth = true;
@@ -3573,11 +3593,33 @@ fn connectToServer(allocator: std.mem.Allocator, _: []const u8, username: []cons
 
     // Simulate authentication validation with enhanced policy checking
     if (std.mem.eql(u8, username, admin_username)) {
+        // GAP-0146: Secure default password handling
+        // CANARY: REQ=REQ-CLI-DEFAULT-PASSWORD-001; FEATURE="CLI Default Password"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
         const default_password_env = getEnvVar(local_allocator, "GEODE_DEFAULT_PASSWORD");
         defer if (default_password_env) |env| local_allocator.free(env);
-        const expected_default_password = default_password_env orelse "geodesic";
 
-        if (std.mem.eql(u8, password, expected_default_password)) {
+        // In production, require env var - server generates random password if not set
+        // Note: builtin is already imported at file level
+        const expected_default_password: ?[]const u8 = blk: {
+            if (default_password_env) |env| {
+                break :blk env;
+            }
+            // Debug builds: Use "geodesic" for testing convenience
+            if (builtin.mode == .Debug) {
+                break :blk "geodesic";
+            }
+            // Production without env var: Auth will fail (server has random password)
+            // Return null to indicate no valid expected password
+            break :blk null;
+        };
+
+        // GAP-0146: If no expected password in production, fail auth for admin user
+        const expected_pwd = expected_default_password orelse {
+            std.log.err("SECURITY: GEODE_DEFAULT_PASSWORD not set. Server generates random password - check server logs.", .{});
+            return error.InvalidCredentials;
+        };
+
+        if (std.mem.eql(u8, password, expected_pwd)) {
             // Check if authenticated password meets current policy
             const password_meets_policy = blk: {
                 validatePasswordAgainstPolicy(password) catch break :blk false;
@@ -3585,7 +3627,7 @@ fn connectToServer(allocator: std.mem.Allocator, _: []const u8, username: []cons
             };
 
             // Force reset if using default "geodesic" OR if password violates current policy
-            const needs_reset = std.mem.eql(u8, expected_default_password, "geodesic") or !password_meets_policy;
+            const needs_reset = std.mem.eql(u8, expected_pwd, "geodesic") or !password_meets_policy;
 
             return AuthResult{ .session_token = token, .requires_password_reset = needs_reset };
         } else {

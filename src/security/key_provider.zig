@@ -35,6 +35,8 @@ pub const Provider = struct {
 };
 
 /// P2-3: Now accepts allocator parameter
+/// GAP-0141: Safe hex parsing with proper error handling
+/// CANARY: REQ=REQ-HEX-PARSE-KEYPROV-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
 fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
     const hex = std.process.getEnvVarOwned(allocator, "GEODE_DISK_KEY_HEX") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
@@ -48,7 +50,10 @@ fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
     var master: [32]u8 = undefined;
     var i: usize = 0;
     while (i < 32) : (i += 1) {
-        master[i] = std.fmt.parseInt(u8, hex[i * 2 .. i * 2 + 2], 16) catch 0;
+        master[i] = std.fmt.parseInt(u8, hex[i * 2 .. i * 2 + 2], 16) catch {
+            std.log.err("Invalid hex encoding in GEODE_DISK_KEY_HEX at position {d}", .{i * 2});
+            return error.InvalidKeyHex;
+        };
     }
     const tde = @import("tde_hierarchy");
     const kh = tde.KeyHierarchy.init(master);

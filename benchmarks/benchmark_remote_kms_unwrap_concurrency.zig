@@ -21,7 +21,8 @@ pub fn main() !void {
     var server = kms.RemoteKmsServer.init(std.heap.page_allocator, 0xfeedfacecafebeef);
     // Local direct mode (skip QUIC handshake due to instability in benchmark context)
     var plain: [32]u8 = undefined;
-    server.server.prng.bytes(&plain);
+    // GAP-0142: Use cryptographic random instead of PRNG
+    std.crypto.random.bytes(&plain);
     const env = server.server.wrap(plain);
     const iterations: usize = 64;
     var times = try std.heap.page_allocator.alloc(u64, iterations);

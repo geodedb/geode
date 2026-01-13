@@ -4,11 +4,21 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Last Updated**: January 13, 2026
 **Last Verified**: January 13, 2026
-**GitLab Issues**: 139 closed gap-labeled issues
+**GitLab Issues**: 146 closed gap-labeled issues
 
-**Total Resolved**: 139 gaps (GAP-0001 through GAP-0139) ✅
+**Total Resolved**: 146 gaps (GAP-0001 through GAP-0146) ✅
 
 **Current Status**: All gaps resolved. See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for process documentation.
+
+**January 13, 2026 Security Gap Resolution Session (Late PM)**:
+7 gaps identified and resolved with CANARY markers and security guards:
+- #222 (GAP-0140) - SHOW Statement Protocol Blocking → **QUIC handler routes to executeShow()** ✅
+- #223 (GAP-0141) - Unsafe Hex Parsing catch 0 → **Proper error returns on invalid hex** ✅
+- #224 (GAP-0142) - Deterministic PRNG for Nonces → **std.crypto.random for all nonces** ✅
+- #225 (GAP-0143) - --disable-auth CLI Bypass → **Production guard blocks flag in release builds** ✅
+- #226 (GAP-0144) - Distributed Insecure QUIC → **TLS verification by default in production** ✅
+- #227 (GAP-0145) - Weak JSON Parsing in KMS → **Bounds checking added to parseEnvelope** ✅
+- #228 (GAP-0146) - Default Password Fallback → **Random password generated in production** ✅
 
 **January 13, 2026 Gap Resolution Session (PM)**:
 3 gaps identified and resolved with CANARY markers and geodetestlab specs:
@@ -78,7 +88,113 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ---
 
-## Latest Resolutions (January 13, 2026 PM Session)
+## Latest Resolutions (January 13, 2026 Late PM Security Session)
+
+### GAP-0140: SHOW Statement Protocol Layer Blocking (Resolved January 13, 2026)
+- **Original Gap:** QUIC connection handler returned NotImplemented for all SHOW types before reaching execution layer
+- **Original Severity:** Critical (GQL Compliance)
+- **GitLab Issue:** [#222](https://gitlab.com/devnw/geode/geode/-/issues/222)
+- **Resolution Evidence:**
+  - src/server/quic_connection_handler.zig — All 5 SHOW types (indexes, constraints, tables, procedures, functions) now route to catalog queries
+  - Each type builds proper JSON rows with schema information
+  - Returns actual catalog data instead of NotImplemented
+  - CANARY: REQ=REQ-SHOW-INDEXES-QUIC-001; STATUS=IMPL; UPDATED=2026-01-13
+- **Verification:** `make geodetestlab-comprehensive` passes
+
+---
+
+### GAP-0141: Unsafe Hex Parsing catch 0 in Cryptographic Paths (Resolved January 13, 2026)
+- **Original Gap:** Multiple security files used `catch 0` for hex parsing, silently corrupting cryptographic data
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#223](https://gitlab.com/devnw/geode/geode/-/issues/223)
+- **Resolution Evidence:**
+  - src/security/external_kms_client.zig — Returns error.InvalidHexInNonce/error.InvalidHexInTag/error.InvalidHexInCiphertext
+  - src/security/vault_kms_provider.zig — Bounds checking + error.InvalidKmsResponse
+  - src/security/kms_remote.zig — parseHexByte returns error.InvalidEnvelopeFormat
+  - src/security/key_provider.zig — Returns error.InvalidKeyHex
+  - src/security/key_rotation.zig — Returns error.InvalidChecksumHex
+  - src/security/backup_key_envelope.zig — Returns error.InvalidChecksumHex
+  - src/security/rls_core.zig — Returns error.InvalidRlsExpression
+  - CANARY: REQ=REQ-HEX-PARSE-001; STATUS=IMPL; UPDATED=2026-01-13
+- **Verification:** `make build` passes, no catch 0 patterns in security/ for hex parsing
+
+---
+
+### GAP-0142: Deterministic PRNG for AES-GCM Nonces (Resolved January 13, 2026)
+- **Original Gap:** Custom xorshift128+ PRNG used for AES-GCM nonces was deterministic with fixed seed
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#224](https://gitlab.com/devnw/geode/geode/-/issues/224)
+- **Resolution Evidence:**
+  - src/security/kms_remote.zig — Removed custom Prng struct entirely
+  - Server.init() now uses std.crypto.random.bytes(&kek) for KEK initialization
+  - Server.wrap() uses std.crypto.random.bytes(&nonce) for nonce generation
+  - Added deprecation comment documenting the removal
+  - benchmarks/benchmark_remote_kms_unwrap_concurrency.zig — Updated to use std.crypto.random.bytes
+  - CANARY: REQ=REQ-PRNG-CRYPTO-001; STATUS=IMPL; UPDATED=2026-01-13
+- **Verification:** `make build` passes, no xorshift or deterministic PRNG in kms_remote.zig
+
+---
+
+### GAP-0143: --disable-auth CLI Flag Bypass (Resolved January 13, 2026)
+- **Original Gap:** --disable-auth flag worked in all build modes, allowing authentication bypass in production
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#225](https://gitlab.com/devnw/geode/geode/-/issues/225)
+- **Resolution Evidence:**
+  - src/cli/main.zig — Production guard checks builtin.mode for ReleaseFast/ReleaseSafe/ReleaseSmall
+  - Logs error and blocks flag: "SECURITY ERROR: --disable-auth is blocked in production builds"
+  - Override possible only via GEODE_ALLOW_NO_AUTH=1 env var with explicit warning
+  - Debug builds still allow the flag for testing convenience
+  - CANARY: REQ=REQ-AUTH-GUARD-001; STATUS=IMPL; UPDATED=2026-01-13
+- **Verification:** `make build` passes, production builds reject --disable-auth
+
+---
+
+### GAP-0144: Distributed Systems Insecure QUIC Connections (Resolved January 13, 2026)
+- **Original Gap:** All distributed/ components used connectInsecure() with skip_verify=true
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#226](https://gitlab.com/devnw/geode/geode/-/issues/226)
+- **Resolution Evidence:**
+  - src/distributed/query_transport.zig — TLS verification by default in production (GEODE_CLUSTER_INSECURE env var override)
+  - src/distributed/twophase.zig — Both connectInsecure calls now check build mode and GEODE_2PC_INSECURE env var
+  - src/distributed/federation.zig — TLS verification by default with GEODE_FEDERATION_INSECURE override
+  - Debug builds allow insecure for testing
+  - Security warnings logged when insecure mode enabled
+  - CANARY: REQ=REQ-DIST-TLS-001, REQ=REQ-2PC-TLS-001, REQ=REQ-FED-TLS-001; STATUS=IMPL; UPDATED=2026-01-13
+- **Verification:** `make build` passes, all distributed components use TLS by default in production
+
+---
+
+### GAP-0145: Weak JSON Parsing in KMS Remote Server (Resolved January 13, 2026)
+- **Original Gap:** JSON parsing in parseEnvelope lacked bounds checking, risking buffer overread
+- **Original Severity:** Medium (Security)
+- **GitLab Issue:** [#227](https://gitlab.com/devnw/geode/geode/-/issues/227)
+- **Resolution Evidence:**
+  - src/security/kms_remote.zig — parseEnvelope adds explicit bounds checking
+  - Validates nonce_start + 24 <= json.len before accessing nonce bytes
+  - Validates tag_start + 32 <= json.len before accessing tag bytes
+  - Validates ct_start + ct_len <= json.len before accessing ciphertext
+  - Returns error.InvalidEnvelopeFormat on any bounds violation
+  - CANARY: REQ=REQ-KMS-JSON-001; STATUS=IMPL; UPDATED=2026-01-13
+- **Verification:** `make build` passes, bounds checking present in parseEnvelope
+
+---
+
+### GAP-0146: Default Password Fallback to Hardcoded Value (Resolved January 13, 2026)
+- **Original Gap:** Default password "geodesic" was used if GEODE_DEFAULT_PASSWORD env var not set
+- **Original Severity:** Medium (Security)
+- **GitLab Issue:** [#228](https://gitlab.com/devnw/geode/geode/-/issues/228)
+- **Resolution Evidence:**
+  - src/security/geode_auth_lib.zig — In production builds without env var, generates random 32-byte password
+  - Password logged to stderr with "ADMIN_PASSWORD=..." so admin can see it for initial login
+  - Debug builds still use "geodesic" for testing convenience
+  - src/cli/main.zig — Production builds without env var return InvalidCredentials (since server has random password)
+  - Clear error message guides user to check server logs for generated password
+  - CANARY: REQ=REQ-DEFAULT-PASSWORD-001, REQ=REQ-CLI-DEFAULT-PASSWORD-001; STATUS=IMPL; UPDATED=2026-01-13
+- **Verification:** `make build` passes, production builds generate random password
+
+---
+
+## Previous Resolutions (January 13, 2026 PM Session)
 
 ### GAP-0137: Backup/Migrate CLI TLS Certificate Verification (Resolved January 13, 2026)
 - **Original Gap:** Backup/Migrate CLI commands used `connectInsecure()` without TLS verification

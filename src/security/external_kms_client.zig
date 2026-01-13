@@ -855,21 +855,23 @@ pub fn envelopeFromJson(json: []const u8) !Envelope {
     if (!std.mem.eql(u8, alg_slice, "AES-256-GCM") and !std.mem.eql(u8, alg_slice, "VAULT-TRANSIT") and !std.mem.eql(u8, alg_slice, "AWS-KMS")) {
         return error.UnsupportedAlgorithm;
     }
+    // GAP-0141: Safe hex parsing with proper error handling
+    // CANARY: REQ=REQ-HEX-PARSE-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
     const nonce_start = nonce_key + 9;
     const nonce_end = nonce_start + 24;
     if (nonce_end > json.len) return error.InvalidEnvelope;
     var k: usize = 0;
-    while (k < 12) : (k += 1) env.nonce[k] = std.fmt.parseInt(u8, json[nonce_start + k * 2 .. nonce_start + k * 2 + 2], 16) catch 0;
+    while (k < 12) : (k += 1) env.nonce[k] = std.fmt.parseInt(u8, json[nonce_start + k * 2 .. nonce_start + k * 2 + 2], 16) catch return error.InvalidHexInNonce;
     const tag_start = tag_key + 7;
     const tag_end = tag_start + 32;
     if (tag_end > json.len) return error.InvalidEnvelope;
     k = 0;
-    while (k < 16) : (k += 1) env.tag[k] = std.fmt.parseInt(u8, json[tag_start + k * 2 .. tag_start + k * 2 + 2], 16) catch 0;
+    while (k < 16) : (k += 1) env.tag[k] = std.fmt.parseInt(u8, json[tag_start + k * 2 .. tag_start + k * 2 + 2], 16) catch return error.InvalidHexInTag;
     const ct_start = ct_key + 6;
     const ct_end = ct_start + 64;
     if (ct_end > json.len) return error.InvalidEnvelope;
     k = 0;
-    while (k < 32) : (k += 1) env.ct[k] = std.fmt.parseInt(u8, json[ct_start + k * 2 .. ct_start + k * 2 + 2], 16) catch 0;
+    while (k < 32) : (k += 1) env.ct[k] = std.fmt.parseInt(u8, json[ct_start + k * 2 .. ct_start + k * 2 + 2], 16) catch return error.InvalidHexInCiphertext;
     env.alg = alg_slice;
     return env;
 }

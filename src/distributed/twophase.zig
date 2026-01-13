@@ -157,14 +157,31 @@ pub const TwoPhaseTransport = struct {
         }
 
         // Parse endpoint into host and port
+        // GAP-0144: Secure TLS connections for 2PC coordination
+        // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
         const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
         const host = endpoint[0..colon_pos];
         const port_str = endpoint[colon_pos + 1 ..];
         const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidPort;
 
-        // Create new connection
+        // Check if insecure mode is explicitly allowed
+        const builtin = @import("builtin");
+        const allow_insecure = blk: {
+            if (builtin.mode == .Debug) break :blk true;
+            const env = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INSECURE") catch null;
+            if (env) |v| {
+                defer self.allocator.free(v);
+                if (std.mem.eql(u8, v, "1")) {
+                    std.log.warn("SECURITY WARNING: 2PC TLS verification disabled", .{});
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        };
+
+        // Create new connection with TLS verification by default
         var client = quic.QuicClient.init(self.allocator);
-        client.connectInsecure(host, port, true) catch |err| {
+        client.connectInsecure(host, port, allow_insecure) catch |err| {
             std.debug.print("2PC_TRANSPORT: Failed to connect to {s}: {}\n", .{ endpoint, err });
             return error.ConnectionFailed;
         };
@@ -429,6 +446,8 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
         return transport.sendMessage(endpoint, msg, timeout_ms);
     }
 
+    // GAP-0144: Secure TLS for one-shot 2PC connections
+    // CANARY: REQ=REQ-2PC-TLS-002; FEATURE="2PC TLS One-shot"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
     // One-shot connection for when transport not initialized
     // Parse endpoint into host and port
     const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
@@ -441,11 +460,23 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create QUIC client and connect
+    // Check if insecure mode is explicitly allowed
+    const builtin = @import("builtin");
+    const allow_insecure = blk: {
+        if (builtin.mode == .Debug) break :blk true;
+        const env = std.process.getEnvVarOwned(allocator, "GEODE_CLUSTER_INSECURE") catch null;
+        if (env) |v| {
+            defer allocator.free(v);
+            if (std.mem.eql(u8, v, "1")) break :blk true;
+        }
+        break :blk false;
+    };
+
+    // Create QUIC client and connect with TLS verification by default
     var client = quic.QuicClient.init(allocator);
     defer client.deinit();
 
-    client.connectInsecure(host, port, true) catch |err| {
+    client.connectInsecure(host, port, allow_insecure) catch |err| {
         std.debug.print("2PC_TRANSPORT: One-shot connect failed to {s}: {}\n", .{ endpoint, err });
         return error.ConnectionFailed;
     };

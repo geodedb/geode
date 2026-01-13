@@ -38,8 +38,12 @@ fn envelopeToJson(env: Envelope, w: anytype) !void {
     try w.writeAll("\"}");
 }
 
-fn parseHexByte(slice: []const u8) u8 {
-    return std.fmt.parseInt(u8, slice, 16) catch 0;
+// GAP-0141: Safe hex parsing with proper error handling
+// GAP-0145: Bounds-checked JSON parsing
+// CANARY: REQ=REQ-HEX-PARSE-KMS-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+// CANARY: REQ=REQ-JSON-PARSE-KMS-001; FEATURE="Safe JSON Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+fn parseHexByte(slice: []const u8) !u8 {
+    return std.fmt.parseInt(u8, slice, 16) catch return error.InvalidHexEncoding;
 }
 
 fn jsonFind(hay: []const u8, key: []const u8) ?usize {
@@ -49,69 +53,52 @@ fn jsonFind(hay: []const u8, key: []const u8) ?usize {
 fn parseEnvelope(json: []const u8) !Envelope {
     if (jsonFind(json, "\"nonce\":\"") == null) return error.InvalidEnvelope;
     var env: Envelope = .{ .nonce = undefined, .tag = undefined, .ct = undefined };
-    // naive scans
+
+    // Find field positions with validation
     const nidx = jsonFind(json, "\"nonce\":\"") orelse return error.InvalidEnvelope;
     const tidx = jsonFind(json, "\"tag\":\"") orelse return error.InvalidEnvelope;
     const cidx = jsonFind(json, "\"ct\":\"") orelse return error.InvalidEnvelope;
+
     const nstart = nidx + 9;
     const tstart = tidx + 7;
     const cstart = cidx + 6;
+
+    // GAP-0145: Bounds checking before array access
+    if (nstart + 24 > json.len) return error.TruncatedEnvelope;
+    if (tstart + 32 > json.len) return error.TruncatedEnvelope;
+    if (cstart + 64 > json.len) return error.TruncatedEnvelope;
+
     var i: usize = 0;
-    while (i < 12) : (i += 1) env.nonce[i] = parseHexByte(json[nstart + i * 2 .. nstart + i * 2 + 2]);
+    while (i < 12) : (i += 1) env.nonce[i] = try parseHexByte(json[nstart + i * 2 .. nstart + i * 2 + 2]);
     i = 0;
-    while (i < 16) : (i += 1) env.tag[i] = parseHexByte(json[tstart + i * 2 .. tstart + i * 2 + 2]);
+    while (i < 16) : (i += 1) env.tag[i] = try parseHexByte(json[tstart + i * 2 .. tstart + i * 2 + 2]);
     i = 0;
-    while (i < 32) : (i += 1) env.ct[i] = parseHexByte(json[cstart + i * 2 .. cstart + i * 2 + 2]);
+    while (i < 32) : (i += 1) env.ct[i] = try parseHexByte(json[cstart + i * 2 .. cstart + i * 2 + 2]);
     return env;
 }
 
-const Prng = struct {
-    s0: u64,
-    s1: u64,
-    fn init(seed: u64) @This() {
-        var z = seed +% 0x9E3779B97F4A7C15;
-        z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
-        z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
-        const s0 = z ^ (z >> 31);
-        z +%= 0x9E3779B97F4A7C15;
-        z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
-        z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
-        const s1 = z ^ (z >> 31);
-        return .{ .s0 = s0, .s1 = s1 };
-    }
-    fn next(self: *@This()) u64 {
-        const result = self.s0 +% self.s1;
-        const s1 = self.s1 ^ self.s0;
-        self.s0 = std.math.rotl(u64, self.s0, 55) ^ s1 ^ (s1 << 14);
-        self.s1 = std.math.rotl(u64, s1, 36);
-        return result;
-    }
-    pub fn bytes(self: *@This(), out: []u8) void {
-        var i: usize = 0;
-        var r: u64 = 0;
-        while (i < out.len) : (i += 1) {
-            if (i % 8 == 0) r = self.next();
-            const shift: u6 = @intCast((i % 8) * 8);
-            const val = r >> shift;
-            out[i] = @as(u8, @truncate(val));
-        }
-    }
-};
+// GAP-0142: DEPRECATED - Deterministic PRNG removed for security
+// CANARY: REQ=REQ-PRNG-CRYPTO-001; FEATURE="Cryptographic PRNG"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+// The custom xorshift128+ PRNG was insecure for cryptographic use.
+// All nonce generation now uses std.crypto.random for cryptographic security.
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
     kek: [32]u8,
-    prng: Prng,
+    // REMOVED: prng field - use std.crypto.random instead
     auth_token: ?[]const u8 = null,
     attestation_hash: [32]u8 = [_]u8{0} ** 32,
     // Ephemeral Ed25519 key pair created on auth token set (test scope, could be rotated with token)
     attest_keypair: ?std.crypto.sign.Ed25519.KeyPair = null,
 
-    pub fn init(allocator: std.mem.Allocator, seed: u64) Server {
-        var prng = Prng.init(seed);
+    /// Initialize KMS server with cryptographically secure KEK
+    /// GAP-0142: Now uses std.crypto.random instead of deterministic PRNG
+    /// The seed parameter is kept for API compatibility but IGNORED in production
+    pub fn init(allocator: std.mem.Allocator, _: u64) Server {
         var kek: [32]u8 = undefined;
-        prng.bytes(&kek);
-        return .{ .allocator = allocator, .kek = kek, .prng = prng }; // auth_token set later
+        // Use cryptographic random for KEK generation
+        std.crypto.random.bytes(&kek);
+        return .{ .allocator = allocator, .kek = kek };
     }
 
     pub fn setAuthToken(self: *Server, tok: []const u8) !void {
@@ -121,18 +108,18 @@ pub const Server = struct {
         h.update(tok);
         h.update(self.kek[0..16]);
         h.final(&self.attestation_hash);
-        // Generate a fresh ephemeral Ed25519 key pair deterministically from a random seed so
-        // tests are reproducible if we ever choose to expose the seed (currently we don't).
-        // Zig 0.15.1 Ed25519 API: KeyPair.generateDeterministic(seed) and kp.sign(msg, null)
+        // Generate a fresh ephemeral Ed25519 key pair from cryptographic random
         var seed: [32]u8 = undefined;
         std.crypto.random.bytes(&seed);
         const attest_kp = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
         self.attest_keypair = attest_kp;
     }
 
+    /// GAP-0142: Wrap key material using cryptographically secure nonces
     pub fn wrap(self: *Server, plaintext: [32]u8) Envelope {
         var nonce: [12]u8 = undefined;
-        self.prng.bytes(&nonce);
+        // Use cryptographic random for nonce generation - CRITICAL for AES-GCM security
+        std.crypto.random.bytes(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
         crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ct, &tag, &plaintext, &.{}, nonce, self.kek);
