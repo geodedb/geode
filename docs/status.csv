@@ -70,6 +70,8 @@ REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,IMPL,,,audit,2025-10-19,sr
 REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,IMPL,,,audit,2025-10-19,src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,IMPL,,,audit,2025-10-25,src/execution/procedure_registry.zig
+REQ-AUDIT-PWSH-001,PowerShell Compatibility,PlatformDetection,IMPL,,,security,2026-01-13,src/security/audit.zig
+REQ-AUDIT-TEST-001,Audit Unit Tests,UnitTests,IMPL,,,security,2026-01-13,src/security/audit.zig
 REQ-AUDIT-TLS-001,SyslogTLSTransport,SECURITY,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,IMPL,,,audit,2026-01-12,src/audit/config.zig
 REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
@@ -77,12 +79,19 @@ REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,IMPL,,,audit,2026-01-12,sr
 REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUDIT-TLS-TEST-001,SyslogTLSTests,TESTING,IMPL,,,audit,2026-01-12,src/audit/syslog.zig
+REQ-AUDIT-VERIFY-001,Audit Verification,ChainVerification,IMPL,,,security,2026-01-13,src/cli/geode_audit_verify.zig
+REQ-AUDIT-VERIFY-002,Audit Signature Verification,Ed25519Verify,IMPL,,,security,2026-01-13,src/cli/geode_audit_verify.zig
 REQ-AUTH-001,AuthenticationLogin,RealImplementation,IMPL,TestCANARY_REQ_AUTH_001_RealLogin,,cli,2025-09-30,src/cli/main.zig
 REQ-AUTH-001,UserManagement,Authentication,IMPLEMENTED,,,security,2025-10-14,src/security/user_management.zig
 REQ-AUTH-002,Argon2idHashing,PasswordSecurity,IMPLEMENTED,,,security,2025-10-14,docs/ARGON2ID_IMPLEMENTATION.md
 REQ-AUTH-002,AuthenticationLogout,RealImplementation,IMPL,TestCANARY_REQ_AUTH_002_RealLogout,,cli,2025-09-30,src/cli/main.zig
+REQ-AUTH-CLI-001,CLI QUIC Authentication,AuthenticatedHello,IMPL,,,security,2026-01-13,src/client/repl/repl_dispatch.zig
+REQ-AUTH-CLI-001,CLI QUIC Authentication,ServerConnection,IMPL,,,security,2026-01-13,src/cli/main.zig
 REQ-AUTH-CLI-001,CLIUserManagement,FileStorage,IMPL,,,cli,2025-10-26,src/cli/user_storage_simple.zig
 REQ-AUTH-CLI-001,CLIUserManagement,SecureStorage,IMPL,,,cli,2026-01-09,src/cli/user_storage_secure.zig
+REQ-AUTH-CLI-002,CLI QUIC Password Update,PasswordChange,IMPL,,,security,2026-01-13,src/cli/main.zig
+REQ-AUTH-CLI-003,CLI QUIC Password Update,PasswordChange,IMPL,,,security,2026-01-13,src/cli/main.zig
+REQ-AUTH-CLI-004,CLI QUIC Password Update,PasswordChange,IMPL,,,security,2026-01-13,src/cli/main.zig
 REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,IMPL,TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-DEFAULT-001,Default User Creation,Security,IMPL,TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-GUARD-001,Production Auth Guard,Security,IMPL,,,security,2026-01-13,src/cli/main.zig
@@ -97,7 +106,6 @@ REQ-AUTH-POLICY-007,Mandatory Password Policy Enforcement,Security,IMPL,TestCANA
 REQ-AUTH-POLICY-008,Pre-Hash Password Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_008_PreHashValidation,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-009,Password Update Policy Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-010,CLI Password Policy Validation,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_010_CLIPolicyValidation,,security,2025-09-30,src/cli/main.zig
-REQ-AUTH-POLICY-011,Pre-Authentication Policy Check,Security,IMPL,TestCANARY_REQ_AUTH_POLICY_011_PreAuthValidation,,security,2025-09-30,src/cli/main.zig
 REQ-AUTH-QUIC-001,QUIC Authentication,ConnectionAuth,IMPL,,,cli,2025-10-25,src/cli/main.zig
 REQ-AUTH-QUIC-003,QUIC Authentication,QueryAuth,IMPL,,,cli,2025-10-25,src/cli/main.zig
 REQ-AUTH-QUIC-003,QUIC Authentication,QueryAuth,IMPL,,,cli,2025-10-25,src/cli/main.zig
@@ -175,7 +183,6 @@ REQ-CLI-BACKUP-002,CLI Backup Integration,IntegrationTests,TESTED,TestCLI_Backup
 REQ-CLI-BACKUP-INFO-001,CLIBackupInfo,FileMetadata,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-BACKUP-INTEGRATION-001,Remote Backup/Restore Operations,IntegrationTesting,IMPL,TestCANARY_REQ_CLI_BACKUP_INTEGRATION_001,,claude,2025-10-05,tests/test_server_backup_api_integration.zig
 REQ-CLI-BACKUP-LIST-001,CLIBackupList,DirectoryScan,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
-REQ-CLI-DEFAULT-PASSWORD-001,CLI Default Password,Security,IMPL,,,security,2026-01-13,src/cli/main.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,TestCANARY_REQ_CLI_EXIT_001_ExitCodes,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
 REQ-CLI-MIGRATE-CREATE-001,CLIMigrateCreate,FileCreation,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-MIGRATE-RUN-001,CLIMigrateRun,MigrationModule,IMPL,,,cli,2026-01-11,src/cli/backup_cli.zig

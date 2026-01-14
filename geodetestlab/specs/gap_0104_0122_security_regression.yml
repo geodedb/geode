@@ -25,9 +25,8 @@ version: "1.0"
 requires:
   - geode
 
-setup:
-  - name: ensure-clean-environment
-    command: "rm -rf /tmp/geode_gap_test_* 2>/dev/null || true"
+# Note: No setup section needed - these are shell-type tests that verify source code patterns
+# Any temp file cleanup is handled by individual test commands
 
 tests:
   # GAP-0104: Hardcoded credentials removed

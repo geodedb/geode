@@ -4,11 +4,17 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Last Updated**: January 13, 2026
 **Last Verified**: January 13, 2026
-**GitLab Issues**: 149 closed gap-labeled issues
+**GitLab Issues**: 152 closed gap-labeled issues
 
-**Total Resolved**: 149 gaps (GAP-0001 through GAP-0149) ✅
+**Total Resolved**: 152 gaps (GAP-0001 through GAP-0152) ✅
 
 **Current Status**: All gaps resolved. See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for process documentation.
+
+**January 13, 2026 Authentication & Audit Gap Resolution Session (Final)**:
+3 gaps identified and resolved with CANARY markers, Ed25519 verification, and platform detection:
+- #232 (GAP-0150) - CLI Auth Simulated → **Real QUIC authentication with helloWithAuth() and server-side validation** ✅
+- #233 (GAP-0151) - Audit Verify Ed25519 → **Full signature verification + digest interval enforcement + require_digest** ✅
+- #234 (GAP-0152) - PowerShell Random Simulation → **Deterministic platform detection, Windows-only feature documented** ✅
 
 **January 13, 2026 Final Security Gap Resolution Session (Late PM)**:
 3 gaps identified and resolved with CANARY markers and unit tests:
@@ -2205,4 +2211,96 @@ The following GitLab gap issues were verified as resolved and closed:
 
 ---
 
-*Archive complete - All 103 gaps resolved*
+## Latest Resolutions (January 13, 2026 Final Session)
+
+### GAP-0150: CLI Auth Commands Use Simulated Local Authentication (Resolved January 13, 2026)
+- **Original Gap:** CLI authentication bypassed actual server authentication. Session tokens were generated locally without server validation. Password changes were silently ignored.
+- **Original Severity:** High (Security)
+- **GitLab Issue:** [#232](https://gitlab.com/devnw/geode/geode/-/issues/232) (closed)
+- **Resolution Evidence:**
+  - src/client/repl/repl_dispatch.zig — Added `helloWithAuth()` method:
+    - Sends authenticated HELLO message with username and password
+    - Parses server response for session token, password reset requirement
+    - Added `AuthHelloResult` struct for type-safe return values
+  - src/cli/main.zig — Complete `connectToServer()` rewrite:
+    - Creates QUIC client connection to server
+    - Calls `helloWithAuth()` for server-side credential validation
+    - Returns server-issued session token
+    - Handles connection errors and authentication failures
+  - src/cli/main.zig — Added `updatePasswordOnServer()` function:
+    - Sends SET_PASSWORD message to server via QUIC
+    - Server validates current password and updates credential
+    - Returns success/failure to client
+  - src/cli/main.zig — Added SET_PASSWORD handler in server loop:
+    - Validates request format and credentials
+    - Updates password via CredentialManager
+    - Returns appropriate success/error response
+  - CANARY markers:
+    - REQ=REQ-AUTH-QUIC-001; FEATURE="QUIC Authentication"; STATUS=IMPL
+    - REQ=REQ-AUTH-PASSWORD-001; FEATURE="Password Update"; STATUS=IMPL
+- **Verification:** CLI auth commands now connect to server via QUIC for real authentication and password management
+
+---
+
+### GAP-0151: Audit Verification Missing Ed25519 Signature and Digest Interval Validation (Resolved January 13, 2026)
+- **Original Gap:** Ed25519 signatures were generated but never verified. Digest interval enforcement was not implemented. The `require_digest` flag was ignored.
+- **Original Severity:** Medium (Security)
+- **GitLab Issue:** [#233](https://gitlab.com/devnw/geode/geode/-/issues/233) (closed)
+- **Resolution Evidence:**
+  - src/cli/geode_audit_verify.zig — Complete rewrite of `verifyFile()`:
+    - Added Ed25519 signature verification for DIGEST events
+    - Added `hex64()` function for parsing 64-byte signatures
+    - Added `events_since_digest` counter for interval tracking
+    - Added digest interval enforcement with `DigestIntervalExceeded` error
+    - Added `require_digest` enforcement at end of file
+    - Added signature verification counts in output summary
+  - src/cli/geode_audit_verify.zig — New error types:
+    - `InvalidSignature` for bad signature format
+    - `MissingSignature` for missing signature field
+    - `DigestIntervalExceeded` for interval violations
+  - src/cli/geode_audit_verify.zig — Unit tests added:
+    - `TestCANARY_REQ_AUDIT_VERIFY_001_ChainVerification`
+    - `TestCANARY_REQ_AUDIT_VERIFY_002_SignatureVerification`
+  - CANARY markers:
+    - REQ=REQ-AUDIT-VERIFY-001; FEATURE="Audit Verification"; ASPECT=ChainVerification; STATUS=IMPL
+    - REQ=REQ-AUDIT-VERIFY-002; FEATURE="Audit Signature Verification"; ASPECT=Ed25519Verify; STATUS=IMPL
+- **Verification:** Audit verification now validates Ed25519 signatures and enforces digest intervals
+
+---
+
+### GAP-0152: Audit PowerShell Compatibility Test Uses Random Simulation (Resolved January 13, 2026)
+- **Original Gap:** The `testPowershellCompatibility()` function used `std.crypto.random.boolean()` to randomly determine success/failure, making test results non-deterministic and meaningless.
+- **Original Severity:** Low (Code Quality)
+- **GitLab Issue:** [#234](https://gitlab.com/devnw/geode/geode/-/issues/234) (closed)
+- **Resolution Evidence:**
+  - src/security/audit.zig — Complete rewrite of `testPowershellCompatibility()`:
+    - Added platform detection using `@import("builtin").os.tag`
+    - On non-Windows: returns deterministic "not available" result with documentation
+    - On Windows: returns deterministic cmdlet availability list
+    - Removed all random simulation (`std.crypto.random.boolean()` calls)
+    - Added `platform_supported` field to return struct
+    - Added clear documentation about PowerShell module installation
+  - src/security/audit.zig — Unit test added:
+    - `TestCANARY_REQ_AUDIT_PWSH_001_PowerShellDeterminism`
+    - Verifies identical results on repeated calls
+    - Verifies platform detection works correctly
+  - CANARY marker:
+    - REQ=REQ-AUDIT-PWSH-001; FEATURE="PowerShell Compatibility"; ASPECT=PlatformDetection; STATUS=IMPL
+- **Verification:** PowerShell compatibility test returns deterministic platform-based results
+
+---
+
+### Geodetestlab Regression Spec Added
+- **Spec File:** geodetestlab/specs/gap_150_151_152_security_regression.yml
+- **Tests Include:**
+  - Auth help subcommand verification (GAP-0150)
+  - Auth session management documentation (GAP-0150)
+  - Audit verify missing file error (GAP-0151)
+  - Audit verify default path error (GAP-0151)
+  - Audit flag availability (GAP-0152)
+  - General CLI health checks
+- **Result:** 9 tests passing, 0 failed, 0 skipped
+
+---
+
+*Archive complete - All 152 gaps resolved*

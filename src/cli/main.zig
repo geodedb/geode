@@ -1407,6 +1407,58 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             defer allocator.free(rollback_stmt);
             try handleControlStatement(stream, allocator, rollback_stmt, authenticated_username, &last_result_data);
             continue;
+        } else if (std.mem.eql(u8, type_str, "SET_PASSWORD")) {
+            // GAP-0150: Handle password change requests via QUIC
+            // CANARY: REQ=REQ-AUTH-CLI-002; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+            const user_mgmt = geode.user_management;
+
+            // Extract required fields
+            const username_val = obj.get("username") orelse {
+                const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"SET_PASSWORD requires username\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            };
+            const new_password_val = obj.get("new_password") orelse {
+                const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"SET_PASSWORD requires new_password\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            };
+
+            if (username_val != .string or new_password_val != .string) {
+                const error_response = "{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Invalid field format\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            }
+
+            const target_username = username_val.string;
+            const new_password = new_password_val.string;
+
+            // Check authorization: user can only change their own password, or admin can change anyone's
+            const is_own_password = if (authenticated_username) |auth_user|
+                std.mem.eql(u8, auth_user, target_username)
+            else
+                false;
+
+            // For now, only allow changing own password when authenticated
+            if (!is_own_password) {
+                const error_response = "{\"type\":\"ERROR\",\"status_class\":\"42501\",\"message\":\"Permission denied: can only change your own password\"}\n";
+                try stream.writeAll(error_response);
+                continue;
+            }
+
+            // Update password
+            _ = user_mgmt.setPassword(target_username, new_password) catch |err| {
+                const error_msg = try std.fmt.allocPrint(allocator, "{{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Password update failed: {s}\"}}\n", .{@errorName(err)});
+                defer allocator.free(error_msg);
+                try stream.writeAll(error_msg);
+                continue;
+            };
+
+            // Success response
+            const success_response = "{\"type\":\"SET_PASSWORD_OK\",\"message\":\"Password updated successfully\"}\n";
+            try stream.writeAll(success_response);
+            log.debug("Password updated for user: {s}", .{target_username});
+            continue;
         } else {
             // Unknown message type
             const error_msg = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"58000\",\"error\":\"Unknown message type: {s}\"}}\n", .{type_str});
@@ -3567,84 +3619,320 @@ fn validatePasswordAgainstPolicy(password: []const u8) !void {
     if (word_count < min_words) return error.PasswordInsufficientWords;
 }
 
-fn connectToServer(allocator: std.mem.Allocator, _: []const u8, username: []const u8, password: []const u8) !AuthResult {
-    // For this implementation, we'll simulate authentication by creating a session token
-    // In a real implementation, this would make an HTTP/QUIC request to the server
+/// GAP-0150: Real QUIC authentication to server
+/// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, password: []const u8) !AuthResult {
+    // GAP-0150 RESOLVED: Now uses real QUIC connection to server for authentication
+    // instead of simulating locally
 
-    // CANARY: REQ=REQ-AUTH-POLICY-011; FEATURE="Pre-Authentication Policy Check"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_011_PreAuthValidation; OWNER=security; UPDATED=2025-09-30
-    // First validate the password against current policy before proceeding
-    // This ensures we catch policy violations early in the process
+    // Parse server address
+    const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse {
+        std.debug.print("Error: Invalid server address format. Expected host:port\n", .{});
+        return error.InvalidAddress;
+    };
+    const host = server[0..colon_idx];
+    const port = std.fmt.parseInt(u16, server[colon_idx + 1 ..], 10) catch {
+        std.debug.print("Error: Invalid port number\n", .{});
+        return error.InvalidAddress;
+    };
 
-    // Create a pseudo-random session token
+    // Create QUIC client connection
+    const client = try allocator.create(quic.QuicClient);
+    client.* = quic.QuicClient.init(allocator);
+    errdefer {
+        client.deinit();
+        allocator.destroy(client);
+    }
+
+    // Connect to server (TLS verification based on shell_tls_config)
+    const insecure = shell_tls_config.insecure;
+    _ = client.connectInsecure(host, port, insecure) catch |err| {
+        std.debug.print("Error: Could not connect to server {s}:{d}: {s}\n", .{ host, port, @errorName(err) });
+        client.deinit();
+        allocator.destroy(client);
+        return error.ConnectionFailed;
+    };
+
+    // Wait for TLS handshake
+    _ = client.waitForHandshake(10) catch |err| {
+        std.debug.print("Error: TLS handshake failed: {s}\n", .{@errorName(err)});
+        client.deinit();
+        allocator.destroy(client);
+        return error.HandshakeFailed;
+    };
+
+    // Get QUIC stream
+    var stream = client.getStream() catch |err| {
+        std.debug.print("Error: Could not open stream: {s}\n", .{@errorName(err)});
+        client.deinit();
+        allocator.destroy(client);
+        return error.StreamError;
+    };
+    defer stream.deinit();
+
+    // Escape credentials for JSON
+    const escaped_username = escapeJsonStringForAuth(allocator, username) catch |err| {
+        client.deinit();
+        allocator.destroy(client);
+        return err;
+    };
+    defer allocator.free(escaped_username);
+
+    const escaped_password = escapeJsonStringForAuth(allocator, password) catch |err| {
+        client.deinit();
+        allocator.destroy(client);
+        return err;
+    };
+    defer allocator.free(escaped_password);
+
+    // Send authenticated HELLO handshake
+    const hello_msg = std.fmt.allocPrint(
+        allocator,
+        "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"{s}\",\"wanted_conformance\":\"min\",\"username\":\"{s}\",\"password\":\"{s}\"}}\n",
+        .{ VERSION, escaped_username, escaped_password },
+    ) catch |err| {
+        client.deinit();
+        allocator.destroy(client);
+        return err;
+    };
+    defer allocator.free(hello_msg);
+
+    // Write HELLO message
+    _ = stream.write(hello_msg) catch |err| {
+        std.debug.print("Error: Could not send authentication request: {s}\n", .{@errorName(err)});
+        client.deinit();
+        allocator.destroy(client);
+        return error.WriteError;
+    };
+
+    // Read response
+    var response_buf: [4096]u8 = undefined;
+    const response_len = stream.read(&response_buf) catch |err| {
+        std.debug.print("Error: Could not read authentication response: {s}\n", .{@errorName(err)});
+        client.deinit();
+        allocator.destroy(client);
+        return error.ReadError;
+    };
+
+    if (response_len == 0) {
+        std.debug.print("Error: Empty response from server\n", .{});
+        client.deinit();
+        allocator.destroy(client);
+        return error.InvalidResponse;
+    }
+
+    // Find end of first line (server might send multiple lines)
+    var end_of_line: usize = response_len;
+    for (response_buf[0..response_len], 0..) |b, i| {
+        if (b == '\n') {
+            end_of_line = i;
+            break;
+        }
+    }
+
+    const response = response_buf[0..end_of_line];
+
+    // Clean up QUIC connection
+    client.deinit();
+    allocator.destroy(client);
+
+    // Parse response
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{ .duplicate_field_behavior = .use_last }) catch {
+        std.debug.print("Error: Invalid JSON response from server\n", .{});
+        return error.InvalidResponse;
+    };
+    defer parsed.deinit();
+
+    const obj = parsed.value.object;
+
+    // Check response type
+    const type_val = obj.get("type") orelse {
+        std.debug.print("Error: Missing 'type' field in response\n", .{});
+        return error.InvalidResponse;
+    };
+
+    if (type_val != .string) {
+        std.debug.print("Error: Invalid 'type' field in response\n", .{});
+        return error.InvalidResponse;
+    }
+
+    const type_str = type_val.string;
+
+    if (std.mem.eql(u8, type_str, "ERROR")) {
+        const msg = if (obj.get("message")) |m|
+            if (m == .string) m.string else "Authentication failed"
+        else
+            "Authentication failed";
+        std.debug.print("Authentication error: {s}\n", .{msg});
+        return error.InvalidCredentials;
+    }
+
+    if (std.mem.eql(u8, type_str, "HELLO")) {
+        // Authentication successful - extract or generate session token
+        const session_token = if (obj.get("session_token")) |st| blk: {
+            if (st == .string) {
+                break :blk try allocator.dupe(u8, st.string);
+            }
+            break :blk try generateSessionToken(allocator);
+        } else try generateSessionToken(allocator);
+
+        const requires_reset = if (obj.get("requires_password_reset")) |rpr|
+            if (rpr == .bool) rpr.bool else false
+        else
+            false;
+
+        return AuthResult{
+            .session_token = session_token,
+            .requires_password_reset = requires_reset,
+        };
+    }
+
+    std.debug.print("Error: Unexpected response type '{s}'\n", .{type_str});
+    return error.InvalidResponse;
+}
+
+/// Generate a session token for local storage
+fn generateSessionToken(allocator: std.mem.Allocator) ![]u8 {
     var token_bytes: [32]u8 = undefined;
     crypto.random.bytes(&token_bytes);
-
     const encoder = std.base64.url_safe_no_pad.Encoder;
     const token = try allocator.alloc(u8, encoder.calcSize(token_bytes.len));
     _ = encoder.encode(token, &token_bytes);
+    return token;
+}
 
-    // Get configurable admin username from environment
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const local_allocator = gpa.allocator();
-    const admin_username_env = getEnvVar(local_allocator, "GEODE_ADMIN_USERNAME");
-    defer if (admin_username_env) |env| local_allocator.free(env);
-    const admin_username = admin_username_env orelse "geode";
+/// Escape a string for JSON embedding (auth-specific version to avoid conflicts)
+fn escapeJsonStringForAuth(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+    var result = try std.ArrayList(u8).initCapacity(allocator, s.len * 2);
+    errdefer result.deinit(allocator);
 
-    // Simulate authentication validation with enhanced policy checking
-    if (std.mem.eql(u8, username, admin_username)) {
-        // GAP-0146: Secure default password handling
-        // CANARY: REQ=REQ-CLI-DEFAULT-PASSWORD-001; FEATURE="CLI Default Password"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
-        const default_password_env = getEnvVar(local_allocator, "GEODE_DEFAULT_PASSWORD");
-        defer if (default_password_env) |env| local_allocator.free(env);
-
-        // In production, require env var - server generates random password if not set
-        // Note: builtin is already imported at file level
-        const expected_default_password: ?[]const u8 = blk: {
-            if (default_password_env) |env| {
-                break :blk env;
-            }
-            // Debug builds: Use "geodesic" for testing convenience
-            if (builtin.mode == .Debug) {
-                break :blk "geodesic";
-            }
-            // Production without env var: Auth will fail (server has random password)
-            // Return null to indicate no valid expected password
-            break :blk null;
-        };
-
-        // GAP-0146: If no expected password in production, fail auth for admin user
-        const expected_pwd = expected_default_password orelse {
-            std.log.err("SECURITY: GEODE_DEFAULT_PASSWORD not set. Server generates random password - check server logs.", .{});
-            return error.InvalidCredentials;
-        };
-
-        if (std.mem.eql(u8, password, expected_pwd)) {
-            // Check if authenticated password meets current policy
-            const password_meets_policy = blk: {
-                validatePasswordAgainstPolicy(password) catch break :blk false;
-                break :blk true;
-            };
-
-            // Force reset if using default "geodesic" OR if password violates current policy
-            const needs_reset = std.mem.eql(u8, expected_pwd, "geodesic") or !password_meets_policy;
-
-            return AuthResult{ .session_token = token, .requires_password_reset = needs_reset };
-        } else {
-            return error.InvalidCredentials;
+    for (s) |c| {
+        switch (c) {
+            '"' => try result.appendSlice(allocator, "\\\""),
+            '\\' => try result.appendSlice(allocator, "\\\\"),
+            '\n' => try result.appendSlice(allocator, "\\n"),
+            '\r' => try result.appendSlice(allocator, "\\r"),
+            '\t' => try result.appendSlice(allocator, "\\t"),
+            else => try result.append(allocator, c),
         }
-    // GAP-0104 SECURITY FIX: Removed hardcoded admin:admin123 credentials
-    // All authentication must now use environment-configured credentials or proper user management
-    } else if (username.len > 0 and password.len >= 8) {
-        // Any other user - validate against current policy
-        const password_meets_policy = blk: {
-            validatePasswordAgainstPolicy(password) catch break :blk false;
-            break :blk true;
-        };
-        return AuthResult{ .session_token = token, .requires_password_reset = !password_meets_policy };
-    } else {
-        return error.InvalidCredentials;
     }
+
+    return result.toOwnedSlice(allocator);
+}
+
+/// GAP-0150: Update password on server via QUIC SET_PASSWORD message
+/// CANARY: REQ=REQ-AUTH-CLI-004; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+fn updatePasswordOnServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, new_password: []const u8) !void {
+    // Parse server address
+    const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidAddress;
+    const host = server[0..colon_idx];
+    const port = std.fmt.parseInt(u16, server[colon_idx + 1 ..], 10) catch return error.InvalidAddress;
+
+    // Create QUIC client connection
+    const client = try allocator.create(quic.QuicClient);
+    client.* = quic.QuicClient.init(allocator);
+    errdefer {
+        client.deinit();
+        allocator.destroy(client);
+    }
+
+    // Connect to server
+    const insecure = shell_tls_config.insecure;
+    _ = client.connectInsecure(host, port, insecure) catch |err| {
+        std.debug.print("Error: Could not connect to server for password update: {s}\n", .{@errorName(err)});
+        client.deinit();
+        allocator.destroy(client);
+        return error.ConnectionFailed;
+    };
+
+    // Wait for TLS handshake
+    _ = client.waitForHandshake(10) catch |err| {
+        client.deinit();
+        allocator.destroy(client);
+        return err;
+    };
+
+    // Get QUIC stream
+    var stream = client.getStream() catch |err| {
+        client.deinit();
+        allocator.destroy(client);
+        return err;
+    };
+    defer stream.deinit();
+    defer {
+        client.deinit();
+        allocator.destroy(client);
+    }
+
+    // Escape fields for JSON
+    const escaped_username = try escapeJsonStringForAuth(allocator, username);
+    defer allocator.free(escaped_username);
+
+    const escaped_password = try escapeJsonStringForAuth(allocator, new_password);
+    defer allocator.free(escaped_password);
+
+    // Send SET_PASSWORD message
+    const set_pwd_msg = try std.fmt.allocPrint(
+        allocator,
+        "{{\"type\":\"SET_PASSWORD\",\"username\":\"{s}\",\"new_password\":\"{s}\"}}\n",
+        .{ escaped_username, escaped_password },
+    );
+    defer allocator.free(set_pwd_msg);
+
+    _ = stream.write(set_pwd_msg) catch |err| {
+        std.debug.print("Error: Could not send password update request: {s}\n", .{@errorName(err)});
+        return error.WriteError;
+    };
+
+    // Read response
+    var response_buf: [4096]u8 = undefined;
+    const response_len = stream.read(&response_buf) catch |err| {
+        std.debug.print("Error: Could not read password update response: {s}\n", .{@errorName(err)});
+        return error.ReadError;
+    };
+
+    if (response_len == 0) {
+        return error.InvalidResponse;
+    }
+
+    // Find end of first line
+    var end_of_line: usize = response_len;
+    for (response_buf[0..response_len], 0..) |b, i| {
+        if (b == '\n') {
+            end_of_line = i;
+            break;
+        }
+    }
+
+    const response = response_buf[0..end_of_line];
+
+    // Parse response
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{ .duplicate_field_behavior = .use_last }) catch {
+        return error.InvalidResponse;
+    };
+    defer parsed.deinit();
+
+    const obj = parsed.value.object;
+    const type_val = obj.get("type") orelse return error.InvalidResponse;
+
+    if (type_val != .string) return error.InvalidResponse;
+
+    const type_str = type_val.string;
+
+    if (std.mem.eql(u8, type_str, "ERROR")) {
+        const msg = if (obj.get("message")) |m|
+            if (m == .string) m.string else "Password update failed"
+        else
+            "Password update failed";
+        std.debug.print("Server error: {s}\n", .{msg});
+        return error.PasswordUpdateFailed;
+    }
+
+    if (std.mem.eql(u8, type_str, "SET_PASSWORD_OK")) {
+        return; // Success
+    }
+
+    return error.InvalidResponse;
 }
 
 fn hasUpperAndLower(password: []const u8) bool {
@@ -3886,7 +4174,13 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
             std.process.exit(@intFromEnum(ExitCode.auth_error));
         }
 
-        // Simulate password update (in real implementation, this would call the server)
+        // GAP-0150: Send password update to server via QUIC
+        // CANARY: REQ=REQ-AUTH-CLI-003; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+        updatePasswordOnServer(allocator, server, final_username, new_password) catch |err| {
+            std.debug.print("Error: Failed to update password on server: {s}\n", .{@errorName(err)});
+            std.process.exit(@intFromEnum(ExitCode.auth_error));
+        };
+
         std.debug.print("Password updated successfully.\n", .{});
         std.debug.print("You can now log in with your new password.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.success));

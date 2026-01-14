@@ -193,6 +193,113 @@ pub const ClientSession = struct {
         defer self.allocator.free(hello_ack);
     }
 
+    /// GAP-0150: Authenticated HELLO handshake for CLI authentication
+    /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=AuthenticatedHello; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+    pub const AuthHelloResult = struct {
+        success: bool,
+        session_token: ?[]const u8,
+        requires_password_reset: bool,
+        error_message: ?[]const u8,
+    };
+
+    pub fn helloWithAuth(self: *ClientSession, username: []const u8, password: []const u8) !AuthHelloResult {
+        if (!self.connected or self.connection == null) return error.NotConnected;
+
+        // Escape credentials for JSON
+        const escaped_username = try escapeJsonString(self.allocator, username);
+        defer self.allocator.free(escaped_username);
+        const escaped_password = try escapeJsonString(self.allocator, password);
+        defer self.allocator.free(escaped_password);
+
+        // Send authenticated HELLO handshake
+        const hello_msg = try std.fmt.allocPrint(
+            self.allocator,
+            "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\",\"username\":\"{s}\",\"password\":\"{s}\"}}\n",
+            .{ escaped_username, escaped_password },
+        );
+        defer self.allocator.free(hello_msg);
+        try self.connection.?.writeAll(hello_msg);
+
+        // Read HELLO response
+        const response = try self.connection.?.readLine(self.allocator, 1 << 16);
+        defer self.allocator.free(response);
+
+        // Parse response
+        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response, .{ .duplicate_field_behavior = .use_last }) catch {
+            return AuthHelloResult{
+                .success = false,
+                .session_token = null,
+                .requires_password_reset = false,
+                .error_message = try self.allocator.dupe(u8, "Invalid server response"),
+            };
+        };
+        defer parsed.deinit();
+
+        const obj = parsed.value.object;
+
+        // Check if it's an error response
+        const type_val = obj.get("type") orelse {
+            return AuthHelloResult{
+                .success = false,
+                .session_token = null,
+                .requires_password_reset = false,
+                .error_message = try self.allocator.dupe(u8, "Missing type in response"),
+            };
+        };
+
+        if (type_val != .string) {
+            return AuthHelloResult{
+                .success = false,
+                .session_token = null,
+                .requires_password_reset = false,
+                .error_message = try self.allocator.dupe(u8, "Invalid type in response"),
+            };
+        }
+
+        const type_str = type_val.string;
+
+        if (std.mem.eql(u8, type_str, "ERROR")) {
+            const msg = if (obj.get("message")) |m|
+                if (m == .string) try self.allocator.dupe(u8, m.string) else try self.allocator.dupe(u8, "Authentication failed")
+            else
+                try self.allocator.dupe(u8, "Authentication failed");
+
+            return AuthHelloResult{
+                .success = false,
+                .session_token = null,
+                .requires_password_reset = false,
+                .error_message = msg,
+            };
+        }
+
+        if (std.mem.eql(u8, type_str, "HELLO")) {
+            // Authentication successful - extract session token if provided
+            const session_token = if (obj.get("session_token")) |st|
+                if (st == .string) try self.allocator.dupe(u8, st.string) else null
+            else
+                null;
+
+            const requires_reset = if (obj.get("requires_password_reset")) |rpr|
+                if (rpr == .bool) rpr.bool else false
+            else
+                false;
+
+            return AuthHelloResult{
+                .success = true,
+                .session_token = session_token,
+                .requires_password_reset = requires_reset,
+                .error_message = null,
+            };
+        }
+
+        return AuthHelloResult{
+            .success = false,
+            .session_token = null,
+            .requires_password_reset = false,
+            .error_message = try self.allocator.dupe(u8, "Unexpected response type"),
+        };
+    }
+
     pub fn runGql(self: *ClientSession, gql: []const u8) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
