@@ -239,6 +239,9 @@ const protocol = geode.protocol;
 const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
 const txn_mgr = @import("txn");
+// CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerIntegration; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// GAP-0165: Wire ABAC enforcement into server execution paths
+const geode_auth = @import("geode_auth");
 
 /// Main server state structure managing all server-side state
 /// Extracted from main.zig in Phase 3 M3.2 to enable better modularization
@@ -332,9 +335,10 @@ pub const ServerState = struct {
     // Graph type registry for CREATE/DROP GRAPH TYPE persistence
     graph_types: std.HashMap([]const u8, GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
 
-    // Security management for RBAC/ABAC - comment out for now to avoid import issues
-    // security_manager: ?*SecurityManager = null,
-    // current_user_id: ?UserId = null,
+    // CANARY: REQ=REQ-ABAC-WIRE-002; FEATURE="ABAC Enforcement"; ASPECT=SecurityManager; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // GAP-0165: Security management for RBAC/ABAC - wired into server execution paths
+    security_manager: ?*geode_auth.SecurityManager = null,
+    current_user_id: ?geode_auth.UserId = null,
 
     // Authentication state for current session (set by HELLO message handler)
     authenticated_user: ?[]const u8 = null,

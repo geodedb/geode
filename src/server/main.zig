@@ -23,6 +23,9 @@ const cert_gen = @import("../tools/cert_gen.zig");
 // Import real logger for proper log level handling
 const logger = @import("../log/logger.zig");
 const audit = @import("../security/audit.zig");
+// CANARY: REQ=REQ-PROMETHEUS-WIRE-003; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerImport; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14
+// GAP-0166: Import metrics server for Prometheus endpoint
+const metrics_server = @import("../monitoring/metrics_server.zig");
 // Import server state management (M3.1 Phase 3 modularization)
 const server_state = @import("server_state.zig");
 // Import backup manager (M3.1 Phase 3 modularization)
@@ -342,6 +345,20 @@ pub fn main() !void {
     const env_spill_threshold = init_ctx.env_config.spill_threshold;
     const env_storage_checksum_error = init_ctx.env_config.storage_checksum_error;
     const env_wal_compact_interval = init_ctx.env_config.wal_compact_interval;
+
+    // CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerInit; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14
+    // GAP-0166: Initialize Prometheus metrics server if enabled via environment
+    // Default port is 9090 for Prometheus metrics endpoint
+    const metrics_port_env = std.process.getEnvVarOwned(gpa, "GEODE_METRICS_PORT") catch null;
+    defer if (metrics_port_env) |p| gpa.free(p);
+    const metrics_port: ?u16 = if (metrics_port_env) |p| std.fmt.parseInt(u16, p, 10) catch 9090 else null;
+    if (metrics_port) |port| {
+        _ = metrics_server.initGlobalMetrics(gpa, port) catch |err| {
+            std.debug.print("Warning: Failed to initialize metrics server on port {d}: {s}\n", .{ port, @errorName(err) });
+        };
+        std.debug.print("Prometheus metrics server listening on http://0.0.0.0:{d}/metrics\n", .{port});
+    }
+    defer metrics_server.shutdownGlobalMetrics(gpa);
 
     // QUIC mode: preferred over TCP
     if (listen_quic) |addr_str| {

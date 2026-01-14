@@ -34,11 +34,11 @@ make test
 # Run integration tests with large datasets
 make integration-test
 
-# Run geodetestlab tests
-cd geodetestlab && python test_runner.py
+# Run geodetestlab tests (from repo root)
+python3 scripts/test/extended_test_runner.py
 
-# Run extended test runner for detailed analysis
-python extended_test_runner.py
+# Run specific geodetestlab spec file
+python3 scripts/test/extended_test_runner.py --specs geodetestlab/specs/geode_gql_compliance.yml
 
 # Run specific regression test suites
 ./tests/comprehensive_regression_test.sh

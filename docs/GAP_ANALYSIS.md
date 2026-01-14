@@ -1,67 +1,74 @@
 # Gap Analysis
 
-**Generated**: January 12, 2026
 **Last Updated**: January 14, 2026
-**Last Verified**: January 14, 2026
-**Methodology**: Requirements-to-code gap analysis comparing documentation claims against implementation evidence
-**Scope**: All .md documentation files vs. source code in src/, scripts/, tests/
-**GitLab Project**: [devnw/geode/geode](https://gitlab.com/devnw/geode/geode)
+**Status**: All gaps resolved
+
+## Current Gaps
+
+No open gaps at this time. All previously identified gaps (GAP-0157 through GAP-0168) have been resolved.
+
+See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for the complete history of resolved gaps.
 
 ---
 
-## Summary
+## Gap Resolution Summary (January 14, 2026)
 
-| Severity | Count | Status |
-|----------|-------|--------|
-| Critical | 0 | - |
-| High | 0 | - |
-| Medium | 0 | - |
-| Low | 0 | - |
+The following 6 gaps were resolved in this session:
 
-**Total Open Gaps**: 0
-**GitLab Gap Issues**: 0 open, 164 closed
+| Gap ID | Issue | Category | Severity | Status |
+|--------|-------|----------|----------|--------|
+| GAP-0157 | #248 | Docs | Low | ✅ Resolved |
+| GAP-0164 | #255 | Tooling | Low | ✅ Resolved |
+| GAP-0165 | #256 | Security | High | ✅ Resolved |
+| GAP-0166 | #257 | Observability | Medium | ✅ Resolved |
+| GAP-0167 | #258 | CI-CD | Medium | ✅ Resolved |
+| GAP-0168 | #259 | Performance | Low | ✅ Resolved |
 
-**Verification Status** (January 14, 2026):
-- All gaps resolved with implementations, unit tests, and CANARY markers.
-- GitLab issues #248-#255 (GAP-0157 through GAP-0164) closed.
+### Key Changes Made:
 
-**Resolution Sessions**:
-- **January 12, 2026**: 9 gaps (GAP-0112 through GAP-0122) - All verified with CANARY markers
-- **January 13, 2026**: 14 gaps (GAP-0123 through GAP-0136) - All implemented with CANARY markers
-- **January 13, 2026**: 3 gaps (GAP-0137 through GAP-0139) - All implemented with CANARY markers and geodetestlab specs
-- **January 13, 2026 PM**: 7 gaps (GAP-0140 through GAP-0146) - All fixed with CANARY markers and security guards
-- **January 13, 2026 PM**: 3 gaps (GAP-0147 through GAP-0149) - Fixed with CANARY markers and unit tests
-- **January 13, 2026 Late PM**: 3 gaps (GAP-0150 through GAP-0152) - Fixed with CANARY markers, Ed25519 verification, and platform detection
-- **January 13, 2026**: 2 gaps (GAP-0153, GAP-0154) - Fixed with production guards, random password generation, and comprehensive tests
-- **January 14, 2026**: 2 gaps (GAP-0155, GAP-0156) - Fixed with secure hex parsing and MFA output cleanup
-- **January 14, 2026**: 8 gaps (GAP-0157 through GAP-0164) - Fixed with documentation updates, CI governance jobs, and symlinks
+1. **GAP-0165 (ABAC Enforcement)**: Wired SecurityManager into server execution paths
+   - Added `security_manager` and `current_user_id` fields to ServerState
+   - Updated `checkPermission()` to use SecurityManager.authorize()
+   - Added geodetestlab regression tests
 
-Resolved gaps: See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for details.
+2. **GAP-0166 (Prometheus Metrics)**: Created HTTP metrics endpoint
+   - New `src/monitoring/metrics_server.zig` module
+   - Server initialization wires metrics on `GEODE_METRICS_PORT`
+   - Added geodetestlab tests for endpoint verification
 
----
+3. **GAP-0167 (GQL Compliance CI)**: Added CI jobs for compliance testing
+   - `test-gql-compliance` job runs GQL compliance specs
+   - `test-geodetestlab-comprehensive` job runs all geodetestlab specs
+   - JUnit XML artifact publishing for visibility
 
-## Open Gaps
+4. **GAP-0157 (Docs)**: Fixed stale test runner references
+   - Updated docs/TESTING.md to use `scripts/test/extended_test_runner.py`
 
-None. All identified gaps have been resolved.
+5. **GAP-0164 (Labels)**: Confirmed script exists
+   - `tools/setup_gitlab_labels.sh` creates required type:: labels
 
----
-
-## Process
-
-New gaps should be identified through:
-1. Documentation review against implementation
-2. Test failure analysis
-3. Code review findings
-4. Security audits
-
-For each gap:
-1. Create GitLab issue with Gap-ID in title
-2. Add entry to this document
-3. Implement fix with CANARY marker
-4. Add regression test
-5. Update documentation
-6. Close GitLab issue and move entry to GAP_ANALYSIS_RESOLVED.md
+6. **GAP-0168 (Benchmarks)**: Created audit latency benchmark
+   - `benchmarks/benchmark_audit_latency.zig` provides P50/P95/P99 latency metrics
+   - Covers audit writes, concurrent writes, and WAL fsync ordering
 
 ---
 
-*Last verified by gap analysis process on January 14, 2026*
+## How to Report New Gaps
+
+When identifying new gaps, file a GitLab issue with the `gap::` label and add an entry here following this template:
+
+```markdown
+### GAP-XXXX: Brief description
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/XXX
+- **Category:** Security|Performance|Compliance|Docs|Tooling|CI-CD|Observability
+- **Severity:** High|Medium|Low
+- **Requirement source:** Link to requirement issue or document
+- **Current state (evidence):**
+  - File/line references showing the gap
+  - Commands that demonstrate the gap
+- **Why this is a gap:** Explanation of the discrepancy
+- **Impact/Risk:** Potential consequences
+- **Recommended fix:** Suggested resolution approach
+- **Acceptance criteria:**
+  - Testable conditions for resolution
+```

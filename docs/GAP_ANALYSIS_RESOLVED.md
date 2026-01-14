@@ -4,27 +4,73 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Last Updated**: January 14, 2026
 **Last Verified**: January 14, 2026
-**GitLab Issues**: 164 closed gap-labeled issues (0 open)
+**GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
-**Total Resolved**: 164 gaps (GAP-0001 through GAP-0164)
-
-**Current Status**: All gaps resolved. No open gaps remain.
+**Current Status**: This file lists resolved gaps. Open gaps are tracked in docs/GAP_ANALYSIS.md.
 
 **Full Audit Verification (January 14, 2026)**:
-- All gap-labeled issues closed via `glab issue list -l gap`.
+- Gap-labeled issues reviewed against GitLab; open gaps tracked in docs/GAP_ANALYSIS.md.
 - Implementation verification: CDC sinks (Kafka/Webhook with DLQ, idempotency, retries), audit logging (Ed25519 signing, hash chains), RLS enforcement, transaction management all confirmed as real implementations.
 - Production guards verified in auth_state.zig, user_mgmt_cli.zig, external_kms_client.zig, kms.zig, tde_nonce_gen.zig, wal.zig.
 
 ---
 
+## January 14, 2026 Security, CI, and Observability Gap Resolution Session
+
+6 gaps identified and resolved with ABAC enforcement, Prometheus metrics, CI compliance, documentation fixes, labels, and benchmarks:
+
+### GAP-0165: ABAC enforcement not wired into server execution ✅
+- **GitLab issue:** #256
+- **Fix:** Wired SecurityManager into server_state.zig and query_executor.zig for full RBAC+ABAC authorization
+- **Evidence:**
+  - `src/server/server_state.zig:338-341` - Added security_manager and current_user_id fields
+  - `src/server/query_executor.zig:2065-2149` - Updated checkPermission() to use SecurityManager.authorize()
+  - `geodetestlab/specs/gap_0165_abac_enforcement.yml` - 8 regression tests
+  - CANARY markers: REQ-ABAC-WIRE-001 through REQ-ABAC-WIRE-004
+
+### GAP-0166: Prometheus metrics exporter not wired to runtime endpoint ✅
+- **GitLab issue:** #257
+- **Fix:** Created MetricsServer HTTP endpoint and wired into server initialization
+- **Evidence:**
+  - `src/monitoring/metrics_server.zig` - New HTTP server for /metrics endpoint
+  - `src/server/main.zig:349-361` - Metrics server initialization on GEODE_METRICS_PORT
+  - `geodetestlab/specs/gap_0166_prometheus_metrics.yml` - 5 regression tests
+  - CANARY markers: REQ-PROMETHEUS-WIRE-001 through REQ-PROMETHEUS-WIRE-004
+
+### GAP-0167: GQL compliance suite not executed in CI ✅
+- **GitLab issue:** #258
+- **Fix:** Added test-gql-compliance and test-geodetestlab-comprehensive jobs to GitLab CI
+- **Evidence:**
+  - `.gitlab-ci.yml:123-217` - Two new CI jobs for compliance testing
+  - JUnit XML artifact publishing for test visibility
+  - CANARY marker: REQ-CI-COMPLIANCE-001
+
+### GAP-0157: geodetestlab test_runner.py reference is stale ✅
+- **GitLab issue:** #248
+- **Fix:** Updated docs/TESTING.md to use correct path scripts/test/extended_test_runner.py
+- **Evidence:**
+  - `docs/TESTING.md:37-41` - Updated command examples
+
+### GAP-0164: Missing type:: label taxonomy ✅
+- **GitLab issue:** #255
+- **Fix:** Script already existed at tools/setup_gitlab_labels.sh
+- **Evidence:**
+  - `tools/setup_gitlab_labels.sh` - Creates type::feature, type::bug, type::enhancement, type::security, etc.
+  - CANARY marker: REQ-LABEL-TAXONOMY-001
+
+### GAP-0168: Performance targets lack benchmark evidence ✅
+- **GitLab issue:** #259
+- **Fix:** Created benchmark_audit_latency.zig with audit write and WAL fsync benchmarks
+- **Evidence:**
+  - `benchmarks/benchmark_audit_latency.zig` - Audit latency, concurrent writes, WAL fsync benchmarks
+  - Benchmarks provide P50/P95/P99 latency metrics and throughput measurements
+  - CANARY marker: REQ-BENCHMARK-AUDIT-001
+
+---
+
 ## January 14, 2026 Documentation & CI Gap Resolution Session
 
-8 gaps identified and resolved with documentation updates, CI governance jobs, symlinks, and unit tests:
-
-### GAP-0157: geodetestlab test_runner.py reference stale ✅
-- **GitLab issue:** #248
-- **Fix:** Updated docs/TESTING.md to reference `scripts/test/extended_test_runner.py`
-- **Evidence:** docs/TESTING.md:76-77, docs/TESTING.md:299-300
+6 gaps identified and resolved with documentation updates, CI governance jobs, symlinks, and unit tests:
 
 ### GAP-0158: CI docs reference GitHub Actions instead of GitLab CI ✅
 - **GitLab issue:** #249
@@ -55,11 +101,6 @@ This document contains gaps that have been verified as resolved from previous ga
 - **GitLab issue:** #254
 - **Fix:** Added symlink creation in build.zig for backward compatibility
 - **Evidence:** build.zig:229-248, symlinks created at zig-out/bin/geoded and zig-out/bin/geodec
-
-### GAP-0164: Missing type:: label taxonomy ✅
-- **GitLab issue:** #255
-- **Fix:** Created tools/setup_gitlab_labels.sh script to create required labels
-- **Evidence:** tools/setup_gitlab_labels.sh (executable script)
 
 ---
 

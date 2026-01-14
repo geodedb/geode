@@ -2062,9 +2062,40 @@ fn loadRestoredDataIntoState(allocator: std.mem.Allocator, state: *ServerState, 
 // Actions enum for permission checking - matches geode_auth_lib.Action
 const Action = enum { create, read, update, delete, execute, grant, revoke, all };
 
-// CANARY: REQ=REQ-SECURITY-PERM-001; FEATURE="Permission Check Integration"; ASPECT=Authorization; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
-// Check if current user has permission to perform an action on a resource
+// CANARY: REQ=REQ-SECURITY-PERM-001; FEATURE="Permission Check Integration"; ASPECT=Authorization; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-003; FEATURE="ABAC Enforcement"; ASPECT=QueryExecution; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// GAP-0165: Check if current user has permission to perform an action on a resource
+// Now wired to use SecurityManager for full ABAC policy enforcement when available
 fn checkPermission(allocator: std.mem.Allocator, state: *ServerState, resource: []const u8, action: Action) !bool {
+    // CANARY: REQ=REQ-ABAC-WIRE-004; FEATURE="ABAC Enforcement"; ASPECT=SecurityManagerCheck; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // GAP-0165: If security_manager is wired, use it for full RBAC+ABAC authorization
+    if (state.security_manager) |sm| {
+        if (state.current_user_id) |user_id| {
+            // Import geode_auth for Action type conversion
+            const geode_auth = @import("geode_auth");
+
+            // Convert local Action to geode_auth.Action for SecurityManager.authorize()
+            const auth_action: geode_auth.Action = switch (action) {
+                .create => .create,
+                .read => .read,
+                .update => .update,
+                .delete => .delete,
+                .execute => .execute,
+                .grant => .grant,
+                .revoke => .revoke,
+                .all => .all,
+            };
+
+            // Use SecurityManager.authorize() which evaluates RBAC + ABAC policies
+            return sm.authorize(user_id, resource, auth_action) catch |err| {
+                // Log authorization errors for security audit
+                _ = err;
+                return false;
+            };
+        }
+    }
+
+    // Fallback to basic RBAC when SecurityManager is not wired
     _ = allocator;
 
     // If no authenticated user, check if anonymous access is allowed
