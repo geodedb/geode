@@ -555,7 +555,7 @@ test "GAP-0062: ciphertext differs from plaintext" {
     var crypto = try PageCrypto.init(allocator, master_key, null);
     defer crypto.deinit();
 
-    const plaintext = [_]u8{0xDE, 0xAD, 0xBE, 0xEF} ** 8;
+    const plaintext = [_]u8{ 0xDE, 0xAD, 0xBE, 0xEF } ** 8;
     var ciphertext: [48]u8 = undefined;
 
     try crypto.encryptPage(999, &plaintext, &ciphertext, "");

@@ -467,7 +467,8 @@ pub const CDCEngine = struct {
             auth_header = std.fmt.bufPrint(&auth_buf, "Authorization: {s}\r\n", .{auth}) catch "";
         }
 
-        const request = std.fmt.bufPrint(&request_buf,
+        const request = std.fmt.bufPrint(
+            &request_buf,
             "POST {s} HTTP/1.1\r\nHost: {s}\r\nContent-Type: application/json\r\nContent-Length: {d}\r\n{s}\r\n",
             .{ path, host, json_buffer.items.len, auth_header },
         ) catch {
