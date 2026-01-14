@@ -112,12 +112,18 @@ pub const Signature = struct {
     pub fn toString(self: Signature, allocator: std.mem.Allocator) ![]u8 {
         const sig_hex = try allocator.alloc(u8, self.signature.len * 2);
         defer allocator.free(sig_hex);
-        _ = std.fmt.bufPrint(sig_hex, "{x}", .{std.fmt.fmtSliceHexLower(self.signature)}) catch unreachable;
+        for (self.signature, 0..) |byte, i| {
+            sig_hex[i * 2] = std.fmt.digitToChar(byte >> 4, .lower);
+            sig_hex[i * 2 + 1] = std.fmt.digitToChar(byte & 0xf, .lower);
+        }
 
         if (self.public_key) |pubkey| {
             const pubkey_hex = try allocator.alloc(u8, pubkey.len * 2);
             defer allocator.free(pubkey_hex);
-            _ = std.fmt.bufPrint(pubkey_hex, "{x}", .{std.fmt.fmtSliceHexLower(pubkey)}) catch unreachable;
+            for (pubkey, 0..) |byte, i| {
+                pubkey_hex[i * 2] = std.fmt.digitToChar(byte >> 4, .lower);
+                pubkey_hex[i * 2 + 1] = std.fmt.digitToChar(byte & 0xf, .lower);
+            }
 
             return std.fmt.allocPrint(allocator, "{s}:{s}:{s}", .{ self.alg.toString(), sig_hex, pubkey_hex });
         } else {
@@ -413,7 +419,10 @@ pub const Hmac = struct {
     pub fn toString(self: Hmac, allocator: std.mem.Allocator) ![]u8 {
         const digest_hex = try allocator.alloc(u8, self.digest.len * 2);
         defer allocator.free(digest_hex);
-        _ = std.fmt.bufPrint(digest_hex, "{x}", .{std.fmt.fmtSliceHexLower(self.digest)}) catch unreachable;
+        for (self.digest, 0..) |byte, i| {
+            digest_hex[i * 2] = std.fmt.digitToChar(byte >> 4, .lower);
+            digest_hex[i * 2 + 1] = std.fmt.digitToChar(byte & 0xf, .lower);
+        }
 
         return std.fmt.allocPrint(allocator, "{s}:{s}", .{ self.alg.toString(), digest_hex });
     }

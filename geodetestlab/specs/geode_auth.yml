@@ -24,6 +24,7 @@ secrets:
     source: "env"
     key: "GEODE_TEST_PASSWORD"
     required: false
+    default: "TestP4ssw0rd123!"
   api_token:
     source: "keyring"
     service: "geodetestlab"
@@ -82,7 +83,7 @@ tests:
 
   - name: "user-create-basic"
     description: "Create a new user"
-    args: ["user", "create", "testuser", "test@example.com", "testpass123"]
+    args: ["user", "create", "testuser", "test@example.com", "--password", "TestP4ss123!"]
     expect:
       exit_code: 0
       stdout_contains: ["created", "testuser"]
@@ -90,7 +91,7 @@ tests:
 
   - name: "user-create-with-password"
     description: "Create user with password"
-    args: ["user", "create", "testuser2", "test2@example.com", "${secret:test_user_password}"]
+    args: ["user", "create", "testuser2", "test2@example.com", "--password", "TestP4ssw0rd123!"]
     expect:
       exit_code: 0
       stdout_contains: ["created", "testuser2"]
@@ -107,7 +108,7 @@ tests:
   - name: "user-show-details"
     description: "Show user details"
     setup:
-      - "user create alice alice@example.com alicepass123"
+      - "user create alice alice@example.com --password Al1ceP4ss!"
     args: ["user", "show", "alice"]
     expect:
       exit_code: 0
@@ -119,7 +120,7 @@ tests:
   - name: "user-enable-disable"
     description: "Test user enable/disable functionality"
     setup:
-      - "user create bob bob@example.com bobpass123"
+      - "user create bob bob@example.com --password B0bP4ssw!"
     args: ["user", "disable", "bob"]
     expect:
       exit_code: 0
@@ -181,7 +182,7 @@ tests:
     description: "Verify audit logging is working"
     setup:
       - "auth login --user admin"
-      - "user create audit_test audit@test.com auditpass123"
+      - "user create audit_test audit@test.com --password Aud1tP4ss!"
     args: ["user", "delete", "audit_test", "--yes"]
     expect:
       exit_code: 0
@@ -200,7 +201,7 @@ tests:
   - name: "mfa-enable"
     description: "Test MFA functionality"
     setup:
-      - "user create mfauser mfa@example.com mfapass123"
+      - "user create mfauser mfa@example.com --password MfaP4ss123!"
     args: ["user", "mfa", "enable", "mfauser"]
     expect:
       exit_code: 0
@@ -230,7 +231,7 @@ tests:
   - name: "privilege-escalation-prevention"
     description: "Test privilege escalation prevention"
     setup:
-      - "user create limited limited@example.com limitedpass123"
+      - "user create limited limited@example.com --password L1mitedP4ss!"
       - "role create limited_role 'Limited permissions'"
       - "user assign-role limited limited_role"
     args: ["grant", "admin", "system", "limited_role"]

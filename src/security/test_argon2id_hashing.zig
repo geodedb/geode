@@ -129,7 +129,8 @@ test "Argon2id - legacy Blake2b migration support" {
     const salt = "geode_default_salt_v1";
     std.crypto.hash.blake2.Blake2b256.hash(password ++ salt, &legacy_hash_bytes, .{});
 
-    const legacy_hash = try std.fmt.allocPrint(ally, "{x}", .{std.fmt.fmtSliceHexLower(&legacy_hash_bytes)});
+    const legacy_hash_hex = std.fmt.bytesToHex(legacy_hash_bytes, .lower);
+    const legacy_hash = try ally.dupe(u8, &legacy_hash_hex);
 
     // Should verify with legacy Blake2b
     try testing.expect(try auth.verifyPassword(password, legacy_hash));

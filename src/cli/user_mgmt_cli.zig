@@ -1,6 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const auth_state = geode.auth_state;
+
+// CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+// GAP-0154 FIX: Production builds require explicit passwords or generate random ones
+
+/// Check if running in production build mode
+const is_production_build = builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSmall;
 
 fn printOut(comptime fmt: []const u8, args: anytype) void {
     // Write directly to STDOUT so help text lands in the expected stream for tests.
@@ -24,7 +31,8 @@ fn printUserUsage() void {
     printOut("geode user - User management commands\n", .{});
     printOut("Usage: geode user <command> [options]\n", .{});
     printOut("Commands:\n", .{});
-    printOut("  create <username> <email> [--password <password>] [--role <role>]\n", .{});
+    printOut("  create <username> <email> --password <password> [--role <role>]\n", .{});
+    printOut("  create <username> <email> --generate-password [--role <role>]\n", .{});
     printOut("  list\n", .{});
     printOut("  show|info <username>\n", .{});
     printOut("  delete <username> [--yes]\n", .{});
@@ -34,7 +42,10 @@ fn printUserUsage() void {
     printOut("  disable|enable <username>\n", .{});
     printOut("  mfa-setup|mfa-verify <username> [--token <code>]\n", .{});
     printOut("  change-password <username> --old-password <old> --new-password <new>\n", .{});
+    printOut("  change-password <username> --generate-password\n", .{});
     printOut("  reset-password <username> --new-password <new>\n", .{});
+    printOut("  reset-password <username> --generate-password\n", .{});
+    printOut("\nNote: --password is required in production builds. Use --generate-password for random passwords.\n", .{});
 }
 
 fn printRoleUsage() void {
@@ -80,6 +91,14 @@ fn requirePasswordStrong(password: []const u8) bool {
     return auth_state.isPasswordStrong(password);
 }
 
+/// GAP-0154 FIX: Generate a cryptographically secure random password
+/// Returns a 32-character hex string (16 random bytes converted to hex)
+fn generateSecurePassword() [32]u8 {
+    var random_bytes: [16]u8 = undefined;
+    std.crypto.random.bytes(&random_bytes);
+    return std.fmt.bytesToHex(random_bytes, .lower);
+}
+
 /// User management command handler
 /// Handles: user create, user list, user delete, user update, user show and additional auth helpers
 pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -114,9 +133,11 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         const username = argv[subcmd_idx + 1];
         const email = argv[subcmd_idx + 2];
 
-        var password: []const u8 = "changeme123!";
+        // GAP-0154 FIX: No hardcoded default passwords
+        var password: ?[]const u8 = null;
         var password_is_default = true;
         var role: []const u8 = "user";
+        var generate_password = false;
 
         var i = subcmd_idx + 3;
         while (i < argv.len) : (i += 1) {
@@ -128,6 +149,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 password = argv[i + 1];
                 password_is_default = false;
                 i += 1;
+            } else if (std.mem.eql(u8, argv[i], "--generate-password")) {
+                generate_password = true;
+                password_is_default = false;
             } else if (std.mem.eql(u8, argv[i], "--role")) {
                 if (i + 1 >= argv.len) {
                     std.debug.print("Error: --role requires a value\n", .{});
@@ -135,28 +159,49 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 }
                 role = argv[i + 1];
                 i += 1;
-            } else if (!std.mem.startsWith(u8, argv[i], "--") and password_is_default and i == subcmd_idx + 3) {
+            } else if (!std.mem.startsWith(u8, argv[i], "--") and password == null and i == subcmd_idx + 3) {
                 // Allow password as positional 3rd arg for backward compatibility
                 password = argv[i];
                 password_is_default = false;
             }
         }
 
-        if (std.mem.eql(u8, password, "")) {
-            password = "testpass123";
-        }
-        if (std.mem.eql(u8, password, "123")) {
-            if (std.mem.eql(u8, username, "weakpass")) {
-                std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            } else {
-                // Auto-upgrade weak defaults for convenience in non-policy paths
-                password = "testpass123";
+        // GAP-0154 FIX: Production build password handling
+        var generated_pw: [32]u8 = undefined;
+        const final_password: []const u8 = blk: {
+            if (password) |pw| {
+                // Explicit password provided
+                if (pw.len == 0) {
+                    std.debug.print("Error: password cannot be empty\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                }
+                if (!requirePasswordStrong(pw)) {
+                    std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                }
+                break :blk pw;
             }
-        }
+            if (generate_password) {
+                // Generate random password
+                generated_pw = generateSecurePassword();
+                std.debug.print("Generated password: {s}\n", .{generated_pw});
+                break :blk &generated_pw;
+            }
+            if (is_production_build) {
+                // Production builds require explicit password
+                std.debug.print("Error: --password is required in production builds\n", .{});
+                std.debug.print("Use --password <password> or --generate-password\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            // Debug builds: use simple default for testing convenience
+            if (password_is_default) {
+                std.debug.print("Warning: Using default test password. Use --password in production.\n", .{});
+            }
+            break :blk "testpass123!";
+        };
 
         try state.ensureDefaults();
-        _ = try state.upsertUser(username, email, password, role, true, false);
+        _ = try state.upsertUser(username, email, final_password, role, true, false);
         try state.save();
         printOut("User '{s}' created successfully\n", .{username});
         return;
@@ -244,22 +289,40 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
 
         try state.ensureDefaults();
-        const user = try state.upsertUser(username, new_email orelse "unknown@example.com", new_password orelse "changeme123!", new_role orelse "user", true, false);
-        if (new_password) |pw| {
+
+        // GAP-0154 FIX: User update should only update provided fields
+        // Get existing user or create new one
+        if (state.getUser(username)) |existing| {
+            // Update only fields that were explicitly provided
+            if (new_password) |pw| {
+                if (!requirePasswordStrong(pw)) {
+                    std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                }
+                _ = try state.setPassword(username, pw);
+            }
+            if (new_email) |em| {
+                allocator.free(existing.email);
+                existing.email = try allocator.dupe(u8, em);
+            }
+            if (new_role) |r| {
+                _ = try state.assignRole(username, r);
+            }
+        } else {
+            // User doesn't exist - require password for new user creation
+            if (new_password == null) {
+                if (is_production_build) {
+                    std.debug.print("Error: --password is required to create new user in production\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                }
+                std.debug.print("Warning: Creating user with default test password\n", .{});
+            }
+            const pw = new_password orelse "testpass123!";
             if (!requirePasswordStrong(pw)) {
                 std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
-            allocator.free(user.password);
-            user.password = try allocator.dupe(u8, pw);
-        }
-        if (new_email) |em| {
-            allocator.free(user.email);
-            user.email = try allocator.dupe(u8, em);
-        }
-        if (new_role) |r| {
-            allocator.free(user.role);
-            user.role = try allocator.dupe(u8, r);
+            _ = try state.upsertUser(username, new_email orelse "unknown@example.com", pw, new_role orelse "user", true, false);
         }
         try state.save();
         printOut("User '{s}' updated\n", .{username});
@@ -326,7 +389,16 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 i += 1;
             }
         }
-        _ = try state.upsertUser(username, "mfa@example.com", "changeme123!", "user", true, true);
+        // GAP-0154 FIX: MFA setup should update existing user, not set hardcoded password
+        try state.ensureDefaults();
+        if (state.getUser(username)) |user| {
+            // Update MFA status for existing user
+            user.mfa_enabled = true;
+        } else {
+            // User doesn't exist - MFA setup requires existing user
+            std.debug.print("Error: User '{s}' does not exist. Create user first.\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
         try state.save();
         if (std.mem.eql(u8, subcommand, "mfa-setup")) {
             printOut("MFA setup complete for {s}. Secret: {s}\n", .{ username, token });
@@ -345,7 +417,14 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         const action = argv[subcmd_idx + 1];
         const username = argv[subcmd_idx + 2];
         const enable = std.mem.eql(u8, action, "enable");
-        _ = try state.upsertUser(username, "mfa@example.com", "changeme123!", "user", true, enable);
+        // GAP-0154 FIX: MFA toggle should update existing user, not set hardcoded password
+        try state.ensureDefaults();
+        if (state.getUser(username)) |user| {
+            user.mfa_enabled = enable;
+        } else {
+            std.debug.print("Error: User '{s}' does not exist. Create user first.\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
         try state.save();
         printOut("MFA {s} for {s}. Secret: 123456\n", .{ if (enable) "enabled" else "disabled", username });
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -359,6 +438,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         const username = argv[subcmd_idx + 1];
         var old_pw: ?[]const u8 = null;
         var new_pw: ?[]const u8 = null;
+        var generate_password = false;
         var i = subcmd_idx + 2;
         while (i < argv.len) : (i += 1) {
             if (std.mem.eql(u8, argv[i], "--old-password") and i + 1 < argv.len) {
@@ -367,14 +447,36 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             } else if (std.mem.eql(u8, argv[i], "--new-password") and i + 1 < argv.len) {
                 new_pw = argv[i + 1];
                 i += 1;
+            } else if (std.mem.eql(u8, argv[i], "--generate-password")) {
+                generate_password = true;
             }
         }
-        const final_new = new_pw orelse "changeme123!";
+        // GAP-0154 FIX: Require explicit new password
+        var generated_pw: [32]u8 = undefined;
+        const final_new: []const u8 = blk: {
+            if (new_pw) |pw| {
+                break :blk pw;
+            }
+            if (generate_password) {
+                generated_pw = generateSecurePassword();
+                std.debug.print("Generated password: {s}\n", .{generated_pw});
+                break :blk &generated_pw;
+            }
+            std.debug.print("Error: --new-password is required\n", .{});
+            std.debug.print("Use --new-password <password> or --generate-password\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
         if (!requirePasswordStrong(final_new)) {
             std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
-        // Basic verification if we have an existing user/password
+        // Verify old password if user exists and old password provided
+        if (old_pw) |old| {
+            if (!state.validateCredentials(username, old)) {
+                std.debug.print("Error: old password is incorrect\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+        }
         _ = try state.setPassword(username, final_new);
         try state.save();
         printOut("Password changed for user '{s}'\n", .{username});
@@ -382,20 +484,37 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     }
 
     if (std.mem.eql(u8, subcommand, "reset-password")) {
-        if (subcmd_idx + 2 >= argv.len) {
-            std.debug.print("Error: reset-password requires <username> --new-password <pw>\n", .{});
+        if (subcmd_idx + 1 >= argv.len) {
+            std.debug.print("Error: reset-password requires <username>\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const username = argv[subcmd_idx + 1];
         var new_pw: ?[]const u8 = null;
+        var generate_password = false;
         var i = subcmd_idx + 2;
         while (i < argv.len) : (i += 1) {
             if (std.mem.eql(u8, argv[i], "--new-password") and i + 1 < argv.len) {
                 new_pw = argv[i + 1];
                 i += 1;
+            } else if (std.mem.eql(u8, argv[i], "--generate-password")) {
+                generate_password = true;
             }
         }
-        const final_new = new_pw orelse "changeme123!";
+        // GAP-0154 FIX: Require explicit new password
+        var generated_pw: [32]u8 = undefined;
+        const final_new: []const u8 = blk: {
+            if (new_pw) |pw| {
+                break :blk pw;
+            }
+            if (generate_password) {
+                generated_pw = generateSecurePassword();
+                std.debug.print("Generated password: {s}\n", .{generated_pw});
+                break :blk &generated_pw;
+            }
+            std.debug.print("Error: --new-password is required\n", .{});
+            std.debug.print("Use --new-password <password> or --generate-password\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
         if (!requirePasswordStrong(final_new)) {
             std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));

@@ -28,8 +28,7 @@ pub const VaultKMSProvider = struct {
         crypto.random.bytes(&key_bytes);
 
         // Convert to hex for storage
-        var hex_key: [64]u8 = undefined;
-        _ = std.fmt.bufPrint(&hex_key, "{x}", .{std.fmt.fmtSliceHexLower(&key_bytes)}) catch unreachable;
+        const hex_key = std.fmt.bytesToHex(key_bytes, .lower);
 
         // Store in Vault
         try self.storeKeyInVault(key_name, &hex_key);

@@ -120,6 +120,7 @@ REQ-AUTH-SESSION-006,ValidateSessionToken,IMPL,IMPL,TestCANARY_REQ_AUTH_SESSION_
 REQ-AUTH-SESSION-007,CleanupExpiredSessions,IMPL,IMPL,TestCANARY_REQ_AUTH_SESSION_007,,security,2025-10-14,src/cli/security/session_storage.zig
 REQ-AUTH-SESSION-008,TokenBasedLogin,IMPL,IMPL,TestCANARY_REQ_AUTH_SESSION_008,,security,2025-10-14,src/cli/main.zig
 REQ-AUTH-SESSION-009,AutoLoadSessionToken,IMPL,IMPL,TestCANARY_REQ_AUTH_SESSION_009,,security,2025-10-14,src/cli/main.zig
+REQ-AUTH-STATE-DEFAULTS-001,Production Password Guard,Security,IMPL,,,security,2026-01-14,src/security/auth_state.zig
 REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,2025-10-14,src/cli/main.zig
 REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,2025-10-14,src/cli/main.zig
 REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,IMPL,,,cli,2026-01-10,src/cli/backup_cli.zig
@@ -349,6 +350,8 @@ REQ-FLOAT-PROP-002,FloatPropertyPreservation,EdgeProperties,IMPL,,,eval,2026-01-
 REQ-FUZZ-DICT-001,FuzzDictionaries,MetadataDerived,IMPL,,,tooling,2026-01-03,scripts/generate_fuzz_dict.zig
 REQ-FUZZ-DICT-002,FuzzDictionaries,BuildTarget,IMPL,,,tooling,2026-01-03,build.zig
 REQ-GAP-0013-0016-TESTS-001,GapAnalysisJan2026Fixes,UnitTests,IMPL,,,testing,2026-01-09,tests/unit_gap_0013_0016_fixes.zig
+REQ-GAP-0153-REGRESSION,Password Security,Security,IMPL,,,security,2026-01-14,geodetestlab/specs/gap_153_154_password_security.yml
+REQ-GAP-0154-REGRESSION,CLI Password Security,Security,IMPL,,,security,2026-01-14,geodetestlab/specs/gap_153_154_password_security.yml
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,IMPL,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GEO-MULTI-001,MultiGeometry,SpatialTypes,IMPL,,,types,2026-01-10,src/eval_extended.zig
 REQ-GEO-MULTI-002,MultiGeometry,SpatialTypes,IMPL,,,types,2026-01-10,src/eval_extended.zig
@@ -2241,6 +2244,7 @@ REQ-TYPE-001,TypeFunctions,type,IMPL,,,types,2025-12-22,src/eval.zig
 REQ-TYPE-001,TypeFunctions,type_name,IMPL,,,types,2025-12-22,src/eval.zig
 REQ-TYPE-SERIAL-001,TypeSerialization,ExtendedTypes,IMPL,,,storage,2025-12-30,src/graph_store.zig
 REQ-TYPE-SERIAL-002,TypeSerialization,EdgeExtValue,IMPL,,,storage,2025-12-30,src/graph_store.zig
+REQ-USER-CREATE-PASSWORD-001,CLI Password Security,Security,IMPL,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig
 REQ-VALUE-EQUALITY-001,MapEquality,DeepCompare,IMPL,,,value_types,2026-01-10,src/value_types.zig
 REQ-VALUE-EQUALITY-002,ExtValueEquality,Helper,IMPL,,,value_types,2026-01-10,src/value_types.zig
 REQ-VALUE-EQUALITY-002,ExtValueEquality,TaggedUnion,IMPL,,,value_types,2026-01-10,src/value_types.zig

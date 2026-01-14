@@ -1,4 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+// CANARY: REQ=REQ-AUTH-STATE-DEFAULTS-001; FEATURE="Production Password Guard"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// GAP-0153 FIX: Production builds must not use hardcoded default passwords
+
+/// Check if running in production build mode
+const is_production_build = builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSmall;
 
 /// Lightweight persistent auth state used by CLI workflows and e2e tests.
 /// Stores users/roles/policies/grants in a simple line-oriented file so state
@@ -181,14 +188,51 @@ pub const State = struct {
         if (self.findRoleIndex("user") == null) _ = try self.upsertRole("user", "Standard user", &[_][]const u8{"read"});
         if (self.findRoleIndex("analyst") == null) _ = try self.upsertRole("analyst", "Analytics role", &[_][]const u8{ "read", "query" });
 
-        // Default users (use env overrides if available)
+        // GAP-0153 FIX: Production guard for default passwords
+        // In production builds, require env vars or generate random passwords
         const admin_pw_owned = std.process.getEnvVarOwned(self.allocator, "GEODE_ADMIN_PASSWORD") catch null;
-        const admin_password = admin_pw_owned orelse "admin";
         defer if (admin_pw_owned) |buf| self.allocator.free(buf);
 
         const test_pw_owned = std.process.getEnvVarOwned(self.allocator, "GEODE_USER_PASSWORD") catch null;
-        const test_password = test_pw_owned orelse "testpass";
         defer if (test_pw_owned) |buf| self.allocator.free(buf);
+
+        // Determine admin password with production safety
+        var generated_admin_pw: [16]u8 = undefined;
+        var generated_admin_pw_hex: [32]u8 = undefined;
+        const admin_password: []const u8 = blk: {
+            if (admin_pw_owned) |pw| {
+                break :blk pw;
+            }
+            if (is_production_build) {
+                // Generate cryptographically secure random password in production
+                std.crypto.random.bytes(&generated_admin_pw);
+                generated_admin_pw_hex = std.fmt.bytesToHex(generated_admin_pw, .lower);
+                std.log.warn("SECURITY: Generated random admin password. Set GEODE_ADMIN_PASSWORD env var for persistent password.", .{});
+                std.log.info("ADMIN_PASSWORD={s}", .{generated_admin_pw_hex});
+                break :blk &generated_admin_pw_hex;
+            }
+            // Debug builds: use simple default for testing convenience
+            break :blk "admin";
+        };
+
+        // Determine test user password with production safety
+        var generated_test_pw: [16]u8 = undefined;
+        var generated_test_pw_hex: [32]u8 = undefined;
+        const test_password: []const u8 = blk: {
+            if (test_pw_owned) |pw| {
+                break :blk pw;
+            }
+            if (is_production_build) {
+                // Generate cryptographically secure random password in production
+                std.crypto.random.bytes(&generated_test_pw);
+                generated_test_pw_hex = std.fmt.bytesToHex(generated_test_pw, .lower);
+                std.log.warn("SECURITY: Generated random testuser password. Set GEODE_USER_PASSWORD env var for persistent password.", .{});
+                std.log.info("TESTUSER_PASSWORD={s}", .{generated_test_pw_hex});
+                break :blk &generated_test_pw_hex;
+            }
+            // Debug builds: use simple default for testing convenience
+            break :blk "testpass";
+        };
 
         if (self.findUserIndex("admin") == null) {
             _ = try self.upsertUser("admin", "admin@geode.dev", admin_password, "admin", true, false);
@@ -443,4 +487,89 @@ pub fn isPasswordStrong(password: []const u8) bool {
         if (std.ascii.isAlphabetic(c)) has_alpha = true;
     }
     return has_digit and has_alpha;
+}
+
+// ============================================================================
+// Unit Tests for GAP-0153: Production Password Guard
+// ============================================================================
+
+test "GAP-0153: isPasswordStrong validates password requirements" {
+    // Too short
+    try std.testing.expect(!isPasswordStrong("abc123"));
+    try std.testing.expect(!isPasswordStrong("abcdefg"));
+
+    // Missing digits
+    try std.testing.expect(!isPasswordStrong("abcdefgh"));
+
+    // Missing letters
+    try std.testing.expect(!isPasswordStrong("12345678"));
+
+    // Valid passwords
+    try std.testing.expect(isPasswordStrong("password1"));
+    try std.testing.expect(isPasswordStrong("abc12345"));
+    try std.testing.expect(isPasswordStrong("SecureP4ss!"));
+}
+
+test "GAP-0153: State.init creates empty state" {
+    var state = State.init(std.testing.allocator);
+    defer state.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), state.users.items.len);
+    try std.testing.expectEqual(@as(usize, 0), state.roles.items.len);
+}
+
+test "GAP-0153: upsertUser creates new user" {
+    var state = State.init(std.testing.allocator);
+    defer state.deinit();
+
+    _ = try state.upsertUser("testadmin", "test@example.com", "securepass123", "admin", true, false);
+
+    try std.testing.expectEqual(@as(usize, 1), state.users.items.len);
+    try std.testing.expectEqualStrings("testadmin", state.users.items[0].username);
+}
+
+test "GAP-0153: upsertUser updates existing user" {
+    var state = State.init(std.testing.allocator);
+    defer state.deinit();
+
+    _ = try state.upsertUser("testadmin", "test@example.com", "pass1", "admin", true, false);
+    _ = try state.upsertUser("testadmin", "new@example.com", "pass2", "user", false, true);
+
+    try std.testing.expectEqual(@as(usize, 1), state.users.items.len);
+    try std.testing.expectEqualStrings("new@example.com", state.users.items[0].email);
+    try std.testing.expectEqualStrings("pass2", state.users.items[0].password);
+    try std.testing.expect(!state.users.items[0].active);
+    try std.testing.expect(state.users.items[0].mfa_enabled);
+}
+
+test "GAP-0153: validateCredentials checks password" {
+    var state = State.init(std.testing.allocator);
+    defer state.deinit();
+
+    _ = try state.upsertUser("testuser", "test@example.com", "correctpass", "user", true, false);
+
+    try std.testing.expect(state.validateCredentials("testuser", "correctpass"));
+    try std.testing.expect(!state.validateCredentials("testuser", "wrongpass"));
+    try std.testing.expect(!state.validateCredentials("nouser", "anypass"));
+}
+
+test "GAP-0153: validateCredentials rejects inactive users" {
+    var state = State.init(std.testing.allocator);
+    defer state.deinit();
+
+    _ = try state.upsertUser("inactiveuser", "test@example.com", "password", "user", false, false);
+
+    // Even correct password should fail for inactive user
+    try std.testing.expect(!state.validateCredentials("inactiveuser", "password"));
+}
+
+test "GAP-0153: production guard constant is correctly set" {
+    // In debug test builds, is_production_build should be false
+    // This test verifies the constant is accessible and makes sense
+    if (builtin.mode == .Debug) {
+        try std.testing.expect(!is_production_build);
+    } else {
+        // In release builds, this should be true
+        try std.testing.expect(is_production_build);
+    }
 }

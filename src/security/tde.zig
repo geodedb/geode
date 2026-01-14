@@ -325,8 +325,8 @@ pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !s
     // Calculate backup hash
     var hash_bytes: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(&[_]u8{0} ** 32, &hash_bytes, .{});
-    const hash_str = try allocator.alloc(u8, 64);
-    _ = try std.fmt.bufPrint(hash_str, "{x}", .{std.fmt.fmtSliceHexLower(&hash_bytes)});
+    const hex_array = std.fmt.bytesToHex(hash_bytes, .lower);
+    const hash_str = try allocator.dupe(u8, &hex_array);
 
     return .{
         .backup_size_bytes = backup_size,

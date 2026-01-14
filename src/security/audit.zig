@@ -1537,8 +1537,8 @@ pub const AuditLogger = struct {
         // Calculate hash (simplified)
         var hash_bytes: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(&[_]u8{0} ** 32, &hash_bytes, .{});
-        const hash = try allocator.alloc(u8, 64);
-        _ = try std.fmt.bufPrint(hash, "{x}", .{std.fmt.fmtSliceHexLower(&hash_bytes)});
+        const hash_hex = std.fmt.bytesToHex(hash_bytes, .lower);
+        const hash = try allocator.dupe(u8, &hash_hex);
 
         return .{
             .package_path = package_path,
@@ -1616,8 +1616,8 @@ pub const AuditLogger = struct {
         // Calculate checksum
         var checksum_bytes: [16]u8 = undefined;
         std.crypto.hash.md5.Md5.hash(&[_]u8{0} ** 16, &checksum_bytes, .{});
-        const checksum = try allocator.alloc(u8, 32);
-        _ = try std.fmt.bufPrint(checksum, "{x}", .{std.fmt.fmtSliceHexLower(&checksum_bytes)});
+        const checksum_hex = std.fmt.bytesToHex(checksum_bytes, .lower);
+        const checksum = try allocator.dupe(u8, &checksum_hex);
 
         return .{
             .export_path = export_path,

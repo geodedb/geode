@@ -16,8 +16,7 @@ test "TestCANARY_REQ_GQL_010_StatusJsonHashIntegrity" {
     h.update(status_data);
     var digest: [32]u8 = undefined;
     h.final(&digest);
-    var hex_buf: [64]u8 = undefined;
-    _ = std.fmt.bufPrint(&hex_buf, "{s}", .{std.fmt.fmtSliceHexLower(&digest)}) catch unreachable;
+    const hex_buf = std.fmt.bytesToHex(digest, .lower);
 
     // Read GAP_ANALYSIS.md first 200 lines to find marker
     var gap_file = try std.fs.cwd().openFile("docs/GAP_ANALYSIS.md", .{ .read = true });

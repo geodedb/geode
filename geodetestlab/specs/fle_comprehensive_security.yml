@@ -115,7 +115,7 @@ tests:
 
   - name: "fle-setup-hr-manager-user"
     description: "Create HR manager user"
-    args: ["user", "create", "hr_manager", "hr@geode.dev", "--password", "${secret:hr_manager_password}", "--role", "hr_manager"]
+    args: ["user", "create", "hr_manager", "hr@geode.dev", "--password", "HrM4nager789!", "--role", "hr_manager"]
     expect:
       exit_code: 0
       stdout_contains: ["hr_manager", "created"]
@@ -123,7 +123,7 @@ tests:
 
   - name: "fle-setup-analyst-user"
     description: "Create analyst user"
-    args: ["user", "create", "analyst_user", "analyst@geode.dev", "--password", "${secret:analyst_password}", "--role", "analyst"]
+    args: ["user", "create", "analyst_user", "analyst@geode.dev", "--password", "An4lyst456!", "--role", "analyst"]
     expect:
       exit_code: 0
       stdout_contains: ["analyst_user", "created"]
@@ -131,7 +131,7 @@ tests:
 
   - name: "fle-setup-auditor-user"
     description: "Create auditor user"
-    args: ["user", "create", "auditor_user", "auditor@geode.dev", "--password", "${secret:auditor_password}", "--role", "auditor"]
+    args: ["user", "create", "auditor_user", "auditor@geode.dev", "--password", "Aud1tor012!", "--role", "auditor"]
     expect:
       exit_code: 0
       stdout_contains: ["auditor_user", "created"]
@@ -139,7 +139,7 @@ tests:
 
   - name: "fle-setup-regular-user"
     description: "Create regular user with no PII access"
-    args: ["user", "create", "regular_user", "user@geode.dev", "--password", "${secret:regular_user_password}", "--role", "user"]
+    args: ["user", "create", "regular_user", "user@geode.dev", "--password", "RegUl4r345!", "--role", "user"]
     expect:
       exit_code: 0
       stdout_contains: ["regular_user", "created"]

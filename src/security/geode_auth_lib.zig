@@ -1012,7 +1012,7 @@ pub const SecurityManager = struct {
             if (builtin.mode != .Debug) {
                 // Production: Generate random 32-byte password (hex encoded to 64 chars)
                 std.crypto.random.bytes(&generated_password_buf);
-                _ = std.fmt.bufPrint(&generated_password_hex, "{s}", .{std.fmt.fmtSliceHexLower(&generated_password_buf)}) catch unreachable;
+                generated_password_hex = std.fmt.bytesToHex(generated_password_buf, .lower);
                 std.log.warn("SECURITY: Generated random admin password (REQUIRES IMMEDIATE CHANGE):", .{});
                 std.log.warn("ADMIN_PASSWORD={s}", .{generated_password_hex[0..32]}); // Only first 32 chars
                 std.log.warn("Set GEODE_DEFAULT_PASSWORD env var to use a custom password.", .{});

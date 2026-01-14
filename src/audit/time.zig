@@ -140,14 +140,14 @@ pub const SystemIdGen = struct {
         const self: *SystemIdGen = @ptrCast(@alignCast(ptr));
         var bytes: [16]u8 = undefined;
         self.rng.random().bytes(&bytes);
-        _ = std.fmt.bufPrint(buf, "{}", .{std.fmt.fmtSliceHexLower(&bytes)}) catch {};
+        buf.* = std.fmt.bytesToHex(bytes, .lower);
     }
 
     fn spanIdImpl(ptr: *anyopaque, buf: *[16]u8) void {
         const self: *SystemIdGen = @ptrCast(@alignCast(ptr));
         var bytes: [8]u8 = undefined;
         self.rng.random().bytes(&bytes);
-        _ = std.fmt.bufPrint(buf, "{}", .{std.fmt.fmtSliceHexLower(&bytes)}) catch {};
+        buf.* = std.fmt.bytesToHex(bytes, .lower);
     }
 
     fn requestIdImpl(ptr: *anyopaque, allocator: std.mem.Allocator) []const u8 {
