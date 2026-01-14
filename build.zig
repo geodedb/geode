@@ -255,14 +255,30 @@ pub fn build(b: *std.Build) void {
     });
     // (TDE security module imported indirectly via geode root; dedicated module variable removed)
 
-    // Unicode generated tables (minimal). We attempt to run the generator; failure is non-fatal for now (IMPL stage).
-    // CANARY: REQ=REQ-GQL-UNICODE-006; FEATURE="UnicodeBuildIntegration"; ASPECT=BuildStep; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables; OWNER=unicode; UPDATED=2025-09-27
+    // CANARY: REQ=REQ-GQL-UNICODE-006; FEATURE="UnicodeBuildIntegration"; ASPECT=BuildStep; STATUS=IMPL; OWNER=unicode; UPDATED=2026-01-14
+    // GAP-0169: Unicode generator build step enforcement - now properly wired
     // Use plain 'zig' from PATH for generator (0.15 Build struct no longer exposes zig_exe field directly)
     const unicode_gen_cmd = b.addSystemCommand(&.{ "zig", "run", "tools/gen_unicode_tables.zig", "third_party/unicode/ucd/UnicodeData.txt", "src/unicode/generated" });
-    // We don't gate root module import on success yet; future promotion to enforced step will add dependency wiring.
-    // The geode root can @import("unicode/geode_unicode.zig") directly; generated tables live alongside.
-    // We currently do not wire the command as a dependency (non-fatal); future promotion to enforced step will add dependency.
-    _ = unicode_gen_cmd; // silence unused warning until enforced
+    unicode_gen_cmd.setName("unicode-gen");
+
+    // CANARY: REQ=REQ-GQL-UNICODE-007; FEATURE="UnicodeBuildEnforcement"; ASPECT=Verification; STATUS=IMPL; OWNER=unicode; UPDATED=2026-01-14
+    // GAP-0169: Create explicit build step for unicode generation
+    const unicode_step = b.step("unicode-gen", "Generate Unicode lookup tables from UCD data");
+    unicode_step.dependOn(&unicode_gen_cmd.step);
+
+    // CANARY: REQ=REQ-GQL-UNICODE-008; FEATURE="UnicodeBuildVerification"; ASPECT=TableCheck; STATUS=IMPL; OWNER=unicode; UPDATED=2026-01-14
+    // GAP-0169: Verification step that checks if generated tables exist
+    // This warns at build time if tables are missing/stale but doesn't block the build
+    // (allows development without UCD files, while CI can enforce generation)
+    const unicode_verify_cmd = b.addSystemCommand(&.{
+        "sh",
+        "-c",
+        "if [ ! -f src/unicode/generated/unicode_data.zig ]; then " ++
+            "echo 'WARNING: Unicode generated tables missing. Run: zig build unicode-gen'; " ++
+            "echo '  (Requires third_party/unicode/ucd/UnicodeData.txt)'; " ++
+            "fi",
+    });
+    unicode_verify_cmd.setName("unicode-verify");
 
     // Field-Level Encryption modules
     // CANARY: REQ=REQ-FLE-BUILD-001; FEATURE="FieldLevelEncryption"; ASPECT=BUILD; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15

@@ -5,6 +5,9 @@ const storage_catalog = @import("storage_catalog");
 const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const index_catalog = @import("index_catalog.zig");
+// CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// GAP-0165: Import geode_auth for SecurityManager initialization at server startup
+const geode_auth = @import("geode_auth");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-008; FEATURE="ServerRefactoring"; ASPECT=SERVER_INIT; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - Server Initialization Module (Fourth Increment)
@@ -18,6 +21,9 @@ pub const EnvironmentConfig = struct {
     spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     wal_compact_interval: usize = 5,
+    // CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement"; ASPECT=EnvConfig; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // GAP-0165: Environment flag to enable ABAC enforcement
+    abac_enabled: bool = false,
 };
 
 /// Server initialization context containing all initialized resources
@@ -28,8 +34,17 @@ pub const InitContext = struct {
     pm_persist: storage_pm.PageManager,
     catalog_inited: bool,
     catalog: storage_catalog.StorageCatalog,
+    // CANARY: REQ=REQ-ABAC-WIRE-006; FEATURE="ABAC Enforcement"; ASPECT=InitContext; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // GAP-0165: SecurityManager instance for RBAC+ABAC enforcement across all connections
+    security_manager: ?*geode_auth.SecurityManager = null,
+    security_manager_storage: ?geode_auth.SecurityManager = null,
 
     pub fn deinit(self: *InitContext) void {
+        // CANARY: REQ=REQ-ABAC-WIRE-007; FEATURE="ABAC Enforcement"; ASPECT=Cleanup; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+        // GAP-0165: Clean up SecurityManager on server shutdown
+        if (self.security_manager_storage) |*sm| {
+            sm.deinit();
+        }
         if (self.catalog_inited) {
             self.catalog.save() catch {};
             self.catalog.deinit();
@@ -87,6 +102,12 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
 
         if (env.get("GEODE_DISABLE_INDEX_CATALOG")) |_| {
             index_catalog.setDisableCatalog(true);
+        }
+
+        // CANARY: REQ=REQ-ABAC-WIRE-008; FEATURE="ABAC Enforcement"; ASPECT=EnvVar; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+        // GAP-0165: Check for GEODE_ENABLE_ABAC environment variable to enable ABAC enforcement
+        if (env.get("GEODE_ENABLE_ABAC")) |val| {
+            config.abac_enabled = val.len > 0 and (val[0] == '1' or std.ascii.eqlIgnoreCase(val, "true"));
         }
 
         if (env.get("GEODE_CHECKSUM_TEST_PATH")) |p| {
@@ -172,6 +193,13 @@ pub fn initializeStorage(
     };
 }
 
+// CANARY: REQ=REQ-ABAC-WIRE-009; FEATURE="ABAC Enforcement"; ASPECT=SecurityInit; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// GAP-0165: Initialize SecurityManager for RBAC+ABAC policy enforcement
+/// Initialize SecurityManager if ABAC is enabled
+pub fn initializeSecurityManager(allocator: std.mem.Allocator) !geode_auth.SecurityManager {
+    return geode_auth.SecurityManager.init(allocator);
+}
+
 /// Complete server initialization
 pub fn initialize(
     allocator: std.mem.Allocator,
@@ -200,12 +228,29 @@ pub fn initialize(
     // Initialize persistent storage and catalog
     const storage = try initializeStorage(allocator, data_dir, catalog_create_name);
 
-    return InitContext{
+    // CANARY: REQ=REQ-ABAC-WIRE-010; FEATURE="ABAC Enforcement"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // GAP-0165: Initialize SecurityManager at server startup if ABAC is enabled
+    var ctx = InitContext{
         .wal = wal,
         .env_config = env_config,
         .pm_persist_active = storage.pm_persist_active,
         .pm_persist = storage.pm_persist,
         .catalog_inited = storage.catalog_inited,
         .catalog = storage.catalog,
+        .security_manager = null,
+        .security_manager_storage = null,
     };
+
+    if (env_config.abac_enabled) {
+        ctx.security_manager_storage = initializeSecurityManager(allocator) catch |err| blk: {
+            std.log.err("Failed to initialize SecurityManager: {}", .{err});
+            break :blk null;
+        };
+        if (ctx.security_manager_storage) |*sm| {
+            ctx.security_manager = sm;
+            std.log.info("ABAC enforcement enabled - SecurityManager initialized", .{});
+        }
+    }
+
+    return ctx;
 }

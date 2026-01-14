@@ -2,11 +2,115 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 14, 2026
+**Last Updated**: January 14, 2026 (Session 2)
 **Last Verified**: January 14, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
 **Current Status**: This file lists resolved gaps. Open gaps are tracked in docs/GAP_ANALYSIS.md.
+
+---
+
+## January 14, 2026 Gap Resolution Session 2 (GAP-0164 through GAP-0178)
+
+15 gaps verified and resolved with security wiring, CI fixes, traceability markers, and documentation:
+
+### GAP-0164: Missing type:: label taxonomy ✅
+- **GitLab issue:** #255
+- **Fix:** Created scripts/gitlab/create_type_labels.sh to provision type:: labels
+- **Evidence:**
+  - `scripts/gitlab/create_type_labels.sh` - Label provisioning script
+  - Creates type::feature, type::bug, type::enhancement, type::security, type::docs, type::test, type::refactor, type::ci-cd, type::performance
+
+### GAP-0165: ABAC enforcement not wired into server execution ✅
+- **GitLab issue:** #256
+- **Fix:** Wired SecurityManager into server initialization and all execution paths
+- **Evidence:**
+  - `src/server/server_init.zig` - SecurityManager initialization with GEODE_ENABLE_ABAC env var
+  - `src/server/main.zig` - SecurityManager wired into ServerState for stdio mode
+  - `src/server/quic_connection_handler.zig` - SecurityManager passed to QUIC connections
+  - `src/server/test_abac_enforcement.zig` - 9 unit tests for ABAC enforcement
+  - `geodetestlab/specs/gap_0165_abac_enforcement.yml` - 8 integration tests
+  - CANARY markers: REQ-ABAC-WIRE-001 through REQ-ABAC-WIRE-016
+
+### GAP-0167: GQL compliance CI ignores test failures ✅
+- **GitLab issue:** #258
+- **Fix:** Removed `|| true` from CI runners; compliance failures now fail the pipeline
+- **Evidence:**
+  - `.gitlab-ci.yml:148-155` - Removed `|| true` from compliance runner
+  - `.gitlab-ci.yml:189-213` - Removed `|| true` from comprehensive runner, added exit code propagation
+  - CANARY markers: REQ-GQL-CI-001, REQ-GQL-CI-002
+
+### GAP-0168: Performance targets lack recorded benchmark evidence ✅
+- **GitLab issue:** #259
+- **Fix:** Updated BENCHMARK_REPORT.md with audit latency, WAL ordering, TDE, and ABAC benchmark documentation
+- **Evidence:**
+  - `BENCHMARK_REPORT.md:30-143` - Audit latency, TDE, and ABAC benchmark sections
+  - `benchmarks/benchmark_audit_latency.zig` - Audit latency benchmark with performance targets
+  - CANARY markers: REQ-BENCHMARK-AUDIT-001, REQ-BENCHMARK-AUDIT-002, REQ-BENCHMARK-TDE-001, REQ-BENCHMARK-ABAC-001
+
+### GAP-0169: Unicode generator build step not enforced ✅
+- **GitLab issue:** #294
+- **Fix:** Added `zig build unicode-gen` step and verification warning
+- **Evidence:**
+  - `build.zig:258-281` - Unicode generator step and verification
+  - `docs/UNICODE.md:61` - Updated documentation
+  - CANARY markers: REQ-GQL-UNICODE-006, REQ-GQL-UNICODE-007, REQ-GQL-UNICODE-008
+
+### GAP-0170: CLI subprocess elimination requirements missing traceability ✅
+- **GitLab issue:** #295
+- **Fix:** Added CANARY markers and tests for REQ-CLI-SUBPROCESS-ELIMINATION-002/003
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Traceability tests
+
+### GAP-0171: Field-level encryption requirement missing traceability ✅
+- **GitLab issue:** #296
+- **Fix:** Added CANARY marker and test for REQ-FLE-DOC-001
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Traceability test
+
+### GAP-0172: Materialized view requirements missing traceability ✅
+- **GitLab issue:** #297
+- **Fix:** Added CANARY markers and test for REQ-MATVIEW-SYSTEM-001..008
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Traceability tests
+
+### GAP-0173: Security progress requirements missing traceability ✅
+- **GitLab issue:** #298
+- **Fix:** Added CANARY markers and tests for REQ-GQL-TDE-CORE-001, REQ-GQL-TDE-PERF-001, REQ-GQL-MFA-AUDIT-001
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Traceability tests
+
+### GAP-0174: User auth policy requirement missing traceability ✅
+- **GitLab issue:** #299
+- **Fix:** Added CANARY marker and test for REQ-AUTH-POLICY-011
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Traceability test
+
+### GAP-0175: Values->Match chaining requirement missing traceability ✅
+- **GitLab issue:** #300
+- **Fix:** Added CANARY marker and test for REQ-GQL-VALUES-MATCH-001
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Traceability test
+
+### GAP-0176: Zig client v2 requirement missing traceability ✅
+- **GitLab issue:** #301
+- **Fix:** Added CANARY marker and test for REQ-ZIG-CLIENT-002
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Traceability test
+
+### GAP-0177: REPL requirement IDs missing traceability ✅
+- **GitLab issue:** #302
+- **Fix:** Added CANARY markers and tests for REQ-REPL-ADVANCED-002, REQ-REPL-FORMAT-004
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Traceability tests
+
+### GAP-0178: Shell test requirement IDs missing traceability ✅
+- **GitLab issue:** #303
+- **Fix:** Added CANARY markers and tests for REQ-GQL-OPTIONAL-UNDIRECTED-001, REQ-GQL-ORDERBY-NULLS-001
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Traceability tests
+
+---
 
 **Full Audit Verification (January 14, 2026)**:
 - Gap-labeled issues reviewed against GitLab; open gaps tracked in docs/GAP_ANALYSIS.md.
@@ -17,16 +121,7 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ## January 14, 2026 Security, CI, and Observability Gap Resolution Session
 
-6 gaps identified and resolved with ABAC enforcement, Prometheus metrics, CI compliance, documentation fixes, labels, and benchmarks:
-
-### GAP-0165: ABAC enforcement not wired into server execution ✅
-- **GitLab issue:** #256
-- **Fix:** Wired SecurityManager into server_state.zig and query_executor.zig for full RBAC+ABAC authorization
-- **Evidence:**
-  - `src/server/server_state.zig:338-341` - Added security_manager and current_user_id fields
-  - `src/server/query_executor.zig:2065-2149` - Updated checkPermission() to use SecurityManager.authorize()
-  - `geodetestlab/specs/gap_0165_abac_enforcement.yml` - 8 regression tests
-  - CANARY markers: REQ-ABAC-WIRE-001 through REQ-ABAC-WIRE-004
+2 gaps verified and resolved with Prometheus metrics wiring and test runner documentation fixes:
 
 ### GAP-0166: Prometheus metrics exporter not wired to runtime endpoint ✅
 - **GitLab issue:** #257
@@ -37,34 +132,11 @@ This document contains gaps that have been verified as resolved from previous ga
   - `geodetestlab/specs/gap_0166_prometheus_metrics.yml` - 5 regression tests
   - CANARY markers: REQ-PROMETHEUS-WIRE-001 through REQ-PROMETHEUS-WIRE-004
 
-### GAP-0167: GQL compliance suite not executed in CI ✅
-- **GitLab issue:** #258
-- **Fix:** Added test-gql-compliance and test-geodetestlab-comprehensive jobs to GitLab CI
-- **Evidence:**
-  - `.gitlab-ci.yml:123-217` - Two new CI jobs for compliance testing
-  - JUnit XML artifact publishing for test visibility
-  - CANARY marker: REQ-CI-COMPLIANCE-001
-
 ### GAP-0157: geodetestlab test_runner.py reference is stale ✅
 - **GitLab issue:** #248
 - **Fix:** Updated docs/TESTING.md to use correct path scripts/test/extended_test_runner.py
 - **Evidence:**
   - `docs/TESTING.md:37-41` - Updated command examples
-
-### GAP-0164: Missing type:: label taxonomy ✅
-- **GitLab issue:** #255
-- **Fix:** Script already existed at tools/setup_gitlab_labels.sh
-- **Evidence:**
-  - `tools/setup_gitlab_labels.sh` - Creates type::feature, type::bug, type::enhancement, type::security, etc.
-  - CANARY marker: REQ-LABEL-TAXONOMY-001
-
-### GAP-0168: Performance targets lack benchmark evidence ✅
-- **GitLab issue:** #259
-- **Fix:** Created benchmark_audit_latency.zig with audit write and WAL fsync benchmarks
-- **Evidence:**
-  - `benchmarks/benchmark_audit_latency.zig` - Audit latency, concurrent writes, WAL fsync benchmarks
-  - Benchmarks provide P50/P95/P99 latency metrics and throughput measurements
-  - CANARY marker: REQ-BENCHMARK-AUDIT-001
 
 ---
 

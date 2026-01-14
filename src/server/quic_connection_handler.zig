@@ -17,6 +17,9 @@ const server_flags = @import("server_flags.zig");
 const message_handlers = @import("message_handlers.zig");
 const protocol_handler = @import("protocol_handler.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
+// CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
+const geode_auth = @import("geode_auth");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
@@ -49,6 +52,8 @@ const F_ILLEGAL = "U:PropOrder=Illegal";
 const F_TIEBREAK = "U:OrderTiebreak=LexJSON";
 const DEBUG_PROFILE = false;
 
+// CANARY: REQ=REQ-ABAC-WIRE-013; FEATURE="ABAC Enforcement"; ASPECT=QUICHandler; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// GAP-0165: Updated handleQuicConnection signature to accept SecurityManager for ABAC enforcement
 pub fn handleQuicConnection(
     gpa: std.mem.Allocator,
     transport: *quic_transport.QuicTransport,
@@ -65,6 +70,7 @@ pub fn handleQuicConnection(
     env_storage_checksum_error: bool,
     env_wal_compact_interval: usize,
     _force_serialization_failure_unused: bool,
+    security_manager: ?*geode_auth.SecurityManager,
 ) !void {
     _ = env_wal_compact_interval;
     _ = _force_serialization_failure_unused;
@@ -118,6 +124,9 @@ pub fn handleQuicConnection(
     state.spill_union = env_spill_union;
     state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
+    // CANARY: REQ=REQ-ABAC-WIRE-014; FEATURE="ABAC Enforcement"; ASPECT=QUICState; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // GAP-0165: Wire SecurityManager into ServerState for QUIC connection ABAC enforcement
+    state.security_manager = security_manager;
 
     // Initialize query plan cache and optimizer for performance optimization
     var query_optimizer = query_plan_cache.QueryOptimizer.init(gpa, 100); // Cache up to 100 plans

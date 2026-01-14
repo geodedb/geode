@@ -100,7 +100,7 @@ pub fn benchmarkConcurrentAuditWrites(allocator: Allocator, threads: u32, iterat
         total_ns: u64,
     };
 
-    var contexts = try allocator.alloc(ThreadContext, threads);
+    const contexts = try allocator.alloc(ThreadContext, threads);
     defer allocator.free(contexts);
 
     for (contexts) |*ctx| {
@@ -185,7 +185,7 @@ pub fn benchmarkWALOrderingLatency(allocator: Allocator, iterations: u32) !struc
 
     // Write buffer (4KB pages typical for WAL)
     const page_size: usize = 4096;
-    var write_buf = try allocator.alloc(u8, page_size);
+    const write_buf = try allocator.alloc(u8, page_size);
     defer allocator.free(write_buf);
     std.crypto.random.bytes(write_buf);
 

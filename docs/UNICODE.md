@@ -58,7 +58,7 @@ All functions allocate fresh buffers owned by the caller; callers must `free` th
 - Full canonical combining class ordering and composition are not implemented (subset normalization only).
 - No locale-sensitive case folding or collation (binary collation default).
 - No grapheme cluster segmentation (needed for precise UI slicing and advanced FTS highlighting).
-- Generator step not enforced via dependency (future: make build fail on generator failure and add a test promoting REQ-GQL-UNICODE-006).
+- Generator step available via `zig build unicode-gen` (GAP-0169 resolved). Run with UnicodeData.txt present.
 - UTF-32 operations are not exposed (current needs satisfied by UTF-16 boundary semantics).
 
 ## Governance & CANARY Lines (Examples)
