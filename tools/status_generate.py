@@ -63,8 +63,9 @@ def find_canary_markers(repo_path: Path) -> List[Dict[str, str]]:
 def generate_status_csv(markers: List[Dict[str, str]], output_path: Path) -> int:
     """Generate status.csv from CANARY markers."""
     
-    # Sort by REQ ID, then by feature, then by aspect
-    markers.sort(key=lambda m: (m['req'], m['feature'], m['aspect']))
+    # Sort by REQ ID, then by feature, then by aspect, then by file for deterministic output
+    # Including file in sort key ensures consistent ordering across different environments
+    markers.sort(key=lambda m: (m['req'], m['feature'], m['aspect'], m['file']))
     
     # Write CSV
     with open(output_path, 'w', newline='') as csvfile:
