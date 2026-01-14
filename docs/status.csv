@@ -352,6 +352,7 @@ REQ-FUZZ-DICT-002,FuzzDictionaries,BuildTarget,IMPL,,,tooling,2026-01-03,build.z
 REQ-GAP-0013-0016-TESTS-001,GapAnalysisJan2026Fixes,UnitTests,IMPL,,,testing,2026-01-09,tests/unit_gap_0013_0016_fixes.zig
 REQ-GAP-0153-REGRESSION,Password Security,Security,IMPL,,,security,2026-01-14,geodetestlab/specs/gap_153_154_password_security.yml
 REQ-GAP-0154-REGRESSION,CLI Password Security,Security,IMPL,,,security,2026-01-14,geodetestlab/specs/gap_153_154_password_security.yml
+REQ-GAP-155-156-REGRESSION,SecurityRegressionTests,Testing,ACTIVE,,,security,2026-01-14,geodetestlab/specs/gap_155_156_regression.yml
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,IMPL,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GEO-MULTI-001,MultiGeometry,SpatialTypes,IMPL,,,types,2026-01-10,src/eval_extended.zig
 REQ-GEO-MULTI-002,MultiGeometry,SpatialTypes,IMPL,,,types,2026-01-10,src/eval_extended.zig
@@ -1875,6 +1876,8 @@ REQ-META-VALIDATE-001,MetadataValidation,CI,IMPL,,,tooling,2026-01-03,scripts/va
 REQ-META-VALIDATE-002,MetadataValidation,BuildTarget,IMPL,,,tooling,2026-01-03,build.zig
 REQ-METADATA-001,UnifiedLanguageMetadata,SingleSourceOfTruth,IMPL,,,api,2026-01-03,src/gql/language_metadata.zig
 REQ-METADATA-LIB-001,MetadataIntegration,LibExport,IMPL,,,lib,2026-01-03,src/lib.zig
+REQ-MFA-OUTPUT-001,MFASecureOutput,Security,IMPL,gap_155_156_regression.yml,,cli,2026-01-14,src/cli/user_mgmt_cli.zig
+REQ-MFA-TOGGLE-001,MFAToggleSecure,Security,IMPL,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig
 REQ-ML-EMBEDDINGS-001,Graph Embeddings Integration,CoreSystem,IMPL,TestCANARY_ML_EMBEDDINGS_001_CoreSystem,,ml,2025-10-05,src/ml/graph_embeddings.zig
 REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Implementation,IMPL,TestCANARY_ML_EMBEDDINGS_002_Node2Vec,,ml,2025-10-05,src/ml/graph_embeddings.zig
 REQ-ML-EMBEDDINGS-003,Graph Neural Networks,GraphSAGE,IMPL,TestCANARY_ML_EMBEDDINGS_003_GraphSAGE,,ml,2025-10-05,src/ml/graph_embeddings.zig
@@ -2263,6 +2266,8 @@ REQ-VECTOR-INDEX-POPULATION-001,Vector Index Population,VectorIndexPopulation,TE
 REQ-VECTOR-INDEX-POPULATION-002,Vector Index Population,PropertyValueIntegration,TESTED,TestCANARY_REQ_VECTOR_INDEX_POPULATION_002_PropertyValueSwitch,,index,2025-10-05,tests/test_vector_index_population.zig
 REQ-VECTOR-INDEX-POPULATION-003,Vector Index Population,JSONSerialization,TESTED,TestCANARY_REQ_VECTOR_INDEX_POPULATION_003_JSONFormat,,index,2025-10-05,tests/test_vector_index_population.zig
 REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001,Vector Index Population Integration,IntegrationTesting,IMPL,TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001,,claude,2025-01-05,tests/test_vector_index_population_integration.zig
+REQ-WAL-HEX-001,SecureWalHexKeyParsing,SECURITY,IMPL,test_parseWalHexKey_valid|test_parseWalHexKey_invalid_char|test_parseWalHexKey_wrong_length,,security,2026-01-14,src/wal/wal.zig
+REQ-WAL-HEX-001,SecureWalHexKeyParsing,TESTING,TESTED,,,security,2026-01-14,src/wal/wal.zig
 REQ-WHERE-EVAL-001,WHERE Condition Evaluation,Filtering,IMPL,,,engine,2026-01-10,src/server/graph/exec.zig
 REQ-WITH-WHERE-001,WITH WHERE Filtering,QueryExecution,IMPL,,,engine,2026-01-10,src/server/graph/exec.zig
 REQ-XXX-NNN,Feature Name,Category,TESTED,TestName,,team,YYYY-MM-DD,CONTRIBUTING.md

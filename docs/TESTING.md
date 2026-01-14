@@ -73,8 +73,8 @@ test "example test" {
 ### 2. geodetestlab Framework
 Python-based integration testing framework using YAML specifications:
 - **Location**: `geodetestlab/specs/*.yml`
-- **Test Runner**: `geodetestlab/test_runner.py`
-- **Extended Runner**: `extended_test_runner.py`
+- **Test Runner**: `scripts/test/extended_test_runner.py`
+- **CANARY**: GAP-0157 - Updated to correct test runner path
 
 #### Test Specification Format
 ```yaml
@@ -163,13 +163,23 @@ Tests validate structured JSON output for machine-readable results:
 
 ## CI/CD Integration
 
-### GitHub Actions
+### GitLab CI
 ```yaml
-- name: Run Tests
-  run: |
-    make test
-    make integration-test
-    python extended_test_runner.py
+# See .gitlab-ci.yml for full pipeline configuration
+# CANARY: GAP-0158 - Updated from GitHub Actions to GitLab CI
+
+# Example jobs from .gitlab-ci.yml:
+test-zig-unit:
+  stage: test
+  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  script:
+    - zig build test --summary all
+
+governance-status-check:
+  stage: governance
+  script:
+    - python3 tools/status_generate.py --repo . --out /tmp/status_check.csv
+    - diff docs/status.csv /tmp/status_check.csv
 ```
 
 ### Docker Testing
@@ -284,8 +294,8 @@ GEODE_DEBUG=1 ./geode command
 
 #### 2. Check Server Logs
 ```bash
-# Enable JSON logging
-./geoded --log_json
+# Enable JSON logging (unified CLI - geoded symlink also works for backward compat)
+./zig-out/bin/geode serve --log_json
 
 # Capture server stderr
 GEODE_CAPTURE_SERVER_STDERR=1 ./run_tests.sh
@@ -297,7 +307,7 @@ GEODE_CAPTURE_SERVER_STDERR=1 ./run_tests.sh
 zig test src/specific_file.zig --test-filter "test name"
 
 # Run single geodetestlab spec
-python test_runner.py specs/specific_test.yml
+python3 scripts/test/extended_test_runner.py geodetestlab/specs/specific_test.yml
 
 # Run single regression test
 ./tests/specific_regression_test.sh

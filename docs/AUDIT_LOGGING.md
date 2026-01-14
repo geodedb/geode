@@ -40,11 +40,12 @@ Geode's audit stream is a canonical JSON Lines (JSONL) append-only log. Each rec
 
 ## Verification CLI
 
-Use `geode-audit verify` to validate an audit file:
+Use the unified `geode audit verify` subcommand to validate an audit file:
 
 ```bash
-zig build geode-audit
-zig-out/bin/geode-audit verify --file /var/log/geode/audit.jsonl --algo sha256 --pubkey $GEODE_AUDIT_PUB
+# CANARY: GAP-0159 - Updated to use unified CLI (geode audit verify)
+zig build
+./zig-out/bin/geode audit verify --file /var/log/geode/audit.jsonl --algo sha256 --pubkey $GEODE_AUDIT_PUB
 ```
 
 ### Verification Outputs

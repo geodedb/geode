@@ -208,8 +208,137 @@ test "diagnostics acceptance: codes presence" {
     try std.testing.expectEqualStrings("TypeMismatch", d.codeName(.TypeMismatch));
 }
 
-// TODO: Pagination orderedness legality is a planner/runtime check.
-// Add integration tests when planner properties and ORDER propagation exist.
+// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-14
+// GAP-0161: Pagination orderedness legality is now implemented as a planner/runtime check.
+// See planner.zig:222-225 (OffsetPushdownRequiresOrder), query_executor.zig:471-494 (diagnostics)
+
+test "pagination orderedness legality US001: OFFSET without ORDER rejected" {
+    // Test that OFFSET without ORDER BY produces US001 diagnostic via planner
+    const planner = lib.planner;
+    const allocator = std.testing.allocator;
+
+    // Parse a query with OFFSET but no ORDER BY
+    const src = "MATCH (n) RETURN n OFFSET 5";
+    var result = try lib.parse(allocator, src, .{});
+    defer result.deinit();
+
+    try std.testing.expect(result.program.statements.len == 1);
+    const st = result.program.statements[0];
+    switch (st) {
+        .Query => |q| {
+            // Verify OFFSET is present but ORDER BY is absent
+            try std.testing.expect(q.offset != null);
+            try std.testing.expect(q.order_by == null);
+
+            // Planner should reject this with OffsetPushdownRequiresOrder when pushdown attempted
+            const plan_result = planner.planQuery(allocator, q, .{ .attempt_pushdown = true });
+            try std.testing.expectError(planner.PlanError.OffsetPushdownRequiresOrder, plan_result);
+        },
+        else => return error.Unexpected,
+    }
+}
+
+test "pagination orderedness legality US001: OFFSET with ORDER allowed" {
+    // Test that OFFSET with ORDER BY is allowed
+    const planner = lib.planner;
+    const allocator = std.testing.allocator;
+
+    const src = "MATCH (n) RETURN n ORDER BY n.x OFFSET 5";
+    var result = try lib.parse(allocator, src, .{});
+    defer result.deinit();
+
+    try std.testing.expect(result.program.statements.len == 1);
+    const st = result.program.statements[0];
+    switch (st) {
+        .Query => |q| {
+            // Verify both OFFSET and ORDER BY are present
+            try std.testing.expect(q.offset != null);
+            try std.testing.expect(q.order_by != null);
+
+            // Planner should accept this
+            const plan = try planner.planQuery(allocator, q, .{ .attempt_pushdown = true });
+            try std.testing.expect(plan.ordered);
+        },
+        else => return error.Unexpected,
+    }
+}
+
+test "pagination orderedness legality US001: LIMIT alone allowed without ORDER" {
+    // Test that LIMIT without ORDER BY is allowed (only OFFSET requires ORDER BY)
+    const planner = lib.planner;
+    const allocator = std.testing.allocator;
+
+    const src = "MATCH (n) RETURN n LIMIT 10";
+    var result = try lib.parse(allocator, src, .{});
+    defer result.deinit();
+
+    try std.testing.expect(result.program.statements.len == 1);
+    const st = result.program.statements[0];
+    switch (st) {
+        .Query => |q| {
+            // Verify LIMIT is present but ORDER BY is absent
+            try std.testing.expect(q.limit != null);
+            try std.testing.expect(q.order_by == null);
+            try std.testing.expect(q.offset == null);
+
+            // Planner should accept LIMIT without ORDER BY (no OFFSET)
+            const plan = try planner.planQuery(allocator, q, .{ .attempt_pushdown = true });
+            try std.testing.expect(!plan.ordered);
+        },
+        else => return error.Unexpected,
+    }
+}
+
+test "pagination orderedness legality US001: LIMIT+OFFSET without ORDER rejected" {
+    // Test that LIMIT+OFFSET without ORDER BY produces rejection
+    const planner = lib.planner;
+    const allocator = std.testing.allocator;
+
+    const src = "MATCH (n) RETURN n LIMIT 10 OFFSET 5";
+    var result = try lib.parse(allocator, src, .{});
+    defer result.deinit();
+
+    try std.testing.expect(result.program.statements.len == 1);
+    const st = result.program.statements[0];
+    switch (st) {
+        .Query => |q| {
+            // Verify both LIMIT and OFFSET are present but ORDER BY is absent
+            try std.testing.expect(q.limit != null);
+            try std.testing.expect(q.offset != null);
+            try std.testing.expect(q.order_by == null);
+
+            // Planner should reject this
+            const plan_result = planner.planQuery(allocator, q, .{ .attempt_pushdown = true });
+            try std.testing.expectError(planner.PlanError.OffsetPushdownRequiresOrder, plan_result);
+        },
+        else => return error.Unexpected,
+    }
+}
+
+test "pagination orderedness legality US001: SKIP alias parses to offset" {
+    // Test that SKIP (alias for OFFSET) parses correctly and produces offset
+    const planner = lib.planner;
+    const allocator = std.testing.allocator;
+
+    const src = "MATCH (n) RETURN n SKIP 10";
+    var result = try lib.parse(allocator, src, .{});
+    defer result.deinit();
+
+    try std.testing.expect(result.program.statements.len == 1);
+    const st = result.program.statements[0];
+    switch (st) {
+        .Query => |q| {
+            // Verify SKIP parsed to offset and ORDER BY is absent
+            try std.testing.expect(q.offset != null);
+            try std.testing.expect(q.order_by == null);
+
+            // Planner should reject this due to unordered pagination
+            const plan_result = planner.planQuery(allocator, q, .{ .attempt_pushdown = true });
+            try std.testing.expectError(planner.PlanError.OffsetPushdownRequiresOrder, plan_result);
+        },
+        else => return error.Unexpected,
+    }
+}
 
 test "ORDER BY with ASC and DESC per key" {
     const src = "MATCH (n)-[r]->(m) RETURN n ORDER BY name ASC, id DESC";

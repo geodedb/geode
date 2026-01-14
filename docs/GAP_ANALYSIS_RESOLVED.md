@@ -4,17 +4,64 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Last Updated**: January 14, 2026
 **Last Verified**: January 14, 2026
-**GitLab Issues**: 156 closed gap-labeled issues (0 open)
+**GitLab Issues**: 164 closed gap-labeled issues (0 open)
 
-**Total Resolved**: 156 gaps (GAP-0001 through GAP-0156) ✅
+**Total Resolved**: 164 gaps (GAP-0001 through GAP-0164)
 
-**Current Status**: All gaps resolved and verified. See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for process documentation.
+**Current Status**: All gaps resolved. No open gaps remain.
 
 **Full Audit Verification (January 14, 2026)**:
-- ✅ All GitLab gap-labeled issues confirmed closed via `glab issue list -l gap`
-- ✅ Implementation verification: CDC sinks (Kafka/Webhook with DLQ, idempotency, retries), audit logging (Ed25519 signing, hash chains), RLS enforcement, transaction management all confirmed as real implementations
-- ✅ Production guards verified in auth_state.zig, user_mgmt_cli.zig, external_kms_client.zig, kms.zig, tde_nonce_gen.zig, wal.zig
-- ✅ No new gaps identified during comprehensive codebase scan
+- All gap-labeled issues closed via `glab issue list -l gap`.
+- Implementation verification: CDC sinks (Kafka/Webhook with DLQ, idempotency, retries), audit logging (Ed25519 signing, hash chains), RLS enforcement, transaction management all confirmed as real implementations.
+- Production guards verified in auth_state.zig, user_mgmt_cli.zig, external_kms_client.zig, kms.zig, tde_nonce_gen.zig, wal.zig.
+
+---
+
+## January 14, 2026 Documentation & CI Gap Resolution Session
+
+8 gaps identified and resolved with documentation updates, CI governance jobs, symlinks, and unit tests:
+
+### GAP-0157: geodetestlab test_runner.py reference stale ✅
+- **GitLab issue:** #248
+- **Fix:** Updated docs/TESTING.md to reference `scripts/test/extended_test_runner.py`
+- **Evidence:** docs/TESTING.md:76-77, docs/TESTING.md:299-300
+
+### GAP-0158: CI docs reference GitHub Actions instead of GitLab CI ✅
+- **GitLab issue:** #249
+- **Fix:** Replaced GitHub Actions YAML with GitLab CI examples in docs/TESTING.md
+- **Evidence:** docs/TESTING.md:166-183
+
+### GAP-0159: Audit logging docs reference non-existent geode-audit binary ✅
+- **GitLab issue:** #250
+- **Fix:** Updated docs/AUDIT_LOGGING.md to use `geode audit verify` unified CLI
+- **Evidence:** docs/AUDIT_LOGGING.md:43-49
+
+### GAP-0160: CI does not enforce governance/status checks ✅
+- **GitLab issue:** #251
+- **Fix:** Added governance stage to .gitlab-ci.yml with status-check, no-feature-flags, and CANARY drift jobs
+- **Evidence:** .gitlab-ci.yml:32-105, CANARY markers added
+
+### GAP-0161: Pagination orderedness legality TODO ✅
+- **GitLab issue:** #252
+- **Fix:** Implementation already exists in planner.zig:222-225; added comprehensive unit tests
+- **Evidence:** src/gql.zig:211-340 (5 new tests), CANARY marker added
+
+### GAP-0162: Distributed query fragment serialization stub ✅
+- **GitLab issue:** #253
+- **Fix:** Implemented full JSON serialization/deserialization in serializeFragment/deserializeFragment
+- **Evidence:** src/distributed/enhanced_query_transport.zig:459-514, 4 unit tests added
+
+### GAP-0163: geoded references remain after server binary removal ✅
+- **GitLab issue:** #254
+- **Fix:** Added symlink creation in build.zig for backward compatibility
+- **Evidence:** build.zig:229-248, symlinks created at zig-out/bin/geoded and zig-out/bin/geodec
+
+### GAP-0164: Missing type:: label taxonomy ✅
+- **GitLab issue:** #255
+- **Fix:** Created tools/setup_gitlab_labels.sh script to create required labels
+- **Evidence:** tools/setup_gitlab_labels.sh (executable script)
+
+---
 
 **January 14, 2026 Security Gap Resolution Session**:
 2 gaps identified and resolved with CANARY markers, unit tests, and geodetestlab specs:

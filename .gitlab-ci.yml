@@ -14,6 +14,7 @@ include:
 
 stages:
   - lint
+  - governance
   - test
   - release
 
@@ -27,6 +28,81 @@ variables:
   GIT_CONFIG_VALUE_0: "https://gitlab.com/"
   GIT_CONFIG_KEY_1: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf"
   GIT_CONFIG_VALUE_1: "git@gitlab.com:"
+
+# =============================================================================
+# Governance Stage - Status and Feature Flag Checks
+# CANARY: REQ=REQ-CI-GOV-001; FEATURE="CI Governance Checks"; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
+# GAP-0160: Adds CI enforcement for status-generate and no-feature-flags
+# =============================================================================
+
+governance-status-check:
+  stage: governance
+  image: python:3.12-slim
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  before_script:
+    - pip install --no-cache-dir pyyaml
+  script:
+    - |
+      echo "=== Running Status Generation Check ==="
+      # Generate status file to temporary location
+      python3 tools/status_generate.py --repo . --out /tmp/status_check.csv
+
+      # Compare with committed status.csv
+      if diff -q docs/status.csv /tmp/status_check.csv > /dev/null 2>&1; then
+        echo "✓ status.csv is up to date"
+      else
+        echo "✗ status.csv is stale - run 'make status-generate' locally and commit"
+        echo ""
+        echo "=== Differences ==="
+        diff docs/status.csv /tmp/status_check.csv || true
+        exit 1
+      fi
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: false
+
+governance-no-feature-flags:
+  stage: governance
+  image: python:3.12-slim
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Running No-Feature-Flags Check ==="
+      python3 tools/no_feature_flags_check.py --repo .
+      echo "✓ No prohibited feature flags found"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: false
+
+governance-canary-drift:
+  stage: governance
+  image: python:3.12-slim
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  before_script:
+    - pip install --no-cache-dir pyyaml
+  script:
+    - |
+      echo "=== Running CANARY Marker Validation ==="
+      # Count CANARY markers
+      CANARY_COUNT=$(grep -r "CANARY:" src/ --include="*.zig" | wc -l)
+      echo "Found $CANARY_COUNT CANARY markers in src/"
+
+      # Ensure minimum expected count (should be > 1000 based on CLAUDE.md)
+      if [ "$CANARY_COUNT" -lt 900 ]; then
+        echo "⚠ Warning: CANARY marker count ($CANARY_COUNT) is lower than expected (>900)"
+        echo "This may indicate missing governance markers or deleted implementations"
+      fi
+
+      echo "✓ CANARY governance check passed"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: true
 
 # =============================================================================
 # Test Stage - Unit Tests

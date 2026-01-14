@@ -32,14 +32,14 @@ fn run_server(args: []const []const u8) !struct { child: Child } {
 test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
     const allocator = std.testing.allocator;
     // Start server on a random-ish port 17657
-    var server = try run_server(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:17657", "--log_json", "--result-format", "json", "--test-exit-after-first-request" });
+    var server = try run_server(&.{ ""./zig-out/bin/geode", "serve"", "--listen-quic", "127.0.0.1:17657", "--log_json", "--result-format", "json", "--test-exit-after-first-request" });
     defer {
         _ = server.child.kill() catch {};
     }
     // Give server a moment
     std.Thread.sleep(200 * std.time.ns_per_ms);
 
-    const res = try run(&.{ "./zig-out/bin/geodec", "MATCH (n) RETURN 1 AS x ORDER BY x LIMIT 1", "--server", "127.0.0.1:17657", "--format", "json" });
+    const res = try run(&.{ ""./zig-out/bin/geode", "query"", "MATCH (n) RETURN 1 AS x ORDER BY x LIMIT 1", "--server", "127.0.0.1:17657", "--format", "json" });
     defer allocator.free(res.out);
     defer allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
@@ -53,13 +53,13 @@ test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
 // CANARY: REQ=REQ-GQL-010; FEATURE="Pagination Legality (US001)"; ASPECT=Execution_QUIC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_MatchUnorderedPaginationReject_QUIC; OWNER=planner; UPDATED=2025-09-24
 test "protocol QUIC: MATCH LIMIT+OFFSET without ORDER (US001)" {
     const allocator = std.testing.allocator;
-    var server = try run_server(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:17658", "--log_json", "--result-format", "json", "--test-exit-after-first-request" });
+    var server = try run_server(&.{ ""./zig-out/bin/geode", "serve"", "--listen-quic", "127.0.0.1:17658", "--log_json", "--result-format", "json", "--test-exit-after-first-request" });
     defer {
         _ = server.child.kill() catch {};
     }
     std.Thread.sleep(200 * std.time.ns_per_ms);
 
-    const res = try run(&.{ "./zig-out/bin/geodec", "MATCH (n) RETURN 1 LIMIT 10 OFFSET 5", "--server", "127.0.0.1:17658", "--format", "json" });
+    const res = try run(&.{ ""./zig-out/bin/geode", "query"", "MATCH (n) RETURN 1 LIMIT 10 OFFSET 5", "--server", "127.0.0.1:17658", "--format", "json" });
     defer allocator.free(res.out);
     defer allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 2), res.code);
@@ -71,19 +71,19 @@ test "protocol QUIC: MATCH LIMIT+OFFSET without ORDER (US001)" {
 // CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH null-preserve"; ASPECT=ProtocolE2E_QUIC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_OptionalMatchNullPreserve_QUIC; OWNER=engine; UPDATED=2025-09-24
 test "protocol QUIC: OPTIONAL MATCH null-preserving semantics" {
     const allocator = std.testing.allocator;
-    var server = try run_server(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:17659", "--log_json", "--result-format", "json" });
+    var server = try run_server(&.{ ""./zig-out/bin/geode", "serve"", "--listen-quic", "127.0.0.1:17659", "--log_json", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }
     std.Thread.sleep(250 * std.time.ns_per_ms);
 
     // Use sample graph seeded in server; query should return at least one row with null right side when pattern not found
-    const res = try run(&.{ "./zig-out/bin/geodec", "MATCH (n:Nonexistent) OPTIONAL MATCH (n)-[r:KNOWS]->(m:Person) RETURN n, m", "--server", "127.0.0.1:17659", "--format", "json" });
+    const res = try run(&.{ ""./zig-out/bin/geode", "query"", "MATCH (n:Nonexistent) OPTIONAL MATCH (n)-[r:KNOWS]->(m:Person) RETURN n, m", "--server", "127.0.0.1:17659", "--format", "json" });
     defer allocator.free(res.out);
     defer allocator.free(res.err);
     // Since left side finds zero, overall may produce zero rows; switch to a pattern that finds left but no right edge in seed
     if (res.code != 0 or std.mem.indexOf(u8, res.out, "\"rows\":[") == null) {
-        const res2 = try run(&.{ "./zig-out/bin/geodec", "MATCH (n:Person {name: 'Alice'}) OPTIONAL MATCH (n)-[r:LIKES]->(m:Person) RETURN n.name, m.name", "--server", "127.0.0.1:17659", "--format", "json" });
+        const res2 = try run(&.{ ""./zig-out/bin/geode", "query"", "MATCH (n:Person {name: 'Alice'}) OPTIONAL MATCH (n)-[r:LIKES]->(m:Person) RETURN n.name, m.name", "--server", "127.0.0.1:17659", "--format", "json" });
         defer allocator.free(res2.out);
         defer allocator.free(res2.err);
         try std.testing.expectEqual(@as(i32, 0), res2.code);

@@ -226,6 +226,27 @@ pub fn build(b: *std.Build) void {
     }
     b.installArtifact(geode_exe);
 
+    // CANARY: REQ=REQ-CLI-COMPAT-001; FEATURE="Legacy Binary Symlinks"; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+    // GAP-0163: Add geoded and geodec symlinks for backward compatibility with tests/docs
+    // This allows existing tests and documentation referencing geoded/geodec to continue working
+    // Create symlinks on Unix-like systems; on Windows, copy the executable
+    if (target.result.os.tag != .windows) {
+        const create_geoded_symlink = b.addSystemCommand(&.{ "ln", "-sf", "geode", "zig-out/bin/geoded" });
+        create_geoded_symlink.step.dependOn(&geode_exe.step);
+        b.getInstallStep().dependOn(&create_geoded_symlink.step);
+
+        const create_geodec_symlink = b.addSystemCommand(&.{ "ln", "-sf", "geode", "zig-out/bin/geodec" });
+        create_geodec_symlink.step.dependOn(&geode_exe.step);
+        b.getInstallStep().dependOn(&create_geodec_symlink.step);
+    } else {
+        // On Windows, we can't create symlinks easily without admin, so copy instead
+        const copy_geoded = b.addInstallFile(geode_exe.getEmittedBin(), "bin/geoded.exe");
+        b.getInstallStep().dependOn(&copy_geoded.step);
+
+        const copy_geodec = b.addInstallFile(geode_exe.getEmittedBin(), "bin/geodec.exe");
+        b.getInstallStep().dependOn(&copy_geodec.step);
+    }
+
     // Remove legacy wire binary build and install (deprecated)
 
     const gql_exe = b.addExecutable(.{
