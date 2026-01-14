@@ -5,6 +5,8 @@ const auth_state = geode.auth_state;
 
 // CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
 // GAP-0154 FIX: Production builds require explicit passwords or generate random ones
+// CANARY: REQ=REQ-MFA-OUTPUT-001; FEATURE="MFASecureOutput"; ASPECT=Security; STATUS=IMPL; TEST=gap_155_156_regression.yml; OWNER=cli; UPDATED=2026-01-14
+// GAP-0156 FIX: MFA toggle command no longer displays hardcoded fake secret
 
 /// Check if running in production build mode
 const is_production_build = builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSmall;
@@ -408,6 +410,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
+    // CANARY: REQ=REQ-MFA-TOGGLE-001; FEATURE="MFAToggleSecure"; ASPECT=Security; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+    // GAP-0156 FIX: Remove hardcoded "Secret: 123456" from MFA toggle output
     if (std.mem.eql(u8, subcommand, "mfa")) {
         // Support: geode user mfa enable <username>
         if (subcmd_idx + 2 >= argv.len) {
@@ -426,7 +430,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
         try state.save();
-        printOut("MFA {s} for {s}. Secret: 123456\n", .{ if (enable) "enabled" else "disabled", username });
+        // GAP-0156 FIX: Do not display fake/hardcoded MFA secret
+        // Users should use 'mfa-setup' command for initial MFA configuration with real secret
+        if (enable) {
+            printOut("MFA enabled for {s}. Use 'mfa-setup' to configure MFA with a real secret.\n", .{username});
+        } else {
+            printOut("MFA disabled for {s}.\n", .{username});
+        }
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 

@@ -6,6 +6,35 @@ const storage = @import("storage_page_manager");
 const fsync_util = @import("fs_fsync");
 const commit_coord = @import("commit_coordinator");
 
+// CANARY: REQ=REQ-WAL-HEX-001; FEATURE="SecureWalHexKeyParsing"; ASPECT=SECURITY; STATUS=IMPL; TEST=test_parseWalHexKey_valid|test_parseWalHexKey_invalid_char|test_parseWalHexKey_wrong_length; OWNER=security; UPDATED=2026-01-14
+// GAP-0155 SECURITY FIX: Proper error handling for WAL encryption key hex parsing instead of silent catch 0
+
+/// Parse a 64-character hex string into a 32-byte key with proper error handling.
+/// GAP-0155: Replaces unsafe `catch 0` pattern that could corrupt encryption keys.
+/// Returns error.InvalidWalKeyLength if the hex string is not exactly 64 characters.
+/// Returns error.InvalidWalKeyHex if any character is not a valid hex digit.
+pub fn parseWalHexKey(hex_str: []const u8) ![32]u8 {
+    if (hex_str.len != 64) {
+        std.log.err("SECURITY ERROR: GEODE_DISK_KEY_HEX must be exactly 64 hex characters (32 bytes), got {d}", .{hex_str.len});
+        return error.InvalidWalKeyLength;
+    }
+
+    var key: [32]u8 = undefined;
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        const hi = std.fmt.charToDigit(hex_str[i * 2], 16) catch {
+            std.log.err("SECURITY ERROR: Invalid hex character '{c}' at position {d} in GEODE_DISK_KEY_HEX", .{ hex_str[i * 2], i * 2 });
+            return error.InvalidWalKeyHex;
+        };
+        const lo = std.fmt.charToDigit(hex_str[i * 2 + 1], 16) catch {
+            std.log.err("SECURITY ERROR: Invalid hex character '{c}' at position {d} in GEODE_DISK_KEY_HEX", .{ hex_str[i * 2 + 1], i * 2 + 1 });
+            return error.InvalidWalKeyHex;
+        };
+        key[i] = @as(u8, @intCast(hi * 16 + lo));
+    }
+    return key;
+}
+
 // WAL encryption wrapper: AES-256-GCM per record (nonce: 12 bytes derived from LSN + payload len).
 // Layout when encrypted: [nonce(12)][tag(16)][ciphertext]. Header payload length = 28 + plaintext_len.
 // CANARY: REQ=REQ-GQL-TDE-002; FEATURE="WAL encryption"; ASPECT=STORAGE; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_002_WalEncryptionRoundTrip; OWNER=security; UPDATED=2025-09-27
@@ -122,6 +151,7 @@ pub const Wal = struct {
         return .{ .allocator = allocator, .buf = list };
     }
 
+    // GAP-0155 FIX: Updated to use parseWalHexKey with proper error handling
     fn loadEncConfig(self: *Wal) void {
         self.enc_enabled = false;
         if (std.process.getEnvVarOwned(self.allocator, "GEODE_WAL_ENCRYPTION")) |v| {
@@ -135,17 +165,23 @@ pub const Wal = struct {
         }
         if (self.enc_enabled) {
             const hex = std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_KEY_HEX") catch null;
-            if (hex == null or hex.?.len != 64) {
+            if (hex == null) {
+                std.log.err("SECURITY ERROR: GEODE_DISK_KEY_HEX not set but encryption enabled. Disabling WAL encryption.", .{});
                 self.enc_enabled = false;
-            } else {
-                defer self.allocator.free(hex.?);
-                var master: [32]u8 = undefined;
-                var i: usize = 0;
-                while (i < 32) : (i += 1) master[i] = std.fmt.parseInt(u8, hex.?[i * 2 .. i * 2 + 2], 16) catch 0;
-                const tde = @import("tde_hierarchy");
-                const kh = tde.KeyHierarchy.init(master);
-                self.enc_key = kh.wal_key;
+                return;
             }
+            defer self.allocator.free(hex.?);
+
+            // GAP-0155 FIX: Use parseWalHexKey with proper error handling instead of catch 0
+            const master = parseWalHexKey(hex.?) catch |err| {
+                std.log.err("SECURITY ERROR: Failed to parse GEODE_DISK_KEY_HEX: {any}. Disabling WAL encryption.", .{err});
+                self.enc_enabled = false;
+                return;
+            };
+
+            const tde = @import("tde_hierarchy");
+            const kh = tde.KeyHierarchy.init(master);
+            self.enc_key = kh.wal_key;
         }
     }
 
@@ -838,3 +874,89 @@ pub const WalIter = struct {
         return r;
     }
 };
+
+// =============================================================================
+// Unit Tests for GAP-0155: Secure WAL Hex Key Parsing
+// CANARY: REQ=REQ-WAL-HEX-001; FEATURE="SecureWalHexKeyParsing"; ASPECT=TESTING; STATUS=TESTED; OWNER=security; UPDATED=2026-01-14
+// =============================================================================
+
+test "test_parseWalHexKey_valid" {
+    // Valid 64-character lowercase hex string
+    const valid_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const key = try parseWalHexKey(valid_hex);
+    try std.testing.expectEqual(@as(u8, 0x01), key[0]);
+    try std.testing.expectEqual(@as(u8, 0x23), key[1]);
+    try std.testing.expectEqual(@as(u8, 0x45), key[2]);
+    try std.testing.expectEqual(@as(u8, 0x67), key[3]);
+    try std.testing.expectEqual(@as(u8, 0xef), key[31]);
+}
+
+test "test_parseWalHexKey_valid_uppercase" {
+    // Valid 64-character uppercase hex string
+    const valid_hex = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+    const key = try parseWalHexKey(valid_hex);
+    try std.testing.expectEqual(@as(u8, 0x01), key[0]);
+    try std.testing.expectEqual(@as(u8, 0xAB), key[5]);
+    try std.testing.expectEqual(@as(u8, 0xEF), key[31]);
+}
+
+test "test_parseWalHexKey_valid_mixed_case" {
+    // Valid 64-character mixed case hex string
+    const valid_hex = "0123456789AbCdEf0123456789aBcDeF0123456789AbCdEf0123456789aBcDeF";
+    const key = try parseWalHexKey(valid_hex);
+    try std.testing.expectEqual(@as(u8, 0x01), key[0]);
+    try std.testing.expectEqual(@as(u8, 0xAB), key[5]);
+}
+
+test "test_parseWalHexKey_invalid_char" {
+    // Invalid hex character 'g'
+    const invalid_hex = "0123456789abcdef0123456789abcdefg123456789abcdef0123456789abcdef";
+    const result = parseWalHexKey(invalid_hex);
+    try std.testing.expectError(error.InvalidWalKeyHex, result);
+}
+
+test "test_parseWalHexKey_invalid_char_space" {
+    // Invalid hex character ' ' (space)
+    const invalid_hex = "0123456789abcdef0123456789abcdef 123456789abcdef0123456789abcdef";
+    const result = parseWalHexKey(invalid_hex);
+    try std.testing.expectError(error.InvalidWalKeyHex, result);
+}
+
+test "test_parseWalHexKey_wrong_length_short" {
+    // Too short (63 characters)
+    const short_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde";
+    const result = parseWalHexKey(short_hex);
+    try std.testing.expectError(error.InvalidWalKeyLength, result);
+}
+
+test "test_parseWalHexKey_wrong_length_long" {
+    // Too long (65 characters)
+    const long_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0";
+    const result = parseWalHexKey(long_hex);
+    try std.testing.expectError(error.InvalidWalKeyLength, result);
+}
+
+test "test_parseWalHexKey_empty" {
+    // Empty string
+    const empty_hex = "";
+    const result = parseWalHexKey(empty_hex);
+    try std.testing.expectError(error.InvalidWalKeyLength, result);
+}
+
+test "test_parseWalHexKey_all_zeros" {
+    // All zeros - valid but weak key
+    const zero_hex = "0000000000000000000000000000000000000000000000000000000000000000";
+    const key = try parseWalHexKey(zero_hex);
+    for (key) |byte| {
+        try std.testing.expectEqual(@as(u8, 0), byte);
+    }
+}
+
+test "test_parseWalHexKey_all_ff" {
+    // All 0xFF - valid key
+    const ff_hex = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    const key = try parseWalHexKey(ff_hex);
+    for (key) |byte| {
+        try std.testing.expectEqual(@as(u8, 0xFF), byte);
+    }
+}

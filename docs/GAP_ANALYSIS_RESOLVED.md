@@ -2,19 +2,33 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 13, 2026
-**Last Verified**: January 13, 2026
-**GitLab Issues**: 154 closed gap-labeled issues (0 open)
+**Last Updated**: January 14, 2026
+**Last Verified**: January 14, 2026
+**GitLab Issues**: 156 closed gap-labeled issues (0 open)
 
-**Total Resolved**: 154 gaps (GAP-0001 through GAP-0154) ✅
+**Total Resolved**: 156 gaps (GAP-0001 through GAP-0156) ✅
 
 **Current Status**: All gaps resolved and verified. See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for process documentation.
 
-**Full Audit Verification (January 13, 2026)**:
+**Full Audit Verification (January 14, 2026)**:
 - ✅ All GitLab gap-labeled issues confirmed closed via `glab issue list -l gap`
 - ✅ Implementation verification: CDC sinks (Kafka/Webhook with DLQ, idempotency, retries), audit logging (Ed25519 signing, hash chains), RLS enforcement, transaction management all confirmed as real implementations
-- ✅ Production guards verified in auth_state.zig, user_mgmt_cli.zig, external_kms_client.zig, kms.zig, tde_nonce_gen.zig
+- ✅ Production guards verified in auth_state.zig, user_mgmt_cli.zig, external_kms_client.zig, kms.zig, tde_nonce_gen.zig, wal.zig
 - ✅ No new gaps identified during comprehensive codebase scan
+
+**January 14, 2026 Security Gap Resolution Session**:
+2 gaps identified and resolved with CANARY markers, unit tests, and geodetestlab specs:
+- #237 (GAP-0155) - WAL Hex Key catch 0 → **parseWalHexKey() with proper error handling** ✅
+- #238 (GAP-0156) - MFA Hardcoded Secret → **Removed fake "123456" from MFA toggle output** ✅
+
+**Evidence**:
+- `src/wal/wal.zig`: Added `parseWalHexKey()` function with proper error handling (lines 10-35)
+- `src/wal/wal.zig`: Updated `loadEncConfig()` to use parseWalHexKey with error handling (lines 162-182)
+- `src/wal/wal.zig`: Added 11 unit tests for hex key parsing validation
+- `src/cli/user_mgmt_cli.zig`: Updated MFA toggle output to not display hardcoded secret (lines 438-447)
+- `geodetestlab/specs/gap_155_156_regression.yml`: 9 regression tests (all passing)
+
+---
 
 **January 13, 2026 Password Security Gap Resolution Session**:
 2 gaps identified and resolved with CANARY markers, production guards, and comprehensive geodetestlab tests:
