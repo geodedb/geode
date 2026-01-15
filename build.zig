@@ -230,12 +230,14 @@ pub fn build(b: *std.Build) void {
     // GAP-0163: Add geoded and geodec symlinks for backward compatibility with tests/docs
     // This allows existing tests and documentation referencing geoded/geodec to continue working
     // Create symlinks on Unix-like systems; on Windows, copy the executable
+    // NOTE: Use dynamic install path to support cross-compilation with custom prefixes
     if (target.result.os.tag != .windows) {
-        const create_geoded_symlink = b.addSystemCommand(&.{ "ln", "-sf", "geode", "zig-out/bin/geoded" });
+        const bin_path = b.getInstallPath(.bin, "");
+        const create_geoded_symlink = b.addSystemCommand(&.{ "ln", "-sf", "geode", b.fmt("{s}/geoded", .{bin_path}) });
         create_geoded_symlink.step.dependOn(&geode_exe.step);
         b.getInstallStep().dependOn(&create_geoded_symlink.step);
 
-        const create_geodec_symlink = b.addSystemCommand(&.{ "ln", "-sf", "geode", "zig-out/bin/geodec" });
+        const create_geodec_symlink = b.addSystemCommand(&.{ "ln", "-sf", "geode", b.fmt("{s}/geodec", .{bin_path}) });
         create_geodec_symlink.step.dependOn(&geode_exe.step);
         b.getInstallStep().dependOn(&create_geodec_symlink.step);
     } else {
