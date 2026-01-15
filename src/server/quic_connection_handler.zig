@@ -372,9 +372,10 @@ pub fn processMessage(
                                     graph_storage_mgr.dropGraphStorage(gpa, dg.name, dg.if_exists) catch {};
                                 },
                                 .Query => |q| {
+                                    // CANARY: REQ=REQ-QUIC-CATALOG-001; FEATURE="QUICCatalogSingleton"; ASPECT=SideEffectQuery; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-14
+                                    // GAP-0180 FIX: Use shared global catalog singleton instead of local stub
                                     // Execute query for side effects (CREATE/INSERT within query)
-                                    const catalog_stub = execution.initCatalog(gpa, ".") catch continue;
-                                    defer catalog_stub.deinit();
+                                    const catalog_instance = execution.ensureCatalogInstance(gpa) catch continue;
                                     var session_state = execution.SessionState.init(gpa);
                                     session_state.graph = state.current_graph;
                                     defer {
@@ -382,7 +383,7 @@ pub fn processMessage(
                                         session_state.deinit();
                                     }
                                     const context = execution.ExecutionContext{
-                                        .catalog = @constCast(&catalog_stub),
+                                        .catalog = catalog_instance,
                                         .user = state.authenticated_user,
                                         .role = state.authenticated_role,
                                         .session_state = &session_state,
@@ -469,11 +470,12 @@ pub fn processMessage(
                                 }
                             }
 
+                            // CANARY: REQ=REQ-QUIC-CATALOG-002; FEATURE="QUICCatalogSingleton"; ASPECT=MainQueryExec; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-14
+                            // GAP-0180 FIX: Use shared global catalog singleton for all QUIC query execution
                             // Use new modular execution path for ALL queries (with parameter support)
                             const rows = blk: {
-                                // Get global catalog (stub for now - will need proper initialization)
-                                const catalog_stub = execution.initCatalog(gpa, ".") catch unreachable;
-                                defer catalog_stub.deinit();
+                                // Get global catalog singleton - shared across all QUIC connections
+                                const catalog_instance = execution.ensureCatalogInstance(gpa) catch unreachable;
 
                                 // Extract first row of parameters (most queries have single parameter row)
                                 const param_values = if (pr.len > 0) pr[0] else &[_]eval.Value{};
@@ -491,7 +493,7 @@ pub fn processMessage(
 
                                 // Create execution context with parameters, authentication state, and session state
                                 const context = execution.ExecutionContext{
-                                    .catalog = @constCast(&catalog_stub),
+                                    .catalog = catalog_instance,
                                     .query_param_names = pn,
                                     .query_param_values = param_values,
                                     .user = state.authenticated_user,

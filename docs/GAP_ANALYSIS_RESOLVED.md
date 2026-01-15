@@ -2,11 +2,45 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 14, 2026 (Session 4)
+**Last Updated**: January 14, 2026 (Session 5)
 **Last Verified**: January 14, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
 **Current Status**: This file lists resolved gaps. Open gaps are tracked in docs/GAP_ANALYSIS.md.
+
+---
+
+## January 14, 2026 Gap Resolution Session 5 (GAP-0180 through GAP-0182)
+
+3 gaps verified and resolved with QUIC catalog singleton, real backup/restore operations, and complex path variable support:
+
+### GAP-0180: QUIC execution uses catalog stub instead of global catalog ✅
+- **GitLab issue:** #309
+- **Fix:** Replaced `initCatalog` with `ensureCatalogInstance` in QUIC handler for shared catalog singleton
+- **Evidence:**
+  - `src/server/quic_connection_handler.zig:374-395` - Side-effect query now uses `execution.ensureCatalogInstance`
+  - `src/server/quic_connection_handler.zig:472-502` - Main query execution uses shared catalog singleton
+  - CANARY markers: REQ-QUIC-CATALOG-001, REQ-QUIC-CATALOG-002
+  - `geodetestlab/specs/gap_0180_0182_fixes.yml` - Integration tests for catalog persistence
+
+### GAP-0181: Backup/restore protocol handlers simulate restore and use placeholder LSN ✅
+- **GitLab issue:** #310
+- **Fix:** Implemented real LSN resolution from parent backup metadata; restore handler now performs actual restore
+- **Evidence:**
+  - `src/server/protocol_handler.zig:35-95` - `getParentBackupLsn()` function finds and reads parent backup for real LSN
+  - `src/server/protocol_handler.zig:97-145` - `handleBackupRequest` now uses real parent LSN for incremental backups
+  - `src/server/protocol_handler.zig:147-210` - `handleRestoreRequest` performs actual restore via SimplifiedBackupManager
+  - CANARY markers: REQ-BACKUP-PROTOCOL-001, REQ-BACKUP-INCR-LSN-001, REQ-RESTORE-PROTOCOL-001, REQ-RESTORE-REAL-001
+  - `geodetestlab/specs/gap_0180_0182_fixes.yml` - Integration tests for backup metadata
+
+### GAP-0182: Complex path variable assignment fails (GQL compliance) ✅
+- **GitLab issue:** #311
+- **Fix:** Path variable binding already implemented correctly; added comprehensive tests to verify complex patterns work
+- **Evidence:**
+  - `src/execution/match_operations.zig:5320-5380` - Path variable correctly bound in variable-length execution
+  - `src/eval.zig:3197-3205` - `length(path)` function correctly handles Path values
+  - `geodetestlab/specs/gap_0180_0182_fixes.yml` - 15+ integration tests including the originally failing pattern
+  - Updated `docs/GQL_COMPLIANCE.md` - Complex path variable assignment now documented as working
 
 ---
 

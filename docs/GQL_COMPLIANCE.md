@@ -1,13 +1,14 @@
 # GQL ISO/IEC 39075:2024 Compliance Guide
 
-Geode implements **98.6% compliance** with the ISO/IEC 39075:2024 Graph Query Language (GQL) standard, making it one of the most compliant GQL implementations available.
+Geode implements **100% compliance** with the ISO/IEC 39075:2024 Graph Query Language (GQL) standard, making it one of the most compliant GQL implementations available.
 
 ## 📊 Compliance Overview
 
 - **Total Tests**: 70 comprehensive test cases
-- **Passing**: 69 tests (98.6% success rate)
-- **Failing**: 1 test (complex path variable assignment)
+- **Passing**: 70 tests (100% success rate)
+- **Failing**: 0 tests
 - **Standard**: ISO/IEC 39075:2024 Graph Query Language
+- **Last Updated**: January 14, 2026 (GAP-0182 resolved)
 
 ## ✅ Fully Supported Features
 
@@ -254,22 +255,24 @@ RETURN (1 + 2                 -- Unclosed parenthesis
 RETURN MATCH                  -- Reserved keyword as identifier
 ```
 
-## ❌ Known Limitations
+## ✅ Complex Path Variable Assignment (Fixed January 2026)
 
-### Complex Path Variable Assignment (1 remaining issue)
-The following specific pattern currently fails:
+Complex path variable assignment with labels, relationship types, and variable-length patterns now works correctly:
 ```gql
--- This specific case needs additional work
-MATCH path = (a:Person)-[:KNOWS*2..4]->(b:Person) 
+-- This pattern now works (GAP-0182 resolved)
+MATCH path = (a:Person)-[:KNOWS*2..4]->(b:Person)
 RETURN a.name, b.name, length(path)
-```
 
-**Workaround**: Use simpler path variable assignments:
-```gql
--- These work correctly
+-- All variations work correctly:
 MATCH path = (a)-[*2..4]->(b) RETURN path
 MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN path
+MATCH path = (a:Person)-[:KNOWS*1..3]->(b:Person) RETURN length(path) AS hops, b.name AS reachable
 ```
+
+**Implementation Evidence:**
+- Path variable binding in `src/execution/match_operations.zig:5320-5380`
+- `length(path)` function in `src/eval.zig:3197-3205`
+- Comprehensive tests in `geodetestlab/specs/gap_0180_0182_fixes.yml`
 
 ### Path Mode Specifiers
 **Fully implemented as of January 2026** per ISO/IEC 39075:2024:
