@@ -2207,7 +2207,9 @@ const SimplifiedRestoreManager = struct {
         };
 
         // Restore catalog
-        const catalog_len = reader.readInt(u64, .little) catch return error.ReadError;
+        const catalog_len_raw = reader.readInt(u64, .little) catch return error.ReadError;
+        // Cast to usize for allocation (safe: catalog data must fit in addressable memory)
+        const catalog_len: usize = @intCast(catalog_len_raw);
         std.debug.print("RESTORE: Reading catalog ({d} bytes)...\n", .{catalog_len});
 
         const catalog_data = self.allocator.alloc(u8, catalog_len) catch return error.OutOfMemory;
