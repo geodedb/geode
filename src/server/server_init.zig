@@ -5,7 +5,7 @@ const storage_catalog = @import("storage_catalog");
 const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const index_catalog = @import("index_catalog.zig");
-// CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
 
@@ -21,7 +21,7 @@ pub const EnvironmentConfig = struct {
     spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     wal_compact_interval: usize = 5,
-    // CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement"; ASPECT=EnvConfig; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement"; ASPECT=EnvConfig; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Environment flag to enable ABAC enforcement
     abac_enabled: bool = false,
 };
@@ -34,13 +34,13 @@ pub const InitContext = struct {
     pm_persist: storage_pm.PageManager,
     catalog_inited: bool,
     catalog: storage_catalog.StorageCatalog,
-    // CANARY: REQ=REQ-ABAC-WIRE-006; FEATURE="ABAC Enforcement"; ASPECT=InitContext; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-ABAC-WIRE-006; FEATURE="ABAC Enforcement"; ASPECT=InitContext; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: SecurityManager instance for RBAC+ABAC enforcement across all connections
     security_manager: ?*geode_auth.SecurityManager = null,
     security_manager_storage: ?geode_auth.SecurityManager = null,
 
     pub fn deinit(self: *InitContext) void {
-        // CANARY: REQ=REQ-ABAC-WIRE-007; FEATURE="ABAC Enforcement"; ASPECT=Cleanup; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+        // CANARY: REQ=REQ-ABAC-WIRE-007; FEATURE="ABAC Enforcement"; ASPECT=Cleanup; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
         // GAP-0165: Clean up SecurityManager on server shutdown
         if (self.security_manager_storage) |*sm| {
             sm.deinit();
@@ -104,7 +104,7 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
             index_catalog.setDisableCatalog(true);
         }
 
-        // CANARY: REQ=REQ-ABAC-WIRE-008; FEATURE="ABAC Enforcement"; ASPECT=EnvVar; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+        // CANARY: REQ=REQ-ABAC-WIRE-008; FEATURE="ABAC Enforcement"; ASPECT=EnvVar; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
         // GAP-0165: Check for GEODE_ENABLE_ABAC environment variable to enable ABAC enforcement
         if (env.get("GEODE_ENABLE_ABAC")) |val| {
             config.abac_enabled = val.len > 0 and (val[0] == '1' or std.ascii.eqlIgnoreCase(val, "true"));
@@ -193,7 +193,7 @@ pub fn initializeStorage(
     };
 }
 
-// CANARY: REQ=REQ-ABAC-WIRE-009; FEATURE="ABAC Enforcement"; ASPECT=SecurityInit; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-009; FEATURE="ABAC Enforcement"; ASPECT=SecurityInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Initialize SecurityManager for RBAC+ABAC policy enforcement
 /// Initialize SecurityManager if ABAC is enabled
 pub fn initializeSecurityManager(allocator: std.mem.Allocator) !geode_auth.SecurityManager {
@@ -228,7 +228,7 @@ pub fn initialize(
     // Initialize persistent storage and catalog
     const storage = try initializeStorage(allocator, data_dir, catalog_create_name);
 
-    // CANARY: REQ=REQ-ABAC-WIRE-010; FEATURE="ABAC Enforcement"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-ABAC-WIRE-010; FEATURE="ABAC Enforcement"; ASPECT=ServerStartup; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Initialize SecurityManager at server startup if ABAC is enabled
     var ctx = InitContext{
         .wal = wal,

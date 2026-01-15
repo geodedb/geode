@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // Key Provider abstraction (skeleton) enabling pluggable key sources (static env, future KMS/HSM).
-// CANARY: REQ=REQ-GQL-TDE-003; FEATURE="Key provider abstraction"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_003_KeyProviderStatic; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-003; FEATURE="Key provider abstraction"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_003_KeyProviderStatic; OWNER=security; UPDATED=2026-01-15
 
 pub const ProviderType = enum {
     StaticEnv,
@@ -36,7 +36,7 @@ pub const Provider = struct {
 
 /// P2-3: Now accepts allocator parameter
 /// GAP-0141: Safe hex parsing with proper error handling
-/// CANARY: REQ=REQ-HEX-PARSE-KEYPROV-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+/// CANARY: REQ=REQ-HEX-PARSE-KEYPROV-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_key_rotation.zig; OWNER=security; UPDATED=2026-01-15
 fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
     const hex = std.process.getEnvVarOwned(allocator, "GEODE_DISK_KEY_HEX") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
@@ -74,7 +74,7 @@ fn derive(seed: u64, label: []const u8, out: *[32]u8) void {
 
 /// AES-256-GCM key wrapping (RFC 5116 compliant)
 /// Uses seed to derive a wrapping key via HKDF, then encrypts with AES-GCM
-/// CANARY: REQ=REQ-GQL-TDE-KEYWRAP-001; FEATURE="AES-GCM Key Wrapping"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+/// CANARY: REQ=REQ-GQL-TDE-KEYWRAP-001; FEATURE="AES-GCM Key Wrapping"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
 fn wrapKey(seed: u64, plain: [32]u8) [32]u8 {
     // Derive wrapping key from seed using HKDF-SHA256 (extract-then-expand)
     var wrap_key: [32]u8 = undefined;
@@ -99,7 +99,7 @@ fn wrapKey(seed: u64, plain: [32]u8) [32]u8 {
 }
 
 /// AES-256-GCM key unwrapping
-/// CANARY: REQ=REQ-GQL-TDE-KEYWRAP-002; FEATURE="AES-GCM Key Unwrapping"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+/// CANARY: REQ=REQ-GQL-TDE-KEYWRAP-002; FEATURE="AES-GCM Key Unwrapping"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
 fn unwrapKey(seed: u64, wrapped: [32]u8) [32]u8 {
     // Derive same wrapping key from seed using HKDF (extract-then-expand)
     var wrap_key: [32]u8 = undefined;
@@ -143,7 +143,7 @@ fn fetchMockKms(self: Provider) ?KeyMaterial {
 
 /// External KMS integration: generates cryptographically secure keys and wraps via KMS client
 /// Uses std.crypto.random for key generation (not deterministic PRNG)
-/// CANARY: REQ=REQ-GQL-TDE-EXTKS-001; FEATURE="External KMS with Crypto Random"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+/// CANARY: REQ=REQ-GQL-TDE-EXTKS-001; FEATURE="External KMS with Crypto Random"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
 fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     // Require explicit KMS endpoint configuration
     const endpoint = std.process.getEnvVarOwned(allocator, "GEODE_KMS_ENDPOINT") catch |e| switch (e) {
@@ -169,7 +169,7 @@ fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     var client = kms.Client.init(allocator, seed);
 
     // Generate cryptographically secure random keys using std.crypto.random
-    // CANARY: REQ=REQ-GQL-TDE-RANDOM-001; FEATURE="Cryptographic Key Generation"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    // CANARY: REQ=REQ-GQL-TDE-RANDOM-001; FEATURE="Cryptographic Key Generation"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
     var data_plain: [32]u8 = undefined;
     std.crypto.random.bytes(&data_plain);
     var wal_plain: [32]u8 = undefined;
@@ -195,9 +195,9 @@ fn deriveDigest(base: *const [32]u8, label: []const u8, out: *[32]u8) void {
     out.* = dig;
 }
 
-// CANARY: REQ=REQ-GQL-TDE-005; FEATURE="ExternalKmsStub"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_005_ExternalKmsStub; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-005; FEATURE="ExternalKmsStub"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_005_ExternalKmsStub; OWNER=security; UPDATED=2026-01-15
 
-// CANARY: REQ=REQ-GQL-TDE-004; FEATURE="MockKMSProvider"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_004_MockKMS; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-TDE-004; FEATURE="MockKMSProvider"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_004_MockKMS; OWNER=security; UPDATED=2026-01-15
 
 // Basic static env provider unit test placeholder (ensures graceful null when unset)
 // (Full CANARY test added via tests harness referencing this module.)

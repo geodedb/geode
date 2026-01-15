@@ -2,7 +2,7 @@ const std = @import("std");
 const rotation = @import("../src/security/key_rotation.zig");
 const kms = @import("../src/security/external_kms_client.zig");
 
-// CANARY: REQ=REQ-GQL-SEC-KEYROT-KMS-001; FEATURE="KeyRotationKmsEnvelopes"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_SEC_KEYROT_KMS_001_Envelopes; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-SEC-KEYROT-KMS-001; FEATURE="KeyRotationKmsEnvelopes"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_KEYROT_KMS_001_Envelopes; OWNER=security; UPDATED=2026-01-15
 
 fn writeTempPath(alloc: std.mem.Allocator) ![]u8 {
     var buf = try alloc.alloc(u8, 64);

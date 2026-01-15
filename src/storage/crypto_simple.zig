@@ -65,7 +65,7 @@ pub const PageCrypto = struct {
 
     /// Encrypt a page using AES-256-GCM
     /// Derives per-page nonce from page_id for deterministic encryption
-    /// CANARY: REQ=REQ-GQL-TDE-PAGE-001; FEATURE="AES-GCM Page Encryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-TDE-PAGE-001; FEATURE="AES-GCM Page Encryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     pub fn encryptPage(self: *Self, page_id: u32, plaintext: []const u8, ciphertext: []u8, additional_data: []const u8) !void {
         // Need room for ciphertext + 16-byte auth tag
         if (plaintext.len + 16 > ciphertext.len) {
@@ -93,7 +93,7 @@ pub const PageCrypto = struct {
     }
 
     /// Decrypt a page using AES-256-GCM
-    /// CANARY: REQ=REQ-GQL-TDE-PAGE-002; FEATURE="AES-GCM Page Decryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-TDE-PAGE-002; FEATURE="AES-GCM Page Decryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     pub fn decryptPage(self: *Self, page_id: u32, ciphertext: []const u8, plaintext: []u8, additional_data: []const u8) !void {
         // Minimum 16 bytes for auth tag
         if (ciphertext.len < 16) {
@@ -150,7 +150,7 @@ pub const WALCrypto = struct {
 
     /// Encrypt a WAL record using AES-256-GCM
     /// Uses LSN to derive unique nonce for each record
-    /// CANARY: REQ=REQ-GQL-TDE-WAL-001; FEATURE="AES-GCM WAL Encryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-TDE-WAL-001; FEATURE="AES-GCM WAL Encryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     pub fn encryptRecord(self: *Self, record: []const u8, encrypted: []u8, lsn: u64) !void {
         // Need room for ciphertext + 16-byte auth tag
         if (record.len + 16 > encrypted.len) {
@@ -181,7 +181,7 @@ pub const WALCrypto = struct {
 
     /// Decrypt a WAL record using AES-256-GCM
     /// Note: LSN must be provided externally for decryption
-    /// CANARY: REQ=REQ-GQL-TDE-WAL-002; FEATURE="AES-GCM WAL Decryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-TDE-WAL-002; FEATURE="AES-GCM WAL Decryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     pub fn decryptRecord(self: *Self, encrypted: []const u8, record: []u8) !void {
         // Minimum 16 bytes for auth tag
         if (encrypted.len < 16) {
@@ -320,7 +320,7 @@ pub const KeyRotationTool = struct {
     }
 };
 
-// CANARY: REQ=REQ-TDE-KMS-SIMPLE-001; FEATURE="KMSIntegration"; ASPECT=Simple; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+// CANARY: REQ=REQ-TDE-KMS-SIMPLE-001; FEATURE="KMSIntegration"; ASPECT=Simple; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 pub const KMSClient = struct {
     config: KMSConfig,
     allocator: Allocator,

@@ -2,8 +2,8 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 14, 2026
-**Last Verified**: January 14, 2026
+**Last Updated**: January 15, 2026
+**Last Verified**: January 15, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
 **Current Status**: This file lists resolved gaps. Open gaps are tracked in docs/GAP_ANALYSIS.md.
@@ -2609,3 +2609,59 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 *Archive complete - All 152 gaps resolved*
+
+### GAP-0186: REQ-0001 standards & conformance requirements lack traceability evidence
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/315
+- **Category:** Requirement
+- **Severity:** High
+- **Status:** Resolved
+- **Resolution:** Added CANARY marker to src/gql/parser.zig linked to e2e_protocol.zig tests.
+
+### GAP-0187: REQ-0002 language surface requirements lack traceability evidence
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/316
+- **Category:** Requirement
+- **Severity:** Medium
+- **Status:** Resolved
+- **Resolution:** Added CANARY marker to src/gql/parser.zig linked to e2e_protocol.zig tests.
+
+### GAP-0188: REQ-0003 engine contract requirements lack traceability evidence
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/317
+- **Category:** Requirement
+- **Severity:** High
+- **Status:** Resolved
+- **Resolution:** Added CANARY marker to src/execution/query_execution.zig linked to e2e_protocol.zig tests.
+
+### GAP-0189: REQ-0004 transactions & storage requirements lack traceability evidence
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/318
+- **Category:** Requirement
+- **Severity:** High
+- **Status:** Resolved
+- **Resolution:** Added CANARY marker to src/transactions/transaction_manager.zig linked to e2e_protocol.zig tests.
+
+### GAP-0190: REQ-0005 security requirements lack traceability evidence
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/319
+- **Category:** Security
+- **Severity:** High
+- **Status:** Resolved
+- **Resolution:** Added CANARY marker to src/security/geode_auth_lib.zig linked to e2e_protocol.zig tests.
+
+### GAP-0191: REQ-0007 tooling & governance requirements lack traceability evidence
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/320
+- **Category:** Requirement
+- **Severity:** Medium
+- **Status:** Resolved
+- **Resolution:** Added CANARY marker to tools/canary_main.zig.
+
+### GAP-0192: REQ-0009 performance targets lack traceability evidence
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/321
+- **Category:** Performance
+- **Severity:** Low
+- **Status:** Resolved
+- **Resolution:** Added CANARY marker to benchmarks/benchmark_monitoring_metrics_variance_unified.zig.
+
+### GAP-0194: Binary protocol doc claims federated merge is stub but code implements merge
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/323
+- **Category:** Docs
+- **Severity:** Low
+- **Status:** Resolved
+- **Resolution:** Updated docs/BINARY_PROTOCOL.md to reflect implemented merge behavior.

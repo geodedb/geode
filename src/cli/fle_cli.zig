@@ -140,7 +140,7 @@ fn handleGrantPlaintext(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx:
     std.debug.print("\n✓ Privilege granted successfully\n", .{});
 }
 
-// CANARY: REQ=REQ-FLE-MIGRATE-CLI-001; FEATURE="FLEMigrateCLI"; ASPECT=CLI; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+// CANARY: REQ=REQ-FLE-MIGRATE-CLI-001; FEATURE="FLEMigrateCLI"; ASPECT=CLI; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0147 FIX: Properly delegate to fle_commands.migrateEncrypt with full validation
 fn handleMigrateEncrypt(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     if (start_idx + 2 >= argv.len) {

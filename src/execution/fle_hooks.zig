@@ -2,7 +2,7 @@ const std = @import("std");
 const fle_integration = @import("../fle_integration.zig");
 
 // CANARY: FLE_EXECUTION_INTEGRATION - Field-Level Encryption Execution Hooks
-// CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=IMPL; OWNER=security; UPDATED=2025-10-17
+// CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 /// Helper function to encrypt node property value if needed before storing
 /// Returns the potentially encrypted value to store

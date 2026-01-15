@@ -1,6 +1,6 @@
 // Test suite for ABAC enforcement wiring in server execution
 // CANARY: REQ=REQ-ABAC-WIRE-TEST-001; FEATURE="ABAC Enforcement Tests";
-//         ASPECT=TESTING; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+//         ASPECT=TESTING; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Unit tests for SecurityManager initialization and ABAC enforcement
 
 const std = @import("std");
@@ -9,7 +9,7 @@ const server_init = @import("server_init.zig");
 const server_state = @import("server_state.zig");
 const geode_auth = @import("geode_auth");
 
-// CANARY: REQ=REQ-ABAC-WIRE-TEST-002; FEATURE="ABAC Enforcement Tests"; ASPECT=SecurityInit; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-TEST-002; FEATURE="ABAC Enforcement Tests"; ASPECT=SecurityInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 test "GAP-0165: SecurityManager initialization succeeds" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -28,7 +28,7 @@ test "GAP-0165: SecurityManager initialization succeeds" {
     }
 }
 
-// CANARY: REQ=REQ-ABAC-WIRE-TEST-003; FEATURE="ABAC Enforcement Tests"; ASPECT=EnvConfig; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-TEST-003; FEATURE="ABAC Enforcement Tests"; ASPECT=EnvConfig; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 test "GAP-0165: EnvironmentConfig includes abac_enabled field" {
     const config = server_init.EnvironmentConfig{};
 
@@ -41,7 +41,7 @@ test "GAP-0165: EnvironmentConfig includes abac_enabled field" {
     try testing.expect(config2.abac_enabled);
 }
 
-// CANARY: REQ=REQ-ABAC-WIRE-TEST-004; FEATURE="ABAC Enforcement Tests"; ASPECT=InitContext; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-TEST-004; FEATURE="ABAC Enforcement Tests"; ASPECT=InitContext; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 test "GAP-0165: InitContext includes SecurityManager fields" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -63,7 +63,7 @@ test "GAP-0165: InitContext includes SecurityManager fields" {
     try testing.expect(ctx.security_manager_storage == null);
 }
 
-// CANARY: REQ=REQ-ABAC-WIRE-TEST-005; FEATURE="ABAC Enforcement Tests"; ASPECT=ServerState; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-TEST-005; FEATURE="ABAC Enforcement Tests"; ASPECT=ServerState; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 test "GAP-0165: ServerState includes security_manager field" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -80,7 +80,7 @@ test "GAP-0165: ServerState includes security_manager field" {
     try testing.expect(state.current_user_id == null);
 }
 
-// CANARY: REQ=REQ-ABAC-WIRE-TEST-006; FEATURE="ABAC Enforcement Tests"; ASPECT=Authorization; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-TEST-006; FEATURE="ABAC Enforcement Tests"; ASPECT=Authorization; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 test "GAP-0165: SecurityManager authorize function works" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -99,7 +99,7 @@ test "GAP-0165: SecurityManager authorize function works" {
     try testing.expectError(error.UserNotFound, result);
 }
 
-// CANARY: REQ=REQ-ABAC-WIRE-TEST-007; FEATURE="ABAC Enforcement Tests"; ASPECT=RBAC; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-TEST-007; FEATURE="ABAC Enforcement Tests"; ASPECT=RBAC; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 test "GAP-0165: RBAC permission checks work through SecurityManager" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -127,7 +127,7 @@ test "GAP-0165: RBAC permission checks work through SecurityManager" {
     try testing.expect(!write_auth);
 }
 
-// CANARY: REQ=REQ-ABAC-WIRE-TEST-008; FEATURE="ABAC Enforcement Tests"; ASPECT=ABAC; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-TEST-008; FEATURE="ABAC Enforcement Tests"; ASPECT=ABAC; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 test "GAP-0165: ABAC policy evaluation works" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -176,7 +176,7 @@ test "GAP-0165: ABAC policy evaluation works" {
     try testing.expect(authorized);
 }
 
-// CANARY: REQ=REQ-ABAC-WIRE-TEST-009; FEATURE="ABAC Enforcement Tests"; ASPECT=DenyPriority; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-TEST-009; FEATURE="ABAC Enforcement Tests"; ASPECT=DenyPriority; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 test "GAP-0165: ABAC deny takes priority over allow" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

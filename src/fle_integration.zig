@@ -7,7 +7,7 @@ const key_types = @import("fle_key_types");
 const blind_index_mod = @import("fle_blind_index");
 
 // CANARY: FLE_INTEGRATION - Field-Level Encryption Integration Layer
-// CANARY: REQ=REQ-FLE-INTEGRATION-001; FEATURE="FieldLevelEncryption"; ASPECT=INTEGRATION; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: REQ=REQ-FLE-INTEGRATION-001; FEATURE="FieldLevelEncryption"; ASPECT=INTEGRATION; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 // Re-export modules for external access
 pub const catalog_mod = fle_catalog;

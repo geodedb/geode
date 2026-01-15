@@ -49,7 +49,7 @@ pub const EncryptionKey = struct {
 };
 
 // CANARY: PERF_PHASE2_KEY_CACHE - Pre-computed encryption keys for hot pages
-// CANARY: REQ=REQ-PERF-PHASE2-003; FEATURE="StorageOptimization"; ASPECT=ENCRYPTION; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE2-003; FEATURE="StorageOptimization"; ASPECT=ENCRYPTION; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=performance; UPDATED=2026-01-15
 pub const PageCrypto = struct {
     allocator: Allocator,
     master_key: EncryptionKey,
@@ -392,7 +392,7 @@ pub const KMSClient = struct {
         }
     }
 
-    // CANARY: REQ=REQ-TDE-KMS-001; FEATURE="KMSIntegration"; ASPECT=AWS; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-TDE-KMS-001; FEATURE="KMSIntegration"; ASPECT=AWS; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     fn retrieveFromAWSKMS(self: *Self) !EncryptionKey {
         // AWS KMS integration via environment variable
         // In production, use AWS SDK or IAM-based HTTP API calls
@@ -412,7 +412,7 @@ pub const KMSClient = struct {
         return try self.keyFromHex(key_hex, .aws_kms);
     }
 
-    // CANARY: REQ=REQ-TDE-KMS-002; FEATURE="KMSIntegration"; ASPECT=Azure; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-TDE-KMS-002; FEATURE="KMSIntegration"; ASPECT=Azure; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     fn retrieveFromAzureKeyVault(self: *Self) !EncryptionKey {
         // Azure Key Vault integration via environment variable
         const env_var_name = try std.fmt.allocPrint(self.allocator, "GEODE_AZURE_KEY_{s}", .{self.config.key_id});
@@ -430,7 +430,7 @@ pub const KMSClient = struct {
         return try self.keyFromHex(key_hex, .azure_key_vault);
     }
 
-    // CANARY: REQ=REQ-TDE-KMS-003; FEATURE="KMSIntegration"; ASPECT=Vault; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-TDE-KMS-003; FEATURE="KMSIntegration"; ASPECT=Vault; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     fn retrieveFromHashicorpVault(self: *Self) !EncryptionKey {
         // Hashicorp Vault integration via environment variable
         const env_var_name = try std.fmt.allocPrint(self.allocator, "GEODE_VAULT_KEY_{s}", .{self.config.key_id});
@@ -448,7 +448,7 @@ pub const KMSClient = struct {
         return try self.keyFromHex(key_hex, .hashicorp_vault);
     }
 
-    // CANARY: REQ=REQ-TDE-KMS-004; FEATURE="KMSIntegration"; ASPECT=GCP; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-TDE-KMS-004; FEATURE="KMSIntegration"; ASPECT=GCP; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     fn retrieveFromGoogleCloudKMS(self: *Self) !EncryptionKey {
         // Google Cloud KMS integration via environment variable
         const env_var_name = try std.fmt.allocPrint(self.allocator, "GEODE_GCP_KMS_KEY_{s}", .{self.config.key_id});

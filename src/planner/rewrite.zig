@@ -3,7 +3,7 @@ const gql_ast = @import("../gql/ast.zig");
 const fle_integration = @import("../fle_integration.zig");
 
 // CANARY: FLE_PLANNER_REWRITE - Field-Level Encryption Predicate Rewriting
-// CANARY: REQ=REQ-FLE-PLANNER-001; FEATURE="FieldLevelEncryption"; ASPECT=PLANNER; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: REQ=REQ-FLE-PLANNER-001; FEATURE="FieldLevelEncryption"; ASPECT=PLANNER; STATUS=TESTED; TEST=tests/e2e_where_subqueries.zig; OWNER=security; UPDATED=2026-01-15
 
 // Simple rewrite & group validation hooks replacing synthetic spins.
 // performRewrite walks the query AST counting nodes/expressions and performs

@@ -6,7 +6,7 @@ const storage = @import("storage_page_manager");
 const fsync_util = @import("fs_fsync");
 const commit_coord = @import("commit_coordinator");
 
-// CANARY: REQ=REQ-WAL-HEX-001; FEATURE="SecureWalHexKeyParsing"; ASPECT=SECURITY; STATUS=IMPL; TEST=test_parseWalHexKey_valid|test_parseWalHexKey_invalid_char|test_parseWalHexKey_wrong_length; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-WAL-HEX-001; FEATURE="SecureWalHexKeyParsing"; ASPECT=SECURITY; STATUS=TESTED; TEST=test_parseWalHexKey_valid|test_parseWalHexKey_invalid_char|test_parseWalHexKey_wrong_length; OWNER=security; UPDATED=2026-01-15
 // GAP-0155 SECURITY FIX: Proper error handling for WAL encryption key hex parsing instead of silent catch 0
 
 /// Parse a 64-character hex string into a 32-byte key with proper error handling.

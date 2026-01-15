@@ -37,6 +37,7 @@ const Value = value_types.Value;
 const Env = value_types.Env;
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=IMPL; OWNER=refactoring; UPDATED=2025-10-17
+// CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-01-15
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
     // Execute the current query (without the next_query link to avoid infinite recursion)
     var current_query_standalone = current_query;

@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-TRACEABILITY-001; FEATURE="Requirement Traceability Tests"; ASPECT=Governance; STATUS=IMPL; OWNER=compliance; UPDATED=2026-01-14
+// CANARY: REQ=REQ-TRACEABILITY-001; FEATURE="Requirement Traceability Tests"; ASPECT=Governance; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=compliance; UPDATED=2026-01-15
 // GAP-0185: Requirement traceability test suite with REAL verification
 // This file provides verification tests for requirement IDs that exercise actual implementations.
 
@@ -32,7 +32,7 @@ const parser = @import("../src/gql/parser.zig");
 
 // =============================================================================
 // GAP-0170: CLI Subprocess Elimination Requirements
-// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=TESTED; TEST=tests/test_cli_subprocess_elimination_integration.zig; OWNER=cli; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-CLI-SUBPROCESS-ELIMINATION-002: unified binary architecture" {
@@ -46,7 +46,7 @@ test "REQ-CLI-SUBPROCESS-ELIMINATION-002: unified binary architecture" {
     try testing.expect(@hasDecl(lib, "ParseResult"));
 }
 
-// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=ServerMode; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=ServerMode; STATUS=TESTED; TEST=tests/test_cli_subprocess_elimination_integration.zig; OWNER=cli; UPDATED=2026-01-15
 test "REQ-CLI-SUBPROCESS-ELIMINATION-003: server-only mode" {
     // Verify QUIC transport module exists for server-only operations
     const quic = @import("../src/transport/quic.zig");
@@ -58,7 +58,7 @@ test "REQ-CLI-SUBPROCESS-ELIMINATION-003: server-only mode" {
 
 // =============================================================================
 // GAP-0171: Field-Level Encryption Documentation Requirement
-// CANARY: REQ=REQ-FLE-DOC-001; FEATURE="Field-Level Encryption"; ASPECT=Implementation; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-FLE-DOC-001; FEATURE="Field-Level Encryption"; ASPECT=Implementation; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=security; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-FLE-DOC-001: field-level encryption implementation" {
@@ -75,7 +75,7 @@ test "REQ-FLE-DOC-001: field-level encryption implementation" {
 
 // =============================================================================
 // GAP-0172: Materialized View Requirements
-// CANARY: REQ=REQ-MATVIEW-SYSTEM-001; FEATURE="MaterializedViews"; ASPECT=ViewCreation; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-14
+// CANARY: REQ=REQ-MATVIEW-SYSTEM-001; FEATURE="MaterializedViews"; ASPECT=ViewCreation; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=storage; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-MATVIEW-SYSTEM: materialized view system" {
@@ -93,7 +93,7 @@ test "REQ-MATVIEW-SYSTEM: materialized view system" {
 
 // =============================================================================
 // GAP-0173: Security Progress Requirements
-// CANARY: REQ=REQ-GQL-TDE-CORE-001; FEATURE="TransparentDataEncryption"; ASPECT=CoreEncryption; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-GQL-TDE-CORE-001; FEATURE="TransparentDataEncryption"; ASPECT=CoreEncryption; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=security; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-GQL-TDE-CORE-001: TDE core encryption" {
@@ -106,7 +106,7 @@ test "REQ-GQL-TDE-CORE-001: TDE core encryption" {
     try testing.expect(@hasDecl(tde, "EncryptionKey"));
 }
 
-// CANARY: REQ=REQ-GQL-TDE-PERF-001; FEATURE="TransparentDataEncryption"; ASPECT=Performance; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-GQL-TDE-PERF-001; FEATURE="TransparentDataEncryption"; ASPECT=Performance; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=security; UPDATED=2026-01-15
 test "REQ-GQL-TDE-PERF-001: TDE performance" {
     // Verify TDE config has performance-related fields
     const TdeConfig = tde.TdeConfig;
@@ -117,7 +117,7 @@ test "REQ-GQL-TDE-PERF-001: TDE performance" {
     _ = config;
 }
 
-// CANARY: REQ=REQ-GQL-MFA-AUDIT-001; FEATURE="MultiFactorAuth"; ASPECT=AuditLogging; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-GQL-MFA-AUDIT-001; FEATURE="MultiFactorAuth"; ASPECT=AuditLogging; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=security; UPDATED=2026-01-15
 test "REQ-GQL-MFA-AUDIT-001: MFA audit logging" {
     // Verify MFA module has audit-related types
     try testing.expect(@hasDecl(mfa, "MfaChallenge"));
@@ -130,7 +130,7 @@ test "REQ-GQL-MFA-AUDIT-001: MFA audit logging" {
 
 // =============================================================================
 // GAP-0174: User Auth Policy Requirement
-// CANARY: REQ=REQ-AUTH-POLICY-011; FEATURE="UserAuth"; ASPECT=PreAuthPolicy; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-AUTH-POLICY-011; FEATURE="UserAuth"; ASPECT=PreAuthPolicy; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=security; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-AUTH-POLICY-011: pre-auth policy check" {
@@ -144,7 +144,7 @@ test "REQ-AUTH-POLICY-011: pre-auth policy check" {
 
 // =============================================================================
 // GAP-0175: Values->Match Chaining Requirement
-// CANARY: REQ=REQ-GQL-VALUES-MATCH-001; FEATURE="GQL Values Match Chaining"; ASPECT=QueryPlanning; STATUS=IMPL; OWNER=gql; UPDATED=2026-01-14
+// CANARY: REQ=REQ-GQL-VALUES-MATCH-001; FEATURE="GQL Values Match Chaining"; ASPECT=QueryPlanning; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=gql; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-GQL-VALUES-MATCH-001: VALUES to MATCH chaining" {
@@ -158,7 +158,7 @@ test "REQ-GQL-VALUES-MATCH-001: VALUES to MATCH chaining" {
 
 // =============================================================================
 // GAP-0176: Zig Client V2 Requirement
-// CANARY: REQ=REQ-ZIG-CLIENT-002; FEATURE="ZigClientV2"; ASPECT=QUICTransport; STATUS=IMPL; OWNER=clients; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ZIG-CLIENT-002; FEATURE="ZigClientV2"; ASPECT=QUICTransport; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=clients; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-ZIG-CLIENT-002: Zig client v2 QUIC transport" {
@@ -175,7 +175,7 @@ test "REQ-ZIG-CLIENT-002: Zig client v2 QUIC transport" {
 
 // =============================================================================
 // GAP-0177: REPL Requirement IDs
-// CANARY: REQ=REQ-REPL-ADVANCED-002; FEATURE="REPL Advanced Features"; ASPECT=AutoComplete; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+// CANARY: REQ=REQ-REPL-ADVANCED-002; FEATURE="REPL Advanced Features"; ASPECT=AutoComplete; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=cli; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-REPL-ADVANCED-002: REPL auto-complete" {
@@ -188,7 +188,7 @@ test "REQ-REPL-ADVANCED-002: REPL auto-complete" {
     try testing.expect(@hasField(TokenType, "tag"));
 }
 
-// CANARY: REQ=REQ-REPL-FORMAT-004; FEATURE="REPL Formatting"; ASPECT=TableOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+// CANARY: REQ=REQ-REPL-FORMAT-004; FEATURE="REPL Formatting"; ASPECT=TableOutput; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=cli; UPDATED=2026-01-15
 test "REQ-REPL-FORMAT-004: REPL table formatting" {
     // Verify protocol has column definition for table formatting
     const protocol = @import("../src/protocol.zig");
@@ -199,7 +199,7 @@ test "REQ-REPL-FORMAT-004: REPL table formatting" {
 
 // =============================================================================
 // GAP-0178: Shell Test Requirement IDs
-// CANARY: REQ=REQ-GQL-OPTIONAL-UNDIRECTED-001; FEATURE="GQL Optional Undirected"; ASPECT=PatternMatching; STATUS=IMPL; OWNER=gql; UPDATED=2026-01-14
+// CANARY: REQ=REQ-GQL-OPTIONAL-UNDIRECTED-001; FEATURE="GQL Optional Undirected"; ASPECT=PatternMatching; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=gql; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-GQL-OPTIONAL-UNDIRECTED-001: optional undirected patterns" {
@@ -208,7 +208,7 @@ test "REQ-GQL-OPTIONAL-UNDIRECTED-001: optional undirected patterns" {
     try testing.expect(@hasDecl(parser, "EdgePattern"));
 }
 
-// CANARY: REQ=REQ-GQL-ORDERBY-NULLS-001; FEATURE="GQL ORDER BY NULLS"; ASPECT=Sorting; STATUS=IMPL; OWNER=gql; UPDATED=2026-01-14
+// CANARY: REQ=REQ-GQL-ORDERBY-NULLS-001; FEATURE="GQL ORDER BY NULLS"; ASPECT=Sorting; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=gql; UPDATED=2026-01-15
 test "REQ-GQL-ORDERBY-NULLS-001: ORDER BY NULLS FIRST/LAST" {
     // Verify parser has ORDER BY related types
     try testing.expect(@hasDecl(parser, "OrderByItem") or @hasDecl(parser, "SortItem"));
@@ -219,7 +219,7 @@ test "REQ-GQL-ORDERBY-NULLS-001: ORDER BY NULLS FIRST/LAST" {
 
 // =============================================================================
 // GAP-0183: CI REQ-0008 Enforcement
-// CANARY: REQ=REQ-0008; FEATURE="Platform Build Requirements"; ASPECT=Verification; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
+// CANARY: REQ=REQ-0008; FEATURE="Platform Build Requirements"; ASPECT=Verification; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=ci; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-0008: build system requirements" {
@@ -234,7 +234,7 @@ test "REQ-0008: build system requirements" {
 
 // =============================================================================
 // GAP-0184: Distributed Shard Execution
-// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=Verification; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
+// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=Verification; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=distributed; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-0006: distributed query coordinator" {
@@ -251,7 +251,7 @@ test "REQ-0006: distributed query coordinator" {
 
 // =============================================================================
 // GAP-0185: Traceability Test Verification
-// CANARY: REQ=REQ-DOC-GOVERNANCE; FEATURE="Requirement Traceability"; ASPECT=TestVerification; STATUS=IMPL; OWNER=compliance; UPDATED=2026-01-14
+// CANARY: REQ=REQ-DOC-GOVERNANCE; FEATURE="Requirement Traceability"; ASPECT=TestVerification; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=compliance; UPDATED=2026-01-15
 // =============================================================================
 
 test "REQ-DOC-GOVERNANCE: traceability tests are non-stubs" {

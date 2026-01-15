@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // CANARY: FLE_CRYPTO_PRIMITIVES - AEAD Encryption Wrapper (AES-256-GCM, ChaCha20-Poly1305)
-// CANARY: REQ=REQ-FLE-AEAD-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: REQ=REQ-FLE-AEAD-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=src/crypto/aead.zig; OWNER=security; UPDATED=2026-01-15
 
 /// Supported AEAD algorithms
 pub const Alg = enum(u8) {

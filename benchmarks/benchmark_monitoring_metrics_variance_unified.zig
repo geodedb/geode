@@ -3,6 +3,7 @@ const std = @import("std");
 // Provides single canonical evidence line for governance.
 // Thresholds (General): CV<=0.25, p95/mean<=2.8 (initial). Trimmed metrics optional.
 //
+// CANARY: REQ=REQ-0009; FEATURE="Performance Targets"; ASPECT=Benchmark; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified_Run; OWNER=ops-team; UPDATED=2026-01-15
 // CANARY: REQ=REQ-GQL-081; FEATURE="MonitoringVariance"; ASPECT=UnifiedVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified; OWNER=ops-team; UPDATED=2025-09-27
 // CANARY: REQ=REQ-GQL-081; FEATURE="MonitoringVariance"; ASPECT=TailLatencyP999Envelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryTailP999; OWNER=ops-team; UPDATED=2025-09-27
 

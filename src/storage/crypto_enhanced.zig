@@ -120,7 +120,7 @@ pub const CryptoManager = struct {
         }
     }
 
-    // CANARY: REQ=REQ-CRYPTO-RANDOM-001; FEATURE="CryptographicKeyGeneration"; ASPECT=KMS_FALLBACK; STATUS=IMPL; OWNER=security; UPDATED=2026-01-11
+    // CANARY: REQ=REQ-CRYPTO-RANDOM-001; FEATURE="CryptographicKeyGeneration"; ASPECT=KMS_FALLBACK; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     fn fetchFromAWSKMS(self: *Self, config: KMSConfig) !void {
         // AWS KMS fallback - uses cryptographically secure random
         // In production with real AWS SDK, this would fetch from KMS
@@ -217,7 +217,7 @@ pub const CryptoManager = struct {
         try self.wrapDataKey();
     }
 
-    // CANARY: REQ=REQ-TDE-KEYWRAP-001; FEATURE="AES-GCM Key Wrapping"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-TDE-KEYWRAP-001; FEATURE="AES-GCM Key Wrapping"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     fn wrapDataKey(self: *Self) !void {
         // Use AES-256-GCM to wrap the DEK with KEK (RFC 5649 style)
         // Output format: [nonce (12 bytes)] [ciphertext (32 bytes)] [tag (16 bytes)] = 60 bytes
@@ -252,7 +252,7 @@ pub const CryptoManager = struct {
         @memcpy(self.current_key.wrapped_dek[32..48], &tag);
     }
 
-    // CANARY: REQ=REQ-TDE-KEYUNWRAP-001; FEATURE="AES-GCM Key Unwrapping"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-TDE-KEYUNWRAP-001; FEATURE="AES-GCM Key Unwrapping"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     pub fn unwrapDataKey(self: *Self) !void {
         // Unwrap DEK from wrapped_dek using KEK with AES-256-GCM
         // Input format: [ciphertext (32 bytes)] [tag (16 bytes)]
@@ -522,7 +522,7 @@ pub const ReencryptionTool = struct {
     }
 };
 
-// CANARY: REQ=REQ-TDE-PAGESTORAGE-001; FEATURE="Encrypted Page Storage"; ASPECT=STORAGE; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-09
+// CANARY: REQ=REQ-TDE-PAGESTORAGE-001; FEATURE="Encrypted Page Storage"; ASPECT=STORAGE; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=storage; UPDATED=2026-01-15
 // Page storage with transparent encryption/decryption
 pub const PageStorage = struct {
     allocator: Allocator,

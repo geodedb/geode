@@ -17,7 +17,7 @@ const server_flags = @import("server_flags.zig");
 const message_handlers = @import("message_handlers.zig");
 const protocol_handler = @import("protocol_handler.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
-// CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");
 
@@ -52,7 +52,7 @@ const F_ILLEGAL = "U:PropOrder=Illegal";
 const F_TIEBREAK = "U:OrderTiebreak=LexJSON";
 const DEBUG_PROFILE = false;
 
-// CANARY: REQ=REQ-ABAC-WIRE-013; FEATURE="ABAC Enforcement"; ASPECT=QUICHandler; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-013; FEATURE="ABAC Enforcement"; ASPECT=QUICHandler; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Updated handleQuicConnection signature to accept SecurityManager for ABAC enforcement
 pub fn handleQuicConnection(
     gpa: std.mem.Allocator,
@@ -124,7 +124,7 @@ pub fn handleQuicConnection(
     state.spill_union = env_spill_union;
     state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
-    // CANARY: REQ=REQ-ABAC-WIRE-014; FEATURE="ABAC Enforcement"; ASPECT=QUICState; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-ABAC-WIRE-014; FEATURE="ABAC Enforcement"; ASPECT=QUICState; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Wire SecurityManager into ServerState for QUIC connection ABAC enforcement
     state.security_manager = security_manager;
 

@@ -8,7 +8,7 @@ pub const DistanceMetric = enum {
 };
 
 // CANARY: PERF_PHASE3_HNSW_PREALLOC - Pre-allocate HNSW neighbor lists
-// CANARY: REQ=REQ-PERF-PHASE3-002; FEATURE="MemoryOptimization"; ASPECT=HNSW_NEIGHBORS; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE3-002; FEATURE="MemoryOptimization"; ASPECT=HNSW_NEIGHBORS; STATUS=BENCHED; BENCH=benchmarks/phase3_benchmarks.zig; OWNER=performance; UPDATED=2026-01-15
 pub const HnswNode = struct {
     id: u64,
     vector: []f32,
@@ -125,7 +125,7 @@ pub const Hnsw = struct {
                 const similarity = dot_product / (@sqrt(norm_a) * @sqrt(norm_b));
                 return 1.0 - similarity;
             },
-            // CANARY: REQ=REQ-GQL-HNSW-JACCARD-001; FEATURE="Jaccard Distance in HNSW"; ASPECT=IndexMetric; STATUS=IMPL; OWNER=index; UPDATED=2026-01-08
+            // CANARY: REQ=REQ-GQL-HNSW-JACCARD-001; FEATURE="Jaccard Distance in HNSW"; ASPECT=IndexMetric; STATUS=TESTED; TEST=tests/test_vector_operations_integration.zig; OWNER=index; UPDATED=2026-01-15
             .jaccard => {
                 var intersection: u64 = 0;
                 var union_size: u64 = 0;

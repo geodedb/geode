@@ -189,8 +189,8 @@ Fields:
 Coordinator Behavior (current):
 
 - Parses each line, validates JSON shape, appends into intermediate lists.
-- Merging logic presently stubbed — final result uses first non‑empty schema; row concatenation without dedup or re‑ordering.
-- Future: stable ordered merge (when all contributors flagged ordered), set op reconciliation, error propagation with per‑remote diagnostics.
+- Merging logic implemented: performs stable ordered merge when all contributors are ordered; falls back to unordered union if any contributor is unordered or order keys mismatch.
+- Handles partial schema reconciliation (first non-empty schema used if others are empty).
 
 Safety / Limits:
 

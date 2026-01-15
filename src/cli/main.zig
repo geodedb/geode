@@ -13,27 +13,27 @@ extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int
 // const hash = @import("../types/hash.zig"); // Not needed for current implementation
 const crypto = std.crypto;
 
-// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=IMPL; TEST=TestCANARY_REQ_CLI_SUBPROCESS_ELIMINATION_001_UnifiedBinary; OWNER=cli; UPDATED=2025-10-05
+// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=TESTED; TEST=tests/test_cli_subprocess_elimination_integration.zig; OWNER=cli; UPDATED=2026-01-15
 // Direct calls to server and client main functions to eliminate subprocess spawning
 
 // CANARY: REQ=REQ-M11-DRY-002; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
 // M11: Import backup types from canonical location (storage/backup.zig) instead of duplicating
 const backup_types = @import("storage/backup");
 
-// CANARY: REQ=REQ-M4.1-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
+// CANARY: REQ=REQ-M4.1-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-01-15
 // Phase 4 M4.1: Import user management CLI module
 const user_mgmt_cli = @import("user_mgmt_cli.zig");
 const cmdUser = user_mgmt_cli.cmdUser;
 const cmdRole = user_mgmt_cli.cmdRole;
 
-// CANARY: REQ=REQ-M4.2-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=AuthCommands; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
+// CANARY: REQ=REQ-M4.2-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=AuthCommands; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-01-15
 // Phase 4 M4.2: Import authentication and policy CLI module
 const auth_cli = @import("auth_cli.zig");
 const cmdPolicy = auth_cli.cmdPolicy;
 const cmdGrant = auth_cli.cmdGrant;
 const cmdRevoke = auth_cli.cmdRevoke;
 
-// CANARY: REQ=REQ-M4.3-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
+// CANARY: REQ=REQ-M4.3-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=TESTED; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-01-15
 // Phase 4 M4.3: Import backup/restore/migrate CLI module
 const backup_cli = @import("backup_cli.zig");
 const cmdBackup = backup_cli.cmdBackup;
@@ -42,7 +42,7 @@ const cmdMigrate = backup_cli.cmdMigrate;
 const auth_state = geode.auth_state;
 const execution = geode.execution;
 
-// CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-002; FEATURE="CLI Modularization"; ASPECT=DispatcherIntegration; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
+// CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-002; FEATURE="CLI Modularization"; ASPECT=DispatcherIntegration; STATUS=TESTED; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-01-15
 // Phase 4 M4.4: Import CLI dispatcher module for command routing
 const cli_dispatcher = @import("cli_dispatcher.zig");
 const fle_cli = @import("fle_cli.zig");
@@ -61,11 +61,11 @@ const vendor_quic = @import("vendor_quic");
 
 const VERSION = build_options.version;
 
-// CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=IMPL; TEST=test_quic_transport; OWNER=repl; UPDATED=2025-11-17
+// CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
 const repl_dispatch = geode.repl.repl_dispatch;
 
 // GAP-0134: Thread-local TLS configuration for shell transport
-// CANARY: REQ=REQ-SHELL-TLS-001; FEATURE="Shell TLS Configuration"; ASPECT=SecureConnection; STATUS=IMPL; UPDATED=2026-01-13
+// CANARY: REQ=REQ-SHELL-TLS-001; FEATURE="Shell TLS Configuration"; ASPECT=SecureConnection; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=cli; UPDATED=2026-01-15
 var shell_tls_config: ShellTlsConfig = .{};
 
 const ShellTlsConfig = struct {
@@ -1409,7 +1409,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             continue;
         } else if (std.mem.eql(u8, type_str, "SET_PASSWORD")) {
             // GAP-0150: Handle password change requests via QUIC
-            // CANARY: REQ=REQ-AUTH-CLI-002; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-AUTH-CLI-002; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
             const user_mgmt = geode.user_management;
 
             // Extract required fields
@@ -2559,7 +2559,7 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             use_stdio = true;
         } else if (std.mem.eql(u8, arg, "--disable-auth")) {
             // GAP-0143: Block --disable-auth in production builds
-            // CANARY: REQ=REQ-AUTH-GUARD-001; FEATURE="Production Auth Guard"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-AUTH-GUARD-001; FEATURE="Production Auth Guard"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
             if (builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) {
                 std.log.err("SECURITY ERROR: --disable-auth is blocked in production builds", .{});
                 std.log.err("If this is intentional for testing, use a Debug build or set GEODE_ALLOW_NO_AUTH=1", .{});
@@ -2871,7 +2871,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         query_text = stdin_allocated;
     }
 
-    // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_009; OWNER=security; UPDATED=2025-10-14
+    // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
     // Auto-load saved session credentials if not explicitly provided
     var loaded_token: ?[]u8 = null;
@@ -3584,7 +3584,7 @@ const AuthResult = struct {
     requires_password_reset: bool = false,
 };
 
-// CANARY: REQ=REQ-AUTH-POLICY-010; FEATURE="CLI Password Policy Validation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_010_CLIPolicyValidation; OWNER=security; UPDATED=2025-09-30
+// CANARY: REQ=REQ-AUTH-POLICY-010; FEATURE="CLI Password Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 fn validatePasswordAgainstPolicy(password: []const u8) !void {
     // Get current policy configuration from environment
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -3620,7 +3620,7 @@ fn validatePasswordAgainstPolicy(password: []const u8) !void {
 }
 
 /// GAP-0150: Real QUIC authentication to server
-/// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+/// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, password: []const u8) !AuthResult {
     // GAP-0150 RESOLVED: Now uses real QUIC connection to server for authentication
     // instead of simulating locally
@@ -3821,7 +3821,7 @@ fn escapeJsonStringForAuth(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
 }
 
 /// GAP-0150: Update password on server via QUIC SET_PASSWORD message
-/// CANARY: REQ=REQ-AUTH-CLI-004; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+/// CANARY: REQ=REQ-AUTH-CLI-004; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 fn updatePasswordOnServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, new_password: []const u8) !void {
     // Parse server address
     const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidAddress;
@@ -4015,7 +4015,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         }
     }
 
-    // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_008; OWNER=security; UPDATED=2025-10-14
+    // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
     // For simplified testing mode - generate token without server connection
     if (username) |u| {
@@ -4175,7 +4175,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         }
 
         // GAP-0150: Send password update to server via QUIC
-        // CANARY: REQ=REQ-AUTH-CLI-003; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+        // CANARY: REQ=REQ-AUTH-CLI-003; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
         updatePasswordOnServer(allocator, server, final_username, new_password) catch |err| {
             std.debug.print("Error: Failed to update password on server: {s}\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.auth_error));

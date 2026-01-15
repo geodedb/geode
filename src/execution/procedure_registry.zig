@@ -38,9 +38,9 @@ const tde_mod = @import("../security/tde.zig");
 const cdc_mod = @import("../streaming/cdc_enhanced.zig");
 const rls = @import("rls");
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=refactor; UPDATED=2026-01-15
 
-// CANARY: REQ=REQ-AUDIT-PROC-001; FEATURE="AuditProcedures"; ASPECT=EventID; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+// CANARY: REQ=REQ-AUDIT-PROC-001; FEATURE="AuditProcedures"; ASPECT=EventID; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
 // Global audit event ID counter for audit.* procedures
 // Use u32 for atomic counter to support 32-bit ARM platforms
 var audit_event_id_counter: std.atomic.Value(u32) = std.atomic.Value(u32).init(1001);
@@ -155,7 +155,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "componentId");
         return try execution.executeSCC(allocator, store, columns);
     }
-    // CANARY: REQ=REQ-GQL-068; FEATURE="ExposedAlgorithms"; ASPECT=Centrality; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+    // CANARY: REQ=REQ-GQL-068; FEATURE="ExposedAlgorithms"; ASPECT=Centrality; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=graph; UPDATED=2026-01-15
     // New algorithms exposed via CALL procedures
     else if (std.mem.eql(u8, proc_name, "algo.harmonic.stream") or
         std.mem.eql(u8, proc_name, "harmonic"))
@@ -206,7 +206,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         columns[1] = try allocator.dupe(u8, "componentId");
         return try execution.executeBiconnectedComponents(allocator, store, columns);
     } else if (std.mem.eql(u8, proc_name, "audit.configure")) {
-        // CANARY: REQ=REQ-AUDIT-001; FEATURE="AuditLogging"; ASPECT=Configuration; STATUS=IMPL; OWNER=security; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-001; FEATURE="AuditLogging"; ASPECT=Configuration; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
         // Real audit configuration with comprehensive settings
 
         // Extract arguments from call statement
@@ -341,7 +341,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.log_auth_event")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-002; FEATURE="AuditProcedures"; ASPECT=AuthEventLogging; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-002; FEATURE="AuditProcedures"; ASPECT=AuthEventLogging; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.log_auth_event(action, actor, result, method) -> event_id, timestamp, logged
         const args = switch (call_stmt.procedure) {
             .Call => |call| call.args,
@@ -418,7 +418,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.log_lifecycle_event")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-003; FEATURE="AuditProcedures"; ASPECT=LifecycleEventLogging; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-003; FEATURE="AuditProcedures"; ASPECT=LifecycleEventLogging; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.log_lifecycle_event(event_type, details) -> event_id, timestamp, logged
         const args = switch (call_stmt.procedure) {
             .Call => |call| call.args,
@@ -452,7 +452,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.get_recent_events")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-004; FEATURE="AuditProcedures"; ASPECT=RecentEventsQuery; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-004; FEATURE="AuditProcedures"; ASPECT=RecentEventsQuery; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.get_recent_events(limit) -> event_id, timestamp, category, action, outcome
         const args = switch (call_stmt.procedure) {
             .Call => |call| call.args,
@@ -478,7 +478,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.verify_hash_chain")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-005; FEATURE="AuditProcedures"; ASPECT=HashChainVerification; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-005; FEATURE="AuditProcedures"; ASPECT=HashChainVerification; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.verify_hash_chain() -> valid, events_checked, issues_found
 
         // Simulate verifying a hash chain of audit events
@@ -536,7 +536,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.test_signature_verification")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-006; FEATURE="AuditProcedures"; ASPECT=SignatureVerification; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-006; FEATURE="AuditProcedures"; ASPECT=SignatureVerification; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.test_signature_verification() -> verified, signatures_checked, failures
 
         // Test Ed25519 signature verification
@@ -619,7 +619,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.get_merkle_digests")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-007; FEATURE="AuditProcedures"; ASPECT=MerkleDigests; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-007; FEATURE="AuditProcedures"; ASPECT=MerkleDigests; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.get_merkle_digests() -> root_hash, leaf_count, tree_height
 
         // Build a Merkle tree from audit events
@@ -716,7 +716,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.comprehensive_integrity_check")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-008; FEATURE="AuditProcedures"; ASPECT=IntegrityCheck; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-008; FEATURE="AuditProcedures"; ASPECT=IntegrityCheck; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.comprehensive_integrity_check() -> status, checks_performed, issues_found
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "status");
@@ -736,7 +736,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.test_file_output")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-009; FEATURE="AuditProcedures"; ASPECT=FileOutput; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-009; FEATURE="AuditProcedures"; ASPECT=FileOutput; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.test_file_output() -> success, file_path, events_written
 
         // Test file path
@@ -817,7 +817,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.test_auth_categories")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-010; FEATURE="AuditProcedures"; ASPECT=AuthCategories; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-010; FEATURE="AuditProcedures"; ASPECT=AuthCategories; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.test_auth_categories() -> category, events_logged, success
 
         // Test different authentication event categories
@@ -892,7 +892,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.test_command_categories")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-011; FEATURE="AuditProcedures"; ASPECT=CommandCategories; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-011; FEATURE="AuditProcedures"; ASPECT=CommandCategories; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.test_command_categories() -> category, events_logged, success
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "category");
@@ -1170,7 +1170,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.generate_compliance_report")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-019; FEATURE="AuditProcedures"; ASPECT=ComplianceReporting; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-019; FEATURE="AuditProcedures"; ASPECT=ComplianceReporting; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.generate_compliance_report() -> success, report_path, events_included
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1190,7 +1190,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.test_powershell_compatibility")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-020; FEATURE="AuditProcedures"; ASPECT=PowerShellCompatibility; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-020; FEATURE="AuditProcedures"; ASPECT=PowerShellCompatibility; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.test_powershell_compatibility() -> success, scripts_tested, all_compatible
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1635,7 +1635,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.export_for_verification")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-033; FEATURE="AuditProcedures"; ASPECT=ExportVerification; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-033; FEATURE="AuditProcedures"; ASPECT=ExportVerification; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.export_for_verification() -> success, export_path, events_exported
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1655,7 +1655,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.prepare_forensic_package")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-034; FEATURE="AuditProcedures"; ASPECT=ForensicPackage; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-034; FEATURE="AuditProcedures"; ASPECT=ForensicPackage; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.prepare_forensic_package() -> success, package_path, integrity_verified
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1675,7 +1675,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.compliance_verification")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-035; FEATURE="AuditProcedures"; ASPECT=ComplianceVerification; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-AUDIT-PROC-035; FEATURE="AuditProcedures"; ASPECT=ComplianceVerification; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.compliance_verification() -> success, compliance_level, violations_found
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1695,7 +1695,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "audit.cleanup_test_artifacts")) {
-        // CANARY: REQ=REQ-AUDIT-PROC-036; FEATURE="AuditProcedures"; ASPECT=TestCleanup; STATUS=IMPL; OWNER=audit; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-AUDIT-PROC-036; FEATURE="AuditProcedures"; ASPECT=TestCleanup; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
         // audit.cleanup_test_artifacts() -> files_cleaned, logs_archived, test_data_removed
 
         // Clean up test audit log files
@@ -1733,7 +1733,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.initialize_key_hierarchy")) {
-        // CANARY: REQ=REQ-TDE-PROC-001; FEATURE="TDEProcedures"; ASPECT=KeyHierarchy; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-001; FEATURE="TDEProcedures"; ASPECT=KeyHierarchy; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.initialize_key_hierarchy() -> success, master_key_id, dek_count
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1753,7 +1753,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.rotate_keys")) {
-        // CANARY: REQ=REQ-TDE-PROC-002; FEATURE="TDEProcedures"; ASPECT=KeyRotation; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-002; FEATURE="TDEProcedures"; ASPECT=KeyRotation; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.rotate_keys() -> success, keys_rotated, new_master_key_id
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1773,7 +1773,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.get_encryption_status")) {
-        // CANARY: REQ=REQ-TDE-PROC-003; FEATURE="TDEProcedures"; ASPECT=EncryptionStatus; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-003; FEATURE="TDEProcedures"; ASPECT=EncryptionStatus; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.get_encryption_status() -> enabled, encrypted_tables, encryption_algorithm
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "enabled");
@@ -1793,7 +1793,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.configure_kms")) {
-        // CANARY: REQ=REQ-TDE-PROC-004; FEATURE="TDEProcedures"; ASPECT=KMSConfiguration; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-004; FEATURE="TDEProcedures"; ASPECT=KMSConfiguration; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.configure_kms() -> success, kms_provider, kms_configured
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1813,7 +1813,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_encryption")) {
-        // CANARY: REQ=REQ-TDE-PROC-005; FEATURE="TDEProcedures"; ASPECT=EncryptionTest; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-005; FEATURE="TDEProcedures"; ASPECT=EncryptionTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_encryption() -> success, bytes_encrypted, encryption_time_ms
 
         // Enable TDE for testing
@@ -1869,7 +1869,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_decryption")) {
-        // CANARY: REQ=REQ-TDE-PROC-006; FEATURE="TDEProcedures"; ASPECT=DecryptionTest; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-006; FEATURE="TDEProcedures"; ASPECT=DecryptionTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_decryption() -> success, bytes_decrypted, decryption_time_ms
 
         // Enable TDE for testing
@@ -1924,7 +1924,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.verify_encrypted_state")) {
-        // CANARY: REQ=REQ-TDE-PROC-007; FEATURE="TDEProcedures"; ASPECT=EncryptedStateVerification; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-007; FEATURE="TDEProcedures"; ASPECT=EncryptedStateVerification; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.verify_encrypted_state() -> success, all_encrypted, tables_checked
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1944,7 +1944,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.benchmark_encryption")) {
-        // CANARY: REQ=REQ-TDE-PROC-008; FEATURE="TDEProcedures"; ASPECT=EncryptionBenchmark; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-008; FEATURE="TDEProcedures"; ASPECT=EncryptionBenchmark; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.benchmark_encryption() -> success, throughput_mbps, avg_latency_us
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -1964,7 +1964,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_key_rotation")) {
-        // CANARY: REQ=REQ-TDE-PROC-009; FEATURE="TDEProcedures"; ASPECT=KeyRotationTest; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-009; FEATURE="TDEProcedures"; ASPECT=KeyRotationTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_key_rotation() -> success, rotation_successful, data_integrity_verified
 
         // Enable TDE for testing
@@ -2041,7 +2041,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.backup_encrypted")) {
-        // CANARY: REQ=REQ-TDE-PROC-010; FEATURE="TDEProcedures"; ASPECT=EncryptedBackup; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-010; FEATURE="TDEProcedures"; ASPECT=EncryptedBackup; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.backup_encrypted() -> success, backup_path, backup_encrypted
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -2061,7 +2061,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.configure_key_provider")) {
-        // CANARY: REQ=REQ-TDE-PROC-011; FEATURE="TDEKeyProvider"; ASPECT=CloudKMSConfiguration; STATUS=IMPL; OWNER=security; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-011; FEATURE="TDEKeyProvider"; ASPECT=CloudKMSConfiguration; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
         // Configure cloud KMS provider (AWS KMS, Azure Key Vault, GCP KMS, HashiCorp Vault)
 
         const args = switch (call_stmt.procedure) {
@@ -2155,7 +2155,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.configure_mock_kms")) {
-        // CANARY: REQ=REQ-TDE-PROC-012; FEATURE="MockKMSProvider"; ASPECT=Testing; STATUS=IMPL; OWNER=security; UPDATED=2025-10-19
+        // CANARY: REQ=REQ-TDE-PROC-012; FEATURE="MockKMSProvider"; ASPECT=Testing; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
         // Real mock KMS setup for testing with in-memory key management
 
         // Extract arguments from call statement
@@ -2909,10 +2909,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         };
 
         // ========== TDE TEST PROCEDURES (Phase 3 - REAL IMPLEMENTATIONS) ==========
-        // CANARY: REQ=REQ-TDE-TEST-PROCEDURES; FEATURE="TDETestProcedures"; ASPECT=RealImplementation; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-TEST-PROCEDURES; FEATURE="TDETestProcedures"; ASPECT=RealImplementation; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
 
     } else if (std.mem.eql(u8, proc_name, "tde.configure_provider")) {
-        // CANARY: REQ=REQ-TDE-PROC-037; FEATURE="TDETestProcedures"; ASPECT=ConfigureProvider; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-037; FEATURE="TDETestProcedures"; ASPECT=ConfigureProvider; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.configure_provider(provider_type) -> provider_type, status, key_source
 
         // Extract provider_type parameter from call arguments
@@ -2956,7 +2956,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.get_rotation_state")) {
-        // CANARY: REQ=REQ-TDE-PROC-038; FEATURE="TDETestProcedures"; ASPECT=GetRotationState; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-038; FEATURE="TDETestProcedures"; ASPECT=GetRotationState; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.get_rotation_state() -> current_generation, last_rotation_time, rotation_in_progress, scheduled_rotation
 
         // Call real TDE function
@@ -2982,7 +2982,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.configure_rotation")) {
-        // CANARY: REQ=REQ-TDE-PROC-039; FEATURE="TDETestProcedures"; ASPECT=ConfigureRotation; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-039; FEATURE="TDETestProcedures"; ASPECT=ConfigureRotation; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.configure_rotation(strategy, max_age_hours) -> status, next_rotation_time
 
         // Extract max_age_hours parameter
@@ -3022,7 +3022,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.encrypt_page_test")) {
-        // CANARY: REQ=REQ-TDE-PROC-040; FEATURE="TDETestProcedures"; ASPECT=EncryptPageTest; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-040; FEATURE="TDETestProcedures"; ASPECT=EncryptPageTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.encrypt_page_test() -> page_id, encryption_status, page_size_encrypted, integrity_check
 
         // Call real TDE function
@@ -3048,7 +3048,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.encrypt_wal_test")) {
-        // CANARY: REQ=REQ-TDE-PROC-041; FEATURE="TDETestProcedures"; ASPECT=EncryptWALTest; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-041; FEATURE="TDETestProcedures"; ASPECT=EncryptWALTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.encrypt_wal_test() -> segment_id, encryption_status, segment_size, integrity_verified
 
         // Call real TDE function
@@ -3074,7 +3074,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.roundtrip_test")) {
-        // CANARY: REQ=REQ-TDE-PROC-042; FEATURE="TDETestProcedures"; ASPECT=RoundtripTest; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-042; FEATURE="TDETestProcedures"; ASPECT=RoundtripTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.roundtrip_test(data) -> original_data, decrypted_data, roundtrip_success
 
         // Extract test_data parameter from call arguments
@@ -3116,7 +3116,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.create_encrypted_backup")) {
-        // CANARY: REQ=REQ-TDE-PROC-043; FEATURE="TDETestProcedures"; ASPECT=CreateEncryptedBackup; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-043; FEATURE="TDETestProcedures"; ASPECT=CreateEncryptedBackup; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.create_encrypted_backup(path) -> backup_path, encryption_key_id, backup_size, integrity_hash
 
         // Extract backup path parameter
@@ -3160,7 +3160,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.restore_with_keys")) {
-        // CANARY: REQ=REQ-TDE-PROC-044; FEATURE="TDETestProcedures"; ASPECT=RestoreWithKeys; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-044; FEATURE="TDETestProcedures"; ASPECT=RestoreWithKeys; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.restore_with_keys(backup_path, manifest_path) -> restore_status, records_restored, keys_verified
 
         // Extract parameters
@@ -3214,7 +3214,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.measure_overhead")) {
-        // CANARY: REQ=REQ-TDE-PROC-045; FEATURE="TDETestProcedures"; ASPECT=MeasureOverhead; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-045; FEATURE="TDETestProcedures"; ASPECT=MeasureOverhead; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.measure_overhead() -> baseline_ops_per_sec, encrypted_ops_per_sec, overhead_percentage, passes_threshold
 
         // Call real TDE function
@@ -3240,7 +3240,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.simulate_oltp_workload")) {
-        // CANARY: REQ=REQ-TDE-PROC-046; FEATURE="TDETestProcedures"; ASPECT=SimulateOLTPWorkload; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-046; FEATURE="TDETestProcedures"; ASPECT=SimulateOLTPWorkload; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.simulate_oltp_workload(duration_seconds, concurrent_transactions) -> avg_transaction_time_ms, tps_with_encryption, tps_without_encryption, degradation_percentage
 
         // Extract parameters
@@ -3296,7 +3296,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_key_zeroization")) {
-        // CANARY: REQ=REQ-TDE-PROC-047; FEATURE="TDETestProcedures"; ASPECT=TestKeyZeroization; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-047; FEATURE="TDETestProcedures"; ASPECT=TestKeyZeroization; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_key_zeroization() -> keys_zeroized, memory_cleared, secure_cleanup_verified
 
         // Call real TDE function
@@ -3320,7 +3320,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.audit_plaintext_keys")) {
-        // CANARY: REQ=REQ-TDE-PROC-048; FEATURE="TDETestProcedures"; ASPECT=AuditPlaintextKeys; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-048; FEATURE="TDETestProcedures"; ASPECT=AuditPlaintextKeys; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.audit_plaintext_keys() -> plaintext_keys_found, encrypted_keys_count, security_violation
 
         // Call real TDE function
@@ -3344,7 +3344,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_key_access_control")) {
-        // CANARY: REQ=REQ-TDE-PROC-049; FEATURE="TDETestProcedures"; ASPECT=TestKeyAccessControl; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-049; FEATURE="TDETestProcedures"; ASPECT=TestKeyAccessControl; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_key_access_control() -> authorized_access, unauthorized_attempts, access_denied_count
 
         // Call real TDE function
@@ -3368,7 +3368,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.configure_external_kms")) {
-        // CANARY: REQ=REQ-TDE-PROC-050; FEATURE="TDETestProcedures"; ASPECT=ConfigureExternalKMS; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-050; FEATURE="TDETestProcedures"; ASPECT=ConfigureExternalKMS; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.configure_external_kms(endpoint, region) -> status, endpoint, connection_verified
 
         // Extract parameters
@@ -3422,7 +3422,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_kms_wrap_unwrap")) {
-        // CANARY: REQ=REQ-TDE-PROC-051; FEATURE="TDETestProcedures"; ASPECT=TestKMSWrapUnwrap; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-051; FEATURE="TDETestProcedures"; ASPECT=TestKMSWrapUnwrap; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_kms_wrap_unwrap() -> wrap_success, unwrap_success, roundtrip_verified, latency_ms
         // Call real TDE function
         const result = try tde_mod.testKmsWrapUnwrap(allocator);
@@ -3447,7 +3447,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_kms_attestation")) {
-        // CANARY: REQ=REQ-TDE-PROC-052; FEATURE="TDETestProcedures"; ASPECT=TestKMSAttestation; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-052; FEATURE="TDETestProcedures"; ASPECT=TestKMSAttestation; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_kms_attestation() -> attestation_valid, signature_verified, ed25519_verification, tamper_detected
         // Call real TDE function
         const result = try tde_mod.testKmsAttestation(allocator);
@@ -3472,7 +3472,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_privileged_unwrap")) {
-        // CANARY: REQ=REQ-TDE-PROC-053; FEATURE="TDETestProcedures"; ASPECT=TestPrivilegedUnwrap; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-053; FEATURE="TDETestProcedures"; ASPECT=TestPrivilegedUnwrap; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_privileged_unwrap() -> privileged_access_granted, unwrap_successful, audit_logged
         // Call real TDE function
         const result = try tde_mod.testPrivilegedUnwrap(allocator);
@@ -3495,7 +3495,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_key_recovery")) {
-        // CANARY: REQ=REQ-TDE-PROC-054; FEATURE="TDETestProcedures"; ASPECT=TestKeyRecovery; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-054; FEATURE="TDETestProcedures"; ASPECT=TestKeyRecovery; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_key_recovery() -> recovery_initiated, master_key_recovered, data_accessible
         // Call real TDE function
         const result = try tde_mod.testKeyRecovery(allocator);
@@ -3518,7 +3518,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.evaluate_rotation_schedule")) {
-        // CANARY: REQ=REQ-TDE-PROC-055; FEATURE="TDETestProcedures"; ASPECT=EvaluateRotationSchedule; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-055; FEATURE="TDETestProcedures"; ASPECT=EvaluateRotationSchedule; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.evaluate_rotation_schedule() -> should_rotate, next_check_time, rotation_reason, age_hours
         // Call real TDE function
         const result = try tde_mod.evaluateRotationSchedule(allocator);
@@ -3543,7 +3543,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_kms_failure")) {
-        // CANARY: REQ=REQ-TDE-PROC-056; FEATURE="TDETestProcedures"; ASPECT=TestKMSFailure; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-056; FEATURE="TDETestProcedures"; ASPECT=TestKMSFailure; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_kms_failure() -> error_handled, fallback_activated, service_degraded
         // Call real TDE function
         const result = try tde_mod.testKmsFailure(allocator);
@@ -3566,7 +3566,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_corrupted_key_handling")) {
-        // CANARY: REQ=REQ-TDE-PROC-057; FEATURE="TDETestProcedures"; ASPECT=TestCorruptedKeyHandling; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-057; FEATURE="TDETestProcedures"; ASPECT=TestCorruptedKeyHandling; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_corrupted_key_handling() -> corruption_detected, recovery_attempted, data_recoverable
         // Call real TDE function
         const result = try tde_mod.testCorruptedKeyHandling(allocator);
@@ -3589,7 +3589,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.cleanup_key_hierarchy")) {
-        // CANARY: REQ=REQ-TDE-PROC-058; FEATURE="TDETestProcedures"; ASPECT=CleanupKeyHierarchy; STATUS=IMPL; OWNER=tde; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-TDE-PROC-058; FEATURE="TDETestProcedures"; ASPECT=CleanupKeyHierarchy; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.cleanup_key_hierarchy() -> keys_zeroized, hierarchy_cleared
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "keys_zeroized");
@@ -3705,7 +3705,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // ==================== CDC (Change Data Capture) Procedures ====================
 
     else if (std.mem.eql(u8, proc_name, "cdc.enable")) {
-        // CANARY: REQ=REQ-CDC-PROC-001; FEATURE="CDCProcedures"; ASPECT=Enable; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-001; FEATURE="CDCProcedures"; ASPECT=Enable; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -3732,7 +3732,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.disable")) {
-        // CANARY: REQ=REQ-CDC-PROC-002; FEATURE="CDCProcedures"; ASPECT=Disable; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-002; FEATURE="CDCProcedures"; ASPECT=Disable; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -3756,7 +3756,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.status")) {
-        // CANARY: REQ=REQ-CDC-PROC-003; FEATURE="CDCProcedures"; ASPECT=Status; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-003; FEATURE="CDCProcedures"; ASPECT=Status; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -3787,7 +3787,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.export_diagnostics")) {
-        // CANARY: REQ=REQ-CDC-PROC-004; FEATURE="CDCProcedures"; ASPECT=ExportDiagnostics; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-004; FEATURE="CDCProcedures"; ASPECT=ExportDiagnostics; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -3813,7 +3813,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_events")) {
-        // CANARY: REQ=REQ-CDC-PROC-005; FEATURE="CDCProcedures"; ASPECT=GetEvents; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-005; FEATURE="CDCProcedures"; ASPECT=GetEvents; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -3846,7 +3846,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.pause")) {
-        // CANARY: REQ=REQ-CDC-PROC-006; FEATURE="CDCProcedures"; ASPECT=Pause; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-006; FEATURE="CDCProcedures"; ASPECT=Pause; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
         const row = try allocator.alloc(Value, 1);
@@ -3855,7 +3855,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.resume")) {
-        // CANARY: REQ=REQ-CDC-PROC-007; FEATURE="CDCProcedures"; ASPECT=Resume; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-007; FEATURE="CDCProcedures"; ASPECT=Resume; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
         const row = try allocator.alloc(Value, 1);
@@ -3864,7 +3864,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.set_guardrail")) {
-        // CANARY: REQ=REQ-CDC-PROC-008; FEATURE="CDCProcedures"; ASPECT=SetGuardrail; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-008; FEATURE="CDCProcedures"; ASPECT=SetGuardrail; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
 
         // Validate arguments
         if (call_stmt.procedure == .Call) {
@@ -3914,7 +3914,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_guardrail_status")) {
-        // CANARY: REQ=REQ-CDC-PROC-009; FEATURE="CDCProcedures"; ASPECT=GetGuardrailStatus; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-009; FEATURE="CDCProcedures"; ASPECT=GetGuardrailStatus; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -3940,7 +3940,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.reset_guardrails")) {
-        // CANARY: REQ=REQ-CDC-PROC-010; FEATURE="CDCProcedures"; ASPECT=ResetGuardrails; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-010; FEATURE="CDCProcedures"; ASPECT=ResetGuardrails; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -3961,7 +3961,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_watermark")) {
-        // CANARY: REQ=REQ-CDC-PROC-011; FEATURE="CDCProcedures"; ASPECT=GetWatermark; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-011; FEATURE="CDCProcedures"; ASPECT=GetWatermark; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -3985,7 +3985,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_pending_events")) {
-        // CANARY: REQ=REQ-CDC-PROC-012; FEATURE="CDCProcedures"; ASPECT=GetPendingEvents; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-012; FEATURE="CDCProcedures"; ASPECT=GetPendingEvents; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -4009,7 +4009,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.configure_adaptive_flush")) {
-        // CANARY: REQ=REQ-CDC-PROC-013; FEATURE="CDCProcedures"; ASPECT=ConfigureAdaptiveFlush; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-013; FEATURE="CDCProcedures"; ASPECT=ConfigureAdaptiveFlush; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
         const row = try allocator.alloc(Value, 1);
@@ -4018,7 +4018,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_flush_metrics")) {
-        // CANARY: REQ=REQ-CDC-PROC-014; FEATURE="CDCProcedures"; ASPECT=GetFlushMetrics; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-014; FEATURE="CDCProcedures"; ASPECT=GetFlushMetrics; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -4044,7 +4044,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_malformed_records")) {
-        // CANARY: REQ=REQ-CDC-PROC-015; FEATURE="CDCProcedures"; ASPECT=GetMalformedRecords; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-015; FEATURE="CDCProcedures"; ASPECT=GetMalformedRecords; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -4066,7 +4066,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_corruption_analysis")) {
-        // CANARY: REQ=REQ-CDC-PROC-016; FEATURE="CDCProcedures"; ASPECT=GetCorruptionAnalysis; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-016; FEATURE="CDCProcedures"; ASPECT=GetCorruptionAnalysis; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "prefix_retained");
         columns[1] = try allocator.dupe(u8, "hash_validation");
@@ -4079,7 +4079,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_ordered_events")) {
-        // CANARY: REQ=REQ-CDC-PROC-017; FEATURE="CDCProcedures"; ASPECT=GetOrderedEvents; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-017; FEATURE="CDCProcedures"; ASPECT=GetOrderedEvents; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "seq_id");
         columns[1] = try allocator.dupe(u8, "timestamp");
@@ -4092,7 +4092,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.check_duplicates")) {
-        // CANARY: REQ=REQ-CDC-PROC-018; FEATURE="CDCProcedures"; ASPECT=CheckDuplicates; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-018; FEATURE="CDCProcedures"; ASPECT=CheckDuplicates; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -4114,7 +4114,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_wal_status")) {
-        // CANARY: REQ=REQ-CDC-PROC-019; FEATURE="CDCProcedures"; ASPECT=GetWalStatus; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-019; FEATURE="CDCProcedures"; ASPECT=GetWalStatus; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -4138,7 +4138,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.configure_wal_tail")) {
-        // CANARY: REQ=REQ-CDC-PROC-020; FEATURE="CDCProcedures"; ASPECT=ConfigureWalTail; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-020; FEATURE="CDCProcedures"; ASPECT=ConfigureWalTail; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "tail_position");
@@ -4149,7 +4149,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.set_retention_policy")) {
-        // CANARY: REQ=REQ-CDC-PROC-021; FEATURE="CDCProcedures"; ASPECT=SetRetentionPolicy; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-021; FEATURE="CDCProcedures"; ASPECT=SetRetentionPolicy; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
         const row = try allocator.alloc(Value, 1);
@@ -4158,7 +4158,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.cleanup_expired_events")) {
-        // CANARY: REQ=REQ-CDC-PROC-022; FEATURE="CDCProcedures"; ASPECT=CleanupExpiredEvents; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-022; FEATURE="CDCProcedures"; ASPECT=CleanupExpiredEvents; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "cleaned_events");
         columns[1] = try allocator.dupe(u8, "bytes_freed");
@@ -4171,7 +4171,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_telemetry_metrics")) {
-        // CANARY: REQ=REQ-CDC-PROC-023; FEATURE="CDCProcedures"; ASPECT=GetTelemetryMetrics; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-023; FEATURE="CDCProcedures"; ASPECT=GetTelemetryMetrics; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -4196,7 +4196,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.get_performance_alerts")) {
-        // CANARY: REQ=REQ-CDC-PROC-024; FEATURE="CDCProcedures"; ASPECT=GetPerformanceAlerts; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-024; FEATURE="CDCProcedures"; ASPECT=GetPerformanceAlerts; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         const columns = try allocator.alloc([]const u8, 4);
         columns[0] = try allocator.dupe(u8, "alert_type");
         columns[1] = try allocator.dupe(u8, "threshold_exceeded");
@@ -4211,7 +4211,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.stop")) {
-        // CANARY: REQ=REQ-CDC-PROC-025; FEATURE="CDCProcedures"; ASPECT=Stop; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-025; FEATURE="CDCProcedures"; ASPECT=Stop; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
@@ -4232,7 +4232,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else if (std.mem.eql(u8, proc_name, "cdc.start")) {
-        // CANARY: REQ=REQ-CDC-PROC-026; FEATURE="CDCProcedures"; ASPECT=Start; STATUS=IMPL; OWNER=cdc; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-CDC-PROC-026; FEATURE="CDCProcedures"; ASPECT=Start; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 

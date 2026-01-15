@@ -5,7 +5,7 @@ const vector_index = @import("../index/vector_index.zig");
 const spatial_index = @import("../index/spatial_index.zig");
 const hnsw = @import("../index/hnsw.zig");
 
-// CANARY: REQ=REQ-GQL-ADVANCED-TYPES-OPTIMIZER; FEATURE="Advanced Types Query Optimizer"; ASPECT=Optimizer; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_ADVANCED_TYPES_OPTIMIZER_All; OWNER=optimizer; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-ADVANCED-TYPES-OPTIMIZER; FEATURE="Advanced Types Query Optimizer"; ASPECT=Optimizer; STATUS=TESTED; TEST=src/optimizer/advanced_types_optimizer.zig; OWNER=optimizer; UPDATED=2026-01-15
 
 /// Advanced types query optimizer
 /// Provides cost-based optimization for vector, geographic, and cryptographic operations

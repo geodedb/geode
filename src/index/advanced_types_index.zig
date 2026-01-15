@@ -13,7 +13,7 @@ const jsonb_persist = @import("jsonb_inverted_persist.zig");
 const domain_trie = @import("domain_trie.zig");
 const domain_persist = @import("domain_trie_persist.zig");
 
-// CANARY: REQ=REQ-GQL-ADVANCED-INDEX-INTEGRATION; FEATURE="Advanced Types Index Integration"; ASPECT=Index; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_ADVANCED_INDEX_INTEGRATION_All; OWNER=index; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-ADVANCED-INDEX-INTEGRATION; FEATURE="Advanced Types Index Integration"; ASPECT=Index; STATUS=TESTED; TEST=src/index/advanced_types_index.zig; OWNER=index; UPDATED=2026-01-15
 
 /// Advanced types index integration layer
 /// Bridges our advanced types (Vector, Geographic, Cryptographic) with specialized indexes

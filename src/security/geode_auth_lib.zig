@@ -1,4 +1,5 @@
 // (Removed duplicated preamble section)
+// CANARY: REQ=REQ-0005; FEATURE="Security Requirements"; ASPECT=Security; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=security; UPDATED=2026-01-15
 // Clean reconstructed auth.zig with consolidated definitions (RBAC, ABAC, RLS, Sessions, MFA Policies)
 const std = @import("std");
 const Allocator = std.mem.Allocator;

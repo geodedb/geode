@@ -9,7 +9,7 @@ const builtin = @import("builtin");
 // - AwsKms: AWS Key Management Service (enterprise)
 //
 // GAP-0086: External KMS Integration Implementation
-// CANARY: REQ=REQ-GQL-TDE-EXT-KMS-001; FEATURE="ExternalKMSIntegration"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_001; OWNER=security; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GQL-TDE-EXT-KMS-001; FEATURE="ExternalKMSIntegration"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_001; OWNER=security; UPDATED=2026-01-15
 
 /// KMS Backend Type
 pub const KmsBackend = enum {
@@ -20,7 +20,7 @@ pub const KmsBackend = enum {
     GcpKms, // Google Cloud KMS (future)
 
     /// Check if this backend is safe for production use
-    /// CANARY: REQ=REQ-GQL-KMS-BACKEND-001; FEATURE="KMS Backend Safety Check"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-KMS-BACKEND-001; FEATURE="KMS Backend Safety Check"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
     pub fn isProductionSafe(self: KmsBackend) bool {
         return switch (self) {
             .LocalSimulated => false, // Never safe for production
@@ -37,7 +37,7 @@ pub const is_production_build = @import("builtin").mode == .ReleaseFast or
     @import("builtin").mode == .ReleaseSafe;
 
 /// KMS Configuration for enterprise backends
-/// CANARY: REQ=REQ-GQL-KMS-CONFIG-001; FEATURE="KMS Configuration"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+/// CANARY: REQ=REQ-GQL-KMS-CONFIG-001; FEATURE="KMS Configuration"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
 pub const KmsConfig = struct {
     backend: KmsBackend = .VaultTransit, // Default to Vault (requires configuration)
     // Vault Transit configuration
@@ -56,7 +56,7 @@ pub const KmsConfig = struct {
     tls_skip_verify: bool = false, // Skip TLS verification (insecure, testing only)
 
     // GAP-0135: Production safety check for TLS configuration
-    // CANARY: REQ=REQ-KMS-TLS-SAFETY-001; FEATURE="KMS TLS Production Guard"; ASPECT=Security; STATUS=IMPL; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-KMS-TLS-SAFETY-001; FEATURE="KMS TLS Production Guard"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
     /// Check if this configuration is safe for production use
     pub fn isSecureForProduction(self: KmsConfig) bool {
         // tls_skip_verify should never be true in production
@@ -124,7 +124,7 @@ pub const KmsProvider = struct {
 
 /// Vault Transit client with actual HTTP implementation
 /// GAP-0086: HashiCorp Vault Transit backend implementation
-/// CANARY: REQ=REQ-GQL-TDE-VAULT-001; FEATURE="VaultTransitKMS"; ASPECT=SECURITY; STATUS=IMPL; UPDATED=2026-01-10
+/// CANARY: REQ=REQ-GQL-TDE-VAULT-001; FEATURE="VaultTransitKMS"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
 pub const VaultTransitClient = struct {
     allocator: std.mem.Allocator,
     config: KmsConfig,
@@ -396,7 +396,7 @@ pub const VaultTransitClient = struct {
 
 /// AWS KMS client with actual HTTP implementation
 /// GAP-0086: AWS Key Management Service backend implementation
-/// CANARY: REQ=REQ-GQL-TDE-AWS-001; FEATURE="AwsKmsIntegration"; ASPECT=SECURITY; STATUS=IMPL; UPDATED=2026-01-10
+/// CANARY: REQ=REQ-GQL-TDE-AWS-001; FEATURE="AwsKmsIntegration"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
 pub const AwsKmsClient = struct {
     allocator: std.mem.Allocator,
     config: KmsConfig,
@@ -767,7 +767,7 @@ pub const Envelope = struct {
 /// LocalSimulated KMS Client - FOR DEVELOPMENT/TESTING ONLY
 /// Uses local AES-256-GCM with deterministic key derived from seed
 /// WARNING: This is NOT a real KMS integration. Production must use VaultTransit or AwsKms.
-/// CANARY: REQ=REQ-GQL-KMS-LOCALSIM-001; FEATURE="LocalSimulated KMS Client"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+/// CANARY: REQ=REQ-GQL-KMS-LOCALSIM-001; FEATURE="LocalSimulated KMS Client"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
 pub const Client = struct {
     allocator: std.mem.Allocator,
     kek: [32]u8, // simulated Key Encryption Key (would be remote / HSM-controlled)
@@ -856,7 +856,7 @@ pub fn envelopeFromJson(json: []const u8) !Envelope {
         return error.UnsupportedAlgorithm;
     }
     // GAP-0141: Safe hex parsing with proper error handling
-    // CANARY: REQ=REQ-HEX-PARSE-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-HEX-PARSE-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
     const nonce_start = nonce_key + 9;
     const nonce_end = nonce_start + 24;
     if (nonce_end > json.len) return error.InvalidEnvelope;

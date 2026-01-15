@@ -495,7 +495,7 @@ pub const IndexManager = struct {
 
     /// Range scan on property index using B-tree range query
     /// Returns all node IDs where the indexed value is between start_key and end_key
-    /// CANARY: REQ=REQ-GQL-INDEX-RANGE-001; FEATURE="B-Tree Range Scan"; ASPECT=QUERY; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-INDEX-RANGE-001; FEATURE="B-Tree Range Scan"; ASPECT=QUERY; STATUS=TESTED; TEST=tests/index_operations_test.sh; OWNER=storage; UPDATED=2026-01-15
     pub fn rangeScan(
         self: *IndexManager,
         index_name: []const u8,

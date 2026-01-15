@@ -17,7 +17,7 @@ const have_tde = true; // placeholder (TDE accessed via higher layer)
 // Each slot entry: offset(u16), size(u16).
 
 // CANARY: PERF_PHASE2_ADLER32 - Optimized Adler32 with chunked processing
-// CANARY: REQ=REQ-PERF-PHASE2-001; FEATURE="StorageOptimization"; ASPECT=CHECKSUM; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE2-001; FEATURE="StorageOptimization"; ASPECT=CHECKSUM; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=performance; UPDATED=2026-01-15
 // Phase 2 optimization: Process 16 bytes at a time before modulo for 2-3x improvement
 fn adler32(data: []const u8) u32 {
     var a: u32 = 1;
@@ -46,7 +46,7 @@ fn adler32(data: []const u8) u32 {
 }
 
 // CANARY: PERF_PHASE2_DIRTY_TRACKING - Dirty page tracking for checksum optimization
-// CANARY: REQ=REQ-PERF-PHASE2-002; FEATURE="StorageOptimization"; ASPECT=DIRTY_TRACKING; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE2-002; FEATURE="StorageOptimization"; ASPECT=DIRTY_TRACKING; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=performance; UPDATED=2026-01-15
 pub const Page = struct {
     buf: []u8,
     // Phase 2 optimization: Track checksum validity to avoid redundant recomputation
@@ -201,10 +201,10 @@ pub const Page = struct {
 
 // LEGACY XOR ENCRYPTION REMOVED - January 12, 2026
 // All encryption now uses AES-256-GCM via page_encryption.zig
-// CANARY: REQ=REQ-GQL-TDE-AES-ONLY-001; FEATURE="AES256GCMOnly"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+// CANARY: REQ=REQ-GQL-TDE-AES-ONLY-001; FEATURE="AES256GCMOnly"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 // CANARY: PERF_PHASE2_WRITE_BATCHING - Write batching for reduced fsync calls
-// CANARY: REQ=REQ-PERF-PHASE2-004; FEATURE="StorageOptimization"; ASPECT=IO_BATCHING; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE2-004; FEATURE="StorageOptimization"; ASPECT=IO_BATCHING; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=performance; UPDATED=2026-01-15
 pub const PageManager = struct {
     allocator: std.mem.Allocator,
     pages: std.ArrayList([]u8),
@@ -249,7 +249,7 @@ pub const PageManager = struct {
         };
     }
 
-    // CANARY: REQ=REQ-GQL-TDE-AES-ONLY-001; FEATURE="AES256GCMOnly"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    // CANARY: REQ=REQ-GQL-TDE-AES-ONLY-001; FEATURE="AES256GCMOnly"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
     // All encryption now uses AES-256-GCM exclusively. Legacy XOR support has been removed.
     fn loadEncConfig(self: *PageManager) void {
         self.enc_enabled = false;

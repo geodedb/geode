@@ -239,7 +239,7 @@ const protocol = geode.protocol;
 const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
 const txn_mgr = @import("txn");
-// CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerIntegration; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Wire ABAC enforcement into server execution paths
 const geode_auth = @import("geode_auth");
 
@@ -335,7 +335,7 @@ pub const ServerState = struct {
     // Graph type registry for CREATE/DROP GRAPH TYPE persistence
     graph_types: std.HashMap([]const u8, GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
 
-    // CANARY: REQ=REQ-ABAC-WIRE-002; FEATURE="ABAC Enforcement"; ASPECT=SecurityManager; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-ABAC-WIRE-002; FEATURE="ABAC Enforcement"; ASPECT=SecurityManager; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Security management for RBAC/ABAC - wired into server execution paths
     security_manager: ?*geode_auth.SecurityManager = null,
     current_user_id: ?geode_auth.UserId = null,

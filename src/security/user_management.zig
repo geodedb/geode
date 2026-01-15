@@ -1,7 +1,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 
-// CANARY: REQ=REQ-AUTH-001; FEATURE="UserManagement"; ASPECT=Authentication; STATUS=IMPLEMENTED; OWNER=security; UPDATED=2025-10-14
+// CANARY: REQ=REQ-AUTH-001; FEATURE="UserManagement"; ASPECT=Authentication; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 // User management system with bcrypt password hashing and role-based access control
 
 pub const Role = enum {

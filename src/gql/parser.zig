@@ -1,3 +1,5 @@
+// CANARY: REQ=REQ-0001; FEATURE="Standards & Conformance Requirements"; ASPECT=Compliance; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=core; UPDATED=2026-01-15
+// CANARY: REQ=REQ-0002; FEATURE="Language Surface Requirements"; ASPECT=Compliance; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=core; UPDATED=2026-01-15
 // CANARY: REQ=REQ-GQL-006; FEATURE="GQL Parser"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-007; FEATURE="MATCH/OPTIONAL Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_graph_match.zig; OWNER=parser; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-008; FEATURE="ORDER/LIMIT/OFFSET Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2025-09-20
@@ -5665,7 +5667,7 @@ pub const Parser = struct {
 
     // Parse CREATE GRAPH TYPE statement
     // CANARY: FLE_PARSER_FIELD_DEFINITIONS - Field-Level Encryption Parser Extensions
-    // CANARY: REQ=REQ-FLE-PARSER-001; FEATURE="FieldLevelEncryption"; ASPECT=PARSER; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+    // CANARY: REQ=REQ-FLE-PARSER-001; FEATURE="FieldLevelEncryption"; ASPECT=PARSER; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
     /// Parse field definitions within graph type: { field1 TYPE, field2 TYPE @annotations, ... }
     fn parseFieldDefinitions(self: *Parser) ParserError![]ast.FieldDefinition {

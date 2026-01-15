@@ -4,7 +4,7 @@ const repl_errors = @import("repl_errors.zig");
 const repl_render = @import("repl_render.zig");
 const platform = @import("platform.zig");
 
-// CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=ClientSession; STATUS=IMPL; TEST=test_quic_integration; OWNER=repl; UPDATED=2025-10-05
+// CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=ClientSession; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
 
 // Transport interface - implemented by CLI layer to avoid module conflicts
 
@@ -194,7 +194,7 @@ pub const ClientSession = struct {
     }
 
     /// GAP-0150: Authenticated HELLO handshake for CLI authentication
-    /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=AuthenticatedHello; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+    /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=AuthenticatedHello; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=security; UPDATED=2026-01-15
     pub const AuthHelloResult = struct {
         success: bool,
         session_token: ?[]const u8,

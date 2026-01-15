@@ -1,6 +1,6 @@
 // Test suite for TDE nonce uniqueness and security
 // CANARY: REQ=REQ-TDE-NONCE-001; FEATURE="TDE_AES_GCM_Nonce_Security";
-//         ASPECT=TESTING; STATUS=IMPL; OWNER=security; UPDATED=2025-10-16
+//         ASPECT=TESTING; STATUS=TESTED; TEST=src/security/test_tde_nonce.zig; OWNER=security; UPDATED=2026-01-15
 
 const std = @import("std");
 const testing = std.testing;

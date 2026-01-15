@@ -408,7 +408,7 @@ pub fn main() !void {
             // QUIC transport uses event-driven callbacks, no polling needed
             log.debug("Test mode - calling handleQuicConnection", .{});
 
-            // CANARY: REQ=REQ-ABAC-WIRE-015; FEATURE="ABAC Enforcement"; ASPECT=QUICCall; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+            // CANARY: REQ=REQ-ABAC-WIRE-015; FEATURE="ABAC Enforcement"; ASPECT=QUICCall; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
             // GAP-0165: Pass SecurityManager to handleQuicConnection for ABAC enforcement
             quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err| {
                 std.debug.print("Error handling QUIC connection: {}\n", .{err});
@@ -424,7 +424,7 @@ pub fn main() !void {
                 // QUIC transport uses event-driven callbacks, no polling needed
                 log.debug("Main loop - calling handleQuicConnection", .{});
 
-                // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+                // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
                 // GAP-0165: Pass SecurityManager to handleQuicConnection in production loop
                 quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err| {
                     std.debug.print("Error handling QUIC connection: {}\n", .{err});
@@ -471,7 +471,7 @@ pub fn main() !void {
     state.spill_distinct = env_spill_distinct;
     state.spill_union = env_spill_union;
     state.query_mem_limit_bytes = env_spill_threshold;
-    // CANARY: REQ=REQ-ABAC-WIRE-011; FEATURE="ABAC Enforcement"; ASPECT=StdioState; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-ABAC-WIRE-011; FEATURE="ABAC Enforcement"; ASPECT=StdioState; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Wire SecurityManager into ServerState for stdio mode ABAC enforcement
     state.security_manager = init_ctx.security_manager;
     state.storage_checksum_error = env_storage_checksum_error;

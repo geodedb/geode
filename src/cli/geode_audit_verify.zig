@@ -1,7 +1,7 @@
 const std = @import("std");
 const Ed25519 = std.crypto.sign.Ed25519;
 
-// CANARY: REQ=REQ-AUDIT-VERIFY-001; FEATURE="Audit Verification"; ASPECT=ChainVerification; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+// CANARY: REQ=REQ-AUDIT-VERIFY-001; FEATURE="Audit Verification"; ASPECT=ChainVerification; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
 // GAP-0151 RESOLVED: Now implements Ed25519 signature verification and digest interval validation
 
 pub const HashAlgo = enum { sha256, blake3 };
@@ -34,7 +34,7 @@ pub fn hex64(buf: []const u8) VerifyError![64]u8 {
 }
 
 /// GAP-0151: Full audit verification with Ed25519 signature and digest interval validation
-/// CANARY: REQ=REQ-AUDIT-VERIFY-002; FEATURE="Audit Signature Verification"; ASPECT=Ed25519Verify; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+/// CANARY: REQ=REQ-AUDIT-VERIFY-002; FEATURE="Audit Signature Verification"; ASPECT=Ed25519Verify; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
 pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo, digest_interval_events: u32, require_digest: bool, pubkey: ?[32]u8) VerifyError!void {
     var file = std.fs.cwd().openFile(path, .{}) catch return error.ReadError;
     defer file.close();

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // CANARY: FLE_CRYPTO_PRIMITIVES - HKDF Key Derivation
-// CANARY: REQ=REQ-FLE-HKDF-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: REQ=REQ-FLE-HKDF-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=src/crypto/hkdf.zig; OWNER=security; UPDATED=2026-01-15
 
 /// HKDF-SHA256 key derivation
 /// Based on RFC 5869

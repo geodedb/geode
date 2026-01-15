@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // CANARY: FLE_BLIND_INDEX - HMAC for Blind Index Tokens
-// CANARY: REQ=REQ-FLE-BI-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: REQ=REQ-FLE-BI-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=src/crypto/hmac.zig; OWNER=security; UPDATED=2026-01-15
 
 /// Compute HMAC-SHA256 blind index token
 pub fn blindIndexHmac256(out: *[32]u8, bik: []const u8, normalized: []const u8) void {

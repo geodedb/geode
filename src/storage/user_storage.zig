@@ -4,7 +4,7 @@ const interface = @import("interface");
 const page_manager = @import("storage_page_manager");
 
 // Persistent storage backend for user management system
-// CANARY: REQ=REQ-GQL-202; FEATURE="UserStorage"; ASPECT=PersistentStorage; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_202_UserStorage; OWNER=security; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-202; FEATURE="UserStorage"; ASPECT=PersistentStorage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_202_UserStorage; OWNER=security; UPDATED=2026-01-15
 
 pub const UserStorageBackend = struct {
     allocator: Allocator,

@@ -4,7 +4,7 @@ const fle_aead = @import("fle_aead");
 const hkdf = @import("fle_hkdf");
 
 // CANARY: FLE_KEY_MANAGER - Hierarchical Key Manager with Cache and Rotation
-// CANARY: REQ=REQ-FLE-KEY-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: REQ=REQ-FLE-KEY-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 pub const Error = error{
     KeyNotFound,

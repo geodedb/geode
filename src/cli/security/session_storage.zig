@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-AUTH-SESSION-001; FEATURE="LocalSessionStorage"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_001; OWNER=security; UPDATED=2025-10-14
+// CANARY: REQ=REQ-AUTH-SESSION-001; FEATURE="LocalSessionStorage"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -128,7 +128,7 @@ pub const CredentialStore = struct {
     }
 
     pub fn saveCredentials(self: *CredentialStore, creds: Credentials) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-002; FEATURE="SaveSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_002; OWNER=security; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-AUTH-SESSION-002; FEATURE="SaveSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
         const file = try std.fs.createFileAbsolute(self.file_path, .{ .truncate = true });
         defer file.close();
@@ -156,7 +156,7 @@ pub const CredentialStore = struct {
     }
 
     pub fn loadCredentials(self: *CredentialStore) !?Credentials {
-        // CANARY: REQ=REQ-AUTH-SESSION-003; FEATURE="LoadSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_003; OWNER=security; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-AUTH-SESSION-003; FEATURE="LoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
         const file = std.fs.openFileAbsolute(self.file_path, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
@@ -215,7 +215,7 @@ pub const CredentialStore = struct {
     }
 
     pub fn deleteCredentials(self: *CredentialStore) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-004; FEATURE="DeleteSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_004; OWNER=security; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-AUTH-SESSION-004; FEATURE="DeleteSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
         std.fs.deleteFileAbsolute(self.file_path) catch |err| {
             if (err != error.FileNotFound) return err;
         };
@@ -265,7 +265,7 @@ pub const SessionRegistry = struct {
     }
 
     pub fn addSession(self: *SessionRegistry, token_hex: []const u8, session: SessionToken) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-005; FEATURE="RegisterSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_005; OWNER=security; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-AUTH-SESSION-005; FEATURE="RegisterSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -275,7 +275,7 @@ pub const SessionRegistry = struct {
     }
 
     pub fn getSession(self: *SessionRegistry, token_hex: []const u8) ?*SessionToken {
-        // CANARY: REQ=REQ-AUTH-SESSION-006; FEATURE="ValidateSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_006; OWNER=security; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-AUTH-SESSION-006; FEATURE="ValidateSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -295,7 +295,7 @@ pub const SessionRegistry = struct {
     }
 
     pub fn cleanupExpired(self: *SessionRegistry) void {
-        // CANARY: REQ=REQ-AUTH-SESSION-007; FEATURE="CleanupExpiredSessions"; ASPECT=IMPL; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_SESSION_007; OWNER=security; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-AUTH-SESSION-007; FEATURE="CleanupExpiredSessions"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
         self.mutex.lock();
         defer self.mutex.unlock();

@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-001; FEATURE="Phase 7 Modularization"; ASPECT=SchemaManager; STATUS=IMPL; OWNER=schema; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-001; FEATURE="Phase 7 Modularization"; ASPECT=SchemaManager; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=schema; UPDATED=2026-01-15
 // Phase 7 M7.1: Unified schema management interface
 //
 // This module provides a centralized interface for all schema-related operations,
