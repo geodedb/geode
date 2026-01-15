@@ -2170,10 +2170,12 @@ const SimplifiedRestoreManager = struct {
 
         // Read entire file into memory for processing
         const stat = file.stat() catch return error.ReadError;
-        const file_data = self.allocator.alloc(u8, stat.size) catch return error.OutOfMemory;
+        // Cast to usize (safely truncates on 32-bit platforms; backup files should not exceed addressable memory)
+        const file_size: usize = @intCast(stat.size);
+        const file_data = self.allocator.alloc(u8, file_size) catch return error.OutOfMemory;
         defer self.allocator.free(file_data);
         const bytes_read = file.readAll(file_data) catch return error.ReadError;
-        if (bytes_read != stat.size) return error.ReadError;
+        if (bytes_read != file_size) return error.ReadError;
 
         // Use a fixed buffer stream for reading
         var fbs = std.io.fixedBufferStream(file_data);
