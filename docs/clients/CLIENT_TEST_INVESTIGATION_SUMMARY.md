@@ -192,7 +192,7 @@ The server may be requiring client certificates even when clients don't provide 
 
 ## Workaround
 
-Until QUIC is fixed, use `--no-quic` mode:
+Until QUIC is fixed, use `--insecure` mode:
 
 **Test Harness** (`run_tests.py:137`):
 ```python
@@ -201,7 +201,7 @@ self.process = await asyncio.create_subprocess_exec(
     "serve",
     "--listen",
     listen_addr,
-    "--no-quic",  # Use TCP until QUIC is fixed
+    "--insecure",  # Use TCP until QUIC is fixed
     ...
 )
 ```
@@ -212,7 +212,7 @@ self.process = await asyncio.create_subprocess_exec(
 
 1. `clients/python/geode_client/client.py` - QUIC improvements
 2. `clients/python/geode_client/types.py` - Added `raw_value`
-3. `clients/test-harness/run_tests.py` - Can add `--no-quic` if needed
+3. `clients/test-harness/run_tests.py` - Can add `--insecure` if needed
 4. `clients/CLIENT_TEST_FIXES_NEEDED.md` - Initial investigation
 5. `clients/CLIENT_TEST_INVESTIGATION_SUMMARY.md` - This file
 

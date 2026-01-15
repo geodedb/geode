@@ -34,15 +34,24 @@ fn executeCommand(allocator: std.mem.Allocator, args: []const []const u8) !struc
     };
 }
 
-// Test actual --no-quic flag with unified binary
-test "integration --no-quic flag returns success with JSON" {
+fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
+    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+}
+
+// Test actual --insecure flag with unified binary
+test "integration query executes with configured server" {
     const allocator = testing.allocator;
+
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
 
     const args = [_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 1 AS test",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     };
 
     const result = try executeCommand(allocator, &args);
@@ -53,26 +62,28 @@ test "integration --no-quic flag returns success with JSON" {
     try expect(result.exit_code == 0);
 
     // Verify JSON response format
-    try expect(std.mem.indexOf(u8, result.stdout, "\"message\":\"Query executed in no-quic mode (test compatibility)\"") != null);
-    try expect(std.mem.indexOf(u8, result.stdout, "\"query\":\"RETURN 1 AS test\"") != null);
+    try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"SCHEMA\"") != null);
+    try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"BINDINGS\"") != null);
+    try expect(std.mem.indexOf(u8, result.stdout, "\"test\":1") != null);
 
     // Verify it's valid JSON
     const stdout_trimmed = std.mem.trim(u8, result.stdout, " \n\r\t");
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, stdout_trimmed, .{}) catch |err| {
-        std.debug.print("Failed to parse JSON: '{s}'\n", .{stdout_trimmed});
+    const newline_idx = std.mem.indexOfScalar(u8, stdout_trimmed, '\n') orelse stdout_trimmed.len;
+    const first_line = stdout_trimmed[0..newline_idx];
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, first_line, .{}) catch |err| {
+        std.debug.print("Failed to parse JSON: '{s}'\n", .{first_line});
         return err;
     };
     defer parsed.deinit();
 }
 
-// Test actual QUIC mode returns usage error
-test "integration QUIC mode returns usage error" {
+// Test query without text returns usage error
+test "integration query without text returns usage error" {
     const allocator = testing.allocator;
 
     const args = [_][]const u8{
         "./zig-out/bin/geode",
         "query",
-        "RETURN 1 AS test",
     };
 
     const result = try executeCommand(allocator, &args);
@@ -83,13 +94,15 @@ test "integration QUIC mode returns usage error" {
     try expect(result.exit_code == 2);
 
     // Verify error message content
-    try expect(std.mem.indexOf(u8, result.stderr, "Error: Direct QUIC client functionality has been moved") != null);
-    try expect(std.mem.indexOf(u8, result.stderr, "Use 'geode shell --server") != null);
+    try expect(std.mem.indexOf(u8, result.stderr, "Error: query text required") != null);
 }
 
-// Test complex query with --no-quic
-test "integration complex query with --no-quic" {
+// Test complex query with --insecure
+test "integration complex query with --insecure" {
     const allocator = testing.allocator;
+
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
 
     const complex_query = "MATCH (person:Person)-[:KNOWS]->(friend:Person) WHERE person.age > 25 RETURN person.name, friend.name";
 
@@ -97,7 +110,9 @@ test "integration complex query with --no-quic" {
         "./zig-out/bin/geode",
         "query",
         complex_query,
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     };
 
     const result = try executeCommand(allocator, &args);
@@ -107,8 +122,9 @@ test "integration complex query with --no-quic" {
     // Should succeed
     try expect(result.exit_code == 0);
 
-    // Should contain the query in response
-    try expect(std.mem.indexOf(u8, result.stdout, complex_query) != null);
+    // Should contain schema and bindings output
+    try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"SCHEMA\"") != null);
+    try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"BINDINGS\"") != null);
 }
 
 // Test server address parameter in error message
@@ -120,30 +136,35 @@ test "integration server address in error message" {
         "query",
         "RETURN 1",
         "--server",
-        "custom.host:9000",
+        "127.0.0.1:1",
     };
 
     const result = try executeCommand(allocator, &args);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    // Should return usage error
-    try expect(result.exit_code == 2);
+    // Should return a non-zero exit code
+    try expect(result.exit_code != 0);
 
     // Should include custom server address
-    try expect(std.mem.indexOf(u8, result.stderr, "custom.host:9000") != null);
+    try expect(std.mem.indexOf(u8, result.stderr, "127.0.0.1:1") != null);
 }
 
 // Test that no subprocess binaries are spawned (no geodec/geoded calls)
 test "integration no subprocess spawning verification" {
     const allocator = testing.allocator;
 
-    // Test with --no-quic to ensure it doesn't try to spawn geodec
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
+    // Test with --insecure to ensure it doesn't try to spawn geodec
     const args = [_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 'subprocess test' AS message",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     };
 
     const result = try executeCommand(allocator, &args);
@@ -212,13 +233,16 @@ test "integration shell command compatibility" {
 test "integration output format consistency" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     const test_cases = [_]struct {
         query: []const u8,
         expected_pattern: []const u8,
     }{
         .{ .query = "RETURN 'hello' AS greeting", .expected_pattern = "hello" },
         .{ .query = "RETURN 42 AS number", .expected_pattern = "42" },
-        .{ .query = "CREATE (n:Test)", .expected_pattern = "CREATE (n:Test)" },
+        .{ .query = "RETURN 7 AS seven", .expected_pattern = "7" },
     };
 
     for (test_cases) |test_case| {
@@ -226,7 +250,9 @@ test "integration output format consistency" {
             "./zig-out/bin/geode",
             "query",
             test_case.query,
-            "--no-quic",
+            "--server",
+            server,
+            "--insecure",
         };
 
         const result = try executeCommand(allocator, &args);
@@ -240,8 +266,8 @@ test "integration output format consistency" {
         try expect(std.mem.indexOf(u8, result.stdout, test_case.expected_pattern) != null);
 
         // All should have consistent JSON format
-        try expect(std.mem.indexOf(u8, result.stdout, "\"message\":") != null);
-        try expect(std.mem.indexOf(u8, result.stdout, "\"query\":") != null);
+        try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"SCHEMA\"") != null);
+        try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"BINDINGS\"") != null);
     }
 }
 
@@ -249,13 +275,18 @@ test "integration output format consistency" {
 test "integration performance timing" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     const start_time = std.time.milliTimestamp();
 
     const args = [_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 'performance test' AS message",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     };
 
     const result = try executeCommand(allocator, &args);
@@ -278,6 +309,9 @@ test "integration performance timing" {
 test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_001" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     // CANARY: This test verifies CLI subprocess elimination integration functionality
     // as specified in REQ-CLI-SUBPROCESS-INTEGRATION-001
 
@@ -285,7 +319,9 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_001" {
         "./zig-out/bin/geode",
         "query",
         "CANARY INTEGRATION TEST",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     };
 
     const result = try executeCommand(allocator, &args);

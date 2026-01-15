@@ -10,7 +10,7 @@ GEODE_BIN="./zig-out/bin/geode"
 
 # Test 1: --format flag auto-routing
 echo "Test 1: --format flag auto-routing"
-result=$($GEODE_BIN --format json "RETURN 'format_test' AS test" --no-quic 2>/dev/null | grep '"test":"format_test"' || echo "FAIL")
+result=$($GEODE_BIN --format json "RETURN 'format_test' AS test" --insecure 2>/dev/null | grep '"test":"format_test"' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: --format flag should auto-route to query command"
     exit 1
@@ -19,7 +19,7 @@ echo "PASS: --format flag auto-routing"
 
 # Test 2: --server flag auto-routing
 echo "Test 2: --server flag auto-routing"
-result=$($GEODE_BIN --server localhost:8443 "RETURN 'server_test' AS test" --no-quic 2>/dev/null | grep '"test":"server_test"' || echo "FAIL")
+result=$($GEODE_BIN --server localhost:8443 "RETURN 'server_test' AS test" --insecure 2>/dev/null | grep '"test":"server_test"' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: --server flag should auto-route to query command"
     exit 1
@@ -28,7 +28,7 @@ echo "PASS: --server flag auto-routing"
 
 # Test 3: --page-size flag auto-routing
 echo "Test 3: --page-size flag auto-routing"
-result=$($GEODE_BIN --page-size 100 "RETURN 'page_test' AS test" --no-quic 2>/dev/null | grep '"test":"page_test"' || echo "FAIL")
+result=$($GEODE_BIN --page-size 100 "RETURN 'page_test' AS test" --insecure 2>/dev/null | grep '"test":"page_test"' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: --page-size flag should auto-route to query command"
     exit 1
@@ -37,7 +37,7 @@ echo "PASS: --page-size flag auto-routing"
 
 # Test 4: --json-param flag auto-routing
 echo "Test 4: --json-param flag auto-routing"
-result=$($GEODE_BIN --json-param test_param test_value "RETURN 'json_param_test' AS test" --no-quic 2>/dev/null | grep '"test":"json_param_test"' || echo "FAIL")
+result=$($GEODE_BIN --json-param test_param test_value "RETURN 'json_param_test' AS test" --insecure 2>/dev/null | grep '"test":"json_param_test"' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: --json-param flag should auto-route to query command"
     exit 1
@@ -46,7 +46,7 @@ echo "PASS: --json-param flag auto-routing"
 
 # Test 5: Multiple query flags auto-routing
 echo "Test 5: Multiple query flags auto-routing"
-result=$($GEODE_BIN --format json --page-size 50 "RETURN 'multi_flag_test' AS test" --no-quic 2>/dev/null | grep '"test":"multi_flag_test"' || echo "FAIL")
+result=$($GEODE_BIN --format json --page-size 50 "RETURN 'multi_flag_test' AS test" --insecure 2>/dev/null | grep '"test":"multi_flag_test"' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Multiple query flags should auto-route to query command"
     exit 1
@@ -55,7 +55,7 @@ echo "PASS: Multiple query flags auto-routing"
 
 # Test 6: Query flags mixed with GQL keywords
 echo "Test 6: Query flags mixed with GQL keywords"
-result=$($GEODE_BIN --format table "MATCH (n) RETURN count(n) AS node_count" --no-quic 2>/dev/null | grep '"node_count"' || echo "FAIL")
+result=$($GEODE_BIN --format table "MATCH (n) RETURN count(n) AS node_count" --insecure 2>/dev/null | grep '"node_count"' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Query flags with MATCH keyword should work"
     exit 1
@@ -83,7 +83,7 @@ echo "PASS: Global flags do not auto-route"
 
 # Test 9: Query options with embedded server
 echo "Test 9: Query options with embedded server"
-result=$($GEODE_BIN --format json "CREATE (n:AutoRoute {test: 'embedded'}) RETURN n" --no-quic 2>/dev/null | grep '"test":"embedded"' || echo "FAIL")
+result=$($GEODE_BIN --format json "CREATE (n:AutoRoute {test: 'embedded'}) RETURN n" --insecure 2>/dev/null | grep '"test":"embedded"' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Query options should work with embedded server"
     exit 1
@@ -93,8 +93,8 @@ echo "PASS: Query options with embedded server"
 # Test 10: Flag order independence
 echo "Test 10: Flag order independence"
 # Test different flag orders
-result1=$($GEODE_BIN --format json "RETURN 1 AS order_test" --no-quic 2>/dev/null | grep '"order_test":1' || echo "FAIL")
-result2=$($GEODE_BIN "RETURN 2 AS order_test" --format json --no-quic 2>/dev/null | grep '"order_test":2' || echo "FAIL")
+result1=$($GEODE_BIN --format json "RETURN 1 AS order_test" --insecure 2>/dev/null | grep '"order_test":1' || echo "FAIL")
+result2=$($GEODE_BIN "RETURN 2 AS order_test" --format json --insecure 2>/dev/null | grep '"order_test":2' || echo "FAIL")
 if [[ $result1 == *"FAIL"* ]] || [[ $result2 == *"FAIL"* ]]; then
     echo "FAIL: Flag order should not matter"
     exit 1

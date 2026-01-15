@@ -2,7 +2,7 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 14, 2026 (Session 2)
+**Last Updated**: January 14, 2026 (Session 4)
 **Last Verified**: January 14, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
@@ -16,10 +16,10 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ### GAP-0164: Missing type:: label taxonomy ✅
 - **GitLab issue:** #255
-- **Fix:** Created scripts/gitlab/create_type_labels.sh to provision type:: labels
+- **Fix:** Provisioned type:: label taxonomy in GitLab (in addition to the provisioning script).
 - **Evidence:**
   - `scripts/gitlab/create_type_labels.sh` - Label provisioning script
-  - Creates type::feature, type::bug, type::enhancement, type::security, type::docs, type::test, type::refactor, type::ci-cd, type::performance
+  - `glab api "projects/77156681/labels?search=type::"` — confirms type::feature, type::bug, type::enhancement, type::security, type::docs, type::test, type::refactor, type::ci-cd, type::performance
 
 ### GAP-0165: ABAC enforcement not wired into server execution ✅
 - **GitLab issue:** #256
@@ -109,6 +109,19 @@ This document contains gaps that have been verified as resolved from previous ga
 - **Fix:** Added CANARY markers and tests for REQ-GQL-OPTIONAL-UNDIRECTED-001, REQ-GQL-ORDERBY-NULLS-001
 - **Evidence:**
   - `tests/test_requirement_traceability.zig` - Traceability tests
+
+---
+
+## January 14, 2026 Gap Resolution Session 4 (GAP-0179)
+
+### GAP-0179: --no-quic flag referenced in docs/tests but not implemented ✅
+- **GitLab issue:** #304
+- **Fix:** Removed no-quic references and aligned docs/tests/scripts with QUIC-only behavior; `--insecure` is documented as TLS validation bypass only.
+- **Evidence:**
+  - `docs/CLI_SUBPROCESS_ELIMINATION.md` - removed no-quic mode references and updated `--insecure` semantics
+  - `tests/test_cli_subprocess_elimination_integration.zig` - integration tests now use `--server` with QUIC
+  - `scripts/test/quick_failure_analysis.py` - removed no-quic categorization
+  - `rg -n "no_quic|no-quic" .` — no matches
 
 ---
 

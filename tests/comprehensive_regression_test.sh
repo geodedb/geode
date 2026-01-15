@@ -27,7 +27,7 @@ run_test() {
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     echo -n "Test $TOTAL_TESTS: $test_name... "
     
-    OUTPUT=$(timeout 5 ./zig-out/bin/geodec "$query" --no-quic 2>&1 || true)
+    OUTPUT=$(timeout 5 ./zig-out/bin/geodec "$query" --insecure 2>&1 || true)
     
     if [ "$test_type" = "positive" ]; then
         if echo "$OUTPUT" | grep -q "$expected_pattern"; then

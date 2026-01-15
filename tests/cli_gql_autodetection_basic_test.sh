@@ -10,7 +10,7 @@ GEODE_BIN="./zig-out/bin/geode"
 
 # Test 1: Basic RETURN query without 'query' subcommand
 echo "Test 1: Basic RETURN query auto-detection"
-result=$($GEODE_BIN "RETURN 1 AS result" --no-quic 2>/dev/null | grep '"result".*1' || echo "FAIL")
+result=$($GEODE_BIN "RETURN 1 AS result" --insecure 2>/dev/null | grep '"result".*1' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Basic RETURN query auto-detection"
     exit 1
@@ -19,7 +19,7 @@ echo "PASS: Basic RETURN query auto-detection"
 
 # Test 2: Invalid GQL syntax detection (currently returns exit code 2, should be 1)
 echo "Test 2: Invalid GQL syntax detection"
-timeout 10 $GEODE_BIN "RETURN INVALID SYNTAX" --no-quic >/dev/null 2>&1
+timeout 10 $GEODE_BIN "RETURN INVALID SYNTAX" --insecure >/dev/null 2>&1
 exit_code=$?
 if [[ $exit_code -eq 0 ]]; then
     echo "FAIL: Invalid GQL syntax should not return success"
@@ -30,7 +30,7 @@ echo "PASS: Invalid GQL syntax detected (exit code: $exit_code)"
 
 # Test 3: Format flag auto-detection
 echo "Test 3: Format flag auto-detection"
-result=$($GEODE_BIN --format json "RETURN 'hello' AS greeting" --no-quic 2>/dev/null | grep '"greeting".*hello' || echo "FAIL")
+result=$($GEODE_BIN --format json "RETURN 'hello' AS greeting" --insecure 2>/dev/null | grep '"greeting".*hello' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Format flag auto-detection"
     exit 1

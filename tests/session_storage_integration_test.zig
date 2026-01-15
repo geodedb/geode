@@ -4,6 +4,10 @@
 const std = @import("std");
 const testing = std.testing;
 
+fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
+    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+}
+
 test "auth login with --save-session creates credentials file" {
     const allocator = testing.allocator;
 
@@ -115,6 +119,9 @@ test "auth logout clears credentials file" {
 test "query command auto-loads saved session" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
     const creds_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
     defer allocator.free(creds_path);
@@ -139,6 +146,8 @@ test "query command auto-loads saved session" {
             "query_test_user",
             "-P",
             "query_test_pass",
+            "--server",
+            server,
             "--save-session",
         },
     });
@@ -151,7 +160,9 @@ test "query command auto-loads saved session" {
         .argv = &[_][]const u8{
             "./zig-out/bin/geode",
             "query",
-            "--no-quic",
+            "--server",
+            server,
+            "--insecure",
             "RETURN 1 AS auto_session_test",
         },
     });
@@ -167,6 +178,9 @@ test "query command auto-loads saved session" {
 
 test "query with --no-saved-session ignores credentials file" {
     const allocator = testing.allocator;
+
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
 
     const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
     const creds_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
@@ -192,19 +206,23 @@ test "query with --no-saved-session ignores credentials file" {
             "nosession_test_user",
             "-P",
             "nosession_test_pass",
+            "--server",
+            server,
             "--save-session",
         },
     });
     allocator.free(result.stdout);
     allocator.free(result.stderr);
 
-    // Run query with --no-saved-session (should still work in --no-quic mode)
+    // Run query with --no-saved-session (should still work in --insecure mode)
     result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
             "./zig-out/bin/geode",
             "query",
-            "--no-quic",
+            "--server",
+            server,
+            "--insecure",
             "--no-saved-session",
             "RETURN 1 AS no_session_test",
         },

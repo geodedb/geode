@@ -14,7 +14,7 @@ The CLI Subprocess Elimination implementation provides a unified binary architec
 - **✅ Unified Binary Design**: Single `geode` binary handles all CLI functionality
 - **✅ Subprocess Elimination**: No more spawning of `geoded` or `geodec` binaries
 - **✅ Direct Function Calls**: Server and client functionality called directly
-- **✅ Test Compatibility**: `--no-quic` flag provides test compatibility mode
+- **✅ TLS Validation Override**: `--insecure` disables certificate validation for test/self-signed environments
 - **✅ Performance Improvement**: Eliminates subprocess overhead and complexity
 - **✅ Simplified Deployment**: One binary instead of multiple separate binaries
 
@@ -23,9 +23,9 @@ The CLI Subprocess Elimination implementation provides a unified binary architec
 ```
 Unified Binary Architecture (geode)
 ├── CLI Command Dispatch (main.zig)
-├── Direct Server Functions (runEmbeddedServer)
-├── Direct Client Functions (runEmbeddedClient)
-├── Configuration Management (ServerConfig, ClientConfig)
+├── Direct Server Functions (startServer)
+├── Direct QUIC Client Execution (executeQuicQuery)
+├── Configuration Management (ServerConfig, inline query params)
 └── Error Handling (ExitCode enum)
 ```
 
@@ -47,13 +47,11 @@ fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
 #### After (Direct Function Calls)
 ```zig
 // NEW: Unified binary approach
-fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
-    // Unified binary architecture - no subprocess spawning
-    std.debug.print("Geode server starting with unified binary (no subprocess spawning)\n", .{});
-    // Direct function call approach (eliminates subprocess)
-    // In production, this would call the server main function directly
-    std.debug.print("✅ Server startup simulation complete (unified binary)\n", .{});
-    std.process.exit(@intFromEnum(ExitCode.success));
+fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Parse server configuration from arguments...
+    _ = start_idx;
+    // Run the QUIC server directly (unified binary - no subprocess spawning)
+    try startServer(allocator, argv);
 }
 ```
 
@@ -61,33 +59,18 @@ fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
 
 #### ServerConfig Structure
 ```zig
-pub const ServerConfig = struct {
-    listen_quic: ?[]const u8 = null,
+const ServerConfig = struct {
     data_dir: ?[]const u8 = null,
+    listen_quic: ?[]const u8 = null,
     cert_path: ?[]const u8 = null,
     key_path: ?[]const u8 = null,
-    force_no_tls: bool = false,
+    log_level: []const u8 = "info",
     result_format_txt: bool = false,
-    server_args: [][]const u8 = &.{},
-    json_params: std.StringHashMap([]const u8) = undefined,
-};
-```
-
-#### ClientConfig Structure
-```zig
-pub const ClientConfig = struct {
-    query_text: []const u8,
-    server: []const u8 = "127.0.0.1:3141",
-    format: []const u8 = "json",
-    page_size: u32 = 1,
-    pull_all: bool = false,
-    extra_pull: u32 = 0,
-    begin: bool = false,
-    commit: bool = false,
-    rollback: bool = false,
-    process_path: ?[]const u8 = null,
-    no_quic: bool = false,
-    server_args: [][]const u8 = &.{},
+    disable_estimates: bool = false,
+    compact_profile: bool = false,
+    memcurve_profile: bool = false,
+    force_no_tls: bool = false,
+    test_exit_after_first: bool = false,
 };
 ```
 
@@ -99,14 +82,10 @@ pub const ClientConfig = struct {
 ```zig
 fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Parse server configuration from arguments
-    const config = ServerConfig{
-        .listen_quic = parsed_listen_address,
-        .data_dir = parsed_data_dir,
-        // ... additional configuration
-    };
-    
+    _ = start_idx;
+
     // Direct function call - no subprocess spawning
-    try runEmbeddedServer(ally, config);
+    try startServer(ally, argv);
 }
 ```
 
@@ -115,8 +94,7 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 # Start server with unified binary
 geode serve --listen 0.0.0.0:3141 --data-dir /var/lib/geode
 
-# Server response indicates unified binary operation
-# Output: "✅ Server startup simulation complete (unified binary)"
+# Server emits startup logs and listens on QUIC
 ```
 
 ### Query Command (geode query)
@@ -124,29 +102,24 @@ geode serve --listen 0.0.0.0:3141 --data-dir /var/lib/geode
 **Unified Binary Implementation:**
 ```zig
 fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Parse client configuration from arguments
-    const config = ClientConfig{
-        .query_text = parsed_query,
-        .server = parsed_server,
-        .no_quic = parsed_no_quic_flag,
-        // ... additional configuration
-    };
-    
-    // Direct function call - no subprocess spawning
-    try runEmbeddedClient(ally, config);
+    // Parse query options from arguments...
+    _ = argv;
+    _ = start_idx;
+    const server_addr = parsed_server orelse "127.0.0.1:3141";
+
+    // Direct QUIC execution - no subprocess spawning
+    try executeQuicQuery(ally, server_addr, parsed_query, format, insecure, timeout_secs, retry_count, user, password, ca_cert_path, client_cert_path, client_key_path);
 }
 ```
 
 **Usage Examples:**
 ```bash
-# Execute query with unified binary (test compatibility mode)
-geode query "RETURN 1 AS test" --no-quic
-# Output: {"message":"Query executed in no-quic mode (test compatibility)", "query":"RETURN 1 AS test"}
-
-# For QUIC mode, guidance provided for shell command
+# Execute query with unified binary (QUIC-only)
 geode query "RETURN 1 AS test" --server 127.0.0.1:3141
-# Output: Error: Direct QUIC client functionality has been moved to the shell command.
-#         Use 'geode shell --server 127.0.0.1:3141' for interactive queries.
+# Output: SCHEMA + BINDINGS JSON lines from server
+
+# Use --insecure only when you need to bypass TLS verification (e.g., self-signed certs)
+geode query "RETURN 1 AS test" --server 127.0.0.1:3141 --insecure
 ```
 
 ## Error Handling
@@ -169,30 +142,16 @@ geode query
 # Output: Error: query text required
 
 # Success
-geode query "RETURN 1" --no-quic
+geode query "RETURN 1" --server 127.0.0.1:3141
 # Exit code: 0 (success)
-# Output: {"message":"Query executed in no-quic mode (test compatibility)", "query":"RETURN 1"}
+# Output: SCHEMA and BINDINGS JSON lines from the server
 ```
 
-## Test Compatibility
+## TLS Validation
 
-### --no-quic Flag Support
+### --insecure Flag Support
 
-The `--no-quic` flag provides test compatibility mode for integration tests that require deterministic output without network connectivity:
-
-```zig
-if (config.no_quic) {
-    // Test compatibility response
-    std.debug.print("{{\"message\":\"Query executed in no-quic mode (test compatibility)\", \"query\":\"{s}\"}}\n", .{config.query_text});
-    std.process.exit(@intFromEnum(ExitCode.success));
-}
-```
-
-**Benefits:**
-- **Deterministic Output**: Consistent JSON response for testing
-- **No Network Dependencies**: Tests can run without QUIC server
-- **Fast Execution**: No network overhead for test scenarios
-- **Integration Compatibility**: Maintains compatibility with existing test suites
+The `--insecure` flag disables TLS certificate verification for QUIC connections. It does not disable QUIC or provide an offline/test-only execution mode. Use it only for self-signed certificates or test environments.
 
 ## Performance Characteristics
 
@@ -209,7 +168,7 @@ if (config.no_quic) {
 ### Command Performance
 - **Help Commands**: <1ms response time
 - **Configuration Parsing**: <1ms overhead
-- **Test Mode Queries**: <5ms total execution time
+- **Query Execution**: <5ms overhead beyond server response time (no subprocess)
 - **Error Handling**: Immediate response with proper exit codes
 
 ## Testing
@@ -220,7 +179,7 @@ if (config.no_quic) {
 
 **Test Coverage:**
 - CLI unified binary architecture validation
-- ServerConfig and ClientConfig structure testing
+- ServerConfig structure testing and query argument handling
 - Exit code management verification
 - Command handler function signature compatibility
 - Memory management for configuration structures
@@ -245,8 +204,8 @@ if (config.no_quic) {
 ./zig-out/bin/geode serve --help              # ✅ Shows server options
 ./zig-out/bin/geode query --help              # ✅ Shows query options
 
-# Test unified binary operation
-./zig-out/bin/geode query "RETURN 1" --no-quic   # ✅ JSON output
+# Test unified binary operation (QUIC)
+./zig-out/bin/geode query "RETURN 1" --server 127.0.0.1:3141   # ✅ JSON output
 ./zig-out/bin/geode shell --help              # ✅ Shows shell options
 
 # Verify no subprocess spawning
@@ -332,10 +291,10 @@ deployment/
 **Test Integration:**
 ```bash
 # OLD: Test using separate binaries
-./geodec "RETURN 1" --no-quic
+./geodec "RETURN 1" --server 127.0.0.1:3141 --insecure
 
 # NEW: Test using unified binary (same command works)
-./geode query "RETURN 1" --no-quic
+./geode query "RETURN 1" --server 127.0.0.1:3141 --insecure
 ```
 
 ## Future Enhancements
@@ -372,10 +331,10 @@ deployment/
 #### Test Compatibility
 ```bash
 # Issue: Tests expecting old binary behavior
-./geodec "RETURN 1" --no-quic
+./geodec "RETURN 1" --server 127.0.0.1:3141 --insecure
 
 # Solution: Use unified binary with same flags
-./geode query "RETURN 1" --no-quic
+./geode query "RETURN 1" --server 127.0.0.1:3141 --insecure
 ```
 
 #### Configuration Migration
@@ -404,7 +363,7 @@ All CLI subprocess elimination implementations include proper CANARY governance 
 - ✅ **Subprocess Elimination**: No more geoded/geodec spawning
 - ✅ **Unified Binary**: Single geode binary for all functionality
 - ✅ **Direct Function Calls**: Server and client functions called directly
-- ✅ **Test Compatibility**: --no-quic flag provides test mode
+- ✅ **TLS Validation Override**: --insecure disables certificate checks for self-signed/test servers
 - ✅ **Performance Improvement**: Eliminated subprocess overhead
 - ✅ **Deployment Simplification**: Single binary distribution
 - ✅ **Integration Testing**: Complete test coverage with validation
@@ -414,6 +373,6 @@ The CLI Subprocess Elimination represents a **major architectural improvement** 
 
 ---
 
-*Last Updated: October 2025*  
+*Last Updated: January 14, 2026*  
 *Version: Unified Binary v1.0*  
 *Next Review: After direct function call integration*

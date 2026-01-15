@@ -15,7 +15,7 @@ echo "Testing count() aggregation functionality..."
 echo
 
 echo "1. Testing basic count(n) aggregation..."
-OUTPUT1=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --no-quic 2>&1)
+OUTPUT1=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure 2>&1)
 if echo "$OUTPUT1" | grep -q '"count(n)":\s*[0-9]'; then
     echo "   ✓ count(n) returns correct total count"
 else
@@ -25,7 +25,7 @@ else
 fi
 
 echo "2. Testing count with label filter..."
-OUTPUT2=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n:Person) RETURN count(n)' --no-quic 2>&1)
+OUTPUT2=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n:Person) RETURN count(n)' --insecure 2>&1)
 if echo "$OUTPUT2" | grep -q '"count(n)":\s*[0-9]'; then
     echo "   ✓ count(n:Person) returns correct filtered count"
 else
@@ -34,7 +34,7 @@ else
 fi
 
 echo "3. Testing count with WHERE clause..."
-OUTPUT3=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) WHERE n.id > 1 RETURN count(n)' --no-quic 2>&1)
+OUTPUT3=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) WHERE n.id > 1 RETURN count(n)' --insecure 2>&1)
 if echo "$OUTPUT3" | grep -q '"count(n)":\s*[0-9]'; then
     echo "   ✓ count(n) with WHERE clause works"
     COUNT=$(echo "$OUTPUT3" | grep -o '"count(n)":\s*[0-9]' | cut -d: -f2 | tr -d ' ')
@@ -44,7 +44,7 @@ else
 fi
 
 echo "4. Testing mixed aggregation and non-aggregation columns..."
-OUTPUT4=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n, count(n)' --no-quic 2>&1)
+OUTPUT4=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n, count(n)' --insecure 2>&1)
 if echo "$OUTPUT4" | grep -q '"col":null.*"count(n)":[0-9]' && echo "$OUTPUT4" | grep -q 'count(n)'; then
     echo "   ✓ Mixed aggregation correctly returns null for non-agg columns"
 else
@@ -69,7 +69,7 @@ else
 fi
 
 echo "7. Testing other aggregation functions (should return null for now)..."
-OUTPUT7=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN sum(n.id)' --no-quic 2>&1)
+OUTPUT7=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN sum(n.id)' --insecure 2>&1)
 if echo "$OUTPUT7" | grep -q '"sum(n.id)":\s*null'; then
     echo "   ✓ sum() returns null (not yet implemented)"
 elif echo "$OUTPUT7" | grep -q 'ParseError'; then
@@ -79,7 +79,7 @@ else
 fi
 
 echo "8. Testing edge case: count with no matches..."
-OUTPUT8=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n:NonexistentLabel) RETURN count(n)' --no-quic 2>&1)
+OUTPUT8=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n:NonexistentLabel) RETURN count(n)' --insecure 2>&1)
 if echo "$OUTPUT8" | grep -q '"count(n)":\s*0'; then
     echo "   ✓ count() with no matches returns 0"
 else

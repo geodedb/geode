@@ -44,7 +44,7 @@ echo "Testing property persistence in stdio mode (single session)..."
 # Test CREATE and immediate query in stdio mode
 echo "3. Testing CREATE then immediate MATCH in stdio mode..."
 echo "   CREATE statement:"
-OUTPUT1=$(timeout 5 ./zig-out/bin/geodec "CREATE (p {name: 'Alice', age: 30})" --no-quic 2>&1)
+OUTPUT1=$(timeout 5 ./zig-out/bin/geodec "CREATE (p {name: 'Alice', age: 30})" --insecure 2>&1)
 if echo "$OUTPUT1" | grep -q "NoResult\|00000"; then
     echo "   ✓ CREATE executed without error"
 else
@@ -52,7 +52,7 @@ else
 fi
 
 echo "   MATCH properties:"
-OUTPUT2=$(timeout 5 ./zig-out/bin/geodec "MATCH (n) RETURN n" --no-quic 2>&1)
+OUTPUT2=$(timeout 5 ./zig-out/bin/geodec "MATCH (n) RETURN n" --insecure 2>&1)
 if echo "$OUTPUT2" | grep -q '"id"'; then
     echo "   ✓ MATCH executed, checking for properties..."
     if echo "$OUTPUT2" | grep -q '"name"'; then
@@ -72,22 +72,22 @@ echo "Testing property creation patterns..."
 echo "4. Testing different property types..."
 
 echo "   String properties:"
-timeout 5 ./zig-out/bin/geodec "CREATE (p {name: 'Bob', city: 'NYC'})" --no-quic > /dev/null 2>&1
+timeout 5 ./zig-out/bin/geodec "CREATE (p {name: 'Bob', city: 'NYC'})" --insecure > /dev/null 2>&1
 echo "   ✓ String properties created"
 
 echo "   Numeric properties:"
-timeout 5 ./zig-out/bin/geodec "CREATE (p {age: 25, salary: 50000})" --no-quic > /dev/null 2>&1
+timeout 5 ./zig-out/bin/geodec "CREATE (p {age: 25, salary: 50000})" --insecure > /dev/null 2>&1
 echo "   ✓ Numeric properties created"
 
 echo "   Mixed properties:"
-timeout 5 ./zig-out/bin/geodec "CREATE (p {name: 'Charlie', age: 35, active: true})" --no-quic > /dev/null 2>&1
+timeout 5 ./zig-out/bin/geodec "CREATE (p {name: 'Charlie', age: 35, active: true})" --insecure > /dev/null 2>&1
 echo "   ✓ Mixed properties created"
 
 echo
 echo "Testing property queries..."
 
 echo "5. Testing property access patterns..."
-OUTPUT3=$(timeout 5 ./zig-out/bin/geodec "MATCH (n) RETURN n.name AS name, n.age AS age LIMIT 1" --no-quic 2>&1)
+OUTPUT3=$(timeout 5 ./zig-out/bin/geodec "MATCH (n) RETURN n.name AS name, n.age AS age LIMIT 1" --insecure 2>&1)
 if echo "$OUTPUT3" | grep -q '"name".*"age"'; then
     echo "   ✓ Property access query structure correct"
     if echo "$OUTPUT3" | grep -q 'null.*null'; then

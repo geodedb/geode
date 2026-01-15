@@ -1,9 +1,15 @@
 const std = @import("std");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 
+fn getServerAddr(allocator: std.mem.Allocator) ![]u8 {
+    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+}
+
 fn run(gql: []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(&.{ "./zig-out/bin/geodec", gql, "--no-quic" }, allocator);
+    const server = try getServerAddr(allocator);
+    defer allocator.free(server);
+    var child = Child.init(&.{ "./zig-out/bin/geodec", gql, "--server", server, "--insecure" }, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;

@@ -12,7 +12,7 @@ def main():
 
     # Categories
     server_tests = []  # Tests that need a running server
-    no_quic_tests = []  # Tests that can run with --server 127.0.0.1:3141 --insecure
+    standalone_tests = []  # Tests that do not require a server
     unknown_tests = []
 
     # Analyze each spec
@@ -46,18 +46,17 @@ def main():
                 # Server-dependent commands
                 if cmd in ["auth", "user", "role", "policy", "grant", "revoke"]:
                     server_tests.append((spec_file.name, name, cmd))
-                # Query command can run with --server 127.0.0.1:3141 --insecure
+                # Query command always requires a server
                 elif cmd == "query":
-                    # But check if it has --server flag
                     if any("--server" in str(arg) for arg in args):
                         server_tests.append((spec_file.name, name, "query with --server"))
                     else:
-                        no_quic_tests.append((spec_file.name, name, cmd))
+                        server_tests.append((spec_file.name, name, "query without --server"))
                 # Other commands
                 elif cmd in ["serve", "backup", "restore", "migrate"]:
                     server_tests.append((spec_file.name, name, cmd))
                 else:
-                    no_quic_tests.append((spec_file.name, name, cmd))
+                    standalone_tests.append((spec_file.name, name, cmd))
             else:
                 unknown_tests.append((spec_file.name, name, "no args"))
 
@@ -80,10 +79,10 @@ def main():
                 print(f"    ... and {len(tests) - 5} more")
 
     print(f"\n{'='*80}")
-    print(f"No-QUIC compatible tests: {len(no_quic_tests)}")
-    if no_quic_tests:
+    print(f"Standalone tests (no server required): {len(standalone_tests)}")
+    if standalone_tests:
         by_cmd = defaultdict(list)
-        for spec, name, cmd in no_quic_tests:
+        for spec, name, cmd in standalone_tests:
             by_cmd[cmd].append((spec, name))
 
         for cmd, tests in sorted(by_cmd.items()):
@@ -98,7 +97,7 @@ def main():
     print(f"1. Server-dependent commands (auth/user/role/policy/grant/revoke) need either:")
     print(f"   a) A running server to connect to")
     print(f"   b) Implementation of --server 127.0.0.1:3141 --insecure mode for these commands")
-    print(f"   c) Mock implementation for testing without server")
+    print(f"   c) Start a dedicated test server for these specs")
     print(f"\n2. For now, we should either:")
     print(f"   - Skip server-dependent tests in extended_test_runner.py")
     print(f"   - Or implement --server 127.0.0.1:3141 --insecure mode for these commands")

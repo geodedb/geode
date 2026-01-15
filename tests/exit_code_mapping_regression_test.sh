@@ -10,7 +10,7 @@ GEODE_BIN="./zig-out/bin/geode"
 
 # Test 1: Success should return exit code 0
 echo "Test 1: Success exit code (0)"
-$GEODE_BIN "RETURN 1 AS success_test" --no-quic >/dev/null 2>&1
+$GEODE_BIN "RETURN 1 AS success_test" --insecure >/dev/null 2>&1
 exit_code=$?
 if [[ $exit_code -ne 0 ]]; then
     echo "FAIL: Successful query should return exit code 0, got $exit_code"
@@ -20,7 +20,7 @@ echo "PASS: Success returns exit code 0"
 
 # Test 2: Parse errors should return exit code 1 (general_error)
 echo "Test 2: Parse error exit code (1)"
-timeout 5 $GEODE_BIN "INVALID" --no-quic >/dev/null 2>&1
+timeout 5 $GEODE_BIN "INVALID" --insecure >/dev/null 2>&1
 exit_code=$?
 if [[ $exit_code -ne 1 ]]; then
     echo "FAIL: Parse error should return exit code 1, got $exit_code"
@@ -82,7 +82,7 @@ echo "PASS: Subcommand help returns exit code 0"
 echo "Test 8: GQL syntax errors exit code (1)"
 syntax_errors=("INVALID" "BADKEYWORD" "SYNTAX ERROR" "UNKNOWN COMMAND")
 for error in "${syntax_errors[@]}"; do
-    timeout 5 $GEODE_BIN "$error" --no-quic >/dev/null 2>&1
+    timeout 5 $GEODE_BIN "$error" --insecure >/dev/null 2>&1
     exit_code=$?
     if [[ $exit_code -ne 1 ]]; then
         echo "FAIL: GQL syntax error '$error' should return exit code 1, got $exit_code"
@@ -107,7 +107,7 @@ echo "PASS: CLI usage errors return exit code 2"
 # Test 10: Auto-detected queries maintain proper exit codes
 echo "Test 10: Auto-detected queries exit codes"
 # Valid auto-detected query should return 0
-$GEODE_BIN "RETURN 'auto_detected' AS test" --no-quic >/dev/null 2>&1
+$GEODE_BIN "RETURN 'auto_detected' AS test" --insecure >/dev/null 2>&1
 exit_code=$?
 if [[ $exit_code -ne 0 ]]; then
     echo "FAIL: Auto-detected valid query should return exit code 0, got $exit_code"
@@ -115,7 +115,7 @@ if [[ $exit_code -ne 0 ]]; then
 fi
 
 # Invalid auto-detected query should return 1
-timeout 5 $GEODE_BIN "INVALID" --no-quic >/dev/null 2>&1
+timeout 5 $GEODE_BIN "INVALID" --insecure >/dev/null 2>&1
 exit_code=$?
 if [[ $exit_code -ne 1 ]]; then
     echo "FAIL: Auto-detected invalid query should return exit code 1, got $exit_code"

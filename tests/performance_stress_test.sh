@@ -16,7 +16,7 @@ echo
 
 echo "1. Testing large node traversal performance..."
 START_TIME=$(date +%s%N)
-OUTPUT1=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --no-quic 2>&1)
+OUTPUT1=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure 2>&1)
 END_TIME=$(date +%s%N)
 DURATION1=$(( ($END_TIME - $START_TIME) / 1000000 )) # Convert to milliseconds
 
@@ -30,7 +30,7 @@ fi
 
 echo "2. Testing relationship traversal performance..."
 START_TIME=$(date +%s%N)
-OUTPUT2=$(timeout 10 ./zig-out/bin/geodec 'MATCH (a)-[r]->(b) RETURN count(r)' --no-quic 2>&1)
+OUTPUT2=$(timeout 10 ./zig-out/bin/geodec 'MATCH (a)-[r]->(b) RETURN count(r)' --insecure 2>&1)
 END_TIME=$(date +%s%N)
 DURATION2=$(( ($END_TIME - $START_TIME) / 1000000 ))
 
@@ -44,7 +44,7 @@ fi
 echo "3. Testing multiple CREATE operations..."
 START_TIME=$(date +%s%N)
 for i in {1..10}; do
-    timeout 5 ./zig-out/bin/geodec "CREATE (n:TestNode {id: $i})" --no-quic > /dev/null 2>&1
+    timeout 5 ./zig-out/bin/geodec "CREATE (n:TestNode {id: $i})" --insecure > /dev/null 2>&1
 done
 END_TIME=$(date +%s%N)
 DURATION3=$(( ($END_TIME - $START_TIME) / 1000000 ))
@@ -53,7 +53,7 @@ echo "   ✓ Created 10 nodes in ${DURATION3}ms (avg: $((DURATION3/10))ms per no
 
 echo "4. Testing large result set ordering..."
 START_TIME=$(date +%s%N)
-OUTPUT4=$(timeout 15 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --no-quic 2>&1)
+OUTPUT4=$(timeout 15 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1)
 END_TIME=$(date +%s%N)
 DURATION4=$(( ($END_TIME - $START_TIME) / 1000000 ))
 
@@ -62,7 +62,7 @@ echo "   ✓ Ordered $ROW_COUNT nodes in ${DURATION4}ms"
 
 echo "5. Testing aggregation performance..."
 START_TIME=$(date +%s%N)
-OUTPUT5=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n), n ORDER BY count(n)' --no-quic 2>&1)
+OUTPUT5=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n), n ORDER BY count(n)' --insecure 2>&1)
 END_TIME=$(date +%s%N)
 DURATION5=$(( ($END_TIME - $START_TIME) / 1000000 ))
 
@@ -74,7 +74,7 @@ fi
 
 echo "6. Testing query complexity stress..."
 START_TIME=$(date +%s%N)
-OUTPUT6=$(timeout 15 ./zig-out/bin/geodec 'MATCH (a)-[r1]->(b)-[r2]->(c) RETURN count(*)' --no-quic 2>&1)
+OUTPUT6=$(timeout 15 ./zig-out/bin/geodec 'MATCH (a)-[r1]->(b)-[r2]->(c) RETURN count(*)' --insecure 2>&1)
 END_TIME=$(date +%s%N)
 DURATION6=$(( ($END_TIME - $START_TIME) / 1000000 ))
 
@@ -88,7 +88,7 @@ fi
 echo "7. Testing rapid query succession..."
 START_TIME=$(date +%s%N)
 for i in {1..20}; do
-    timeout 2 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --no-quic > /dev/null 2>&1
+    timeout 2 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure > /dev/null 2>&1
 done
 END_TIME=$(date +%s%N)
 DURATION7=$(( ($END_TIME - $START_TIME) / 1000000 ))
@@ -97,7 +97,7 @@ echo "   ✓ 20 rapid queries completed in ${DURATION7}ms (avg: $((DURATION7/20)
 
 echo "8. Testing memory usage with large result sets..."
 START_TIME=$(date +%s%N)
-OUTPUT8=$(timeout 20 ./zig-out/bin/geodec 'MATCH (n) RETURN n, n.id, count(n) ORDER BY n.id LIMIT 1000' --no-quic 2>&1)
+OUTPUT8=$(timeout 20 ./zig-out/bin/geodec 'MATCH (n) RETURN n, n.id, count(n) ORDER BY n.id LIMIT 1000' --insecure 2>&1)
 END_TIME=$(date +%s%N)
 DURATION8=$(( ($END_TIME - $START_TIME) / 1000000 ))
 

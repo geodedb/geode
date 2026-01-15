@@ -14,11 +14,11 @@ GEODE_CMD="./zig-out/bin/geode query"
 
 # Create test data
 echo "Setting up test data..."
-$GEODE_CMD "CREATE (test:TestNode {name: 'Alice', age: 30, active: true})" --no-quic > /dev/null 2>&1
+$GEODE_CMD "CREATE (test:TestNode {name: 'Alice', age: 30, active: true})" --insecure > /dev/null 2>&1
 
 # Test toString with property access
 echo -n "Testing toString(n.name)... "
-result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN toString(n.name)" --no-quic --format table 2>/dev/null | grep "Alice" | wc -l)
+result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN toString(n.name)" --insecure --format table 2>/dev/null | grep "Alice" | wc -l)
 if [ "$result" -gt 0 ]; then
     echo "PASS"
 else
@@ -28,7 +28,7 @@ fi
 
 # Test type function with property access
 echo -n "Testing type(n.name)... "
-result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN type(n.name)" --no-quic --format table 2>/dev/null | grep "STRING" | wc -l)
+result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN type(n.name)" --insecure --format table 2>/dev/null | grep "STRING" | wc -l)
 if [ "$result" -gt 0 ]; then
     echo "PASS"
 else
@@ -38,7 +38,7 @@ fi
 
 # Test toInteger with property access
 echo -n "Testing toInteger(n.age)... "
-result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN toInteger(n.age)" --no-quic --format table 2>/dev/null | grep "30" | wc -l)
+result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN toInteger(n.age)" --insecure --format table 2>/dev/null | grep "30" | wc -l)
 if [ "$result" -gt 0 ]; then
     echo "PASS"
 else
@@ -48,7 +48,7 @@ fi
 
 # Test multiple function calls with property access
 echo -n "Testing multiple functions with properties... "
-output=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN toString(n.name), type(n.age), toInteger(n.age)" --no-quic 2>/dev/null)
+output=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN toString(n.name), type(n.age), toInteger(n.age)" --insecure 2>/dev/null)
 alice_count=$(echo "$output" | grep -o "Alice" | wc -l)
 integer_count=$(echo "$output" | grep -o "INTEGER" | wc -l)
 thirty_count=$(echo "$output" | grep -o "30" | wc -l)
@@ -61,7 +61,7 @@ fi
 
 # Test function call with missing property (should return null)
 echo -n "Testing function with missing property... "
-result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN toString(n.missing_prop)" --no-quic --format table 2>/dev/null | grep "null" | wc -l)
+result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN toString(n.missing_prop)" --insecure --format table 2>/dev/null | grep "null" | wc -l)
 if [ "$result" -gt 0 ]; then
     echo "PASS"
 else
@@ -71,7 +71,7 @@ fi
 
 # Test type function with boolean property
 echo -n "Testing type(n.active) with boolean... "
-result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN type(n.active)" --no-quic --format table 2>/dev/null | grep "BOOLEAN" | wc -l)
+result=$($GEODE_CMD "MATCH (n:TestNode {name: 'Alice'}) RETURN type(n.active)" --insecure --format table 2>/dev/null | grep "BOOLEAN" | wc -l)
 if [ "$result" -gt 0 ]; then
     echo "PASS"
 else
@@ -81,7 +81,7 @@ fi
 
 # Test nested property access expressions
 echo -n "Testing complex property expressions... "
-result=$($GEODE_CMD "MATCH (n:TestNode) WHERE toString(n.name) = 'Alice' RETURN n.name" --no-quic --format table 2>/dev/null | grep "Alice" | wc -l)
+result=$($GEODE_CMD "MATCH (n:TestNode) WHERE toString(n.name) = 'Alice' RETURN n.name" --insecure --format table 2>/dev/null | grep "Alice" | wc -l)
 if [ "$result" -gt 0 ]; then
     echo "PASS"
 else

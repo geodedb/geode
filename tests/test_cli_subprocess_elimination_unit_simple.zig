@@ -9,33 +9,31 @@ const expect = testing.expect;
 const ClientConfig = struct {
     query_text: []const u8,
     server: []const u8 = "127.0.0.1:3141",
-    no_quic: bool = false,
+    insecure: bool = false,
 };
 
 // Mock function for testing CLI behavior
 fn mockCliHandler(config: ClientConfig) struct { exit_code: i32, is_json_response: bool, contains_query: bool } {
-    if (config.no_quic) {
-        // Simulate --no-quic mode: returns JSON response with exit code 0
-        return .{
-            .exit_code = 0,
-            .is_json_response = true,
-            .contains_query = true,
-        };
-    } else {
-        // Simulate QUIC mode: returns error message with exit code 2
+    if (config.query_text.len == 0 or std.mem.indexOf(u8, config.server, ":") == null) {
         return .{
             .exit_code = 2,
             .is_json_response = false,
             .contains_query = false,
         };
     }
+
+    return .{
+        .exit_code = 0,
+        .is_json_response = true,
+        .contains_query = true,
+    };
 }
 
-// Test --no-quic flag returns success
-test "no-quic flag returns success exit code" {
+// Test --insecure flag does not change success path
+test "insecure flag preserves success exit code" {
     const config = ClientConfig{
         .query_text = "RETURN 1 AS test",
-        .no_quic = true,
+        .insecure = true,
     };
 
     const result = mockCliHandler(config);
@@ -45,11 +43,11 @@ test "no-quic flag returns success exit code" {
     try expect(result.contains_query == true);
 }
 
-// Test QUIC mode returns error
-test "quic mode returns usage error exit code" {
+// Test missing query returns error
+test "missing query returns usage error exit code" {
     const config = ClientConfig{
-        .query_text = "RETURN 2 AS test",
-        .no_quic = false,
+        .query_text = "",
+        .insecure = false,
     };
 
     const result = mockCliHandler(config);
@@ -60,24 +58,18 @@ test "quic mode returns usage error exit code" {
 }
 
 // Test configuration flag behavior
-test "configuration flags affect behavior correctly" {
-    // Test --no-quic enabled
-    const no_quic_config = ClientConfig{
+test "configuration flags do not alter validation" {
+    const insecure_config = ClientConfig{
         .query_text = "TEST QUERY",
-        .no_quic = true,
+        .insecure = true,
     };
 
-    const no_quic_result = mockCliHandler(no_quic_config);
-    try expect(no_quic_result.exit_code == 0);
+    const insecure_result = mockCliHandler(insecure_config);
+    try expect(insecure_result.exit_code == 0);
 
-    // Test --no-quic disabled
-    const quic_config = ClientConfig{
-        .query_text = "TEST QUERY",
-        .no_quic = false,
-    };
-
-    const quic_result = mockCliHandler(quic_config);
-    try expect(quic_result.exit_code == 2);
+    const secure_config = ClientConfig{ .query_text = "TEST QUERY" };
+    const secure_result = mockCliHandler(secure_config);
+    try expect(secure_result.exit_code == 0);
 }
 
 // Test query text preservation logic
@@ -92,7 +84,7 @@ test "query text configuration preserved" {
     for (test_queries) |query| {
         const config = ClientConfig{
             .query_text = query,
-            .no_quic = true,
+            .insecure = true,
         };
 
         // Verify query text is preserved in config
@@ -117,7 +109,7 @@ test "server configuration handling" {
         const config = ClientConfig{
             .query_text = "RETURN 1",
             .server = server,
-            .no_quic = false, // Test error path includes server
+            .insecure = false,
         };
 
         // Verify server is preserved in config
@@ -134,17 +126,17 @@ test "edge case handling" {
     // Empty query
     const empty_config = ClientConfig{
         .query_text = "",
-        .no_quic = true,
+        .insecure = true,
     };
 
     const empty_result = mockCliHandler(empty_config);
-    try expect(empty_result.exit_code == 0);
+    try expect(empty_result.exit_code == 2);
 
     // Very long query
     const long_query = "MATCH " ++ "a" ** 100 ++ " RETURN " ++ "b" ** 100;
     const long_config = ClientConfig{
         .query_text = long_query,
-        .no_quic = true,
+        .insecure = true,
     };
 
     const long_result = mockCliHandler(long_config);
@@ -155,7 +147,7 @@ test "edge case handling" {
 test "behavior consistency across multiple calls" {
     const config = ClientConfig{
         .query_text = "CONSISTENCY TEST",
-        .no_quic = true,
+        .insecure = true,
     };
 
     // Call multiple times and verify consistent behavior
@@ -172,15 +164,15 @@ test "default configuration values" {
     // Test with minimal config (using defaults)
     const minimal_config = ClientConfig{
         .query_text = "DEFAULT TEST",
-        // no_quic defaults to false
+        // insecure defaults to false
         // server defaults to "127.0.0.1:3141"
     };
 
     try expect(std.mem.eql(u8, minimal_config.server, "127.0.0.1:3141"));
-    try expect(minimal_config.no_quic == false);
+    try expect(minimal_config.insecure == false);
 
     const result = mockCliHandler(minimal_config);
-    try expect(result.exit_code == 2); // Should get error without --no-quic
+    try expect(result.exit_code == 0);
 }
 
 // CANARY compliance test
@@ -190,7 +182,7 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_UNIT_002" {
 
     const config = ClientConfig{
         .query_text = "CANARY UNIT TEST",
-        .no_quic = true,
+        .insecure = true,
     };
 
     const result = mockCliHandler(config);

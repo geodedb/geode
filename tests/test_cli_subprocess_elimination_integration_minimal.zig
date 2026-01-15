@@ -5,6 +5,10 @@ const std = @import("std");
 const testing = std.testing;
 const expect = testing.expect;
 
+fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
+    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+}
+
 // Helper to execute command and get just exit code
 fn getExitCode(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     var child = std.process.Child.init(args, allocator);
@@ -17,28 +21,32 @@ fn getExitCode(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     };
 }
 
-// Test --no-quic flag returns success exit code
-test "integration --no-quic returns exit code 0" {
+// Test --insecure flag returns success exit code
+test "integration --insecure returns exit code 0" {
     const allocator = testing.allocator;
+
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 1 AS test",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     });
 
     try expect(exit_code == 0);
 }
 
-// Test QUIC mode returns usage error exit code
-test "integration QUIC mode returns exit code 2" {
+// Test query without text returns usage error exit code
+test "integration query without text returns exit code 2" {
     const allocator = testing.allocator;
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
         "./zig-out/bin/geode",
         "query",
-        "RETURN 1 AS test",
     });
 
     try expect(exit_code == 2);
@@ -68,9 +76,12 @@ test "integration invalid command returns non-zero exit code" {
     try expect(exit_code != 0);
 }
 
-// Test with different queries all return success with --no-quic
-test "integration various queries with --no-quic return success" {
+// Test with different queries all return success with --insecure
+test "integration various queries with --insecure return success" {
     const allocator = testing.allocator;
+
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
 
     const test_queries = [_][]const u8{
         "RETURN 1",
@@ -84,46 +95,45 @@ test "integration various queries with --no-quic return success" {
             "./zig-out/bin/geode",
             "query",
             query,
-            "--no-quic",
+            "--server",
+            server,
+            "--insecure",
         });
 
         try expect(exit_code == 0);
     }
 }
 
-// Test with different server addresses all return error without --no-quic
-test "integration various server addresses return error in QUIC mode" {
+// Test invalid server address returns error
+test "integration invalid server address returns error" {
     const allocator = testing.allocator;
 
-    const test_servers = [_][]const u8{
-        "localhost:3141",
-        "127.0.0.1:9000",
-        "custom.host:3141",
-    };
+    const exit_code = try getExitCode(allocator, &[_][]const u8{
+        "./zig-out/bin/geode",
+        "query",
+        "RETURN 1",
+        "--server",
+        "127.0.0.1:1",
+    });
 
-    for (test_servers) |server| {
-        const exit_code = try getExitCode(allocator, &[_][]const u8{
-            "./zig-out/bin/geode",
-            "query",
-            "RETURN 1",
-            "--server",
-            server,
-        });
-
-        try expect(exit_code == 2);
-    }
+    try expect(exit_code != 0);
 }
 
 // Test binary can be executed (basic smoke test)
 test "integration binary execution smoke test" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     // Just verify we can execute the binary without crashing
     const exit_code = try getExitCode(allocator, &[_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 'smoke test'",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     });
 
     // Should not crash (exit code should be defined)
@@ -134,6 +144,9 @@ test "integration binary execution smoke test" {
 test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_003" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     // CANARY: This test verifies CLI subprocess elimination integration functionality
     // as specified in REQ-CLI-SUBPROCESS-INTEGRATION-003
 
@@ -141,7 +154,9 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_003" {
         "./zig-out/bin/geode",
         "query",
         "CANARY TEST",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     });
 
     // Verify the integration test passes - this confirms CLI subprocess elimination

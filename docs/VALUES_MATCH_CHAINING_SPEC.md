@@ -420,7 +420,7 @@ description: Test VALUES → MATCH binding propagation
 
 tests:
   - name: basic-values-match
-    args: ["query", "--no-quic"]
+    args: ["query", "--insecure"]
     stdin: |
       CREATE (p:Person {id: 1, name: 'Alice'});
       VALUES (1 AS search_id)
@@ -433,7 +433,7 @@ tests:
         - "1"
 
   - name: values-where-integration
-    args: ["query", "--no-quic"]
+    args: ["query", "--insecure"]
     stdin: |
       CREATE (p1:Product {price: 15}), (p2:Product {price: 25});
       VALUES (20 AS max_price)

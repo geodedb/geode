@@ -1,8 +1,8 @@
-# Plan: Remove `--embedded` and `--no-quic` Features
+# Plan: Remove `--embedded` Feature
 
 ## Overview
 
-This document outlines the plan to remove all `--embedded` and `--no-quic` features from the Geode codebase. The system will require a proper server implementation for all operations instead of supporting an embedded mode.
+This document outlines the plan to remove all `--embedded` features from the Geode codebase. The system will require a proper server implementation for all operations instead of supporting an embedded mode. The `--insecure` flag remains supported for disabling TLS certificate verification.
 
 ## Rationale
 
@@ -19,7 +19,6 @@ This document outlines the plan to remove all `--embedded` and `--no-quic` featu
 
 **Changes Required:**
 - Remove `--embedded` argument parsing (~line 227-228, 250-251, 282-283, 2482-2493)
-- Remove `--no-quic` argument parsing (~line 2491-2493)
 - Remove `--embedded-data-dir` argument parsing (~line 2484-2490)
 - Remove `embedded` field from `ClientConfig` struct (~line 282-283)
 - Remove `executeEmbeddedQuery` function (~line 2680+)
@@ -39,7 +38,6 @@ This document outlines the plan to remove all `--embedded` and `--no-quic` featu
 
 **Changes Required in `extended_test_runner.py`:**
 - Remove all `--embedded` injection logic (lines 230-243, 246-254, 316-343, 399-421)
-- Remove `--no-quic` injection logic (lines 245-254, 325, 346-349, 406-409)
 - Make server mode the default/only mode
 - Tests must start a server before running or connect to existing one
 - Add server lifecycle management (start before tests, stop after)
@@ -47,7 +45,7 @@ This document outlines the plan to remove all `--embedded` and `--no-quic` featu
 **Changes Required in `parallel_test_runner.py`:**
 - Remove embedded scenario from `default_scenario_configs()` (lines 225-230)
 - Remove `Scenario.client_mode == "embedded"` handling throughout
-- Remove `--embedded` and `--no-quic` stripping from `process_args()` (lines 391-393)
+- Remove `--embedded` stripping from `process_args()` (lines 391-393)
 - Update `build_scenarios()` to only support server mode
 - Keep server management logic (already good)
 
@@ -87,13 +85,13 @@ This document outlines the plan to remove all `--embedded` and `--no-quic` featu
 ### 6. Documentation Updates
 
 **Files:**
-- `CLAUDE.md` - Remove `--no-quic` reference in test compatibility
+- `CLAUDE.md` - Update `--insecure` references to reflect TLS-only usage
 - `geodetestlab/README.md` - Update scenario documentation
-- `.claude/agents/integration-test-generator.md` - Remove `--no-quic` references
+- `.claude/agents/integration-test-generator.md` - Update examples to use `--server` and keep `--insecure` only when TLS validation is bypassed
 
 ### 7. Shell Scripts (`scripts/`)
 
-**Files with `--no-quic` references:**
+**Files to review for embedded-mode assumptions:**
 - `scripts/focused_db_test.sh`
 - `scripts/database_integration_test.sh`
 - `scripts/comprehensive_graph_test.sh`
@@ -103,8 +101,8 @@ This document outlines the plan to remove all `--embedded` and `--no-quic` featu
 - `tools/update_tests_unified_cli.sh`
 
 **Changes Required:**
-- Update all scripts to use `--server localhost:3141` instead of `--no-quic`
-- OR update to start a local server before tests and connect to it
+- Ensure scripts start a server or pass `--server` explicitly for query operations
+- Keep `--insecure` only when TLS validation must be bypassed
 - Consider deprecating legacy test scripts that duplicate geodetestlab functionality
 
 ### 8. Docker Files
@@ -115,7 +113,7 @@ This document outlines the plan to remove all `--embedded` and `--no-quic` featu
 
 **Changes Required:**
 - Update health check commands to use proper server connection
-- Remove `--no-quic` from health check commands
+- Keep `--insecure` only when TLS validation must be bypassed
 
 ### 9. CI/CD
 
@@ -123,7 +121,7 @@ This document outlines the plan to remove all `--embedded` and `--no-quic` featu
 - `.github/workflows/release.yml`
 
 **Changes Required:**
-- Update any `--no-quic` usages in workflow files
+- Update any `--insecure` usages to include `--server` and use TLS bypass only when required
 
 ### 10. Other Zig Files
 
@@ -136,14 +134,14 @@ This document outlines the plan to remove all `--embedded` and `--no-quic` featu
 - `src/client/main.zig`
 
 **Changes Required:**
-- Search for and remove any embedded/no_quic handling
+- Search for and remove any embedded-mode handling
 - Update tests to use server mode
 
 ## Implementation Order
 
 ### Phase 1: Core CLI Changes (MUST DO FIRST)
 1. Update `src/cli/main.zig`:
-   - Remove `--embedded`, `--no-quic`, `--embedded-data-dir` argument parsing
+   - Remove `--embedded` and `--embedded-data-dir` argument parsing
    - Remove `executeEmbeddedQuery` function and related code
    - Update default behavior to require server connection
    - Keep graceful error message when server not available
@@ -196,7 +194,6 @@ If issues arise:
 ## Success Criteria
 
 - [ ] No `--embedded` flag in codebase (except in comments documenting removal)
-- [ ] No `--no-quic` flag in codebase
 - [ ] All tests pass using server mode only
 - [ ] CI/CD pipelines pass
 - [ ] Documentation updated

@@ -114,19 +114,19 @@ All authentication tests pass with Argon2id:
 
 ```bash
 # ✅ Valid credentials
-$ echo "RETURN 1" | geode query --no-quic --user testuser --password testpass -
+$ echo "RETURN 1" | geode query --insecure --user testuser --password testpass -
 {"status_class":"00000","columns":["column"],"rows":[[1]]}
 
 # ✅ Wrong password
-$ echo "RETURN 1" | geode query --no-quic --user testuser --password wrong -
+$ echo "RETURN 1" | geode query --insecure --user testuser --password wrong -
 Authentication failed
 
 # ✅ Permission denied for read-only user
-$ echo "CREATE (n) RETURN n" | geode query --no-quic --user testuser --password testpass -
+$ echo "CREATE (n) RETURN n" | geode query --insecure --user testuser --password testpass -
 Permission denied
 
 # ✅ Admin has full access
-$ echo "CREATE (n) RETURN n" | geode query --no-quic --user admin --password admin -
+$ echo "CREATE (n) RETURN n" | geode query --insecure --user admin --password admin -
 {"status_class":"00000","columns":["n"],"rows":[[{"id":84}]]}
 ```
 

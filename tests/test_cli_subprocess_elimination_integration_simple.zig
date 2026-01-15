@@ -5,15 +5,24 @@ const std = @import("std");
 const testing = std.testing;
 const expect = testing.expect;
 
-// Test the actual --no-quic flag with a simple execution
-test "integration --no-quic flag basic functionality" {
+fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
+    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+}
+
+// Test the actual --insecure flag with a simple execution
+test "integration --insecure flag basic functionality" {
     const allocator = testing.allocator;
+
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
 
     var child = std.process.Child.init(&[_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 1 AS test",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     }, allocator);
 
     child.stdout_behavior = .Pipe;
@@ -36,18 +45,17 @@ test "integration --no-quic flag basic functionality" {
     }
 
     // Should produce JSON output
-    try expect(std.mem.indexOf(u8, stdout, "{") != null);
-    try expect(std.mem.indexOf(u8, stdout, "}") != null);
+    try expect(std.mem.indexOf(u8, stdout, "\"type\":\"SCHEMA\"") != null);
+    try expect(std.mem.indexOf(u8, stdout, "\"type\":\"BINDINGS\"") != null);
 }
 
-// Test QUIC mode returns error
-test "integration QUIC mode error handling" {
+// Test query without text returns usage error
+test "integration query without text error handling" {
     const allocator = testing.allocator;
 
     var child = std.process.Child.init(&[_][]const u8{
         "./zig-out/bin/geode",
         "query",
-        "RETURN 1 AS test",
     }, allocator);
 
     child.stdout_behavior = .Pipe;
@@ -70,7 +78,7 @@ test "integration QUIC mode error handling" {
     }
 
     // Should produce error message
-    try expect(std.mem.indexOf(u8, stderr, "Error:") != null);
+    try expect(std.mem.indexOf(u8, stderr, "Error: query text required") != null);
 }
 
 // Test help command works
@@ -111,11 +119,16 @@ test "integration help command functionality" {
 test "integration no subprocess spawning" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     var child = std.process.Child.init(&[_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 'subprocess test'",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     }, allocator);
 
     child.stdout_behavior = .Pipe;
@@ -147,6 +160,9 @@ test "integration no subprocess spawning" {
 test "integration binary existence and execution" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     // Test that the binary exists
     std.fs.cwd().access("./zig-out/bin/geode", .{}) catch |err| {
         std.debug.print("Binary not found: {}\n", .{err});
@@ -158,7 +174,9 @@ test "integration binary existence and execution" {
         "./zig-out/bin/geode",
         "query",
         "RETURN 'existence test'",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     }, allocator);
 
     child.stdout_behavior = .Pipe;
@@ -184,13 +202,18 @@ test "integration binary existence and execution" {
 test "integration performance acceptable" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     const start_time = std.time.milliTimestamp();
 
     var child = std.process.Child.init(&[_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 'performance test'",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     }, allocator);
 
     child.stdout_behavior = .Pipe;
@@ -225,6 +248,9 @@ test "integration performance acceptable" {
 test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_002" {
     const allocator = testing.allocator;
 
+    const server = try getTestServer(allocator);
+    defer allocator.free(server);
+
     // CANARY: This test verifies CLI subprocess elimination integration functionality
     // as specified in REQ-CLI-SUBPROCESS-INTEGRATION-002
 
@@ -232,7 +258,9 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_002" {
         "./zig-out/bin/geode",
         "query",
         "CANARY INTEGRATION TEST",
-        "--no-quic",
+        "--server",
+        server,
+        "--insecure",
     }, allocator);
 
     child.stdout_behavior = .Pipe;

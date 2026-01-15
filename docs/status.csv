@@ -388,7 +388,6 @@ REQ-GAP-0013-0016-TESTS-001,GapAnalysisJan2026Fixes,UnitTests,IMPL,,,testing,202
 REQ-GAP-0153-REGRESSION,Password Security,Security,IMPL,,,security,2026-01-14,geodetestlab/specs/gap_153_154_password_security.yml
 REQ-GAP-0154-REGRESSION,CLI Password Security,Security,IMPL,,,security,2026-01-14,geodetestlab/specs/gap_153_154_password_security.yml
 REQ-GAP-155-156-REGRESSION,SecurityRegressionTests,Testing,ACTIVE,,,security,2026-01-14,geodetestlab/specs/gap_155_156_regression.yml
-REQ-GAP-ANALYSIS-001,Gap Analysis,Documentation,IMPL,,,governance,2026-01-14*,docs/GAP_ANALYSIS.md
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,IMPL,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GEO-MULTI-001,MultiGeometry,SpatialTypes,IMPL,,,types,2026-01-10,src/eval_extended.zig
 REQ-GEO-MULTI-002,MultiGeometry,SpatialTypes,IMPL,,,types,2026-01-10,src/eval_extended.zig

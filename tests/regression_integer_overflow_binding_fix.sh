@@ -13,7 +13,7 @@ BINARY="./zig-out/bin/geode"
 
 # Test 1: Basic property access in RETURN clause
 echo "Test 1: Basic property access - MATCH (n:Person) RETURN n.name"
-RESULT1=$($BINARY query "MATCH (n:Person) RETURN n.name LIMIT 3" --no-quic 2>/dev/null | grep -E '"name":|Alice|Bob|Carol' || echo "no results")
+RESULT1=$($BINARY query "MATCH (n:Person) RETURN n.name LIMIT 3" --insecure 2>/dev/null | grep -E '"name":|Alice|Bob|Carol' || echo "no results")
 
 if [[ "$RESULT1" == "no results" ]]; then
     echo "❌ Test 1 FAILED: Property access query returned no results"
@@ -24,7 +24,7 @@ fi
 
 # Test 2: Multiple property access
 echo "Test 2: Multiple property access - MATCH (n) RETURN n.name, n.age"  
-RESULT2=$($BINARY query "MATCH (n:Person) RETURN n.name, n.age LIMIT 2" --no-quic 2>/dev/null | grep '"name"' || echo "no results")
+RESULT2=$($BINARY query "MATCH (n:Person) RETURN n.name, n.age LIMIT 2" --insecure 2>/dev/null | grep '"name"' || echo "no results")
 
 if [[ "$RESULT2" == "no results" ]]; then
     echo "❌ Test 2 FAILED: Multiple property access failed"
@@ -35,7 +35,7 @@ fi
 
 # Test 3: Property access with WHERE clause
 echo "Test 3: Property access in WHERE clause"
-RESULT3=$($BINARY query "MATCH (n:Person) WHERE n.name = 'Alice' RETURN count(n)" --no-quic 2>/dev/null | grep '"count"' || echo "no results")
+RESULT3=$($BINARY query "MATCH (n:Person) WHERE n.name = 'Alice' RETURN count(n)" --insecure 2>/dev/null | grep '"count"' || echo "no results")
 
 if [[ "$RESULT3" == "no results" ]]; then
     echo "❌ Test 3 FAILED: Property filtering failed"
@@ -46,7 +46,7 @@ fi
 
 # Test 4: CREATE + property access combination
 echo "Test 4: CREATE and immediate property access"
-RESULT4=$($BINARY query 'CREATE (test:TestNode {prop: "value"}) RETURN count(test)' --no-quic 2>/dev/null | grep '"created"' || echo "no results")
+RESULT4=$($BINARY query 'CREATE (test:TestNode {prop: "value"}) RETURN count(test)' --insecure 2>/dev/null | grep '"created"' || echo "no results")
 
 if [[ "$RESULT4" == "no results" ]]; then
     echo "❌ Test 4 FAILED: CREATE + property access failed"

@@ -14,7 +14,7 @@ make build > /dev/null 2>&1
 
 # Test 1: Basic CREATE statements (node ID collision fix)
 echo "1. Testing CREATE statement execution..."
-timeout 3 ./zig-out/bin/geodec 'CREATE (a), (b), (c)' --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec 'CREATE (a), (b), (c)' --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE nodes successful"
 else
@@ -24,7 +24,7 @@ fi
 
 # Test 2: CREATE with labels
 echo "2. Testing CREATE with labels..."
-timeout 3 ./zig-out/bin/geodec 'CREATE (p:Person), (c:Company)' --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec 'CREATE (p:Person), (c:Company)' --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE with labels successful"
 else
@@ -34,7 +34,7 @@ fi
 
 # Test 3: CREATE with properties
 echo "3. Testing CREATE with properties..."
-timeout 3 ./zig-out/bin/geodec "CREATE (p {name: 'Alice', age: 30})" --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec "CREATE (p {name: 'Alice', age: 30})" --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE with properties successful"
 else
@@ -44,7 +44,7 @@ fi
 
 # Test 4: CREATE with labels and properties
 echo "4. Testing CREATE with labels and properties..."
-timeout 3 ./zig-out/bin/geodec "CREATE (p:Person {name: 'Bob', age: 25})" --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec "CREATE (p:Person {name: 'Bob', age: 25})" --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE with labels and properties successful"
 else
@@ -54,7 +54,7 @@ fi
 
 # Test 5: CREATE relationship patterns
 echo "5. Testing CREATE relationship patterns..."
-timeout 3 ./zig-out/bin/geodec 'CREATE (a)-[:KNOWS]->(b)' --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec 'CREATE (a)-[:KNOWS]->(b)' --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE relationships successful"
 else
@@ -64,7 +64,7 @@ fi
 
 # Test 6: Complex CREATE patterns
 echo "6. Testing complex CREATE patterns..."
-timeout 3 ./zig-out/bin/geodec 'CREATE (alice:Person {name: "Alice"})-[:WORKS_AT {since: 2020}]->(tech:Company {name: "TechCorp"})' --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec 'CREATE (alice:Person {name: "Alice"})-[:WORKS_AT {since: 2020}]->(tech:Company {name: "TechCorp"})' --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Complex CREATE patterns successful"
 else
@@ -74,7 +74,7 @@ fi
 
 # Test 7: Single quote string literals (should work)
 echo "7. Testing single quote string literals..."
-timeout 3 ./zig-out/bin/geodec "RETURN 'hello' AS greeting" --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec "RETURN 'hello' AS greeting" --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Single quote strings successful"
 else
@@ -84,7 +84,7 @@ fi
 
 # Test 8: Basic RETURN queries
 echo "8. Testing basic RETURN queries..."
-timeout 3 ./zig-out/bin/geodec 'RETURN 42 AS answer' --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec 'RETURN 42 AS answer' --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Basic RETURN successful"
 else
@@ -94,7 +94,7 @@ fi
 
 # Test 9: Basic MATCH queries (should execute without hanging)
 echo "9. Testing basic MATCH queries..."
-timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n' --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n' --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Basic MATCH successful"
 else
@@ -105,7 +105,7 @@ fi
 # Test 10: Node ID collision fix verification
 echo "10. Testing node ID collision prevention..."
 # This test creates multiple nodes in succession to verify they get unique IDs
-timeout 3 ./zig-out/bin/geodec 'CREATE (n1), (n2), (n3), (n4), (n5)' --no-quic > /dev/null
+timeout 3 ./zig-out/bin/geodec 'CREATE (n1), (n2), (n3), (n4), (n5)' --insecure > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Node ID collision prevention successful"
 else

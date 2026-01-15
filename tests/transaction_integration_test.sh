@@ -80,48 +80,48 @@ echo
 echo -e "${BLUE}=== Phase 1: Basic Transaction Operations ===${NC}"
 
 test_transaction "BEGIN transaction" \
-    "./zig-out/bin/geodec 'BEGIN' --no-quic" \
+    "./zig-out/bin/geodec 'BEGIN' --insecure" \
     "status_class\|BEGIN\|success"
 
 test_transaction "COMMIT empty transaction" \
-    "./zig-out/bin/geodec 'COMMIT' --no-quic" \
+    "./zig-out/bin/geodec 'COMMIT' --insecure" \
     "status_class\|COMMIT\|success"
 
 test_transaction "ROLLBACK empty transaction" \
-    "./zig-out/bin/geodec 'ROLLBACK' --no-quic" \
+    "./zig-out/bin/geodec 'ROLLBACK' --insecure" \
     "status_class\|ROLLBACK\|success"
 
 echo
 echo -e "${BLUE}=== Phase 2: Transaction with Data Modifications ===${NC}"
 
 # Create initial data
-./zig-out/bin/geodec "CREATE (n:Account {id: 1, balance: 1000})" --no-quic 2>/dev/null
-./zig-out/bin/geodec "CREATE (n:Account {id: 2, balance: 500})" --no-quic 2>/dev/null
+./zig-out/bin/geodec "CREATE (n:Account {id: 1, balance: 1000})" --insecure 2>/dev/null
+./zig-out/bin/geodec "CREATE (n:Account {id: 2, balance: 500})" --insecure 2>/dev/null
 
 test_transaction "Transaction with CREATE" \
-    "./zig-out/bin/geodec 'BEGIN' --no-quic && \
-     ./zig-out/bin/geodec 'CREATE (n:Account {id: 3, balance: 750})' --no-quic && \
-     ./zig-out/bin/geodec 'COMMIT' --no-quic" \
+    "./zig-out/bin/geodec 'BEGIN' --insecure && \
+     ./zig-out/bin/geodec 'CREATE (n:Account {id: 3, balance: 750})' --insecure && \
+     ./zig-out/bin/geodec 'COMMIT' --insecure" \
     "status_class\|success"
 
 test_transaction "Verify CREATE committed" \
-    "./zig-out/bin/geodec 'MATCH (a:Account {id: 3}) RETURN a.balance AS balance' --no-quic" \
+    "./zig-out/bin/geodec 'MATCH (a:Account {id: 3}) RETURN a.balance AS balance' --insecure" \
     "balance.*750"
 
 test_transaction "Transaction with UPDATE" \
-    "./zig-out/bin/geodec 'BEGIN' --no-quic && \
-     ./zig-out/bin/geodec 'MATCH (a:Account {id: 1}) SET a.balance = a.balance - 100' --no-quic && \
-     ./zig-out/bin/geodec 'COMMIT' --no-quic" \
+    "./zig-out/bin/geodec 'BEGIN' --insecure && \
+     ./zig-out/bin/geodec 'MATCH (a:Account {id: 1}) SET a.balance = a.balance - 100' --insecure && \
+     ./zig-out/bin/geodec 'COMMIT' --insecure" \
     "status_class\|success"
 
 test_transaction "Transaction ROLLBACK" \
-    "./zig-out/bin/geodec 'BEGIN' --no-quic && \
-     ./zig-out/bin/geodec 'MATCH (a:Account {id: 2}) SET a.balance = 0' --no-quic && \
-     ./zig-out/bin/geodec 'ROLLBACK' --no-quic" \
+    "./zig-out/bin/geodec 'BEGIN' --insecure && \
+     ./zig-out/bin/geodec 'MATCH (a:Account {id: 2}) SET a.balance = 0' --insecure && \
+     ./zig-out/bin/geodec 'ROLLBACK' --insecure" \
     "status_class\|ROLLBACK\|success"
 
 test_transaction "Verify ROLLBACK (balance unchanged)" \
-    "./zig-out/bin/geodec 'MATCH (a:Account {id: 2}) RETURN a.balance AS balance' --no-quic" \
+    "./zig-out/bin/geodec 'MATCH (a:Account {id: 2}) RETURN a.balance AS balance' --insecure" \
     "balance.*500"
 
 echo
@@ -129,32 +129,32 @@ echo -e "${BLUE}=== Phase 3: ACID Properties Testing ===${NC}"
 
 # Atomicity Test
 test_transaction "Atomicity - All or nothing" \
-    "./zig-out/bin/geodec 'BEGIN' --no-quic && \
-     ./zig-out/bin/geodec 'CREATE (n:TxTest {step: 1})' --no-quic && \
-     ./zig-out/bin/geodec 'CREATE (n:TxTest {step: 2})' --no-quic && \
-     ./zig-out/bin/geodec 'ROLLBACK' --no-quic && \
-     ./zig-out/bin/geodec 'MATCH (n:TxTest) RETURN count(n) AS cnt' --no-quic" \
+    "./zig-out/bin/geodec 'BEGIN' --insecure && \
+     ./zig-out/bin/geodec 'CREATE (n:TxTest {step: 1})' --insecure && \
+     ./zig-out/bin/geodec 'CREATE (n:TxTest {step: 2})' --insecure && \
+     ./zig-out/bin/geodec 'ROLLBACK' --insecure && \
+     ./zig-out/bin/geodec 'MATCH (n:TxTest) RETURN count(n) AS cnt' --insecure" \
     "cnt.*0"
 
 # Consistency Test
 test_transaction "Consistency - Constraint validation" \
-    "./zig-out/bin/geodec 'CREATE CONSTRAINT positive_balance ON Account ASSERT balance >= 0' --no-quic && \
-     ./zig-out/bin/geodec 'BEGIN' --no-quic && \
-     ./zig-out/bin/geodec 'MATCH (a:Account {id: 1}) SET a.balance = -100' --no-quic" \
+    "./zig-out/bin/geodec 'CREATE CONSTRAINT positive_balance ON Account ASSERT balance >= 0' --insecure && \
+     ./zig-out/bin/geodec 'BEGIN' --insecure && \
+     ./zig-out/bin/geodec 'MATCH (a:Account {id: 1}) SET a.balance = -100' --insecure" \
     "error\|constraint\|violation"
 
 # Isolation Test (Dirty Read Prevention)
 echo -n "Testing Isolation - No dirty reads... "
 (
-    ./zig-out/bin/geodec 'BEGIN' --no-quic 2>/dev/null
-    ./zig-out/bin/geodec 'MATCH (a:Account {id: 1}) SET a.balance = 999999' --no-quic 2>/dev/null
+    ./zig-out/bin/geodec 'BEGIN' --insecure 2>/dev/null
+    ./zig-out/bin/geodec 'MATCH (a:Account {id: 1}) SET a.balance = 999999' --insecure 2>/dev/null
     sleep 1
-    ./zig-out/bin/geodec 'ROLLBACK' --no-quic 2>/dev/null
+    ./zig-out/bin/geodec 'ROLLBACK' --insecure 2>/dev/null
 ) &
 TX1_PID=$!
 
 sleep 0.5
-BALANCE=$(./zig-out/bin/geodec 'MATCH (a:Account {id: 1}) RETURN a.balance AS b' --no-quic 2>/dev/null | grep -o '"b":[0-9]*' | cut -d: -f2)
+BALANCE=$(./zig-out/bin/geodec 'MATCH (a:Account {id: 1}) RETURN a.balance AS b' --insecure 2>/dev/null | grep -o '"b":[0-9]*' | cut -d: -f2)
 wait $TX1_PID
 
 if [ "$BALANCE" != "999999" ]; then
@@ -167,10 +167,10 @@ fi
 
 # Durability Test
 test_transaction "Durability - Committed data persists" \
-    "./zig-out/bin/geodec 'BEGIN' --no-quic && \
-     ./zig-out/bin/geodec 'CREATE (n:Durable {id: 999, data: '\''persistent'\''})' --no-quic && \
-     ./zig-out/bin/geodec 'COMMIT' --no-quic && \
-     ./zig-out/bin/geodec 'MATCH (n:Durable {id: 999}) RETURN n.data AS data' --no-quic" \
+    "./zig-out/bin/geodec 'BEGIN' --insecure && \
+     ./zig-out/bin/geodec 'CREATE (n:Durable {id: 999, data: '\''persistent'\''})' --insecure && \
+     ./zig-out/bin/geodec 'COMMIT' --insecure && \
+     ./zig-out/bin/geodec 'MATCH (n:Durable {id: 999}) RETURN n.data AS data' --insecure" \
     "data.*persistent"
 
 echo
@@ -182,9 +182,9 @@ START_TIME=$(date +%s%N)
 
 for i in {1..10}; do
     (
-        ./zig-out/bin/geodec "BEGIN" --no-quic 2>/dev/null
-        ./zig-out/bin/geodec "CREATE (n:Concurrent {tx: $i, timestamp: timestamp()})" --no-quic 2>/dev/null
-        ./zig-out/bin/geodec "COMMIT" --no-quic 2>/dev/null
+        ./zig-out/bin/geodec "BEGIN" --insecure 2>/dev/null
+        ./zig-out/bin/geodec "CREATE (n:Concurrent {tx: $i, timestamp: timestamp()})" --insecure 2>/dev/null
+        ./zig-out/bin/geodec "COMMIT" --insecure 2>/dev/null
     ) &
 done
 wait
@@ -192,7 +192,7 @@ wait
 END_TIME=$(date +%s%N)
 DURATION_MS=$(( (END_TIME - START_TIME) / 1000000 ))
 
-COUNT=$(./zig-out/bin/geodec 'MATCH (n:Concurrent) RETURN count(n) AS cnt' --no-quic 2>/dev/null | grep -o '"cnt":[0-9]*' | cut -d: -f2)
+COUNT=$(./zig-out/bin/geodec 'MATCH (n:Concurrent) RETURN count(n) AS cnt' --insecure 2>/dev/null | grep -o '"cnt":[0-9]*' | cut -d: -f2)
 
 if [ "$COUNT" = "10" ]; then
     echo -e "${GREEN}PASS${NC} (${DURATION_MS}ms for 10 concurrent transactions)"
@@ -210,16 +210,16 @@ echo -e "${BLUE}=== Phase 5: Transaction Deadlock Detection ===${NC}"
 
 test_transaction "Deadlock detection" \
     "timeout 3 bash -c '
-        ./zig-out/bin/geodec \"BEGIN\" --no-quic 2>/dev/null &
+        ./zig-out/bin/geodec \"BEGIN\" --insecure 2>/dev/null &
         P1=\$!
-        ./zig-out/bin/geodec \"BEGIN\" --no-quic 2>/dev/null &
+        ./zig-out/bin/geodec \"BEGIN\" --insecure 2>/dev/null &
         P2=\$!
         sleep 0.5
-        ./zig-out/bin/geodec \"MATCH (a:Account {id: 1}) SET a.lock = 1\" --no-quic 2>/dev/null &
-        ./zig-out/bin/geodec \"MATCH (a:Account {id: 2}) SET a.lock = 2\" --no-quic 2>/dev/null &
+        ./zig-out/bin/geodec \"MATCH (a:Account {id: 1}) SET a.lock = 1\" --insecure 2>/dev/null &
+        ./zig-out/bin/geodec \"MATCH (a:Account {id: 2}) SET a.lock = 2\" --insecure 2>/dev/null &
         sleep 0.5
-        ./zig-out/bin/geodec \"MATCH (a:Account {id: 2}) SET a.lock = 1\" --no-quic 2>/dev/null &
-        ./zig-out/bin/geodec \"MATCH (a:Account {id: 1}) SET a.lock = 2\" --no-quic 2>/dev/null &
+        ./zig-out/bin/geodec \"MATCH (a:Account {id: 2}) SET a.lock = 1\" --insecure 2>/dev/null &
+        ./zig-out/bin/geodec \"MATCH (a:Account {id: 1}) SET a.lock = 2\" --insecure 2>/dev/null &
         wait
     ' || echo 'deadlock_detected'" \
     "deadlock\|timeout\|lock"
@@ -232,9 +232,9 @@ echo -n "Testing transaction throughput (100 transactions)... "
 START_TIME=$(date +%s%N)
 
 for i in {1..100}; do
-    ./zig-out/bin/geodec "BEGIN" --no-quic 2>/dev/null
-    ./zig-out/bin/geodec "CREATE (n:PerfTest {id: $i})" --no-quic 2>/dev/null
-    ./zig-out/bin/geodec "COMMIT" --no-quic 2>/dev/null
+    ./zig-out/bin/geodec "BEGIN" --insecure 2>/dev/null
+    ./zig-out/bin/geodec "CREATE (n:PerfTest {id: $i})" --insecure 2>/dev/null
+    ./zig-out/bin/geodec "COMMIT" --insecure 2>/dev/null
 done
 
 END_TIME=$(date +%s%N)
@@ -251,12 +251,12 @@ echo -e "${BLUE}=== Phase 7: Large Transaction Testing ===${NC}"
 
 test_transaction "Large transaction (1000 operations)" \
     "bash -c '
-        ./zig-out/bin/geodec \"BEGIN\" --no-quic 2>/dev/null
+        ./zig-out/bin/geodec \"BEGIN\" --insecure 2>/dev/null
         for i in {1..1000}; do
-            ./zig-out/bin/geodec \"CREATE (n:Large {id: \$i})\" --no-quic 2>/dev/null
+            ./zig-out/bin/geodec \"CREATE (n:Large {id: \$i})\" --insecure 2>/dev/null
         done
-        ./zig-out/bin/geodec \"COMMIT\" --no-quic 2>/dev/null
-        ./zig-out/bin/geodec \"MATCH (n:Large) RETURN count(n) AS cnt\" --no-quic
+        ./zig-out/bin/geodec \"COMMIT\" --insecure 2>/dev/null
+        ./zig-out/bin/geodec \"MATCH (n:Large) RETURN count(n) AS cnt\" --insecure
     '" \
     "cnt.*1000" \
     30000
@@ -265,16 +265,16 @@ echo
 echo -e "${BLUE}=== Phase 8: Transaction Savepoints ===${NC}"
 
 test_transaction "SAVEPOINT creation" \
-    "./zig-out/bin/geodec 'BEGIN' --no-quic && \
-     ./zig-out/bin/geodec 'SAVEPOINT sp1' --no-quic" \
+    "./zig-out/bin/geodec 'BEGIN' --insecure && \
+     ./zig-out/bin/geodec 'SAVEPOINT sp1' --insecure" \
     "SAVEPOINT\|success\|NotImplemented"
 
 test_transaction "ROLLBACK TO SAVEPOINT" \
-    "./zig-out/bin/geodec 'BEGIN' --no-quic && \
-     ./zig-out/bin/geodec 'SAVEPOINT sp1' --no-quic && \
-     ./zig-out/bin/geodec 'CREATE (n:SavepointTest {id: 1})' --no-quic && \
-     ./zig-out/bin/geodec 'ROLLBACK TO SAVEPOINT sp1' --no-quic && \
-     ./zig-out/bin/geodec 'COMMIT' --no-quic" \
+    "./zig-out/bin/geodec 'BEGIN' --insecure && \
+     ./zig-out/bin/geodec 'SAVEPOINT sp1' --insecure && \
+     ./zig-out/bin/geodec 'CREATE (n:SavepointTest {id: 1})' --insecure && \
+     ./zig-out/bin/geodec 'ROLLBACK TO SAVEPOINT sp1' --insecure && \
+     ./zig-out/bin/geodec 'COMMIT' --insecure" \
     "ROLLBACK\|SAVEPOINT\|success\|NotImplemented"
 
 # Cleanup

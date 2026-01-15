@@ -90,9 +90,9 @@ if (std.ascii.eqlIgnoreCase(name, "toInteger")) {
 ### Test Examples
 ```bash
 # Basic function tests
-./zig-out/bin/geode query "RETURN toString(123)" --no-quic
-./zig-out/bin/geode query "RETURN toInteger('456')" --no-quic
-./zig-out/bin/geode query "RETURN toReal('123.45')" --no-quic
+./zig-out/bin/geode query "RETURN toString(123)" --insecure
+./zig-out/bin/geode query "RETURN toInteger('456')" --insecure
+./zig-out/bin/geode query "RETURN toReal('123.45')" --insecure
 ```
 
 ## Known Limitations

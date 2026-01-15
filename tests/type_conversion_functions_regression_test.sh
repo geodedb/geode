@@ -19,7 +19,7 @@ test_query() {
     echo -n "Testing $name... "
     
     # Run query with timeout
-    if result=$(timeout 10s $GEODE_CLI query "$query" --no-quic 2>&1); then
+    if result=$(timeout 10s $GEODE_CLI query "$query" --insecure 2>&1); then
         if echo "$result" | grep -q "$expected_pattern"; then
             echo "PASS"
         else

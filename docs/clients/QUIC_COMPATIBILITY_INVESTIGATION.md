@@ -120,14 +120,14 @@ Testing revealed that quic-go (Go) fails to connect to the vendor's reference QU
 
 3. **Update Test Infrastructure**
    - Modify test harness to support Go/Rust clients
-   - Keep Python client as reference (with `--no-quic` fallback)
+   - Keep Python client as reference (with `--insecure` fallback)
    - Create integration tests for all three clients
 
 ### Python Client Options
 
 **Option A: Switch to TCP** (Immediate workaround)
 - Add TCP transport support to Python client
-- Use `--no-quic` flag for tests
+- Use `--insecure` flag for tests
 - Maintains Python client usability
 
 **Option B: Wait for Library Updates**

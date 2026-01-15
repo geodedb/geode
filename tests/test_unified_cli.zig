@@ -39,7 +39,6 @@ test "ClientConfig initialization with defaults" {
         commit: bool = false,
         rollback: bool = false,
         process_path: ?[]const u8 = null,
-        no_quic: bool = false,
         server_args: [][]const u8 = &.{},
         json_params: ?std.StringHashMap([]const u8) = null,
     };
@@ -53,7 +52,6 @@ test "ClientConfig initialization with defaults" {
     try testing.expectEqualStrings("json", config.format);
     try testing.expect(config.page_size == 1);
     try testing.expect(config.pull_all == false);
-    try testing.expect(config.no_quic == false);
 }
 
 test "Command line argument parsing patterns" {
@@ -267,7 +265,7 @@ test "Process argument building" {
     var client_args = try std.ArrayList([]const u8).initCapacity(allocator, 5);
     try client_args.append(allocator, "./zig-out/bin/geodec");
     try client_args.append(allocator, "RETURN 1 AS x");
-    try client_args.append(allocator, "--no-quic");
+    try client_args.append(allocator, "--insecure");
     try client_args.append(allocator, "--format");
     try client_args.append(allocator, "json");
 
@@ -275,5 +273,5 @@ test "Process argument building" {
     try testing.expect(client_argv.len == 5);
     try testing.expectEqualStrings("./zig-out/bin/geodec", client_argv[0]);
     try testing.expectEqualStrings("RETURN 1 AS x", client_argv[1]);
-    try testing.expectEqualStrings("--no-quic", client_argv[2]);
+    try testing.expectEqualStrings("--insecure", client_argv[2]);
 }

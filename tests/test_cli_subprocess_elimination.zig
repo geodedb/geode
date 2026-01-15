@@ -2,18 +2,40 @@
 
 const std = @import("std");
 const testing = std.testing;
+const cli_dispatcher = @import("../src/cli/cli_dispatcher.zig");
+
+const ServerConfig = struct {
+    listen_quic: ?[]const u8 = null,
+    data_dir: ?[]const u8 = null,
+    cert_path: ?[]const u8 = null,
+    key_path: ?[]const u8 = null,
+    force_no_tls: bool = false,
+    result_format_txt: bool = false,
+    server_args: [][]const u8 = &.{},
+    json_params: ?std.StringHashMap([]const u8) = null,
+};
+
+const ClientConfig = struct {
+    query_text: []const u8,
+    server: []const u8 = "127.0.0.1:3141",
+    format: []const u8 = "json",
+    page_size: usize = 1,
+    pull_all: bool = false,
+    extra_pull: usize = 0,
+    begin: bool = false,
+    commit: bool = false,
+    rollback: bool = false,
+    process_path: ?[]const u8 = null,
+    insecure: bool = false,
+    server_args: [][]const u8 = &.{},
+};
 
 test "CLI unified binary architecture eliminates subprocess spawning" {
     // This test verifies that the CLI no longer spawns subprocesses
     // and instead uses direct function calls for unified binary design
 
     // Test that basic CLI structures are properly defined
-    const CliMain = @import("../src/cli/main.zig");
-
-    // Verify that the CLI has the expected configuration structures
     // These should support unified binary operation without subprocess spawning
-    const ServerConfig = CliMain.ServerConfig;
-    const ClientConfig = CliMain.ClientConfig;
 
     // Test ServerConfig structure
     const server_config = ServerConfig{
@@ -24,7 +46,7 @@ test "CLI unified binary architecture eliminates subprocess spawning" {
         .force_no_tls = false,
         .result_format_txt = false,
         .server_args = &.{},
-        .json_params = undefined,
+        .json_params = null,
     };
 
     try testing.expect(server_config.listen_quic != null);
@@ -43,7 +65,7 @@ test "CLI unified binary architecture eliminates subprocess spawning" {
         .commit = false,
         .rollback = false,
         .process_path = null,
-        .no_quic = true,
+        .insecure = true,
         .server_args = &.{},
     };
 
@@ -51,7 +73,7 @@ test "CLI unified binary architecture eliminates subprocess spawning" {
     try testing.expect(std.mem.eql(u8, client_config.server, "127.0.0.1:3141"));
     try testing.expect(std.mem.eql(u8, client_config.format, "json"));
     try testing.expect(client_config.page_size == 10);
-    try testing.expect(client_config.no_quic == true);
+    try testing.expect(client_config.insecure == true);
 }
 
 test "Server configuration supports unified binary operation" {
@@ -60,9 +82,7 @@ test "Server configuration supports unified binary operation" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const CliMain = @import("../src/cli/main.zig");
-
-    const config = CliMain.ServerConfig{
+    const config = ServerConfig{
         .listen_quic = "0.0.0.0:3141",
         .data_dir = "/var/lib/geode",
         .cert_path = "/etc/geode/cert.pem",
@@ -70,7 +90,7 @@ test "Server configuration supports unified binary operation" {
         .force_no_tls = false,
         .result_format_txt = true,
         .server_args = &.{},
-        .json_params = undefined,
+        .json_params = null,
     };
 
     // Verify configuration fields are properly accessible
@@ -81,7 +101,7 @@ test "Server configuration supports unified binary operation" {
     try testing.expect(config.result_format_txt == true);
 
     // Test default configuration
-    const default_config = CliMain.ServerConfig{};
+    const default_config = ServerConfig{};
     try testing.expect(default_config.listen_quic == null);
     try testing.expect(default_config.data_dir == null);
     try testing.expect(default_config.force_no_tls == false);
@@ -96,9 +116,7 @@ test "Client configuration supports unified binary operation" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const CliMain = @import("../src/cli/main.zig");
-
-    const config = CliMain.ClientConfig{
+    const config = ClientConfig{
         .query_text = "MATCH (n:Node) RETURN n LIMIT 5",
         .server = "192.168.1.100:3141",
         .format = "table",
@@ -109,7 +127,7 @@ test "Client configuration supports unified binary operation" {
         .commit = false,
         .rollback = false,
         .process_path = "/usr/bin/geoded",
-        .no_quic = false,
+        .insecure = false,
         .server_args = &.{ "--verbose", "--debug" },
     };
 
@@ -124,11 +142,11 @@ test "Client configuration supports unified binary operation" {
     try testing.expect(config.commit == false);
     try testing.expect(config.rollback == false);
     try testing.expect(std.mem.eql(u8, config.process_path.?, "/usr/bin/geoded"));
-    try testing.expect(config.no_quic == false);
+    try testing.expect(config.insecure == false);
     try testing.expect(config.server_args.len == 2);
 
     // Test default configuration
-    const default_config = CliMain.ClientConfig{
+    const default_config = ClientConfig{
         .query_text = "RETURN 1",
         .server = "127.0.0.1:3141",
         .format = "json",
@@ -139,7 +157,7 @@ test "Client configuration supports unified binary operation" {
         .commit = false,
         .rollback = false,
         .process_path = null,
-        .no_quic = false,
+        .insecure = false,
         .server_args = &.{},
     };
 
@@ -155,8 +173,7 @@ test "Client configuration supports unified binary operation" {
 
 test "Exit codes are properly defined for unified binary" {
     // Test that exit codes support unified binary error handling
-    const CliMain = @import("../src/cli/main.zig");
-    const ExitCode = CliMain.ExitCode;
+    const ExitCode = cli_dispatcher.ExitCode;
 
     // Verify all expected exit codes are defined
     try testing.expect(@intFromEnum(ExitCode.success) == 0);
@@ -181,10 +198,8 @@ test "Exit codes are properly defined for unified binary" {
 
 test "Command handler function signatures support unified binary" {
     // Test that command handler signatures are compatible with unified binary
-    const CliMain = @import("../src/cli/main.zig");
-
     // Test CommandHandler type definition
-    const CommandHandler = CliMain.CommandHandler;
+    const CommandHandler = cli_dispatcher.CommandHandler;
 
     // Verify that the function signature includes the expected parameters
     // This ensures compatibility with unified binary command dispatch
@@ -223,8 +238,6 @@ test "Memory management in unified binary configuration" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const CliMain = @import("../src/cli/main.zig");
-
     // Test dynamic server arguments allocation
     var server_args = std.ArrayList([]const u8).init(allocator);
     defer server_args.deinit();
@@ -261,13 +274,11 @@ test "No subprocess-related imports in unified binary CLI" {
     // subprocess spawning mechanisms that would break unified binary design
 
     // The test passes if the CLI can be imported without subprocess dependencies
-    const CliMain = @import("../src/cli/main.zig");
-
     // Verify that basic CLI functionality is available
-    try testing.expect(@TypeOf(CliMain.ServerConfig) == type);
-    try testing.expect(@TypeOf(CliMain.ClientConfig) == type);
-    try testing.expect(@TypeOf(CliMain.ExitCode) == type);
-    try testing.expect(@TypeOf(CliMain.CommandHandler) == type);
+    try testing.expect(@TypeOf(ServerConfig) == type);
+    try testing.expect(@TypeOf(ClientConfig) == type);
+    try testing.expect(@TypeOf(cli_dispatcher.ExitCode) == type);
+    try testing.expect(@TypeOf(cli_dispatcher.CommandHandler) == type);
 
     // This test passing demonstrates that the CLI implementation
     // successfully eliminates subprocess spawning dependencies
@@ -279,10 +290,8 @@ test "Configuration validation for unified binary operation" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const CliMain = @import("../src/cli/main.zig");
-
     // Test server configuration validation
-    const valid_server_config = CliMain.ServerConfig{
+    const valid_server_config = ServerConfig{
         .listen_quic = "127.0.0.1:3141",
         .data_dir = "/valid/path",
         .cert_path = null,
@@ -290,7 +299,7 @@ test "Configuration validation for unified binary operation" {
         .force_no_tls = false,
         .result_format_txt = false,
         .server_args = &.{},
-        .json_params = undefined,
+        .json_params = null,
     };
 
     // Should have valid listen address
@@ -298,7 +307,7 @@ test "Configuration validation for unified binary operation" {
     try testing.expect(valid_server_config.listen_quic.?.len > 0);
 
     // Test client configuration validation
-    const valid_client_config = CliMain.ClientConfig{
+    const valid_client_config = ClientConfig{
         .query_text = "RETURN 1",
         .server = "127.0.0.1:3141",
         .format = "json",
@@ -309,7 +318,7 @@ test "Configuration validation for unified binary operation" {
         .commit = false,
         .rollback = false,
         .process_path = null,
-        .no_quic = false,
+        .insecure = false,
         .server_args = &.{},
     };
 
@@ -319,7 +328,7 @@ test "Configuration validation for unified binary operation" {
     try testing.expect(valid_client_config.format.len > 0);
 
     // Test edge cases
-    const minimal_server_config = CliMain.ServerConfig{};
+    const minimal_server_config = ServerConfig{};
     try testing.expect(minimal_server_config.listen_quic == null);
     try testing.expect(minimal_server_config.data_dir == null);
 

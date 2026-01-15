@@ -41,7 +41,7 @@ run_test() {
     # Run the query
     if [ "$should_fail" = "true" ]; then
         # Test should fail
-        if "$GEODE_BIN" query "$query" --no-quic >/dev/null 2>&1; then
+        if "$GEODE_BIN" query "$query" --insecure >/dev/null 2>&1; then
             echo -e "${RED}FAIL${NC} (expected failure but succeeded)"
             FAILED_TESTS=$((FAILED_TESTS + 1))
             return 1
@@ -53,7 +53,7 @@ run_test() {
     else
         # Test should succeed
         local output
-        output=$("$GEODE_BIN" query "$query" --no-quic 2>&1)
+        output=$("$GEODE_BIN" query "$query" --insecure 2>&1)
         local exit_code=$?
         
         if [ $exit_code -eq 0 ]; then

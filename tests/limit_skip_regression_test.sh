@@ -33,7 +33,7 @@ run_test() {
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     echo -n "Test $TOTAL_TESTS: $test_name... "
     
-    OUTPUT=$(timeout 3 ./zig-out/bin/geodec "$query" --no-quic 2>&1 || true)
+    OUTPUT=$(timeout 3 ./zig-out/bin/geodec "$query" --insecure 2>&1 || true)
     
     if [ "$should_succeed" = "true" ]; then
         # Should succeed - check for SCHEMA or valid result

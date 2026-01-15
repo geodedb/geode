@@ -11,7 +11,7 @@ GEODE_BIN="./zig-out/bin/geode"
 
 # Test 1: Basic RETURN query without 'query' subcommand
 echo "Test 1: Basic RETURN query auto-detection"
-result=$($GEODE_BIN "RETURN 1 AS result" --no-quic 2>/dev/null | grep '"result".*1' || echo "FAIL")
+result=$($GEODE_BIN "RETURN 1 AS result" --insecure 2>/dev/null | grep '"result".*1' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Basic RETURN query auto-detection"
     exit 1
@@ -20,7 +20,7 @@ echo "PASS: Basic RETURN query auto-detection"
 
 # Test 2: MATCH query auto-detection
 echo "Test 2: MATCH query auto-detection"
-result=$($GEODE_BIN "MATCH (n) RETURN count(n) AS node_count" --no-quic 2>/dev/null | grep '"node_count"' || echo "FAIL")
+result=$($GEODE_BIN "MATCH (n) RETURN count(n) AS node_count" --insecure 2>/dev/null | grep '"node_count"' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: MATCH query auto-detection"
     exit 1
@@ -29,7 +29,7 @@ echo "PASS: MATCH query auto-detection"
 
 # Test 3: CREATE query auto-detection
 echo "Test 3: CREATE query auto-detection"
-$GEODE_BIN "CREATE (n:TestNode {name: 'autotest'})" --no-quic >/dev/null 2>&1
+$GEODE_BIN "CREATE (n:TestNode {name: 'autotest'})" --insecure >/dev/null 2>&1
 if [[ $? -ne 0 ]]; then
     echo "FAIL: CREATE query auto-detection"
     exit 1
@@ -38,7 +38,7 @@ echo "PASS: CREATE query auto-detection"
 
 # Test 4: Invalid GQL syntax should return exit code 1
 echo "Test 4: Invalid GQL syntax exit code"
-timeout 10 $GEODE_BIN "INVALID GQL SYNTAX HERE" --no-quic >/dev/null 2>&1
+timeout 10 $GEODE_BIN "INVALID GQL SYNTAX HERE" --insecure >/dev/null 2>&1
 exit_code=$?
 if [[ $exit_code -ne 1 ]]; then
     echo "FAIL: Invalid GQL syntax should return exit code 1, got $exit_code"
@@ -48,7 +48,7 @@ echo "PASS: Invalid GQL syntax returns correct exit code 1"
 
 # Test 5: Format flag auto-detection
 echo "Test 5: Format flag auto-detection"
-result=$($GEODE_BIN --format json "RETURN 'hello' AS greeting" --no-quic 2>/dev/null | grep '"greeting".*hello' || echo "FAIL")
+result=$($GEODE_BIN --format json "RETURN 'hello' AS greeting" --insecure 2>/dev/null | grep '"greeting".*hello' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Format flag auto-detection"
     exit 1
@@ -57,7 +57,7 @@ echo "PASS: Format flag auto-detection"
 
 # Test 6: Server flag auto-detection
 echo "Test 6: Server flag auto-detection"
-result=$($GEODE_BIN --server localhost:8443 "RETURN 2 AS num" --no-quic 2>/dev/null | grep '"num".*2' || echo "FAIL")
+result=$($GEODE_BIN --server localhost:8443 "RETURN 2 AS num" --insecure 2>/dev/null | grep '"num".*2' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Server flag auto-detection"
     exit 1
@@ -66,7 +66,7 @@ echo "PASS: Server flag auto-detection"
 
 # Test 7: Case insensitive keyword detection
 echo "Test 7: Case insensitive keyword detection"
-result=$($GEODE_BIN "return 42 as answer" --no-quic 2>/dev/null | grep '"answer".*42' || echo "FAIL")
+result=$($GEODE_BIN "return 42 as answer" --insecure 2>/dev/null | grep '"answer".*42' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Case insensitive keyword detection"
     exit 1
@@ -84,7 +84,7 @@ echo "PASS: Non-GQL command error handling"
 
 # Test 9: Mixed flags and query
 echo "Test 9: Mixed flags and query handling"
-result=$($GEODE_BIN --format json "RETURN 'test' AS value" --no-quic 2>/dev/null | grep '"value".*test' || echo "FAIL")
+result=$($GEODE_BIN --format json "RETURN 'test' AS value" --insecure 2>/dev/null | grep '"value".*test' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
     echo "FAIL: Mixed flags and query handling"
     exit 1
@@ -96,7 +96,7 @@ echo "Test 10: Complex GQL keywords detection"
 keywords=("EXPLAIN" "PROFILE" "MERGE" "OPTIONAL" "DETACH" "CONSTRAINT" "INDEX")
 for keyword in "${keywords[@]}"; do
     # These might fail due to syntax, but should be detected as GQL queries (not unknown subcommands)
-    result=$($GEODE_BIN "$keyword test" --no-quic 2>&1 | grep -E "(ParseError|unknown subcommand)" || echo "UNKNOWN")
+    result=$($GEODE_BIN "$keyword test" --insecure 2>&1 | grep -E "(ParseError|unknown subcommand)" || echo "UNKNOWN")
     if [[ $result == *"unknown subcommand"* ]]; then
         echo "FAIL: $keyword should be detected as GQL query"
         exit 1

@@ -34,15 +34,15 @@ The QUIC handshake between aioquic and quiche doesn't complete. While both imple
 **Problem**:
 - Python client only supports QUIC (via aioquic)
 - No TCP/TLS fallback implementation
-- Server supports `--no-quic` mode but client can't use it
+- Server supports `--insecure` mode but client can't use it
 
 **Impact**:
-- Cannot run tests with `--no-quic` server
+- Cannot run tests with `--insecure` server
 - Makes testing difficult during development
 
 ### 3. Test Runner Configuration
 
-**Fixed**: Added `--no-quic` flag to test harness server start (line 137 in run_tests.py)
+**Fixed**: Added `--insecure` flag to test harness server start (line 137 in run_tests.py)
 
 ```python
 self.process = await asyncio.create_subprocess_exec(
@@ -50,7 +50,7 @@ self.process = await asyncio.create_subprocess_exec(
     "serve",
     "--listen",
     listen_addr,
-    "--no-quic",  # Disable QUIC for now
+    "--insecure",  # Disable QUIC for now
     ...
 )
 ```
@@ -77,7 +77,7 @@ def raw_value(self) -> Any:
 1. **Added `raw_value` property** to `clients/python/geode_client/types.py`
    - Test runner can now access values correctly
 
-2. **Updated test harness** to use `--no-quic` flag
+2. **Updated test harness** to use `--insecure` flag
    - Temporarily disables QUIC until Python client TCP support is added
 
 ### 🚧 In Progress

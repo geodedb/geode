@@ -34,6 +34,7 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-MATERIALIZED_VIEWS: Materialized Views System Requirements](https://gitlab.com/devnw/geode/geode/-/issues/266)
 - [REQ-DOC-BM25_INDEX_OPTIMIZER_INTEGRATION: BM25 IndexOptimizer Integration Requirements](https://gitlab.com/devnw/geode/geode/-/issues/261)
 - [REQ-DOC-GRAPH_ALGORITHM_PERFORMANCE_ENHANCEMENTS: Graph Algorithm Performance Enhancements Requirements](https://gitlab.com/devnw/geode/geode/-/issues/264)
+- [REQ-DOC-EVALUATION_PIPELINE: Geode Expression Evaluation Pipeline Requirements](https://gitlab.com/devnw/geode/geode/-/issues/290)
 - [REQ-DOC-TELEMETRY: Streaming Telemetry (Paging Events) - v0.16.0 Requirements](https://gitlab.com/devnw/geode/geode/-/issues/286)
 - [REQ-DOC-ALL_PHASES_COMPLETION_SUMMARY: All Phases Completion Summary Requirements](https://gitlab.com/devnw/geode/geode/-/issues/272)
 

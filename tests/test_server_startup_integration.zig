@@ -57,10 +57,10 @@ test "server_startup_with_query_test" {
     // Give server time to start
     std.Thread.sleep(2000000000); // 2 seconds
 
-    // Test query command (using --no-quic for test compatibility)
+    // Test query command (using --insecure for test compatibility)
     const query_result = std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &[_][]const u8{ "./zig-out/bin/geode", "query", "RETURN 1 AS test", "--no-quic" },
+        .argv = &[_][]const u8{ "./zig-out/bin/geode", "query", "RETURN 1 AS test", "--server", "127.0.0.1:7568", "--insecure" },
         .max_output_bytes = 1024,
     }) catch |err| {
         // Terminate server before returning error

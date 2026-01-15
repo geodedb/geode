@@ -16,7 +16,7 @@ echo "Testing property-based ordering patterns..."
 
 # Test 1: Basic property ordering
 echo "1. Basic property ordering (ORDER BY n.id)..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"ordered":true' && echo "$OUTPUT" | grep -q '"order_keys":\["n.id"\]'; then
     echo "   ✓ Basic property ordering works"
     if echo "$OUTPUT" | grep -q '"flagger_findings":\["I:PropertyOrderingEnabled"\]'; then
@@ -31,7 +31,7 @@ fi
 
 # Test 2: Descending property ordering
 echo "2. Descending property ordering (ORDER BY n.id DESC)..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id DESC' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id DESC' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"ordered":true' && echo "$OUTPUT" | grep -q '"order_keys":\["n.id"\]'; then
     echo "   ✓ Descending property ordering works"
 else
@@ -40,7 +40,7 @@ fi
 
 # Test 3: Property ordering with label filter
 echo "3. Property ordering with label filter..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n:Person) RETURN n ORDER BY n.id' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n:Person) RETURN n ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"ordered":true' && echo "$OUTPUT" | grep -q '"order_keys":\["n.id"\]'; then
     echo "   ✓ Property ordering with labels works"
 else
@@ -49,7 +49,7 @@ fi
 
 # Test 4: Multiple property ordering keys
 echo "4. Multiple property ordering keys..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id, n.name' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id, n.name' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"ordered":true'; then
     echo "   ✓ Multiple property ordering executed"
 else
@@ -58,7 +58,7 @@ fi
 
 # Test 5: Property ordering with LIMIT
 echo "5. Property ordering with LIMIT..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id LIMIT 2' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id LIMIT 2' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"ordered":true' && echo "$OUTPUT" | grep -q '"order_keys":\["n.id"\]'; then
     echo "   ✓ Property ordering with LIMIT works"
 else
@@ -70,7 +70,7 @@ echo "Testing regression: Verify IllegalOrderKey no longer occurs..."
 
 # Test 6: Verify no IllegalOrderKey error
 echo "6. Verify no IllegalOrderKey error..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"status_subclass":"IllegalOrderKey"'; then
     echo "   ✗ REGRESSION: IllegalOrderKey error still occurs!"
     echo "   Error output: $OUTPUT"
@@ -80,7 +80,7 @@ fi
 
 # Test 7: Test with explicit property access in SELECT
 echo "7. Property access in SELECT with ordering..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n.id AS node_id ORDER BY n.id' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n.id AS node_id ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"ordered":true'; then
     echo "   ✓ Property access in SELECT with ordering works"
 else
@@ -89,7 +89,7 @@ fi
 
 # Test 8: Complex property ordering
 echo "8. Complex property ordering with relationships..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n)-[r]->(m) RETURN n, r, m ORDER BY n.id, m.id' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n)-[r]->(m) RETURN n, r, m ORDER BY n.id, m.id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"ordered":true'; then
     echo "   ✓ Complex property ordering executed"
 else
@@ -101,7 +101,7 @@ echo "Testing edge cases and advanced property ordering..."
 
 # Test 9: Property ordering with WHERE clause
 echo "9. Property ordering with WHERE clause..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) WHERE n.id > 1 RETURN n ORDER BY n.id' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) WHERE n.id > 1 RETURN n ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"ordered":true'; then
     echo "   ✓ Property ordering with WHERE works"
 else
@@ -110,7 +110,7 @@ fi
 
 # Test 10: Property ordering with DISTINCT
 echo "10. Property ordering with DISTINCT..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN DISTINCT n ORDER BY n.id' --no-quic 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN DISTINCT n ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"ordered":true'; then
     echo "   ✓ Property ordering with DISTINCT works"
 else

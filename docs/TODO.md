@@ -127,7 +127,7 @@ python3 extended_test_runner.py
 - ✅ **Root Cause**: Commands treated --embedded as subcommand instead of global flag
 - ✅ **Fix**: Added flag-skipping logic before subcommand detection
 - ✅ **Details**:
-  - Skip known global flags (--embedded, --no-quic, --enable-auth, --audit, --server, etc.)
+  - Skip known global flags (--embedded, --insecure, --enable-auth, --audit, --server, etc.)
   - Works for both --embedded placement before and after command
   - Applied to both `cmdUser()` and `cmdRole()` functions
 - ✅ **Impact**: All user/role help commands now work correctly
@@ -207,7 +207,7 @@ python3 extended_test_runner.py
 - ✅ **Test results**: All 10 math function tests passing (29/29 math tests in geode_advanced_math_algorithms.yml)
 
 ### Critical Bug Fixes
-- ✅ **parallel_test_runner.py**: Fixed missing `--embedded` and `--no-quic` flags (fixed 107 exit code failures)
+- ✅ **parallel_test_runner.py**: Fixed missing `--embedded` and `--insecure` flags (fixed 107 exit code failures)
 - ✅ **extended_test_runner.py**: Fixed command extraction to support both string and list formats
 - ✅ **Makefile**: Increased timeout from 10s to 120s (eliminated 400 false timeout failures)
 

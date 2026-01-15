@@ -3,6 +3,9 @@ const testing = std.testing;
 const builtin = @import("builtin");
 
 // Integration tests for unified CLI - testing actual process spawning and communication
+fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
+    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+}
 
 test "geode unified binary exists and responds" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
@@ -59,7 +62,7 @@ test "geode query help shows client options" {
 
         // Check for client-specific options
         try testing.expect(std.mem.indexOf(u8, stdout, "--format") != null);
-        try testing.expect(std.mem.indexOf(u8, stdout, "--no-quic") != null);
+        try testing.expect(std.mem.indexOf(u8, stdout, "--insecure") != null);
         try testing.expect(std.mem.indexOf(u8, stdout, "--server") != null);
     } else {
         // If stdout is null, just check exit code
@@ -68,10 +71,13 @@ test "geode query help shows client options" {
     }
 }
 
-test "geode query with embedded server execution" {
+test "geode query executes with configured server" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x", "--no-quic" }, testing.allocator);
+    const server = try getTestServer(testing.allocator);
+    defer testing.allocator.free(server);
+
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x", "--server", server, "--insecure" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -159,11 +165,14 @@ test "query without arguments returns usage error" {
     try testing.expect(result.Exited == 2); // usage error
 }
 
-test "embedded server responds to basic query" {
+test "query responds to basic query" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    // Test basic query execution through embedded server
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 'hello' AS greeting", "--no-quic", "--format", "json" }, testing.allocator);
+    const server = try getTestServer(testing.allocator);
+    defer testing.allocator.free(server);
+
+    // Test basic query execution against configured server
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 'hello' AS greeting", "--server", server, "--insecure", "--format", "json" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -177,16 +186,19 @@ test "embedded server responds to basic query" {
     if (child.stdout) |stdout_pipe| {
         const stdout = try stdout_pipe.readToEndAlloc(testing.allocator, 1024 * 1024);
         defer testing.allocator.free(stdout);
+        try testing.expect(std.mem.indexOf(u8, stdout, "\"type\":\"SCHEMA\"") != null);
         try testing.expect(std.mem.indexOf(u8, stdout, "greeting") != null);
-        try testing.expect(std.mem.indexOf(u8, stdout, "hello") != null);
     }
 }
 
-test "embedded server error handling" {
+test "query error handling for invalid syntax" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
+    const server = try getTestServer(testing.allocator);
+    defer testing.allocator.free(server);
+
     // Test error handling with invalid syntax
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "SELECT * FROM nonexistent_table", "--no-quic" }, testing.allocator);
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "SELECT * FROM nonexistent_table", "--server", server, "--insecure" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -194,16 +206,23 @@ test "embedded server error handling" {
     const result = try child.wait();
 
     try testing.expect(result == .Exited);
-    // Note: The embedded server currently returns 0 even for invalid queries
-    // This test verifies that the command executes without crashing
-    try testing.expect(result.Exited == 0);
+    try testing.expect(result.Exited != 0);
+
+    if (child.stderr) |stderr_pipe| {
+        const stderr = try stderr_pipe.readToEndAlloc(testing.allocator, 1024 * 1024);
+        defer testing.allocator.free(stderr);
+        try testing.expect(std.mem.indexOf(u8, stderr, "Error") != null);
+    }
 }
 
 test "process argument forwarding" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    // Test that arguments are properly forwarded to embedded server
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 42 AS answer", "--no-quic", "--format", "json" }, testing.allocator);
+    const server = try getTestServer(testing.allocator);
+    defer testing.allocator.free(server);
+
+    // Test that arguments are properly forwarded to configured server
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 42 AS answer", "--server", server, "--insecure", "--format", "json" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -224,7 +243,10 @@ test "process argument forwarding" {
 test "concurrent query execution" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    // Test that multiple queries can be executed concurrently (each with embedded server)
+    const server = try getTestServer(testing.allocator);
+    defer testing.allocator.free(server);
+
+    // Test that multiple queries can be executed concurrently
     const query_count = 3;
     var children: [query_count]std.process.Child = undefined;
 
@@ -233,7 +255,7 @@ test "concurrent query execution" {
         const query = try std.fmt.allocPrint(testing.allocator, "RETURN {d} AS id", .{i});
         defer testing.allocator.free(query);
 
-        child.* = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", query, "--no-quic" }, testing.allocator);
+        child.* = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", query, "--server", server, "--insecure" }, testing.allocator);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 

@@ -4,7 +4,7 @@ const testing = std.testing;
 extern fn geode_server_start() void; // placeholder if needed
 
 fn run_query(allocator: std.mem.Allocator, exe: []const u8, query: []const u8) ![]const u8 {
-    var argv = [_][]const u8{ exe, query, "--no-quic" };
+    var argv = [_][]const u8{ exe, query, "--insecure" };
     var child = std.ChildProcess.init(&argv, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
@@ -36,7 +36,7 @@ fn run_server_and_query(allocator: std.mem.Allocator, query: []const u8) ![]cons
     std.Thread.sleep(200 * std.time.ns_per_ms);
 
     // Use CLI over TCP
-    var argv = [_][]const u8{ "./zig-out/bin/geodec", query, "--server", "127.0.0.1:7567" };
+    var argv = [_][]const u8{ "./zig-out/bin/geodec", query, "--server", "127.0.0.1:7567", "--insecure" };
     var child = std.ChildProcess.init(&argv, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
