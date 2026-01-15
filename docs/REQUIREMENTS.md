@@ -26,6 +26,7 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-TYPE_CONVERSION_FUNCTIONS: Type Conversion Functions Implementation Requirements](https://gitlab.com/devnw/geode/geode/-/issues/288)
 - [REQ-DOC-UNICODE: UNICODE.md - Geode Unicode Support (v0.18.0) Requirements](https://gitlab.com/devnw/geode/geode/-/issues/268)
 - [REQ-DOC-VALUES_MATCH_CHAINING_SPEC: VALUES -> MATCH Chaining Technical Specification Requirements](https://gitlab.com/devnw/geode/geode/-/issues/269)
+- [REQ-DOC-GQL_COMPLIANCE: GQL ISO/IEC 39075:2024 Compliance Guide Requirements](https://gitlab.com/devnw/geode/geode/-/issues/308)
 - [REQ-DOC-GQL_CONFORMANCE_PROFILE: GQL Conformance Profile — MATCH (subset) Requirements](https://gitlab.com/devnw/geode/geode/-/issues/291)
 - [REQ-DOC-MATCH_TUTORIAL: MATCH Subset Tutorial (Geode) Requirements](https://gitlab.com/devnw/geode/geode/-/issues/275)
 
@@ -37,6 +38,11 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-EVALUATION_PIPELINE: Geode Expression Evaluation Pipeline Requirements](https://gitlab.com/devnw/geode/geode/-/issues/290)
 - [REQ-DOC-TELEMETRY: Streaming Telemetry (Paging Events) - v0.16.0 Requirements](https://gitlab.com/devnw/geode/geode/-/issues/286)
 - [REQ-DOC-ALL_PHASES_COMPLETION_SUMMARY: All Phases Completion Summary Requirements](https://gitlab.com/devnw/geode/geode/-/issues/272)
+
+## Transactions & Session Management
+- [REQ-DOC-TRANSACTION_MANAGEMENT: Transaction Management Requirements](https://gitlab.com/devnw/geode/geode/-/issues/305)
+- [REQ-DOC-SESSION_MANAGEMENT: Session Management Requirements](https://gitlab.com/devnw/geode/geode/-/issues/306)
+- [REQ-DOC-ENHANCED_TRANSACTION_ISOLATION: Enhanced Transaction Isolation Requirements](https://gitlab.com/devnw/geode/geode/-/issues/307)
 
 ## Transport & Protocol
 - [REQ-DOC-BINARY_PROTOCOL: Binary Protocol — GQL Outcome & Diagnostics Mapping (v0.16.0) Requirements](https://gitlab.com/devnw/geode/geode/-/issues/260)
