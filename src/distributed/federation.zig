@@ -33,6 +33,11 @@ pub const FederationConfig = struct {
 
     /// Top-K merge batch size
     topk_merge_batch_size: u32 = 1000,
+
+    /// GAP-0184: Enable parallel scatter/gather for distributed queries
+    /// When true, query fragments are executed concurrently across shards
+    /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ParallelScatter; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
+    enable_parallel_scatter: bool = true,
 };
 
 /// Remote Geode instance

@@ -2,7 +2,7 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 14, 2026 (Session 5)
+**Last Updated**: January 14, 2026
 **Last Verified**: January 14, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
@@ -10,9 +10,86 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ---
 
-## January 14, 2026 Gap Resolution Session 5 (GAP-0180 through GAP-0182)
+## January 14, 2026 Gap Resolution Session 7 (GAP-0181)
 
-3 gaps verified and resolved with QUIC catalog singleton, real backup/restore operations, and complex path variable support:
+1 gap resolved with real LSN tracking for incremental backup chains:
+
+### GAP-0181: Incremental backups ignore parent LSN metadata ✅
+- **GitLab issue:** #310
+- **Category:** Feature
+- **Severity:** High
+- **Fix:** Implemented real LSN tracking throughout the backup system:
+  1. Extended `BackupHeader` with `start_lsn`, `end_lsn`, and `parent_backup_id` fields
+  2. Updated `createFullBackup` to track WAL LSN and store in header
+  3. Updated `createIncrementalBackup` to use `parent_lsn` parameter for chain continuity
+  4. Implemented `readBackupEndLsn` to read actual LSN from backup file headers
+  5. Updated `getParentBackupLsn` in protocol_handler to read real LSN from backup files
+- **Evidence:**
+  - `src/server/backup_manager.zig:30-46` - Extended BackupHeader with LSN fields
+  - `src/server/backup_manager.zig:76-212` - createFullBackup with LSN tracking
+  - `src/server/backup_manager.zig:214-301` - createIncrementalBackup with parent_lsn
+  - `src/server/backup_manager.zig:303-358` - readBackupEndLsn and getCurrentWalLsn functions
+  - `src/server/protocol_handler.zig:21-91` - getParentBackupLsn reads actual LSN from header
+  - `src/server/backup_manager.zig:560-743` - 5 unit tests for LSN tracking
+  - CANARY markers: REQ-BACKUP-LSN-TRACKING-001, REQ-BACKUP-HEADER-LSN-001, REQ-BACKUP-FULL-LSN-001, REQ-BACKUP-INCR-LSN-002, REQ-BACKUP-READ-LSN-001, REQ-BACKUP-WAL-LSN-001, REQ-BACKUP-READ-PARENT-LSN-001
+  - `geodetestlab/specs/gap_0181_backup_lsn_tracking.yml` - 11 integration tests for LSN chain verification
+- **Acceptance criteria met:**
+  - `getParentBackupLsn` reads real `end_lsn` from backup header
+  - `createIncrementalBackup` uses `parent_lsn` with correct start/end LSNs
+  - Tests validate incremental chain continuity across full and incremental backups
+
+---
+
+## January 14, 2026 Gap Resolution Session 6 (GAP-0183 through GAP-0185)
+
+3 gaps resolved with CI enforcement, concurrent distributed execution, and real traceability verification:
+
+### GAP-0183: CI does not enforce REQ-0008 Zig/ReleaseSafe build requirements ✅
+- **GitLab issue:** #312
+- **Category:** CI-CD
+- **Severity:** Medium
+- **Fix:** Added `test-zig-release-safe` CI job that builds and tests with `-Doptimize=ReleaseSafe`; updated CI to enforce ReleaseSafe as required job
+- **Evidence:**
+  - `.gitlab-ci.yml:123-150` - New `test-zig-release-safe` job with ReleaseSafe optimization
+  - CANARY marker: REQ-0008; FEATURE="Platform Build Requirements"; ASPECT=ReleaseSafe
+  - `geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml` - Build verification tests
+- **Acceptance criteria met:** CI now runs ReleaseSafe build as a required job; optimizer-only regressions will be caught
+
+### GAP-0184: Distributed queries execute shards sequentially (simulated parallelism) ✅
+- **GitLab issue:** #313
+- **Category:** Feature
+- **Severity:** Medium
+- **Fix:** Implemented actual concurrent scatter/gather in `scatterQuery` using `std.Thread.spawn` with worker threads; added `enable_parallel_scatter` config option
+- **Evidence:**
+  - `src/distributed/query_coordinator.zig:110-220` - Concurrent execution using thread pool with error tracking
+  - `src/distributed/federation.zig:37-40` - Added `enable_parallel_scatter` config field (default: true)
+  - `src/distributed/query_coordinator.zig:734-735` - Added `concurrent_queries` metrics tracking
+  - `src/distributed/query_coordinator.zig:754-853` - 6 unit tests for concurrent execution
+  - CANARY markers: REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ConcurrentExecution
+  - `geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml` - Distributed execution pattern tests
+- **Acceptance criteria met:** scatterQuery runs fragments concurrently; tests verify parallel execution and correct merge results
+
+### GAP-0185: Requirement traceability tests are non-verifying stubs ✅
+- **GitLab issue:** #314
+- **Category:** Test
+- **Severity:** Medium
+- **Fix:** Replaced all stub tests with real verification using `@hasDecl`, `@hasField`, `@TypeOf` checks and actual module imports
+- **Evidence:**
+  - `tests/test_requirement_traceability.zig` - Complete rewrite with 18 tests:
+    - Imports actual modules (tde, mfa, aead, hkdf, materialized_views, federation, parser)
+    - Uses `@hasDecl` to verify symbol presence
+    - Uses `@hasField` to verify struct fields
+    - Uses `@TypeOf` to verify type accessibility
+    - Tests fail if required implementations are removed
+  - CANARY markers: REQ-TRACEABILITY-001; REQ-DOC-GOVERNANCE
+  - `geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml` - 15+ integration tests
+- **Acceptance criteria met:** Traceability tests fail if required implementation or markers are removed; tests include real assertions
+
+---
+
+## January 14, 2026 Gap Resolution Session 5 (GAP-0180 and GAP-0182)
+
+2 gaps verified and resolved with QUIC catalog singleton and complex path variable support:
 
 ### GAP-0180: QUIC execution uses catalog stub instead of global catalog ✅
 - **GitLab issue:** #309
@@ -22,16 +99,6 @@ This document contains gaps that have been verified as resolved from previous ga
   - `src/server/quic_connection_handler.zig:472-502` - Main query execution uses shared catalog singleton
   - CANARY markers: REQ-QUIC-CATALOG-001, REQ-QUIC-CATALOG-002
   - `geodetestlab/specs/gap_0180_0182_fixes.yml` - Integration tests for catalog persistence
-
-### GAP-0181: Backup/restore protocol handlers simulate restore and use placeholder LSN ✅
-- **GitLab issue:** #310
-- **Fix:** Implemented real LSN resolution from parent backup metadata; restore handler now performs actual restore
-- **Evidence:**
-  - `src/server/protocol_handler.zig:35-95` - `getParentBackupLsn()` function finds and reads parent backup for real LSN
-  - `src/server/protocol_handler.zig:97-145` - `handleBackupRequest` now uses real parent LSN for incremental backups
-  - `src/server/protocol_handler.zig:147-210` - `handleRestoreRequest` performs actual restore via SimplifiedBackupManager
-  - CANARY markers: REQ-BACKUP-PROTOCOL-001, REQ-BACKUP-INCR-LSN-001, REQ-RESTORE-PROTOCOL-001, REQ-RESTORE-REAL-001
-  - `geodetestlab/specs/gap_0180_0182_fixes.yml` - Integration tests for backup metadata
 
 ### GAP-0182: Complex path variable assignment fails (GQL compliance) ✅
 - **GitLab issue:** #311

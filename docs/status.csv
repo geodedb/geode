@@ -1,5 +1,14 @@
 REQ,Feature,Aspect,Status,Test,Bench,Owner,Updated,File
 <req-id>,<feature>,<aspect>,<status>,,,<owner>,<date>,tests/unit_gap_0013_0016_fixes.zig
+REQ-0006,Distributed Query Federation,ConcurrentExecution,IMPL,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
+REQ-0006,Distributed Query Federation,GeodeTestlab,IMPL,,,distributed,2026-01-14,geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml
+REQ-0006,Distributed Query Federation,Metrics,IMPL,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
+REQ-0006,Distributed Query Federation,ParallelScatter,IMPL,,,distributed,2026-01-14,src/distributed/federation.zig
+REQ-0006,Distributed Query Federation,UnitTests,IMPL,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
+REQ-0006,Distributed Query Federation,Verification,IMPL,,,distributed,2026-01-14,tests/test_requirement_traceability.zig
+REQ-0008,Platform Build Requirements,GeodeTestlab,IMPL,,,ci,2026-01-14,geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml
+REQ-0008,Platform Build Requirements,ReleaseSafe,IMPL,,,ci,2026-01-14,.gitlab-ci.yml
+REQ-0008,Platform Build Requirements,Verification,IMPL,,,ci,2026-01-14,tests/test_requirement_traceability.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
@@ -151,9 +160,19 @@ REQ-AUTH-STATE-DEFAULTS-001,Production Password Guard,Security,IMPL,,,security,2
 REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,2025-10-14,src/cli/main.zig
 REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,2025-10-14,src/cli/main.zig
 REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,IMPL,,,cli,2026-01-10,src/cli/backup_cli.zig
+REQ-BACKUP-FULL-LSN-001,FullBackupLSN,LSNTracking,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
+REQ-BACKUP-HEADER-LSN-001,BackupHeaderLSN,MetadataStorage,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
 REQ-BACKUP-HEX-001,SecureHexKeyParsing,SECURITY,IMPL,,,storage,2026-01-13,src/storage/backup.zig
 REQ-BACKUP-HEX-001,SecureHexKeyParsing,TEST,TESTED,,,storage,2026-01-13,src/storage/backup.zig
+REQ-BACKUP-INCR-LSN-001,IncrementalBackupLSN,RealParentLSN,IMPL,,,backup,2026-01-14,src/server/protocol_handler.zig
+REQ-BACKUP-INCR-LSN-002,IncrementalBackupLSN,ChainContinuity,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
 REQ-BACKUP-LOCAL-001,Local Directory Backup,DataExport,IMPL,,,cli,2026-01-10,src/cli/backup_cli.zig
+REQ-BACKUP-LSN-TEST-001,BackupLSNTests,UnitTests,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
+REQ-BACKUP-LSN-TRACKING-001,BackupLSNTracking,GeodeTestlab,IMPL,,,backup,2026-01-14,geodetestlab/specs/gap_0181_backup_lsn_tracking.yml
+REQ-BACKUP-LSN-TRACKING-001,BackupLSNTracking,IncrementalChain,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
+REQ-BACKUP-PROTOCOL-001,BackupProtocolHandler,RealLSN,IMPL,,,backup,2026-01-14,src/server/protocol_handler.zig
+REQ-BACKUP-READ-LSN-001,BackupReadLSN,MetadataRetrieval,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
+REQ-BACKUP-READ-PARENT-LSN-001,BackupReadParentLSN,RealMetadata,IMPL,,,backup,2026-01-14,src/server/protocol_handler.zig
 REQ-BACKUP-REAL-DATA-001,BackupRealData,DataIntegrity,IMPL,,,backup,2026-01-10,src/cli/backup_cli.zig
 REQ-BACKUP-REAL-DATA-001,BackupRealData,DataIntegrity,IMPL,,,backup,2026-01-10,src/server/backup_manager.zig
 REQ-BACKUP-REMOTE-001,RemoteBackup,QUICProtocol,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
@@ -161,6 +180,7 @@ REQ-BACKUP-RESTORE-001,Backup Restore,RemoteRestore,IMPL,,,cli,2026-01-09,src/cl
 REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-BACKUP-RESTORE-003,Backup Restore Manager,LocalRestoreImpl,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-BACKUP-TLS-001,BackupTLSCertVerification,Security,IMPL,,,cli,2026-01-13,src/cli/backup_cli.zig
+REQ-BACKUP-WAL-LSN-001,WalLSNTracking,CurrentPosition,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
 REQ-BENCHMARK-ABAC-001,ABAC Benchmark,Documentation,IMPL,,,security,2026-01-14,BENCHMARK_REPORT.md
 REQ-BENCHMARK-AUDIT-001,Audit Latency Benchmark,Performance,IMPL,,,monitoring,2026-01-14,benchmarks/benchmark_audit_latency.zig
 REQ-BENCHMARK-AUDIT-002,Audit Latency Benchmark,Documentation,IMPL,,,monitoring,2026-01-14,BENCHMARK_REPORT.md
@@ -331,6 +351,8 @@ REQ-DISTRIBUTED-QUERY-009,Distributed Transaction Coordination,TransactionCoordi
 REQ-DISTRIBUTED-QUERY-PLANNER-001,Distributed Query Planning,BasicPlanGeneration,TESTED,TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_001_BasicPlanGeneration,,distributed,2025-10-05,tests/test_distributed_query_planner.zig
 REQ-DISTRIBUTED-QUERY-PLANNER-002,Distributed Query Planning,FederationIntegration,TESTED,TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_002_FederationIntegration,,distributed,2025-10-05,tests/test_distributed_query_planner.zig
 REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TESTED,TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_003_CostOptimization,,distributed,2025-10-05,tests/test_distributed_query_planner.zig
+REQ-DOC-GOVERNANCE,Requirement Traceability,GeodeTestlab,IMPL,,,compliance,2026-01-14,geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml
+REQ-DOC-GOVERNANCE,Requirement Traceability,TestVerification,IMPL,,,compliance,2026-01-14,tests/test_requirement_traceability.zig
 REQ-DOCUMENTATION-STRUCTURE-001,Documentation Structure Tests,UnitTests,IMPL,TestCANARY_REQ_DOCUMENTATION_STRUCTURE_001,,claude,2025-10-05,tests/test_documentation_structure.zig
 REQ-DOCUMENTATION-SYSTEM-INTEGRATION-001,Documentation System Integration Tests,IntegrationTests,IMPL,TestCANARY_REQ_DOCUMENTATION_SYSTEM_INTEGRATION_001,,claude,2025-10-05,tests/test_documentation_system_integration.zig
 REQ-EXEC-REFACTOR-001,ExecutionRefactoring,GRAPH_ALGORITHMS,IMPL,,,refactor,2025-10-17,src/execution/graph_algorithms.zig
@@ -357,7 +379,7 @@ REQ-FLE-BI-002,FieldLevelEncryption,SECURITY,IMPL,,,security,2025-10-15,src/inde
 REQ-FLE-BUILD-001,FieldLevelEncryption,BUILD,IMPL,,,security,2025-10-15,build.zig
 REQ-FLE-CATALOG-001,FieldLevelEncryption,CATALOG,IMPL,,,security,2025-10-15,src/execution.zig
 REQ-FLE-CATALOG-001,FieldLevelEncryption,SCHEMA,IMPL,,,security,2025-10-15,src/schema/fle_catalog.zig
-REQ-FLE-DOC-001,Field-Level Encryption,Documentation,IMPL,,,security,2026-01-14,tests/test_requirement_traceability.zig
+REQ-FLE-DOC-001,Field-Level Encryption,Implementation,IMPL,,,security,2026-01-14,tests/test_requirement_traceability.zig
 REQ-FLE-DOC-001,FieldLevelEncryption,DOCUMENTATION,IMPL,,,security,2025-10-15,docs/FIELD_LEVEL_ENCRYPTION.md
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,IMPL,,,security,2025-10-15,src/execution.zig
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,IMPL,,,security,2025-10-17,src/execution/fle_hooks.zig
@@ -1912,13 +1934,6 @@ REQ-MATVIEW-REWRITE-001,Query Rewriting for Materialized Views,QueryRewrite,IMPL
 REQ-MATVIEW-STORAGE-001,Materialized View Storage Creation,Storage,IMPL,,,query,2026-01-08,src/query/enhanced_materialized_views.zig
 REQ-MATVIEW-STORAGE-002,Materialized View Storage Entry,Storage,IMPL,,,query,2026-01-08,src/query/enhanced_materialized_views.zig
 REQ-MATVIEW-SYSTEM-001,MaterializedViews,ViewCreation,IMPL,,,storage,2026-01-14,tests/test_requirement_traceability.zig
-REQ-MATVIEW-SYSTEM-002,MaterializedViews,ViewRefresh,IMPL,,,storage,2026-01-14,tests/test_requirement_traceability.zig
-REQ-MATVIEW-SYSTEM-003,MaterializedViews,QueryRewrite,IMPL,,,storage,2026-01-14,tests/test_requirement_traceability.zig
-REQ-MATVIEW-SYSTEM-004,MaterializedViews,DependencyTracking,IMPL,,,storage,2026-01-14,tests/test_requirement_traceability.zig
-REQ-MATVIEW-SYSTEM-005,MaterializedViews,IncrementalRefresh,IMPL,,,storage,2026-01-14,tests/test_requirement_traceability.zig
-REQ-MATVIEW-SYSTEM-006,MaterializedViews,ViewStorage,IMPL,,,storage,2026-01-14,tests/test_requirement_traceability.zig
-REQ-MATVIEW-SYSTEM-007,MaterializedViews,ViewMetadata,IMPL,,,storage,2026-01-14,tests/test_requirement_traceability.zig
-REQ-MATVIEW-SYSTEM-008,MaterializedViews,ViewInvalidation,IMPL,,,storage,2026-01-14,tests/test_requirement_traceability.zig
 REQ-MATVIEW-TEST-001,Materialized View Tests,UnitTests,IMPL,TestCANARY_REQ_MATVIEW_TEST_001_UnitTests,,query,2025-10-05,tests/test_materialized_views_enhanced.zig
 REQ-MEM-FIX-001,MemorySafety,DoubleFreeFix,IMPL,,,execution,2025-10-25,src/execution/match_operations.zig
 REQ-MEM-FIX-002,MemorySafety,DoubleFreeFix,IMPL,,,execution,2025-10-25,src/execution/match_operations.zig
@@ -2075,6 +2090,8 @@ REQ-QP-PARALLEL-001,QueryPlannerOptimization,Parallelization,IMPL,,,planner,2025
 REQ-QP-PUSH-001,QueryPlannerOptimization,PredicatePushdown,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
 REQ-QP-SORT-001,QueryPlannerOptimization,SortElimination,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
 REQ-QP-STATS-001,QueryPlannerOptimization,StatisticsEstimation,IMPL,,,planner,2025-12-30,src/planner/query_optimizer.zig
+REQ-QUIC-CATALOG-001,QUICCatalogSingleton,SideEffectQuery,IMPL,,,engine,2026-01-14,src/server/quic_connection_handler.zig
+REQ-QUIC-CATALOG-002,QUICCatalogSingleton,MainQueryExec,IMPL,,,engine,2026-01-14,src/server/quic_connection_handler.zig
 REQ-QUIC-CONN-CLEANUP-001,ConnectionMemoryManagement,ResourceLeak,IMPL,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-CONN-CLEANUP-002,ConnectionMemoryManagement,ConnectionListCleanup,IMPL,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-CONN-CLEANUP-003,ConnectionMemoryManagement,ProperCleanup,IMPL,,,server,2025-12-27,src/server/quic_connection_handler.zig
@@ -2119,6 +2136,8 @@ REQ-REPL-QUIC-005,REPL E2E Tests,EndToEndIntegration,IMPL,test_repl_server_hands
 REQ-REPL-SESSION-001,REPL Session Persistence,Implementation,IMPL,test_session_state,,repl,2025-11-17,src/client/repl/session_state.zig
 REQ-REPL-SYNTAX-001,REPL Syntax Highlighting,Implementation,IMPL,test_syntax_highlighting,,repl,2025-11-17,src/client/repl/syntax_highlighter.zig
 REQ-REPL-TIMING-001,REPL Timing,RegressionTesting,TESTED,repl_timing_regression_test,,repl,2025-10-05,tests/repl_timing_regression_test.sh
+REQ-RESTORE-PROTOCOL-001,RestoreProtocolHandler,RealRestore,IMPL,,,backup,2026-01-14,src/server/protocol_handler.zig
+REQ-RESTORE-REAL-001,RealRestoreOperation,DataRestore,IMPL,,,backup,2026-01-14,src/server/protocol_handler.zig
 REQ-RLS-ENHANCED-001,Enhanced RLS Implementation,EnhancedPolicyEvaluation,TESTED,test_enhanced_policy_evaluation,,security,2025-10-05,tests/test_rls_enhanced.zig
 REQ-RLS-ENHANCED-002,Enhanced RLS Implementation,TemporalConstraints,TESTED,test_temporal_constraint_evaluation,,security,2025-10-05,tests/test_rls_enhanced.zig
 REQ-RLS-ENHANCED-003,Enhanced RLS Implementation,DataClassification,TESTED,test_data_classification_evaluation,,security,2025-10-05,tests/test_rls_enhanced.zig

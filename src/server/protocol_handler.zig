@@ -18,7 +18,25 @@ pub const ServerState = struct {
 // CANARY: REQ=REQ-BACKUP-PROTOCOL-001; FEATURE="BackupProtocolHandler"; ASPECT=RealLSN; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
 // GAP-0181 FIX: Use real backup metadata for incremental LSN selection
 
-/// Parse parent backup ID from hex string to get actual LSN
+/// GAP-0181: Extended backup header structure for LSN reading
+/// Must match SimplifiedBackupManager.BackupHeader exactly
+const BackupHeader = extern struct {
+    magic: u32,
+    version: u16,
+    backup_type: u8,
+    timestamp: i64,
+    compression: u8,
+    encrypted: bool = false,
+    _padding: [2]u8 = .{0} ** 2,
+    start_lsn: u64 = 0,
+    end_lsn: u64 = 0,
+    parent_backup_id: u128 = 0,
+};
+
+const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
+
+/// GAP-0181: Parse parent backup ID from hex string and read actual end_lsn from backup file
+/// CANARY: REQ=REQ-BACKUP-READ-PARENT-LSN-001; FEATURE="BackupReadParentLSN"; ASPECT=RealMetadata; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
 fn getParentBackupLsn(gpa: std.mem.Allocator, backup_dir: []const u8, parent_id_hex: []const u8) !u64 {
     // Parse the parent backup ID from hex
     const parent_id = std.fmt.parseUnsigned(u128, parent_id_hex, 16) catch {
@@ -45,10 +63,31 @@ fn getParentBackupLsn(gpa: std.mem.Allocator, backup_dir: []const u8, parent_id_
     }
     defer backup_file.close();
 
-    // Read backup header to get end_lsn
-    // For now, use the backup ID as a proxy for LSN ordering
-    // In a production system, we'd read the actual metadata from the backup file
-    return @intCast(parent_id);
+    // GAP-0181: Read backup header to get ACTUAL end_lsn
+    var header_bytes: [@sizeOf(BackupHeader)]u8 = undefined;
+    const bytes_read = backup_file.readAll(&header_bytes) catch {
+        return error.BackupReadError;
+    };
+
+    if (bytes_read < @sizeOf(BackupHeader)) {
+        // Old format backup without LSN fields, use parent_id as fallback
+        return @intCast(parent_id);
+    }
+
+    const header = @as(*const BackupHeader, @ptrCast(&header_bytes)).*;
+
+    // Verify magic number
+    if (header.magic != BACKUP_MAGIC) {
+        return error.InvalidBackupFormat;
+    }
+
+    // GAP-0181: Return the actual end_lsn from the backup header
+    // If end_lsn is 0 (old format), fall back to parent_id for backward compatibility
+    if (header.end_lsn > 0) {
+        return header.end_lsn;
+    } else {
+        return @intCast(parent_id);
+    }
 }
 
 /// Handle BACKUP protocol request from client

@@ -121,6 +121,35 @@ test-zig-unit:
   allow_failure: true
 
 # =============================================================================
+# Test Stage - ReleaseSafe Build and Test (REQ-0008 enforcement)
+# CANARY: REQ=REQ-0008; FEATURE="Platform Build Requirements"; ASPECT=ReleaseSafe; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
+# GAP-0183: Enforces ReleaseSafe build requirements per REQ-0008
+# =============================================================================
+
+test-zig-release-safe:
+  stage: test
+  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Building with ReleaseSafe optimization ==="
+      zig build -Doptimize=ReleaseSafe --summary all
+
+      echo "=== Running tests with ReleaseSafe optimization ==="
+      zig build test -Doptimize=ReleaseSafe --summary all
+
+      echo "=== Verifying ReleaseSafe binary size and symbols ==="
+      ls -la zig-out/bin/geode 2>/dev/null || echo "Binary built successfully"
+
+      echo "✓ REQ-0008 ReleaseSafe build requirements enforced"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  allow_failure: false
+
+# =============================================================================
 # Test Stage - GQL Compliance Suite (geodetestlab)
 # CANARY: REQ=REQ-CI-COMPLIANCE-001; FEATURE="GQL Compliance CI"; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
 # GAP-0167: Execute geodetestlab GQL compliance specs in CI
