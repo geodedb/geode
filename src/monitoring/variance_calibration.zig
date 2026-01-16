@@ -5,8 +5,8 @@ const std = @import("std");
 // suggested thresholds (suggested_cv_max, suggested_p95_mean_ratio_max) using
 // trimmed statistics (drop top/bottom 5%). Deterministic given ordered input.
 //
-// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationVarianceAutoCalibration"; ASPECT=AutoCalibrationLogic; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_004_PaginationVarianceAutoCalibration; OWNER=planner; UPDATED=2025-09-27
-// CANARY: REQ=REQ-GQL-075; FEATURE="CostModelVarianceAutoCalibration"; ASPECT=AutoCalibrationLogic; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_075_CostModelVarianceAutoCalibration; OWNER=planner; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationVarianceAutoCalibration"; ASPECT=AutoCalibrationLogic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_PaginationVarianceAutoCalibration; OWNER=planner; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-075; FEATURE="CostModelVarianceAutoCalibration"; ASPECT=AutoCalibrationLogic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelVarianceAutoCalibration; OWNER=planner; UPDATED=2025-09-27
 
 pub const Suggestion = struct {
     suggested_cv_max: f64,

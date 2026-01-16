@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-NET-TYPES-001; FEATURE="IpAddr Network Type"; ASPECT=Types; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_NET_TYPES_001_IpAddr; OWNER=types; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-NET-TYPES-001; FEATURE="IpAddr Network Type"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_NET_TYPES_001_IpAddr; OWNER=types; UPDATED=2025-01-03
 
 /// IP Address type supporting both IPv4 and IPv6
 /// Stores addresses in canonical binary format for efficient operations

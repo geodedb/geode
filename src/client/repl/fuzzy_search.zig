@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-REPL-FUZZY-001; FEATURE="REPL Fuzzy Search"; ASPECT=Implementation; STATUS=IMPL; TEST=test_fuzzy_search; OWNER=repl; UPDATED=2025-11-17
+// CANARY: REQ=REQ-REPL-FUZZY-001; FEATURE="REPL Fuzzy Search"; ASPECT=Implementation; STATUS=TESTED; TEST=test_fuzzy_search; OWNER=repl; UPDATED=2025-11-17
 
 /// Result of a fuzzy search match
 pub const FuzzyMatch = struct {

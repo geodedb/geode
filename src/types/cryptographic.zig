@@ -1,7 +1,7 @@
 const std = @import("std");
 const hash_impl = @import("hash.zig");
 
-// CANARY: REQ=REQ-GQL-CRYPTO-TYPES-001; FEATURE="Cryptographic Types Implementation"; ASPECT=Types; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_CRYPTO_TYPES_001_All; OWNER=types; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-CRYPTO-TYPES-001; FEATURE="Cryptographic Types Implementation"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_CRYPTO_TYPES_001_All; OWNER=types; UPDATED=2025-01-03
 
 /// Cryptographic types for security, integrity, and authentication
 /// Supports hashing, digital signatures, and cryptographic primitives
@@ -132,7 +132,7 @@ pub const Signature = struct {
     }
 
     /// Verify signature against data using stdlib cryptography
-    // CANARY: REQ=REQ-M7-SIGNATURE-001; FEATURE="CodeQuality"; ASPECT=SignatureVerification; STATUS=IMPL; TEST=BuildAndSmoke; OWNER=security; UPDATED=2025-10-17
+    // CANARY: REQ=REQ-M7-SIGNATURE-001; FEATURE="CodeQuality"; ASPECT=SignatureVerification; STATUS=TESTED; TEST=BuildAndSmoke; OWNER=security; UPDATED=2025-10-17
     pub fn verify(self: Signature, data: []const u8) !bool {
         if (self.public_key == null) return error.PublicKeyRequired;
 
@@ -226,7 +226,7 @@ pub const KeyPair = struct {
     private_key: []const u8,
     public_key: []const u8,
 
-    // CANARY: REQ=REQ-CRYPTO-RANDOM-001; FEATURE="CryptographicKeyGeneration"; ASPECT=SECURITY; STATUS=IMPL; TEST=TestCANARY_REQ_CRYPTO_RANDOM_001; OWNER=security; UPDATED=2026-01-11
+    // CANARY: REQ=REQ-CRYPTO-RANDOM-001; FEATURE="CryptographicKeyGeneration"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_CRYPTO_RANDOM_001; OWNER=security; UPDATED=2026-01-11
     pub fn generate(alg: Signature.SignatureAlg, allocator: std.mem.Allocator) !KeyPair {
         // Use cryptographically secure random generation via std.crypto.random
         switch (alg) {
@@ -296,7 +296,7 @@ pub const KeyPair = struct {
     }
 
     /// Sign data with this key pair using stdlib cryptography
-    // CANARY: REQ=REQ-M7-SIGNATURE-002; FEATURE="CodeQuality"; ASPECT=SignatureSigning; STATUS=IMPL; TEST=BuildAndSmoke; OWNER=security; UPDATED=2025-10-17
+    // CANARY: REQ=REQ-M7-SIGNATURE-002; FEATURE="CodeQuality"; ASPECT=SignatureSigning; STATUS=TESTED; TEST=BuildAndSmoke; OWNER=security; UPDATED=2025-10-17
     pub fn sign(self: KeyPair, data: []const u8, allocator: std.mem.Allocator) !Signature {
         // Perform actual cryptographic signing based on algorithm
         switch (self.alg) {

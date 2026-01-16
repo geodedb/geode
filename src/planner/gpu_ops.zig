@@ -1,7 +1,7 @@
 const std = @import("std");
 const phase0 = @import("../gpu/phase0.zig");
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=PlannerOps; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUPlannerDispatch; OWNER=engine; UPDATED=2025-10-25
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=PlannerOps; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUPlannerDispatch; OWNER=engine; UPDATED=2025-10-25
 
 pub const PhysicalGpuOp = enum { node_scan, expand, set_op, pagerank, bfs };
 

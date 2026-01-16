@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-PERF-MMAP-001; FEATURE="MemoryMappedIO"; ASPECT=Performance; STATUS=IMPL; TEST=TestCANARY_MemoryMappedIO; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-MMAP-001; FEATURE="MemoryMappedIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_MemoryMappedIO; OWNER=performance; UPDATED=2025-10-04
 
 /// High-performance memory-mapped file I/O system for large dataset access
 /// Addresses file I/O bottlenecks by providing zero-copy access to persistent data

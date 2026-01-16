@@ -3,8 +3,8 @@ const wal = @import("wal");
 
 // WAL Compaction Pipeline orchestrates periodic checkpoint selection, compaction execution, and archival hook firing.
 // CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CheckpointSelection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_CheckpointSelection; OWNER=storage; UPDATED=2025-09-27
-// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionJob; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_083_CompactionJob; OWNER=storage; UPDATED=2025-09-23
-// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=ArchivalHook; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_083_ArchivalHook; OWNER=storage; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionJob; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_CompactionJob; OWNER=storage; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=ArchivalHook; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_ArchivalHook; OWNER=storage; UPDATED=2025-09-23
 
 pub const Pipeline = struct {
     allocator: std.mem.Allocator,

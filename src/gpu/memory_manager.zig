@@ -2,7 +2,7 @@ const std = @import("std");
 const CudaLoader = @import("cuda_loader.zig").CudaLoader;
 const phase0 = @import("phase0.zig");
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=MemoryManager; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUMemoryManager; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=MemoryManager; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUMemoryManager; OWNER=engine; UPDATED=2025-10-26
 
 const CUdeviceptr = u64;
 

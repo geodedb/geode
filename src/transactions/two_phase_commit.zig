@@ -2,7 +2,7 @@ const std = @import("std");
 
 // Two-Phase Commit (2PC) - Complete Implementation.
 // Runtime gated by GEODE_ENABLE_DISTRIBUTED_WRITES. Provides coordinator & participant state machines.
-// CANARY: REQ=REQ-GQL-2PC-001; FEATURE="Distributed 2PC"; ASPECT=TXN; STATUS=IMPL; TEST=tests/e2e_2pc_distributed.zig:1; OWNER=txn; UPDATED=2025-12-30
+// CANARY: REQ=REQ-GQL-2PC-001; FEATURE="Distributed 2PC"; ASPECT=TXN; STATUS=TESTED; TEST=tests/e2e_2pc_distributed.zig:1; OWNER=txn; UPDATED=2025-12-30
 // Includes timeout handling, network failure recovery, and coordinator/participant failure recovery.
 
 pub const Xid = struct {

@@ -33,7 +33,7 @@ pub const User = struct {
     // Single-use recovery codes (strings) consumed on successful use. Optional.
     recovery_codes: ?std.ArrayList([]const u8) = null,
     attributes: std.StringHashMap([]const u8),
-    // CANARY: REQ=REQ-AUTH-POLICY-001; FEATURE="Password Reset Tracking"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_001_ForceReset; OWNER=security; UPDATED=2025-09-30
+    // CANARY: REQ=REQ-AUTH-POLICY-001; FEATURE="Password Reset Tracking"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_001_ForceReset; OWNER=security; UPDATED=2025-09-30
     password_reset_required: bool = false,
     is_default_user: bool = false,
     password_set_by_env: bool = false,
@@ -142,7 +142,7 @@ pub const Session = struct {
     elevation_expires_at: ?i64, // boundary after which high-assurance privileges lapse
     // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="Session step-up metadata"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
 };
-// CANARY: REQ=REQ-AUTH-POLICY-002; FEATURE="Enhanced Password Policy"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_002_PassphrasePolicy; OWNER=security; UPDATED=2025-09-30
+// CANARY: REQ=REQ-AUTH-POLICY-002; FEATURE="Enhanced Password Policy"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_002_PassphrasePolicy; OWNER=security; UPDATED=2025-09-30
 pub const PasswordPolicy = struct {
     min_length: usize,
     max_length: usize,
@@ -157,13 +157,13 @@ pub const PasswordPolicy = struct {
     history_count: u32,
 
     pub fn default() PasswordPolicy {
-        // CANARY: REQ=REQ-AUTH-POLICY-004; FEATURE="Unified Password Policy"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_004_UnifiedPolicy; OWNER=security; UPDATED=2025-09-30
+        // CANARY: REQ=REQ-AUTH-POLICY-004; FEATURE="Unified Password Policy"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_004_UnifiedPolicy; OWNER=security; UPDATED=2025-09-30
         // All users now follow the same minimum security standard as admins
         return geodeSecure();
     }
 
     pub fn geodeSecure() PasswordPolicy {
-        // CANARY: REQ=REQ-AUTH-CONFIG-001; FEATURE="Configurable Password Policy"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy; OWNER=security; UPDATED=2025-09-30
+        // CANARY: REQ=REQ-AUTH-CONFIG-001; FEATURE="Configurable Password Policy"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy; OWNER=security; UPDATED=2025-09-30
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         defer _ = gpa.deinit();
         const allocator = gpa.allocator();
@@ -228,7 +228,8 @@ pub const AuditLog = struct {
     allocator: Allocator,
     entries: std.ArrayList(AuditEntry),
     pub fn init(a: Allocator) !AuditLog {
-        return .{ .allocator = a, .entries = std.ArrayList(AuditEntry).initCapacity(a, 0) catch unreachable };
+        // GAP-0220 FIX: Use try for proper error propagation
+        return .{ .allocator = a, .entries = try std.ArrayList(AuditEntry).initCapacity(a, 0) };
     }
     pub fn deinit(self: *AuditLog) void {
         self.entries.deinit(self.allocator);
@@ -310,10 +311,11 @@ pub const SecurityManager = struct {
             .roles = std.AutoHashMap(RoleId, Role).init(a),
             .permissions = std.AutoHashMap(PermissionId, Permission).init(a),
             .rbac = RBACPolicy{ .user_roles = std.AutoHashMap(UserId, std.ArrayList(RoleId)).init(a), .role_permissions = std.AutoHashMap(RoleId, std.ArrayList(Permission)).init(a), .role_hierarchy = std.AutoHashMap(RoleId, std.ArrayList(RoleId)).init(a) },
-            .abac_policies = std.ArrayList(ABACPolicy).initCapacity(a, 0) catch unreachable,
-            .row_policies = std.ArrayList(RowLevelPolicy).initCapacity(a, 0) catch unreachable,
+            // GAP-0220 FIX: Use try for proper error propagation
+            .abac_policies = try std.ArrayList(ABACPolicy).initCapacity(a, 0),
+            .row_policies = try std.ArrayList(RowLevelPolicy).initCapacity(a, 0),
             .sessions = std.StringHashMap(Session).init(a),
-            .mfa_policies = std.ArrayList(MfaAdminPolicy).initCapacity(a, 0) catch unreachable,
+            .mfa_policies = try std.ArrayList(MfaAdminPolicy).initCapacity(a, 0),
             .mfa_require_cache = std.AutoHashMap(UserId, bool).init(a),
             .audit_log = try AuditLog.init(a),
             .password_policy = PasswordPolicy.geodeSecure(),
@@ -545,7 +547,8 @@ pub const SecurityManager = struct {
             if (match) try applicable.append(p);
         }
         if (applicable.items.len == 0) return query;
-        var out = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var out = try std.ArrayList(u8).initCapacity(self.allocator, 0);
         try out.appendSlice(self.allocator, query);
         try out.appendSlice(self.allocator, " WHERE (");
         for (applicable.items, 0..) |p, i| {
@@ -630,7 +633,8 @@ pub const SecurityManager = struct {
     // ---- Role & Permission Mgmt ----
     pub fn createRole(self: *Self, name: []const u8, description: []const u8) !*Role {
         const id = @as(RoleId, @intCast(self.roles.count() + 1));
-        const role = Role{ .id = id, .name = try self.allocator.dupe(u8, name), .description = try self.allocator.dupe(u8, description), .permissions = std.ArrayList(PermissionId).initCapacity(self.allocator, 0) catch unreachable, .created_at = std.time.milliTimestamp(), .is_system = false, .priority = 100, .parent_role = null };
+        // GAP-0220 FIX: Use try for proper error propagation
+        const role = Role{ .id = id, .name = try self.allocator.dupe(u8, name), .description = try self.allocator.dupe(u8, description), .permissions = try std.ArrayList(PermissionId).initCapacity(self.allocator, 0), .created_at = std.time.milliTimestamp(), .is_system = false, .priority = 100, .parent_role = null };
         try self.roles.put(id, role);
         return self.roles.getPtr(id).?;
     }
@@ -638,7 +642,8 @@ pub const SecurityManager = struct {
         _ = self.users.get(user_id) orelse return error.UserNotFound;
         _ = self.roles.get(role_id) orelse return error.RoleNotFound;
         const entry = try self.rbac.user_roles.getOrPut(user_id);
-        if (!entry.found_existing) entry.value_ptr.* = std.ArrayList(RoleId).initCapacity(self.allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        if (!entry.found_existing) entry.value_ptr.* = try std.ArrayList(RoleId).initCapacity(self.allocator, 0);
         for (entry.value_ptr.items) |r| if (r == role_id) return;
         try entry.value_ptr.append(self.allocator, role_id);
         try self.audit_log.logRoleAssigned(user_id, role_id);
@@ -666,16 +671,17 @@ pub const SecurityManager = struct {
         for (role.permissions.items) |p| if (p == perm_id) return;
         try role.permissions.append(self.allocator, perm_id);
         const rp = try self.rbac.role_permissions.getOrPut(role_id);
-        if (!rp.found_existing) rp.value_ptr.* = std.ArrayList(Permission).initCapacity(self.allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        if (!rp.found_existing) rp.value_ptr.* = try std.ArrayList(Permission).initCapacity(self.allocator, 0);
         try rp.value_ptr.append(self.allocator, perm);
         try self.audit_log.logPermissionGranted(role_id, perm_id);
     }
 
     // ---- Passwords ----
-    // CANARY: REQ=REQ-AUTH-HASH-001; FEATURE="Argon2id Password Hashing"; ASPECT=PostQuantumSecurity; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_HASH_001_Argon2id; OWNER=security; UPDATED=2025-10-16
+    // CANARY: REQ=REQ-AUTH-HASH-001; FEATURE="Argon2id Password Hashing"; ASPECT=PostQuantumSecurity; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_HASH_001_Argon2id; OWNER=security; UPDATED=2025-10-16
     // CRITICAL SECURITY FIX (C2): Proper Argon2id implementation with random salts and PHC format
     pub fn hashPassword(self: *Self, password: []const u8) ![]const u8 {
-        // CANARY: REQ=REQ-AUTH-POLICY-008; FEATURE="Pre-Hash Password Validation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_008_PreHashValidation; OWNER=security; UPDATED=2025-09-30
+        // CANARY: REQ=REQ-AUTH-POLICY-008; FEATURE="Pre-Hash Password Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_008_PreHashValidation; OWNER=security; UPDATED=2025-09-30
         // Validate password against policy before hashing
         try self.validatePasswordAgainstCurrentPolicy(password);
 
@@ -900,7 +906,7 @@ pub const SecurityManager = struct {
     pub fn createUser(self: *Self, username: []const u8, email: []const u8, password: []const u8) !UserId {
         return self.createUserDetailed(username, email, password, false);
     }
-    // CANARY: REQ=REQ-AUTH-POLICY-003; FEATURE="Enhanced Password Validation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_003_PassphraseValidation; OWNER=security; UPDATED=2025-09-30
+    // CANARY: REQ=REQ-AUTH-POLICY-003; FEATURE="Enhanced Password Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_003_PassphraseValidation; OWNER=security; UPDATED=2025-09-30
     pub fn validatePassword(self: *Self, password: []const u8) !void {
         if (password.len < self.password_policy.min_length) return error.PasswordTooShort;
         if (password.len > self.password_policy.max_length) return error.PasswordTooLong;
@@ -981,7 +987,7 @@ pub const SecurityManager = struct {
         return word_count;
     }
 
-    // CANARY: REQ=REQ-AUTH-DEFAULT-001; FEATURE="Default User Creation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser; OWNER=security; UPDATED=2025-09-30
+    // CANARY: REQ=REQ-AUTH-DEFAULT-001; FEATURE="Default User Creation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser; OWNER=security; UPDATED=2025-09-30
     fn initializeDefaultUser(self: *Self) !void {
         // Get configurable admin username from environment or use default
         const admin_username_env = std.process.getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME") catch null;
@@ -1082,7 +1088,7 @@ pub const SecurityManager = struct {
 
     // Update password and clear reset requirement
     pub fn updatePassword(self: *Self, user_id: UserId, new_password: []const u8) !void {
-        // CANARY: REQ=REQ-AUTH-POLICY-009; FEATURE="Password Update Policy Validation"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation; OWNER=security; UPDATED=2025-09-30
+        // CANARY: REQ=REQ-AUTH-POLICY-009; FEATURE="Password Update Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation; OWNER=security; UPDATED=2025-09-30
         // Validate new password against current policy before accepting
         try self.validatePasswordAgainstCurrentPolicy(new_password);
 
@@ -1111,17 +1117,18 @@ pub const SecurityManager = struct {
         try self.grantPermission(1, readp.id);
         try self.grantPermission(2, adminp.id);
         try self.grantPermission(3, readp.id);
-        try self.rbac.role_hierarchy.put(2, std.ArrayList(RoleId).initCapacity(self.allocator, 0) catch unreachable);
+        // GAP-0220 FIX: Use try for proper error propagation
+        try self.rbac.role_hierarchy.put(2, try std.ArrayList(RoleId).initCapacity(self.allocator, 0));
         try self.rbac.role_hierarchy.getPtr(2).?.append(self.allocator, 1);
     }
-    // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Password Policy Validation Before Hashing"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_005_PreHashValidation; OWNER=security; UPDATED=2025-09-30
+    // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Password Policy Validation Before Hashing"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_005_PreHashValidation; OWNER=security; UPDATED=2025-09-30
     pub fn validatePasswordAgainstCurrentPolicy(self: *Self, password: []const u8) !void {
         // Pre-hash validation against current policy
         try self.validatePassword(password);
     }
 
     // Check if stored password hash meets current policy requirements
-    // CANARY: REQ=REQ-AUTH-POLICY-006; FEATURE="Post-Authentication Policy Check"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_006_PostAuthPolicyCheck; OWNER=security; UPDATED=2025-09-30
+    // CANARY: REQ=REQ-AUTH-POLICY-006; FEATURE="Post-Authentication Policy Check"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_006_PostAuthPolicyCheck; OWNER=security; UPDATED=2025-09-30
     pub fn checkStoredPasswordMeetsCurrentPolicy(self: *Self, _: *User, password: []const u8) bool {
         // Since we can't reverse the hash, we validate the plaintext password
         // that was just successfully authenticated against current policy
@@ -1158,7 +1165,7 @@ pub const SecurityManager = struct {
             return error.InvalidCredentials;
         }
 
-        // CANARY: REQ=REQ-AUTH-POLICY-007; FEATURE="Mandatory Password Policy Enforcement"; ASPECT=Security; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_POLICY_007_MandatoryPolicyEnforcement; OWNER=security; UPDATED=2025-09-30
+        // CANARY: REQ=REQ-AUTH-POLICY-007; FEATURE="Mandatory Password Policy Enforcement"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_007_MandatoryPolicyEnforcement; OWNER=security; UPDATED=2025-09-30
         // Check if the authenticated password meets current policy requirements
         // This is non-bypassable - if password violates policy, force reset
         const password_meets_policy = self.checkStoredPasswordMeetsCurrentPolicy(user, password);

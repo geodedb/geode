@@ -1,5 +1,5 @@
 // Leiden community detection algorithm for graph partitioning
-// CANARY: REQ=REQ-GQL-GRAPH-001; FEATURE="Leiden Community Detection"; ASPECT=Graph; STATUS=IMPL; TEST=TestCANARY_Leiden; OWNER=graph; UPDATED=2025-09-29
+// CANARY: REQ=REQ-GQL-GRAPH-001; FEATURE="Leiden Community Detection"; ASPECT=Graph; STATUS=TESTED; TEST=TestCANARY_Leiden; OWNER=graph; UPDATED=2025-09-29
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -417,7 +417,7 @@ pub const LeidenDetector = struct {
         return visited.count() == community.nodes.items.len;
     }
 
-    // CANARY: REQ=REQ-GRAPH-LEIDEN-SPLIT-001; FEATURE="Leiden Split Community"; ASPECT=Graph; STATUS=IMPL; TEST=TestCANARY_Leiden; OWNER=graph; UPDATED=2025-10-16
+    // CANARY: REQ=REQ-GRAPH-LEIDEN-SPLIT-001; FEATURE="Leiden Split Community"; ASPECT=Graph; STATUS=TESTED; TEST=TestCANARY_Leiden; OWNER=graph; UPDATED=2025-10-16
     fn splitCommunity(
         self: *LeidenDetector,
         community: *Community,

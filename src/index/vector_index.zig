@@ -3,7 +3,7 @@ const hnsw = @import("hnsw.zig");
 const vector_types = @import("../types/vector.zig");
 const heap = @import("../storage/heap.zig");
 
-// CANARY: REQ=REQ-GQL-VECTOR-INDEX-001; FEATURE="Vector Index Integration"; ASPECT=Index; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_VECTOR_INDEX_001_All; OWNER=index; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-VECTOR-INDEX-001; FEATURE="Vector Index Integration"; ASPECT=Index; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_VECTOR_INDEX_001_All; OWNER=index; UPDATED=2025-01-03
 
 /// High-level vector index interface that bridges Geode's vector types with HNSW
 pub const VectorIndex = struct {

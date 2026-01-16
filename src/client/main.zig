@@ -416,7 +416,7 @@ pub fn main() !void {
         }
     }
 
-    // CANARY: REQ=REQ-CLIENT-ENV-001; FEATURE="ClientEnvironmentVariables"; ASPECT=VariableResolution; STATUS=IMPL; TEST=TestCANARY_ClientCli_EnvVarResolution; OWNER=clients; UPDATED=2025-10-04
+    // CANARY: REQ=REQ-CLIENT-ENV-001; FEATURE="ClientEnvironmentVariables"; ASPECT=VariableResolution; STATUS=TESTED; TEST=TestCANARY_ClientCli_EnvVarResolution; OWNER=clients; UPDATED=2025-10-04
     // Client-side environment variable resolution (security: client-only, never server-side)
     if (std.mem.indexOf(u8, processed_text, "${") != null) {
         const env_resolved = resolveEnvironmentVariables(gpa, processed_text) catch |err| blk: {

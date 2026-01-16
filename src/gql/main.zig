@@ -255,7 +255,8 @@ pub fn main() !void {
                     try exec.stableOrderByTemporal(&rows, k0.desc, k0.nulls, ctx, ally);
                     // Print results
                     const pr = gql.printer;
-                    var out = std.ArrayList(u8).initCapacity(ally, 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var out = try std.ArrayList(u8).initCapacity(ally, 0);
                     defer out.deinit(ally);
                     try out.appendSlice(ally, "demo-sort: session_offset_minutes=");
                     try out.writer(ally).print("{d}", .{so});
@@ -571,9 +572,11 @@ pub fn main() !void {
                         return;
                     }
                     // Build Agg list from RETURN items and HAVING (COUNT/COUNT(*), SUM/MIN/MAX/AVG); numeric args operate on column index 1 (val)
-                    var aggs = std.ArrayList(exec.Agg).initCapacity(gpa, 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var aggs = try std.ArrayList(exec.Agg).initCapacity(gpa, 0);
                     defer aggs.deinit(gpa);
-                    var v_idxs = std.ArrayList(usize).initCapacity(gpa, 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var v_idxs = try std.ArrayList(usize).initCapacity(gpa, 0);
                     defer v_idxs.deinit(gpa);
                     // Header labels
                     var labels = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
@@ -672,7 +675,8 @@ pub fn main() !void {
                     var ai: usize = 0;
                     while (ai < aggs.items.len) : (ai += 1) {
                         const a = aggs.items[ai];
-                        var sig_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch unreachable;
+                        // GAP-0220 FIX: Use try for proper error propagation
+                        var sig_buf = try std.ArrayList(u8).initCapacity(gpa, 0);
                         defer sig_buf.deinit(gpa);
                         switch (a) {
                             .CountStar => {

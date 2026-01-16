@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="SimpleAsyncIO"; ASPECT=Performance; STATUS=IMPL; TEST=TestCANARY_SimpleAsyncIO; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="SimpleAsyncIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_SimpleAsyncIO; OWNER=performance; UPDATED=2025-10-04
 
 /// Simplified asynchronous I/O framework for testing performance concepts
 /// This provides the basic structure for async I/O without complex threading

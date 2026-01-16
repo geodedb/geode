@@ -1,7 +1,7 @@
 const std = @import("std");
 const IpAddr = @import("ipaddr.zig").IpAddr;
 
-// CANARY: REQ=REQ-GQL-NET-TYPES-002; FEATURE="Subnet CIDR Type"; ASPECT=Types; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_NET_TYPES_002_Subnet; OWNER=types; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-NET-TYPES-002; FEATURE="Subnet CIDR Type"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_NET_TYPES_002_Subnet; OWNER=types; UPDATED=2025-01-03
 
 /// CIDR subnet representation supporting both IPv4 and IPv6
 /// Stores network address with prefix length for efficient containment operations

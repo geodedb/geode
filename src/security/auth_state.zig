@@ -46,13 +46,14 @@ pub const State = struct {
     policies: std.ArrayList(Policy),
     grants: std.ArrayList(Grant),
 
-    pub fn init(allocator: std.mem.Allocator) State {
+    // GAP-0220 FIX: Return error union for proper error propagation
+    pub fn init(allocator: std.mem.Allocator) !State {
         return .{
             .allocator = allocator,
-            .users = std.ArrayList(User).initCapacity(allocator, 0) catch unreachable,
-            .roles = std.ArrayList(Role).initCapacity(allocator, 0) catch unreachable,
-            .policies = std.ArrayList(Policy).initCapacity(allocator, 0) catch unreachable,
-            .grants = std.ArrayList(Grant).initCapacity(allocator, 0) catch unreachable,
+            .users = try std.ArrayList(User).initCapacity(allocator, 0),
+            .roles = try std.ArrayList(Role).initCapacity(allocator, 0),
+            .policies = try std.ArrayList(Policy).initCapacity(allocator, 0),
+            .grants = try std.ArrayList(Grant).initCapacity(allocator, 0),
         };
     }
 
@@ -87,7 +88,7 @@ pub const State = struct {
     }
 
     pub fn load(allocator: std.mem.Allocator) !State {
-        var state = State.init(allocator);
+        var state = try State.init(allocator);
 
         const file = std.fs.openFileAbsolute(STATE_PATH, .{}) catch |err| switch (err) {
             error.FileNotFound => {
@@ -128,7 +129,8 @@ pub const State = struct {
                 const name = parts.next() orelse continue;
                 const desc = parts.next() orelse "";
                 const perms_str = parts.next() orelse "";
-                var perm_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var perm_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                 defer perm_list.deinit(allocator);
                 var perm_split = std.mem.splitScalar(u8, perms_str, ',');
                 while (perm_split.next()) |p| {
@@ -163,7 +165,8 @@ pub const State = struct {
             try file.writeAll(line);
         }
         for (self.roles.items) |r| {
-            var joined = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var joined = try std.ArrayList(u8).initCapacity(self.allocator, 0);
             defer joined.deinit(self.allocator);
             for (r.permissions.items, 0..) |p, idx| {
                 if (idx > 0) try joined.append(self.allocator, ',');
@@ -314,10 +317,11 @@ pub const State = struct {
             return existing;
         }
 
+        // GAP-0220 FIX: Use try for proper error propagation
         var role = Role{
             .name = try self.allocator.dupe(u8, name),
             .description = try self.allocator.dupe(u8, description),
-            .permissions = std.ArrayList([]u8).initCapacity(self.allocator, 0) catch unreachable,
+            .permissions = try std.ArrayList([]u8).initCapacity(self.allocator, 0),
         };
         for (permissions) |p| {
             try role.permissions.append(self.allocator, try self.allocator.dupe(u8, p));

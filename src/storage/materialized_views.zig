@@ -438,7 +438,7 @@ pub const MaterializedViewManager = struct {
             view_costs: std.StringHashMap(f64),
 
             pub fn estimateCost(self: *CostEstimator, query: *ast.Query) f64 {
-                // CANARY: REQ=REQ-GQL-027; FEATURE="MV Cost Estimation"; ASPECT=QueryOptimization; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+                // CANARY: REQ=REQ-GQL-027; FEATURE="MV Cost Estimation"; ASPECT=QueryOptimization; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
                 var total_cost: f64 = 0.0;
 
@@ -537,7 +537,7 @@ pub const MaterializedViewManager = struct {
     }
 
     pub fn deinit(self: *MaterializedViewManager) void {
-        // CANARY: REQ=REQ-GQL-016; FEATURE="MV Memory Management"; ASPECT=ResourceCleanup; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-016; FEATURE="MV Memory Management"; ASPECT=ResourceCleanup; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         // Free all views and their contents
         var view_iter = self.view_catalog.views.valueIterator();
@@ -996,7 +996,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn extractColumns(self: *MaterializedViewManager, query: *ast.Query) ![]ViewCatalog.MaterializedView.ViewDefinition.Column {
-        // CANARY: REQ=REQ-GQL-018; FEATURE="MV Column Extraction"; ASPECT=SchemaInference; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-018; FEATURE="MV Column Extraction"; ASPECT=SchemaInference; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         var columns = std.ArrayList(ViewCatalog.MaterializedView.ViewDefinition.Column).init(self.allocator);
         defer columns.deinit();
@@ -1055,7 +1055,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn createDefaultIndexes(self: *MaterializedViewManager, query: *ast.Query) ![]ViewCatalog.MaterializedView.ViewStorage.Index {
-        // CANARY: REQ=REQ-GQL-019; FEATURE="MV Index Creation"; ASPECT=IndexGeneration; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-019; FEATURE="MV Index Creation"; ASPECT=IndexGeneration; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         var indexes = std.ArrayList(ViewCatalog.MaterializedView.ViewStorage.Index).init(self.allocator);
         defer indexes.deinit();
@@ -1130,7 +1130,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn extractDependencies(self: *MaterializedViewManager, query: *ast.Query) ![]ViewCatalog.MaterializedView.Dependency {
-        // CANARY: REQ=REQ-GQL-020; FEATURE="MV Dependency Extraction"; ASPECT=DependencyTracking; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-020; FEATURE="MV Dependency Extraction"; ASPECT=DependencyTracking; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         var dependencies = std.ArrayList(ViewCatalog.MaterializedView.Dependency).init(self.allocator);
         defer dependencies.deinit();
@@ -1168,7 +1168,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn updateDependencyGraph(self: *MaterializedViewManager, view: *ViewCatalog.MaterializedView) !void {
-        // CANARY: REQ=REQ-GQL-021; FEATURE="MV Dependency Graph"; ASPECT=GraphMaintenance; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-021; FEATURE="MV Dependency Graph"; ASPECT=GraphMaintenance; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         // Create node for this view
         const node = DependencyTracker.DependencyGraph.Node{
@@ -1204,7 +1204,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn scheduleRefresh(self: *MaterializedViewManager, view: *ViewCatalog.MaterializedView) !void {
-        // CANARY: REQ=REQ-GQL-022; FEATURE="MV Refresh Scheduling"; ASPECT=Scheduler; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-022; FEATURE="MV Refresh Scheduling"; ASPECT=Scheduler; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         const schedule = switch (view.refresh.timing) {
             .scheduled => |sched| sched,
@@ -1227,7 +1227,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn waitForRefresh(self: *MaterializedViewManager, view_id: u64) !void {
-        // CANARY: REQ=REQ-GQL-023; FEATURE="MV Refresh Wait"; ASPECT=Synchronization; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-023; FEATURE="MV Refresh Wait"; ASPECT=Synchronization; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         // Poll until refresh completes
         const timeout_ms = 60000; // 60 second timeout
@@ -1388,7 +1388,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn performDifferentialRefresh(self: *MaterializedViewManager, view: *ViewCatalog.MaterializedView, job: *RefreshManager.RefreshJob) !void {
-        // CANARY: REQ=REQ-GQL-024; FEATURE="MV Differential Refresh"; ASPECT=DifferentialRefresh; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-024; FEATURE="MV Differential Refresh"; ASPECT=DifferentialRefresh; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         job.status = .running;
 
@@ -1472,7 +1472,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn findApplicableViews(self: *MaterializedViewManager, query: *ast.Query) ![]ViewCatalog.MaterializedView {
-        // CANARY: REQ=REQ-GQL-025; FEATURE="MV Query Matching"; ASPECT=ViewSelection; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-025; FEATURE="MV Query Matching"; ASPECT=ViewSelection; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         var applicable = std.ArrayList(ViewCatalog.MaterializedView).init(self.allocator);
         defer applicable.deinit();
@@ -1527,7 +1527,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn rewriteWithView(self: *MaterializedViewManager, query: *ast.Query, view: ViewCatalog.MaterializedView) !*ast.Query {
-        // CANARY: REQ=REQ-GQL-026; FEATURE="MV Query Rewriting"; ASPECT=QueryTransformation; STATUS=IMPL; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-026; FEATURE="MV Query Rewriting"; ASPECT=QueryTransformation; STATUS=TESTED; TEST=test_materialized_views; OWNER=storage; UPDATED=2025-10-16
 
         // Create a new query that reads from the materialized view instead
         const rewritten = try self.allocator.create(ast.Query);

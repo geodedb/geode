@@ -9,7 +9,7 @@ const ast = @import("../gql/ast.zig");
 const graph_storage = @import("../types/graph_common.zig");
 const lib = @import("../lib.zig");
 
-// CANARY: REQ=REQ-MATERIALIZED-VIEWS-001; FEATURE="Materialized View Management"; ASPECT=QueryOptimization; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-10-05
+// CANARY: REQ=REQ-MATERIALIZED-VIEWS-001; FEATURE="Materialized View Management"; ASPECT=QueryOptimization; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2025-10-05
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -505,7 +505,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn extractDependencies(self: *MaterializedViewManager, view_name: []const u8, query: []const u8) !void {
-        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-002; FEATURE="MV Dependency Extraction"; ASPECT=ASTDependencyParsing; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-002; FEATURE="MV Dependency Extraction"; ASPECT=ASTDependencyParsing; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
         // Parse query AST and extract table/view dependencies (node labels and relationship types)
         var parse_result = lib.parseGql(query, self.allocator) catch |err| {
             std.debug.print("Failed to parse query for dependency extraction: {}\n", .{err});
@@ -552,7 +552,7 @@ pub const MaterializedViewManager = struct {
 
     fn executeSourceQuery(self: *MaterializedViewManager, query: []const u8) !QueryResult {
         // GAP-0046: Execute query using the actual query execution engine
-        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-006; FEATURE="MV Source Query Execution"; ASPECT=ActualQueryExecution; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2026-01-10
+        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-006; FEATURE="MV Source Query Execution"; ASPECT=ActualQueryExecution; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2026-01-10
 
         const start_time = std.time.milliTimestamp();
 
@@ -661,7 +661,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn calculateStorageSize(self: *MaterializedViewManager, data: MaterializedViewData) u64 {
-        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-003; FEATURE="MV Storage Calculation"; ASPECT=AccurateStorageMetrics; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-003; FEATURE="MV Storage Calculation"; ASPECT=AccurateStorageMetrics; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
         _ = self;
         var total_size: u64 = 0;
 
@@ -730,7 +730,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn evaluateFilter(self: *MaterializedViewManager, row: graph_storage.Binding, filter: []const u8) bool {
-        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-004; FEATURE="MV Filter Evaluation"; ASPECT=PredicateEvaluation; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-004; FEATURE="MV Filter Evaluation"; ASPECT=PredicateEvaluation; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
         // Parse filter expression and evaluate against the row binding
         // Supports simple property comparisons: property = value, property > value, etc.
 
@@ -876,7 +876,7 @@ pub const MaterializedViewManager = struct {
     }
 
     fn isQueryCompatible(self: *MaterializedViewManager, query1: []const u8, query2: []const u8) bool {
-        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-005; FEATURE="MV Query Compatibility"; ASPECT=SemanticQueryMatching; STATUS=IMPL; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-MATERIALIZED-VIEWS-005; FEATURE="MV Query Compatibility"; ASPECT=SemanticQueryMatching; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
         // Check if query1 can be satisfied by a materialized view with query2 as its source
         // Uses semantic analysis to compare query patterns
 

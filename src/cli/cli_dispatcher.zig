@@ -357,7 +357,7 @@ pub fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
     return std.process.getEnvVarOwned(allocator, key) catch null;
 }
 
-// CANARY: REQ=REQ-AUDIT-CLI-001; FEATURE="CLI Audit Configuration"; ASPECT=Configuration; STATUS=IMPL; TEST=TestCANARY_REQ_AUDIT_CLI_001_Configuration; OWNER=audit; UPDATED=2025-09-30
+// CANARY: REQ=REQ-AUDIT-CLI-001; FEATURE="CLI Audit Configuration"; ASPECT=Configuration; STATUS=TESTED; TEST=TestCANARY_REQ_AUDIT_CLI_001_Configuration; OWNER=audit; UPDATED=2025-09-30
 pub fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
     var cli_config = CliAuditConfig{};
 
@@ -475,7 +475,7 @@ pub fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditC
     }
 }
 
-// CANARY: REQ=REQ-AUDIT-CLI-003; FEATURE="CLI Audit Events"; ASPECT=EventLogging; STATUS=IMPL; TEST=TestCANARY_REQ_AUDIT_CLI_003_EventLogging; OWNER=audit; UPDATED=2025-09-30
+// CANARY: REQ=REQ-AUDIT-CLI-003; FEATURE="CLI Audit Events"; ASPECT=EventLogging; STATUS=TESTED; TEST=TestCANARY_REQ_AUDIT_CLI_003_EventLogging; OWNER=audit; UPDATED=2025-09-30
 pub fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const u8) void {
     // Log to file if enabled
     if (global_audit_file) |file| {
@@ -561,7 +561,7 @@ fn sendSyslogMessage(host: []const u8, port: u16, category: []const u8, action: 
     _ = std.posix.sendto(socket, message, 0, &addr.any, addr.getOsSockLen()) catch return;
 }
 
-// CANARY: REQ=REQ-AUDIT-CLI-004; FEATURE="Windows Event Log Integration"; ASPECT=EventLogging; STATUS=IMPL; TEST=TestCANARY_REQ_AUDIT_CLI_004_WindowsEventLog; OWNER=audit; UPDATED=2025-09-30
+// CANARY: REQ=REQ-AUDIT-CLI-004; FEATURE="Windows Event Log Integration"; ASPECT=EventLogging; STATUS=TESTED; TEST=TestCANARY_REQ_AUDIT_CLI_004_WindowsEventLog; OWNER=audit; UPDATED=2025-09-30
 fn logToWindowsEventLog(event_handle: std.os.windows.HANDLE, category: []const u8, action: []const u8, outcome: []const u8) void {
     if (builtin.os.tag != .windows) return;
 

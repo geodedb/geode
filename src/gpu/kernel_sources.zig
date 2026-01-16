@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=KernelSources; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_KernelCompile; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=KernelSources; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_KernelCompile; OWNER=engine; UPDATED=2025-10-26
 
 // CUDA C kernel source for BFS - will be compiled to PTX at runtime
 // This is the actual working kernel that will be executed on GPU

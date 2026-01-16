@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-GEO-TYPES-001; FEATURE="Geographic Types Implementation"; ASPECT=Types; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_GEO_TYPES_001_All; OWNER=types; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-GEO-TYPES-001; FEATURE="Geographic Types Implementation"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_GEO_TYPES_001_All; OWNER=types; UPDATED=2025-01-03
 
 /// Geographic types for spatial data and GIS operations
 /// Supports latitude/longitude coordinates, points, and spatial operations

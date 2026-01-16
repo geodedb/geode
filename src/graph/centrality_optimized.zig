@@ -1,7 +1,7 @@
 const std = @import("std");
 const builders = @import("builders.zig");
 
-// CANARY: REQ=REQ-GRAPH-ALGORITHM-OPTIMIZATION-001; FEATURE="Graph Algorithm Performance Optimization"; ASPECT=CentralityOptimization; STATUS=IMPL; TEST=TestCANARY_REQ_GRAPH_ALGORITHM_OPTIMIZATION_001_CentralityOptimization; OWNER=graph; UPDATED=2025-10-05
+// CANARY: REQ=REQ-GRAPH-ALGORITHM-OPTIMIZATION-001; FEATURE="Graph Algorithm Performance Optimization"; ASPECT=CentralityOptimization; STATUS=TESTED; TEST=TestCANARY_REQ_GRAPH_ALGORITHM_OPTIMIZATION_001_CentralityOptimization; OWNER=graph; UPDATED=2025-10-05
 
 /// Optimized centrality algorithms with performance enhancements
 /// Key optimizations:

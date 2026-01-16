@@ -1,7 +1,7 @@
 const std = @import("std");
 const ext = @import("extended.zig");
 
-// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ENGINE; STATUS=IMPL; TEST=tests/types/extended_functions.zig; OWNER=engine; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ENGINE; STATUS=TESTED; TEST=tests/types/extended_functions.zig; OWNER=engine; UPDATED=2025-09-26
 
 // Built-in style function value union (re-uses ext.Value for return values where possible)
 pub const BuiltinValue = union(enum) {

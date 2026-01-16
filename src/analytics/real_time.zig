@@ -1,6 +1,6 @@
-// CANARY: REQ=REQ-ANALYTICS-001; FEATURE="Real-time Analytics"; ASPECT=StreamingIntegration; STATUS=IMPL; TEST=TestCANARY_ANALYTICS_001_StreamingIntegration; OWNER=analytics; UPDATED=2025-10-05
-// CANARY: REQ=REQ-ANALYTICS-002; FEATURE="Real-time Analytics"; ASPECT=MLIntegration; STATUS=IMPL; TEST=TestCANARY_ANALYTICS_002_MLIntegration; OWNER=analytics; UPDATED=2025-10-05
-// CANARY: REQ=REQ-ANALYTICS-003; FEATURE="Real-time Analytics"; ASPECT=EventProcessing; STATUS=IMPL; TEST=TestCANARY_ANALYTICS_003_EventProcessing; OWNER=analytics; UPDATED=2025-10-05
+// CANARY: REQ=REQ-ANALYTICS-001; FEATURE="Real-time Analytics"; ASPECT=StreamingIntegration; STATUS=TESTED; TEST=TestCANARY_ANALYTICS_001_StreamingIntegration; OWNER=analytics; UPDATED=2025-10-05
+// CANARY: REQ=REQ-ANALYTICS-002; FEATURE="Real-time Analytics"; ASPECT=MLIntegration; STATUS=TESTED; TEST=TestCANARY_ANALYTICS_002_MLIntegration; OWNER=analytics; UPDATED=2025-10-05
+// CANARY: REQ=REQ-ANALYTICS-003; FEATURE="Real-time Analytics"; ASPECT=EventProcessing; STATUS=TESTED; TEST=TestCANARY_ANALYTICS_003_EventProcessing; OWNER=analytics; UPDATED=2025-10-05
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

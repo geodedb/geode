@@ -1,5 +1,5 @@
 // Network types module - exports all network-related types
-// CANARY: REQ=REQ-GQL-NET-TYPES-000; FEATURE="Network Types Module"; ASPECT=Types; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_NET_TYPES_000_Module; OWNER=types; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-NET-TYPES-000; FEATURE="Network Types Module"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_NET_TYPES_000_Module; OWNER=types; UPDATED=2025-01-03
 
 pub const IpAddr = @import("ipaddr.zig").IpAddr;
 pub const Subnet = @import("subnet.zig").Subnet;

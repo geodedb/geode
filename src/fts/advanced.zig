@@ -43,7 +43,7 @@ fn tokenize(allocator: std.mem.Allocator, text: []const u8) ![][]const u8 {
 
 fn lowerAlloc(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
     // Unicode-aware lowercase via foldCase (minimal subset) after NFC normalize.
-    // CANARY: REQ=REQ-GQL-UNICODE-008; FEATURE="UnicodeFtsAdvanced"; ASPECT=AnalyzerLower; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNICODE_008_FtsAdvancedAnalyzer; OWNER=unicode; UPDATED=2025-09-27
+    // CANARY: REQ=REQ-GQL-UNICODE-008; FEATURE="UnicodeFtsAdvanced"; ASPECT=AnalyzerLower; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_008_FtsAdvancedAnalyzer; OWNER=unicode; UPDATED=2025-09-27
     const unicode = @import("../unicode/geode_unicode.zig");
     const nfc = try unicode.nfcNormalize(allocator, s);
     defer allocator.free(nfc);

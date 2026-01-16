@@ -5,7 +5,7 @@ const SmartKernelLoader = @import("smart_kernel_loader.zig").SmartKernelLoader;
 const MemoryManager = @import("memory_manager.zig").MemoryManager;
 const kernel_sources = @import("kernel_sources.zig");
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase3SetOps; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUUnionDistinctSmall; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase3SetOps; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUUnionDistinctSmall; OWNER=engine; UPDATED=2025-10-26
 
 pub fn unionDistinctCPU(a: []const u32, b: []const u32, allocator: std.mem.Allocator) ![]u32 {
     var map = std.AutoHashMap(u32, void).init(allocator);

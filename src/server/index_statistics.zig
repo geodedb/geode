@@ -4,7 +4,7 @@ const geode = @import("geode");
 const graph_common = geode.graph_common;
 
 // Index statistics collection for better cost estimation
-// CANARY: REQ=REQ-GQL-016; FEATURE="IndexStatistics"; ASPECT=CostEstimation; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_IndexStatistics; OWNER=engine; UPDATED=2025-10-03
+// CANARY: REQ=REQ-GQL-016; FEATURE="IndexStatistics"; ASPECT=CostEstimation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_IndexStatistics; OWNER=engine; UPDATED=2025-10-03
 
 pub const IndexStatistics = struct {
     name: []const u8,
@@ -159,7 +159,7 @@ pub const IndexStatistics = struct {
     }
 
     // Record full-text search query statistics
-    // CANARY: REQ=REQ-GQL-FTS-003; FEATURE="FTS Statistics"; ASPECT=Performance; STATUS=IMPL; TEST=TestCANARY_FTSStatistics; OWNER=fts; UPDATED=2025-10-04
+    // CANARY: REQ=REQ-GQL-FTS-003; FEATURE="FTS Statistics"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_FTSStatistics; OWNER=fts; UPDATED=2025-10-04
     pub fn recordFtsQuery(self: *IndexStatistics, query_type: FtsQueryType, score: f64, documents_found: u64) void {
         if (self.index_type != .fulltext) return; // Not a full-text index
 

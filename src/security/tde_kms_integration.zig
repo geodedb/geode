@@ -5,7 +5,7 @@ const tde_hierarchy = @import("tde_hierarchy.zig");
 const flags_mod = @import("../util/feature_flags.zig");
 
 // TDE-KMS Integration: Enhanced Transparent Data Encryption with KMS Provider support
-// CANARY: REQ=REQ-GQL-TDE-KMS-001; FEATURE="TDEKMSIntegration"; ASPECT=SECURITY; STATUS=IMPL; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2025-10-05
+// CANARY: REQ=REQ-GQL-TDE-KMS-001; FEATURE="TDEKMSIntegration"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2025-10-05
 
 pub const TDEKeyManager = struct {
     allocator: std.mem.Allocator,

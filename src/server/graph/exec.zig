@@ -1,5 +1,5 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-017; FEATURE="Property Access"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_PropertyAccess; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-017; FEATURE="Property Access"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_PropertyAccess; OWNER=engine; UPDATED=2025-09-20
 // Use relative imports to avoid circular dependency when execution.zig imports graph_storage_manager.zig
 const eval = @import("../../eval.zig");
 const ast = @import("../../gql/ast.zig");
@@ -256,7 +256,7 @@ pub fn executeMatch(
     index_optimizer: ?*IndexOptimizer,
 ) ![]Binding {
     const opts: MatchOptions = opts_opt orelse .{};
-    // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=EngineGuardInit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_InvalidHopBounds; OWNER=engine; UPDATED=2025-09-24
+    // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=EngineGuardInit; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_InvalidHopBounds; OWNER=engine; UPDATED=2025-09-24
 
     _ = where_clause;
     _ = eval_diag;

@@ -5,7 +5,7 @@ const auth_state = geode.auth_state;
 
 // CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
 // GAP-0154 FIX: Production builds require explicit passwords or generate random ones
-// CANARY: REQ=REQ-MFA-OUTPUT-001; FEATURE="MFASecureOutput"; ASPECT=Security; STATUS=IMPL; TEST=gap_155_156_regression.yml; OWNER=cli; UPDATED=2026-01-14
+// CANARY: REQ=REQ-MFA-OUTPUT-001; FEATURE="MFASecureOutput"; ASPECT=Security; STATUS=TESTED; TEST=gap_155_156_regression.yml; OWNER=cli; UPDATED=2026-01-14
 // GAP-0156 FIX: MFA toggle command no longer displays hardcoded fake secret
 
 /// Check if running in production build mode

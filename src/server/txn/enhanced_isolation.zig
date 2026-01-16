@@ -1,7 +1,7 @@
-// CANARY: REQ=REQ-TXN-ISOLATION-001; FEATURE="Enhanced Transaction Isolation"; ASPECT=IsolationLevels; STATUS=IMPL; TEST=TestCANARY_REQ_TXN_ISOLATION_001_IsolationLevels; OWNER=txn; UPDATED=2025-10-05
-// CANARY: REQ=REQ-TXN-ISOLATION-002; FEATURE="Advanced Phantom Read Prevention"; ASPECT=PhantomReadPrevention; STATUS=IMPL; TEST=TestCANARY_REQ_TXN_ISOLATION_002_PhantomReadPrevention; OWNER=txn; UPDATED=2025-10-05
-// CANARY: REQ=REQ-TXN-ISOLATION-003; FEATURE="Serializable Snapshot Isolation"; ASPECT=SerializableSSI; STATUS=IMPL; TEST=TestCANARY_REQ_TXN_ISOLATION_003_SerializableSSI; OWNER=txn; UPDATED=2025-10-05
-// CANARY: REQ=REQ-TXN-ISOLATION-004; FEATURE="Deadlock Detection and Resolution"; ASPECT=DeadlockResolution; STATUS=IMPL; TEST=TestCANARY_REQ_TXN_ISOLATION_004_DeadlockResolution; OWNER=txn; UPDATED=2025-10-05
+// CANARY: REQ=REQ-TXN-ISOLATION-001; FEATURE="Enhanced Transaction Isolation"; ASPECT=IsolationLevels; STATUS=TESTED; TEST=TestCANARY_REQ_TXN_ISOLATION_001_IsolationLevels; OWNER=txn; UPDATED=2025-10-05
+// CANARY: REQ=REQ-TXN-ISOLATION-002; FEATURE="Advanced Phantom Read Prevention"; ASPECT=PhantomReadPrevention; STATUS=TESTED; TEST=TestCANARY_REQ_TXN_ISOLATION_002_PhantomReadPrevention; OWNER=txn; UPDATED=2025-10-05
+// CANARY: REQ=REQ-TXN-ISOLATION-003; FEATURE="Serializable Snapshot Isolation"; ASPECT=SerializableSSI; STATUS=TESTED; TEST=TestCANARY_REQ_TXN_ISOLATION_003_SerializableSSI; OWNER=txn; UPDATED=2025-10-05
+// CANARY: REQ=REQ-TXN-ISOLATION-004; FEATURE="Deadlock Detection and Resolution"; ASPECT=DeadlockResolution; STATUS=TESTED; TEST=TestCANARY_REQ_TXN_ISOLATION_004_DeadlockResolution; OWNER=txn; UPDATED=2025-10-05
 
 const std = @import("std");
 const mvcc = @import("mvcc.zig");

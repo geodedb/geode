@@ -541,7 +541,7 @@ pub const IndexOptimizer = struct {
             },
             .fulltext => blk: {
                 // Full-text indexes for text search with BM25 scoring
-                // CANARY: REQ=REQ-GQL-FTS-004; FEATURE="FTS IndexOptimizer"; ASPECT=CostEstimation; STATUS=IMPL; TEST=TestCANARY_FTSIndexOptimizer; OWNER=fts; UPDATED=2025-10-04
+                // CANARY: REQ=REQ-GQL-FTS-004; FEATURE="FTS IndexOptimizer"; ASPECT=CostEstimation; STATUS=TESTED; TEST=TestCANARY_FTSIndexOptimizer; OWNER=fts; UPDATED=2025-10-04
 
                 // Try to get advanced FTS statistics first
                 if (self.stats_manager) |stats_mgr| {
@@ -931,7 +931,7 @@ pub const IndexOptimizer = struct {
     }
 
     // Optimize full-text search queries with BM25 scoring and advanced statistics
-    // CANARY: REQ=REQ-GQL-FTS-005; FEATURE="FTS Query Optimization"; ASPECT=QueryPlanning; STATUS=IMPL; TEST=TestCANARY_FTSQueryOptimization; OWNER=fts; UPDATED=2025-10-04
+    // CANARY: REQ=REQ-GQL-FTS-005; FEATURE="FTS Query Optimization"; ASPECT=QueryPlanning; STATUS=TESTED; TEST=TestCANARY_FTSQueryOptimization; OWNER=fts; UPDATED=2025-10-04
     pub fn optimizeFtsQuery(
         self: *IndexOptimizer,
         labels: []const []const u8,
@@ -1990,7 +1990,7 @@ pub const FullTextOptimizer = struct {
     };
 
     // Distributed Query Planning Cost Estimation Integration
-    // CANARY: REQ=REQ-DISTRIBUTED-INDEX-OPTIMIZER-001; FEATURE="Distributed IndexOptimizer"; ASPECT=FederationAwareCostEstimation; STATUS=IMPL; TEST=TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001; OWNER=distributed; UPDATED=2025-10-05
+    // CANARY: REQ=REQ-DISTRIBUTED-INDEX-OPTIMIZER-001; FEATURE="Distributed IndexOptimizer"; ASPECT=FederationAwareCostEstimation; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001; OWNER=distributed; UPDATED=2025-10-05
 
     /// Distributed query planning cost estimation for federation-aware optimization
     /// GAP-0114 FIX: Added per-shard cost breakdown for EXPLAIN output

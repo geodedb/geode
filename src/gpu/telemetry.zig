@@ -2,7 +2,7 @@ const std = @import("std");
 const phase0 = @import("phase0.zig");
 const CudaLoader = @import("cuda_loader.zig").CudaLoader;
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase5Telemetry; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUTelemetryStruct; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase5Telemetry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUTelemetryStruct; OWNER=engine; UPDATED=2025-10-26
 
 pub const GPUPerfMetrics = struct {
     kernel_ms: f64,

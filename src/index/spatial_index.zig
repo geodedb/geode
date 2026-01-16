@@ -3,7 +3,7 @@ const rtree = @import("rtree.zig");
 const geographic_types = @import("../types/geographic.zig");
 const heap = @import("../storage/heap.zig");
 
-// CANARY: REQ=REQ-GQL-SPATIAL-INDEX-001; FEATURE="Spatial Index Integration"; ASPECT=Index; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_SPATIAL_INDEX_001_All; OWNER=index; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-SPATIAL-INDEX-001; FEATURE="Spatial Index Integration"; ASPECT=Index; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SPATIAL_INDEX_001_All; OWNER=index; UPDATED=2025-01-03
 
 /// High-level spatial index interface that bridges Geode's geographic types with R-tree
 pub const SpatialIndex = struct {

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="OptimizedCollections"; ASPECT=Performance; STATUS=IMPL; TEST=TestCANARY_OptimizedCollections; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="OptimizedCollections"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_OptimizedCollections; OWNER=performance; UPDATED=2025-10-04
 
 /// High-performance collection operations with pre-allocation strategies
 /// Addresses 746μs ArrayList bottleneck (15x slower than target) identified in performance analysis

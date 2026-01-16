@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=PerformanceProfiler; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUPerformanceProfiler; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=PerformanceProfiler; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUPerformanceProfiler; OWNER=engine; UPDATED=2025-10-26
 
 const std = @import("std");
 const cuda_loader = @import("cuda_loader.zig");

@@ -2,7 +2,7 @@ const std = @import("std");
 const crypto = std.crypto;
 
 // HashiCorp Vault KMS Provider for Geode TDE
-// CANARY: REQ=REQ-GQL-VAULT-KMS-001; FEATURE="VaultKMSProvider"; ASPECT=SECURITY; STATUS=IMPL; TEST=tests/test_vault_kms_provider.zig; OWNER=security; UPDATED=2025-10-05
+// CANARY: REQ=REQ-GQL-VAULT-KMS-001; FEATURE="VaultKMSProvider"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_vault_kms_provider.zig; OWNER=security; UPDATED=2025-10-05
 
 pub const VaultKMSProvider = struct {
     allocator: std.mem.Allocator,

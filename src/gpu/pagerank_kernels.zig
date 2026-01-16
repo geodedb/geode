@@ -9,7 +9,7 @@ const VulkanBuffer = @import("vulkan_compute.zig").VulkanBuffer;
 const ComputePipeline = @import("vulkan_compute.zig").ComputePipeline;
 const vulkan_shaders = @import("vulkan_shaders.zig");
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase3VulkanPageRank; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUPageRankVulkan; OWNER=engine; UPDATED=2025-12-30
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase3VulkanPageRank; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUPageRankVulkan; OWNER=engine; UPDATED=2025-12-30
 
 pub const PRGraph = struct {
     row_offsets: []const u32,

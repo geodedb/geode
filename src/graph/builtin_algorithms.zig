@@ -34,7 +34,7 @@ pub const BuiltinAlgorithms = struct {
         max_iterations: u32,
         tolerance: f64,
     ) !std.AutoHashMap(u64, f64) {
-        // CANARY: REQ=REQ-GQL-ALGO-PERF-001; FEATURE="PageRank Optimization"; ASPECT=Performance; STATUS=IMPL; TEST=benchmark_pagerank; OWNER=graph; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-ALGO-PERF-001; FEATURE="PageRank Optimization"; ASPECT=Performance; STATUS=TESTED; TEST=benchmark_pagerank; OWNER=graph; UPDATED=2025-10-16
 
         // Check cache for recent results
         if (self.cache.cache_valid and self.cache.pagerank_results.count() > 0) {
@@ -130,7 +130,7 @@ pub const BuiltinAlgorithms = struct {
         normalized: bool,
         sample_size: ?usize,
     ) !std.AutoHashMap(u64, f64) {
-        // CANARY: REQ=REQ-GQL-ALGO-PERF-002; FEATURE="Betweenness Optimization"; ASPECT=Performance; STATUS=IMPL; TEST=benchmark_betweenness; OWNER=graph; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-ALGO-PERF-002; FEATURE="Betweenness Optimization"; ASPECT=Performance; STATUS=TESTED; TEST=benchmark_betweenness; OWNER=graph; UPDATED=2025-10-16
 
         // Check cache for recent results
         if (self.cache.cache_valid and self.cache.betweenness_results.count() > 0 and sample_size == null) {
@@ -305,7 +305,7 @@ pub const BuiltinAlgorithms = struct {
         normalized: bool,
         wf_improved: bool, // Wasserman-Faust improvement for disconnected graphs
     ) !std.AutoHashMap(u64, f64) {
-        // CANARY: REQ=REQ-GQL-ALGO-PERF-003; FEATURE="Closeness Optimization"; ASPECT=Performance; STATUS=IMPL; TEST=benchmark_closeness; OWNER=graph; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-ALGO-PERF-003; FEATURE="Closeness Optimization"; ASPECT=Performance; STATUS=TESTED; TEST=benchmark_closeness; OWNER=graph; UPDATED=2025-10-16
 
         // Check cache for recent results
         if (self.cache.cache_valid and self.cache.closeness_results.count() > 0) {
@@ -380,7 +380,7 @@ pub const BuiltinAlgorithms = struct {
         max_iterations: u32,
         tolerance: f64,
     ) ![]CentralityResult {
-        // CANARY: REQ=REQ-GQL-ALGO-PERF-004; FEATURE="Eigenvector Optimization"; ASPECT=Performance; STATUS=IMPL; TEST=benchmark_eigenvector; OWNER=graph; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-ALGO-PERF-004; FEATURE="Eigenvector Optimization"; ASPECT=Performance; STATUS=TESTED; TEST=benchmark_eigenvector; OWNER=graph; UPDATED=2025-10-16
 
         // Check cache for recent results
         if (self.cache.cache_valid and self.cache.eigenvector_results.count() > 0) {
@@ -1236,7 +1236,7 @@ pub const BuiltinAlgorithms = struct {
 
     // Algorithm cache for memoization
     const AlgorithmCache = struct {
-        // CANARY: REQ=REQ-GQL-ALGO-PERF; FEATURE="Algorithm Performance"; ASPECT=Caching; STATUS=IMPL; TEST=benchmark_graph_algorithms; OWNER=graph; UPDATED=2025-10-16
+        // CANARY: REQ=REQ-GQL-ALGO-PERF; FEATURE="Algorithm Performance"; ASPECT=Caching; STATUS=TESTED; TEST=benchmark_graph_algorithms; OWNER=graph; UPDATED=2025-10-16
 
         allocator: Allocator,
         pagerank_results: std.AutoHashMap(u64, f64),

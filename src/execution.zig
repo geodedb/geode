@@ -1455,10 +1455,12 @@ pub fn expandVariableLengthPathsWithMode(
     rel_direction: u8,
     path_mode: ast.PathMode,
 ) !std.ArrayList(VariableLengthPath) {
-    var result_paths = std.ArrayList(VariableLengthPath).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var result_paths = try std.ArrayList(VariableLengthPath).initCapacity(allocator, 0);
 
     // Queue for BFS: (current_path, depth)
-    var queue = std.ArrayList(struct { path: VariableLengthPath, depth: u32 }).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var queue = try std.ArrayList(struct { path: VariableLengthPath, depth: u32 }).initCapacity(allocator, 0);
     defer {
         for (queue.items) |*item| {
             item.path.deinit(allocator);
@@ -1930,7 +1932,8 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
     // Handle collect(expr)
     if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
         if (arg_ptr == null) return Value{ .List = &.{} };
-        var list = std.ArrayList(Value).initCapacity(allocator, group_rows.len) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var list = std.ArrayList(Value).initCapacity(allocator, group_rows.len) catch return Value{ .List = &.{} };
         for (group_rows) |row| {
             const env = Env{
                 .names = columns,
@@ -1963,7 +1966,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
     const with_items = with_clause.items;
 
     // Calculate new column count - allocate new strings for column names
-    var new_columns = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var new_columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     defer new_columns.deinit(allocator);
 
     for (with_items) |item| {
@@ -1974,7 +1978,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
     }
 
     // Transform each row according to WITH items
-    var new_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var new_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
     // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=GroupingLogic; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
     // Handle GROUP BY if present - group rows and compute aggregations per group
@@ -1982,7 +1987,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
         // Group input rows by the GROUP BY key(s)
         // Use a string key for grouping (serialize key values)
         var groups = std.StringHashMap(std.ArrayList([]const Value)).init(allocator);
-        var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
         defer {
             var iter = groups.iterator();
             while (iter.next()) |entry| {
@@ -2005,7 +2011,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
             };
 
             // Evaluate GROUP BY key(s) and serialize to string
-            var key_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
             const key_writer = key_buf.writer(allocator);
             for (gb.keys, 0..) |key_expr, k| {
                 if (k > 0) key_writer.writeAll("|") catch {};
@@ -2028,7 +2035,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                 group_list.append(allocator, input_row) catch {};
                 allocator.free(group_key);
             } else {
-                var new_list = std.ArrayList([]const Value).initCapacity(allocator, 4) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var new_list = try std.ArrayList([]const Value).initCapacity(allocator, 4);
                 new_list.append(allocator, input_row) catch {};
                 groups.put(group_key, new_list) catch {};
                 group_keys_list.append(allocator, group_key) catch {};
@@ -2114,7 +2122,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                 // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-002; FEATURE="ImplicitGroupBy"; ASPECT=GroupingLogic; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
                 // Implicit GROUP BY: group rows by non-aggregated expressions
                 var groups = std.StringHashMap(std.ArrayList([]const Value)).init(allocator);
-                var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                 defer {
                     var iter = groups.iterator();
                     while (iter.next()) |entry| {
@@ -2136,7 +2145,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                     };
 
                     // Build group key from non-aggregated expressions
-                    var key_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
                     const key_writer = key_buf.writer(allocator);
                     var first_key = true;
                     for (with_items) |item| {
@@ -2161,7 +2171,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                         group_list.append(allocator, input_row) catch {};
                         allocator.free(group_key);
                     } else {
-                        var new_list = std.ArrayList([]const Value).initCapacity(allocator, 4) catch unreachable;
+                        // GAP-0220 FIX: Use try for proper error propagation
+                        var new_list = try std.ArrayList([]const Value).initCapacity(allocator, 4);
                         new_list.append(allocator, input_row) catch {};
                         groups.put(group_key, new_list) catch {};
                         group_keys_list.append(allocator, group_key) catch {};
@@ -2352,7 +2363,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
         if (offset_usize > 0) {
             // Remove the first offset_usize rows
             const remaining = new_rows.items[offset_usize..];
-            var remaining_rows = std.ArrayList([]Value).initCapacity(allocator, remaining.len) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var remaining_rows = try std.ArrayList([]Value).initCapacity(allocator, remaining.len);
             try remaining_rows.appendSlice(allocator, remaining);
             new_rows.deinit(allocator);
             new_rows = remaining_rows;
@@ -2365,7 +2377,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
         if (limit_usize < new_rows.items.len) {
             // Keep only the first limit_usize rows
             const limited = new_rows.items[0..limit_usize];
-            var limited_rows = std.ArrayList([]Value).initCapacity(allocator, limited.len) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var limited_rows = try std.ArrayList([]Value).initCapacity(allocator, limited.len);
             try limited_rows.appendSlice(allocator, limited);
             new_rows.deinit(allocator);
             new_rows = limited_rows;

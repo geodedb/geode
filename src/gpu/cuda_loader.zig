@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=CudaDynamicLoader; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_CudaLoaderInit; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=CudaDynamicLoader; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_CudaLoaderInit; OWNER=engine; UPDATED=2025-10-26
 
 const RTLD_LAZY = 0x00001;
 const RTLD_NOW = 0x00002;

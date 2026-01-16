@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-PERF-JSON-001; FEATURE="OptimizedJSON"; ASPECT=Performance; STATUS=IMPL; TEST=TestCANARY_OptimizedJSON; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-JSON-001; FEATURE="OptimizedJSON"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_OptimizedJSON; OWNER=performance; UPDATED=2025-10-04
 
 /// High-performance JSON serialization system with arena allocators and streaming support
 /// Addresses 630μs JSON parsing bottleneck (31x slower than target) identified in performance analysis

@@ -655,7 +655,8 @@ pub const Parser = struct {
                     _ = try self.expect(.DELETE);
 
                     // Parse items to delete
-                    var delete_items = std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var delete_items = try std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0);
 
                     // Parse first item
                     const first_item = try self.parseDeleteItem();
@@ -2067,7 +2068,7 @@ pub const Parser = struct {
         }
 
         // Optional WITH projection forwarding (works for both MATCH and CREATE)
-        // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
+        // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=TESTEDEMENTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
         var next_query_ptr: ?*ast.Query = null;
         if (self.cur.kind == .WITH) {
             self.advance();
@@ -2224,7 +2225,7 @@ pub const Parser = struct {
         }
 
         // Parse DELETE clause if present (for CREATE ... WITH ... DELETE ... pattern)
-        // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=Parser; STATUS=IMPLEMENTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=Parser; STATUS=TESTEDEMENTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
         var delete_items: []ast.DeleteItem = &.{};
         if (self.cur.kind == .DELETE) {
             self.advance();
@@ -2511,7 +2512,7 @@ pub const Parser = struct {
             // parse a chain with one-or-more hops
             var hops = std.ArrayList(ast.Hop).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             // Optional path alias: ident '=' before a node pattern or shortestPath function
-            // CANARY: REQ=REQ-GQL-091; FEATURE="PathAssignmentAfterWITH"; ASPECT=Parser; STATUS=IMPLEMENTED; TEST=subgraph-isomorphism; OWNER=parser; UPDATED=2025-10-14
+            // CANARY: REQ=REQ-GQL-091; FEATURE="PathAssignmentAfterWITH"; ASPECT=Parser; STATUS=TESTEDEMENTED; TEST=subgraph-isomorphism; OWNER=parser; UPDATED=2025-10-14
             var chain_name: ?[]const u8 = null;
             if ((self.cur.kind == .identifier or self.cur.kind == .PATH or self.isKeyword(self.cur.kind)) and self.peekKind() == .eq) {
                 chain_name = self.cur.lexeme;
@@ -4214,7 +4215,7 @@ pub const Parser = struct {
             }
 
             // Parse DELETE clause if present (for CREATE ... WITH ... DELETE ... pattern)
-            // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=ParserCreateStatement; STATUS=IMPLEMENTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
+            // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=ParserCreateStatement; STATUS=TESTEDEMENTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
             var delete_items: []ast.DeleteItem = &.{};
             if (self.cur.kind == .DELETE) {
                 self.advance();
@@ -4326,7 +4327,8 @@ pub const Parser = struct {
         }
 
         // Parse items to delete
-        var items = std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var items = try std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0);
 
         // Parse first item
         const first_item = try self.parseDeleteItem();
@@ -4379,8 +4381,9 @@ pub const Parser = struct {
         const pattern = try self.parseGraphPattern();
 
         // Parse ON CREATE/MATCH clauses
-        var on_create = std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0) catch unreachable;
-        var on_match = std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var on_create = try std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0);
+        var on_match = try std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0);
 
         while (self.cur.kind == .ON) {
             self.advance();
@@ -4425,7 +4428,8 @@ pub const Parser = struct {
     }
 
     fn parseSetClauses(self: *Parser) ParserError![]ast.SetClause {
-        var clauses = std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var clauses = try std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0);
 
         // Parse first clause
         const first = try self.parseSetClause();
@@ -4450,7 +4454,8 @@ pub const Parser = struct {
         // Check what follows the identifier
         if (self.cur.kind == .colon) {
             // Parse label(s): SET n:Label or SET n:Label1:Label2
-            var labels = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var labels = try std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0);
 
             while (self.cur.kind == .colon) {
                 self.advance(); // consume ':'
@@ -4490,7 +4495,8 @@ pub const Parser = struct {
     }
 
     fn parseRemoveClauses(self: *Parser) ParserError![]ast.RemoveClause {
-        var clauses = std.ArrayList(ast.RemoveClause).initCapacity(self.arena.allocator(), 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var clauses = try std.ArrayList(ast.RemoveClause).initCapacity(self.arena.allocator(), 0);
 
         // Parse first clause
         const first = try self.parseRemoveClause();
@@ -4515,7 +4521,8 @@ pub const Parser = struct {
         // Check if it's a label removal (n:Label) or property removal (n.property)
         if (self.cur.kind == .colon) {
             // Parse label(s): REMOVE n:Label or REMOVE n:Label1:Label2
-            var labels = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var labels = try std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0);
 
             while (self.cur.kind == .colon) {
                 self.advance(); // consume ':'
@@ -4539,7 +4546,8 @@ pub const Parser = struct {
     }
 
     fn parseDeleteItems(self: *Parser) ParserError![]ast.DeleteItem {
-        var items = std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var items = try std.ArrayList(ast.DeleteItem).initCapacity(self.arena.allocator(), 0);
 
         // Parse first item
         const first = try self.parseDeleteItem();
@@ -4721,7 +4729,8 @@ pub const Parser = struct {
         if (self.cur.kind != .l_paren) return error.UnexpectedToken;
         self.advance();
 
-        var properties = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 1) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var properties = try std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 1);
 
         // Parse properties - handle both (property) and (n.property) syntax
         // CANARY: REQ=REQ-GQL-084; FEATURE="CreateIndexKeywordProperties"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-14
@@ -4877,7 +4886,8 @@ pub const Parser = struct {
         self.advance();
 
         var label: []const u8 = undefined;
-        var properties = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 1) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var properties = try std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 1);
         var constraint_type: ast.ConstraintType = undefined;
 
         // Check for ISO GQL syntax: FOR (n:Label) REQUIRE ...

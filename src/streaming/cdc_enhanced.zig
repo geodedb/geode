@@ -216,7 +216,7 @@ pub const CDCEngine = struct {
     thread: ?std.Thread,
     mutex: std.Thread.Mutex,
     diag_events: std.ArrayList(DiagEvent), // lifecycle diagnostics (START/STOP)
-    current_txn_id: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=TxnAttribution; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
+    current_txn_id: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=TxnAttribution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
     next_sequence: u64 = 1,
     adapt_events_accum: u32 = 0,
     dynamic_batch_size: u32 = 0,
@@ -229,10 +229,10 @@ pub const CDCEngine = struct {
     total_wal_attempts: u64 = 0,
     guardrail_warn_triggered: bool = false,
     guardrail_abort_triggered: bool = false,
-    first_warn_ts_ms: i64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailTimestamps; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailTimestamps; OWNER=streaming; UPDATED=2025-09-20
-    first_abort_ts_ms: i64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailTimestampsAbort; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailTimestamps; OWNER=streaming; UPDATED=2025-09-20
+    first_warn_ts_ms: i64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailTimestamps; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailTimestamps; OWNER=streaming; UPDATED=2025-09-20
+    first_abort_ts_ms: i64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailTimestampsAbort; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailTimestamps; OWNER=streaming; UPDATED=2025-09-20
     malformed_hashes: MalformedHashStore = .{},
-    guardrail_epoch: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailEpoch; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailEpoch; OWNER=streaming; UPDATED=2025-09-20
+    guardrail_epoch: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailEpoch; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailEpoch; OWNER=streaming; UPDATED=2025-09-20
     start_time_ms: i64 = 0, // engine start timestamp for uptime computations
 
     const Self = @This();
@@ -773,7 +773,7 @@ pub const CDCEngine = struct {
     }
 
     /// Reset guardrail state (malformed WAL ratio tracking) clearing latched flags & timestamps while preserving counters.
-    /// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailReset; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailReset; OWNER=streaming; UPDATED=2025-09-20
+    /// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailReset; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailReset; OWNER=streaming; UPDATED=2025-09-20
     pub fn resetGuardrailState(self: *Self) void {
         self.mutex.lock();
         self.guardrail_warn_triggered = false;

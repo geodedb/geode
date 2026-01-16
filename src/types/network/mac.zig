@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-NET-TYPES-003; FEATURE="Mac Address Type"; ASPECT=Types; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_NET_TYPES_003_Mac; OWNER=types; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-NET-TYPES-003; FEATURE="Mac Address Type"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_NET_TYPES_003_Mac; OWNER=types; UPDATED=2025-01-03
 
 /// MAC address (EUI-48) implementation
 /// Stores 6-byte hardware addresses with format validation and OUI extraction

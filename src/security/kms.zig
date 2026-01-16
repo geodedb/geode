@@ -3,7 +3,7 @@ const external_kms = @import("external_kms_client.zig");
 const kms_remote = @import("kms_remote.zig");
 
 // kms.zig - Comprehensive KMS provider abstraction
-// CANARY: REQ=REQ-GQL-SEC-KMS-001; FEATURE="KMSProviderSystem"; ASPECT=SECURITY; STATUS=IMPL; TEST=tests/test_kms_provider.zig; OWNER=security; UPDATED=2025-10-05
+// CANARY: REQ=REQ-GQL-SEC-KMS-001; FEATURE="KMSProviderSystem"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_kms_provider.zig; OWNER=security; UPDATED=2025-10-05
 
 pub const MasterKeyId = []const u8;
 

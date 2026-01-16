@@ -195,7 +195,7 @@ pub fn plannerPathCacheInsert(
 }
 
 // Real phase timing integration wrapper (coarse) - times internal logical phases of planQuery.
-// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerPhaseRealTimingIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerPhaseRealTimingIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration; OWNER=planner; UPDATED=2025-09-21
 pub fn planQueryRealTimed(q: planner_root.ast.Query, opts: planner_root.PlannerOptions) !struct { plan: planner_root.Plan, timings: phase_timing_mod.PhaseTimings, cost_estimate: f64 } {
     var timings: phase_timing_mod.PhaseTimings = .{};
     var pt = phase_timing_mod.PhaseTimer.init(&timings);

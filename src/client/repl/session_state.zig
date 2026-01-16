@@ -1,7 +1,7 @@
 const std = @import("std");
 const repl_config = @import("repl_config.zig");
 
-// CANARY: REQ=REQ-REPL-SESSION-001; FEATURE="REPL Session Persistence"; ASPECT=Implementation; STATUS=IMPL; TEST=test_session_state; OWNER=repl; UPDATED=2025-11-17
+// CANARY: REQ=REQ-REPL-SESSION-001; FEATURE="REPL Session Persistence"; ASPECT=Implementation; STATUS=TESTED; TEST=test_session_state; OWNER=repl; UPDATED=2025-11-17
 
 /// Session state that can be persisted
 pub const SessionState = struct {

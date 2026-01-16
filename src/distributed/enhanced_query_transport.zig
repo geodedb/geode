@@ -1,6 +1,6 @@
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-004; FEATURE="Enhanced Query Transport Integration"; ASPECT=NetworkTransport; STATUS=IMPL; TEST=TestCANARY_DISTRIBUTED_QUERY_004_EnhancedTransport; OWNER=distributed; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-005; FEATURE="Cross-Shard Query Coordination"; ASPECT=QueryCoordination; STATUS=IMPL; TEST=TestCANARY_DISTRIBUTED_QUERY_005_CrossShardCoordination; OWNER=distributed; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-006; FEATURE="Shard-Aware Query Execution"; ASPECT=ShardOptimization; STATUS=IMPL; TEST=TestCANARY_DISTRIBUTED_QUERY_006_ShardOptimization; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-004; FEATURE="Enhanced Query Transport Integration"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_DISTRIBUTED_QUERY_004_EnhancedTransport; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-005; FEATURE="Cross-Shard Query Coordination"; ASPECT=QueryCoordination; STATUS=TESTED; TEST=TestCANARY_DISTRIBUTED_QUERY_005_CrossShardCoordination; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-006; FEATURE="Shard-Aware Query Execution"; ASPECT=ShardOptimization; STATUS=TESTED; TEST=TestCANARY_DISTRIBUTED_QUERY_006_ShardOptimization; OWNER=distributed; UPDATED=2025-10-05
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

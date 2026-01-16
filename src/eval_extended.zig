@@ -14,7 +14,7 @@ const xml = @import("types/xml.zig");
 const bitstring = @import("types/bitstring.zig");
 const range = @import("types/range.zig");
 
-// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ADAPTER_CACHE; STATUS=IMPL; TEST=tests/canary_extended_builtins.zig; OWNER=engine; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ADAPTER_CACHE; STATUS=TESTED; TEST=tests/canary_extended_builtins.zig; OWNER=engine; UPDATED=2025-09-26
 
 // Adapter registry caching: avoid rebuilding extf registry for every bridged call.
 // We lazily initialize a global registry once in a thread-safe manner (single-threaded init assumption for now).

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-VECTOR-TYPES-001; FEATURE="Vector Types Implementation"; ASPECT=Types; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_VECTOR_TYPES_001_All; OWNER=types; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-VECTOR-TYPES-001; FEATURE="Vector Types Implementation"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_VECTOR_TYPES_001_All; OWNER=types; UPDATED=2025-01-03
 
 /// Vector types for machine learning and scientific computing
 /// Supports both f32 and i32 vectors with efficient operations
@@ -397,7 +397,7 @@ pub const VectorI32 = struct {
 
     /// Jaccard similarity coefficient between two vectors (treated as sets)
     /// Returns value between 0.0 (no overlap) and 1.0 (identical)
-    /// CANARY: REQ=REQ-GQL-VECTOR-JACCARD-001; FEATURE="Jaccard Distance"; ASPECT=VectorMetric; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_VECTOR_JACCARD; OWNER=types; UPDATED=2026-01-08
+    /// CANARY: REQ=REQ-GQL-VECTOR-JACCARD-001; FEATURE="Jaccard Distance"; ASPECT=VectorMetric; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_VECTOR_JACCARD; OWNER=types; UPDATED=2026-01-08
     pub fn jaccardSimilarity(self: VectorI32, other: VectorI32) !f64 {
         if (self.dim != other.dim) return error.DimensionMismatch;
 

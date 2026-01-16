@@ -1,9 +1,9 @@
 const std = @import("std");
 const mvcc = @import("mvcc.zig");
 
-// CANARY: REQ=REQ-TXN-PHANTOM-001; FEATURE="Phantom Read Prevention"; ASPECT=PhantomReadPrevention; STATUS=IMPL; TEST=TestCANARY_REQ_TXN_PHANTOM_001_BasicPhantomPrevention; OWNER=txn; UPDATED=2025-10-05
-// CANARY: REQ=REQ-TXN-PHANTOM-002; FEATURE="Phantom Read Prevention"; ASPECT=PredicateLocks; STATUS=IMPL; TEST=TestCANARY_REQ_TXN_PHANTOM_002_PredicateLocks; OWNER=txn; UPDATED=2025-10-05
-// CANARY: REQ=REQ-TXN-PHANTOM-003; FEATURE="Phantom Read Prevention"; ASPECT=RangeQueryValidation; STATUS=IMPL; TEST=TestCANARY_REQ_TXN_PHANTOM_003_RangeQueryValidation; OWNER=txn; UPDATED=2025-10-05
+// CANARY: REQ=REQ-TXN-PHANTOM-001; FEATURE="Phantom Read Prevention"; ASPECT=PhantomReadPrevention; STATUS=TESTED; TEST=TestCANARY_REQ_TXN_PHANTOM_001_BasicPhantomPrevention; OWNER=txn; UPDATED=2025-10-05
+// CANARY: REQ=REQ-TXN-PHANTOM-002; FEATURE="Phantom Read Prevention"; ASPECT=PredicateLocks; STATUS=TESTED; TEST=TestCANARY_REQ_TXN_PHANTOM_002_PredicateLocks; OWNER=txn; UPDATED=2025-10-05
+// CANARY: REQ=REQ-TXN-PHANTOM-003; FEATURE="Phantom Read Prevention"; ASPECT=RangeQueryValidation; STATUS=TESTED; TEST=TestCANARY_REQ_TXN_PHANTOM_003_RangeQueryValidation; OWNER=txn; UPDATED=2025-10-05
 
 /// Predicate lock for phantom read prevention
 pub const PredicateLock = struct {

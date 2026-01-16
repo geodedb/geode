@@ -785,7 +785,7 @@ pub const ClusterCoordinator = struct {
     }
 
     fn handleShardQuery(self: *ClusterCoordinator, msg: Message) !Response {
-        // CANARY: REQ=REQ-GQL-2PC-005; FEATURE="Distributed Query Processing"; ASPECT=Distributed; STATUS=IMPL; TEST=TestCANARY_DistributedQuery; OWNER=distributed; UPDATED=2025-09-29
+        // CANARY: REQ=REQ-GQL-2PC-005; FEATURE="Distributed Query Processing"; ASPECT=Distributed; STATUS=TESTED; TEST=TestCANARY_DistributedQuery; OWNER=distributed; UPDATED=2025-09-29
 
         // Determine if this is a read-only or write query
         const is_write = try self.isWriteQuery(msg);

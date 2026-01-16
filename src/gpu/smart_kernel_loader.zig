@@ -4,7 +4,7 @@ const ModuleLoader = @import("module_loader.zig").ModuleLoader;
 const NVRTCCompiler = @import("nvrtc_compiler.zig").NVRTCCompiler;
 const kernel_sources = @import("kernel_sources.zig");
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=SmartKernelLoader; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_SmartKernelLoader; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=SmartKernelLoader; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_SmartKernelLoader; OWNER=engine; UPDATED=2025-10-26
 
 /// SmartKernelLoader tries to compile CUDA C to PTX using NVRTC,
 /// and falls back to simplified PTX if NVRTC is unavailable.

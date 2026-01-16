@@ -1358,7 +1358,7 @@ pub const RaftNode = struct {
 
                 .txn_prepare => |prepare| {
                     // Handle distributed transaction prepare phase
-                    // CANARY: REQ=REQ-GQL-2PC-004; FEATURE="2PC Raft Integration"; ASPECT=2PC; STATUS=IMPL; TEST=TestCANARY_2PC_RaftIntegration; OWNER=distributed; UPDATED=2025-09-29
+                    // CANARY: REQ=REQ-GQL-2PC-004; FEATURE="2PC Raft Integration"; ASPECT=2PC; STATUS=TESTED; TEST=TestCANARY_2PC_RaftIntegration; OWNER=distributed; UPDATED=2025-09-29
                     if (self.txn_coordinator) |*coordinator| {
                         const can_commit = try coordinator.handlePrepare(prepare);
                         // Store result for client response

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-REPL-SYNTAX-001; FEATURE="REPL Syntax Highlighting"; ASPECT=Implementation; STATUS=IMPL; TEST=test_syntax_highlighting; OWNER=repl; UPDATED=2025-11-17
+// CANARY: REQ=REQ-REPL-SYNTAX-001; FEATURE="REPL Syntax Highlighting"; ASPECT=Implementation; STATUS=TESTED; TEST=test_syntax_highlighting; OWNER=repl; UPDATED=2025-11-17
 
 /// ANSI color codes for syntax highlighting
 pub const Color = struct {

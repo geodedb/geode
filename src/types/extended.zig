@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-083; FEATURE="ExtendedDecimalFormatting"; ASPECT=FORMATTER; STATUS=IMPL; TEST=extended.decimal parse/format; OWNER=engine; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-083; FEATURE="ExtendedDecimalFormatting"; ASPECT=FORMATTER; STATUS=TESTED; TEST=extended.decimal parse/format; OWNER=engine; UPDATED=2025-09-26
 
 // Extended type system (layered alongside core heap.Value) providing richer
 // domain types without disrupting existing encoding until promoted.

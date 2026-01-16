@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-GQL-2PC-002; FEATURE="Distributed Transaction Coordinator"; ASPECT=2PC; STATUS=IMPL; TEST=TestCANARY_2PC_Coordinator; OWNER=distributed; UPDATED=2025-09-29
+// CANARY: REQ=REQ-GQL-2PC-002; FEATURE="Distributed Transaction Coordinator"; ASPECT=2PC; STATUS=TESTED; TEST=TestCANARY_2PC_Coordinator; OWNER=distributed; UPDATED=2025-09-29
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -265,7 +265,7 @@ pub const TxnCoordinator = struct {
     }
 };
 
-// CANARY: REQ=REQ-GQL-2PC-003; FEATURE="2PC Idempotence"; ASPECT=2PC; STATUS=IMPL; TEST=TestCANARY_2PC_Idempotent; OWNER=distributed; UPDATED=2025-09-29
+// CANARY: REQ=REQ-GQL-2PC-003; FEATURE="2PC Idempotence"; ASPECT=2PC; STATUS=TESTED; TEST=TestCANARY_2PC_Idempotent; OWNER=distributed; UPDATED=2025-09-29
 
 test "TestCANARY_2PC_Coordinator basic prepare and commit" {
     const allocator = std.testing.allocator;

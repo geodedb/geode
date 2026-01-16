@@ -3379,10 +3379,10 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     const subcmd = argv[subcmd_idx];
 
     if (std.mem.eql(u8, subcmd, "login")) {
-        // CANARY: REQ=REQ-AUTH-001; FEATURE="AuthenticationLogin"; ASPECT=RealImplementation; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_001_RealLogin; OWNER=cli; UPDATED=2025-09-30
+        // CANARY: REQ=REQ-AUTH-001; FEATURE="AuthenticationLogin"; ASPECT=RealImplementation; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_001_RealLogin; OWNER=cli; UPDATED=2025-09-30
         try cmdAuthLogin(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "logout")) {
-        // CANARY: REQ=REQ-AUTH-002; FEATURE="AuthenticationLogout"; ASPECT=RealImplementation; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_002_RealLogout; OWNER=cli; UPDATED=2025-09-30
+        // CANARY: REQ=REQ-AUTH-002; FEATURE="AuthenticationLogout"; ASPECT=RealImplementation; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_002_RealLogout; OWNER=cli; UPDATED=2025-09-30
         try cmdAuthLogout(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "validate")) {
         // Validate a session token
@@ -3418,7 +3418,7 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         _ = try stdout_fd.writeAll("\n");
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcmd, "token")) {
-        // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
         try cmdAuthToken(allocator);
     } else if (std.mem.eql(u8, subcmd, "-h") or std.mem.eql(u8, subcmd, "--help")) {
         printAuthUsage();
@@ -4309,7 +4309,7 @@ fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     std.debug.print("Credentials cleared from ~/.geode/credentials.json\n", .{});
 }
 
-// CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
+// CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
 fn cmdAuthToken(allocator: std.mem.Allocator) !void {
     // Get home directory - use std.process for cross-platform compatibility
     // Windows uses USERPROFILE, Unix uses HOME

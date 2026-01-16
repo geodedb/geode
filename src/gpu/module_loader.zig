@@ -1,7 +1,7 @@
 const std = @import("std");
 const CudaLoader = @import("cuda_loader.zig").CudaLoader;
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=ModuleLoader; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_ModuleLoader; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=ModuleLoader; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_ModuleLoader; OWNER=engine; UPDATED=2025-10-26
 
 const CUresult = i32;
 const CUmodule = *anyopaque;

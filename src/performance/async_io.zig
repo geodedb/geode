@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="AsynchronousIO"; ASPECT=Performance; STATUS=IMPL; TEST=TestCANARY_AsynchronousIO; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="AsynchronousIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_AsynchronousIO; OWNER=performance; UPDATED=2025-10-04
 
 /// High-performance asynchronous I/O system with completion queues
 /// Enables non-blocking database operations for maximum throughput

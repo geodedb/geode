@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const CudaLoader = @import("cuda_loader.zig").CudaLoader;
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase0Infra; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_051_GPUPhase0DeviceEnum; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase0Infra; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUPhase0DeviceEnum; OWNER=engine; UPDATED=2025-10-26
 
 pub const DeviceInfo = struct {
     id: u32,

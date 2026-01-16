@@ -3,13 +3,13 @@ const Allocator = std.mem.Allocator;
 const Value = @import("../protocol.zig").Value;
 
 // Schema constraints for graph database
-// CANARY: REQ=REQ-GQL-032; FEATURE="Composite Uniqueness"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_CompositeUnique; OWNER=schema; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-032; FEATURE="Check Constraint Evaluation"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_CheckConstraint; OWNER=schema; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-032; FEATURE="Check Constraint Extended Ops"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_CheckConstraintRangeAnd; OWNER=schema; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-032; FEATURE="Composite Uniqueness"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_CompositeUnique; OWNER=schema; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-032; FEATURE="Check Constraint Evaluation"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_CheckConstraint; OWNER=schema; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-032; FEATURE="Check Constraint Extended Ops"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_CheckConstraintRangeAnd; OWNER=schema; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Performance"; ASPECT=UniquePerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_UniquePerf; OWNER=schema; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Performance"; ASPECT=ConstraintPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_ConstraintPerf; OWNER=schema; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Matching"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_PatternMatch; OWNER=schema; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Regex"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_PatternRegex; OWNER=schema; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Matching"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_PatternMatch; OWNER=schema; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Regex"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_PatternRegex; OWNER=schema; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Performance"; ASPECT=PatternPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_PatternPerf; OWNER=schema; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern Regex NegClass"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_PatternRegexNegClass; OWNER=schema; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Pattern State Dedup Perf"; ASPECT=PatternStateDedupPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf; OWNER=schema; UPDATED=2025-09-20
@@ -21,7 +21,7 @@ pub const SchemaConstraints = struct {
     edge_constraints: std.StringHashMap(EdgeConstraints),
     unique_indexes: std.ArrayList(UniqueIndex),
     check_constraints: std.ArrayList(CheckConstraint),
-    unique_value_sets: std.StringHashMap(std.AutoHashMap(u64, void)), // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Uniqueness"; ASPECT=Engine; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_032_UniqueEnforce; OWNER=schema; UPDATED=2025-09-20
+    unique_value_sets: std.StringHashMap(std.AutoHashMap(u64, void)), // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Uniqueness"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_UniqueEnforce; OWNER=schema; UPDATED=2025-09-20
     composite_unique_sets: std.StringHashMap(std.AutoHashMap(u64, void)),
 
     pub const NodeConstraints = struct {
