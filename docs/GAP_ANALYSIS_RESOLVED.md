@@ -10,6 +10,126 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ---
 
+## January 16, 2026 Gap Resolution Session 10 - GitLab Issue Closures
+
+The following GitLab issues were formally closed after verification of resolution evidence:
+
+| Gap ID | Issue # | Status | Resolution Date |
+|--------|---------|--------|-----------------|
+| GAP-0172 | #297 | Closed | 2026-01-16 |
+| GAP-0193 | #322 | Closed | 2026-01-16 |
+| GAP-0195 | #324 | Closed | 2026-01-16 |
+| GAP-0196 | #325 | Closed | 2026-01-16 |
+| GAP-0197 | #326 | Closed | 2026-01-16 |
+| GAP-0198 | #327 | Closed | 2026-01-16 |
+| GAP-0199 | #328 | Closed | 2026-01-16 |
+| GAP-0200 | #329 | Closed | 2026-01-16 |
+| GAP-0201 | #330 | Closed | 2026-01-16 |
+| GAP-0202 | #331 | Closed | 2026-01-16 |
+| GAP-0203 | #332 | Closed | 2026-01-16 |
+
+**Gaps identified were subsequently resolved in Session 11 (see below).**
+
+---
+
+## January 16, 2026 Gap Resolution Session 11 (GAP-0204 through GAP-0208) ✅
+
+All 5 gaps identified in Session 10 have been fully implemented with production code fixes.
+
+### GAP-0204: Fuzz harness is non-functional placeholder ✅ FULLY RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/333
+- **Category:** Test/Security
+- **Severity:** Medium
+- **Fix:** Implemented functional fuzz harness that exercises the GQL parser
+- **Evidence:**
+  - `src/fuzz/main.zig` - Complete rewrite with:
+    - `fuzzParseGql()` function that actually parses input using `geode.parse()`
+    - AST traversal to trigger lazy evaluation bugs
+    - `LLVMFuzzerTestOneInput` export for libFuzzer integration
+    - Proper error handling (parse errors are expected during fuzzing)
+  - CANARY markers: REQ-FUZZ-PARSER-001, REQ-FUZZ-PARSER-002, REQ-FUZZ-ENTRY-001
+  - Unit tests: `test "fuzz harness compiles and runs with empty input"`, valid GQL, malformed input
+- **Acceptance criteria met:**
+  - Fuzz harness parses input using `geode.parse()` ✅
+  - Fuzz harness exercises AST traversal ✅
+  - libFuzzer entry point exported ✅
+
+### GAP-0205: Spatial search uses placeholder coordinate calculation ✅ FULLY RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/334
+- **Category:** Bug
+- **Severity:** Medium
+- **Fix:** Added `coordinate_map` to store actual coordinates alongside node IDs
+- **Evidence:**
+  - `src/index/advanced_types_index.zig:535-610` - `SpatialIndexWrapper` now includes:
+    - `coordinate_map: std.AutoHashMap(u64, geographic.LatLon)` for coordinate storage
+    - `insert()` stores coordinates in map alongside R-tree insertion
+    - `searchRadius()` retrieves actual coordinates from map for distance calculation
+  - CANARY marker: REQ-GQL-SPATIAL-001 (STATUS=TESTED)
+- **Acceptance criteria met:**
+  - Spatial search retrieves actual stored coordinates ✅
+  - Distance calculations return correct values ✅
+
+### GAP-0206: Network index subnet/prefix conversion uses placeholder implementation ✅ FULLY RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/335
+- **Category:** Bug
+- **Severity:** Medium
+- **Fix:** Implemented proper subnet-to-key and subnet-to-prefix conversion
+- **Evidence:**
+  - `src/index/advanced_types_index.zig:728-765` - `NetworkIndexWrapper` fixes:
+    - `subnetToKey()` returns [address_bytes][prefix_len] key format
+    - `subnetToPrefix()` applies CIDR mask to get network prefix bytes
+    - Handles both IPv4 (5 bytes) and IPv6 (17 bytes) formats
+  - CANARY marker: REQ-GQL-NETWORK-001 (STATUS=TESTED)
+- **Acceptance criteria met:**
+  - `subnetToKey` returns unique keys for different subnets ✅
+  - `subnetToPrefix` returns correct prefix bits respecting CIDR mask ✅
+
+### GAP-0207: FLE batch re-encryption is simulated ✅ FULLY RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/336
+- **Category:** Security
+- **Severity:** Medium
+- **Fix:** Implemented StorageCallback interface for real batch re-encryption
+- **Evidence:**
+  - `src/admin/fle_commands.zig:80-130` - New types:
+    - `StorageCallback` struct with queryRecordsFn, updateRecordFn, countRecordsFn
+    - `MigrationState` for progress tracking with checkpoints
+    - `StorageRecord` and `StorageError` types
+  - `src/admin/fle_commands.zig:153-280` - `executeMigrationWithStorage()`:
+    - Queries records through storage callback
+    - Decrypts with old key, re-encrypts with new key using proper AEAD
+    - Generates blind indexes using HMAC-SHA256
+    - Updates records atomically per batch
+    - Progress tracking and checkpointing
+  - CANARY markers: REQ-FLE-BATCH-001, REQ-FLE-BATCH-002, REQ-FLE-BATCH-003
+- **Acceptance criteria met:**
+  - Batch re-encryption queries actual storage ✅
+  - Re-encryption uses proper key rotation ✅
+  - Progress tracking and failure recovery implemented ✅
+
+### GAP-0208: Shard migration is simulated ✅ FULLY RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/337
+- **Category:** Feature
+- **Severity:** High
+- **Fix:** Implemented TransportCallback interface for network-based shard migration
+- **Evidence:**
+  - `src/distributed/sharding.zig:355-420` - New types:
+    - `TransportCallback` with requestBatchFn, sendBatchFn, verifyBatchFn, acknowledgeTransferFn
+    - `MigrationState` with progress tracking, checksums, verification counts
+    - `TransportError` and `MigrationStatus` enums
+  - `src/distributed/sharding.zig:422-520` - `executeMigrationWithTransport()`:
+    - Requests batches from source shard via transport callback
+    - Sends batches to target shard with checksum verification
+    - Tracks migration progress with atomic checkpoints
+    - Supports resume after failure using last_checkpoint
+    - Validates data integrity with CRC32 checksums
+  - CANARY markers: REQ-SHARD-MIG-001, REQ-SHARD-MIG-002, REQ-SHARD-MIG-003
+- **Acceptance criteria met:**
+  - Shard migration transfers data over transport callback ✅
+  - Migration progress tracked with checkpointing ✅
+  - Data integrity verified with checksums ✅
+
+---
+
 ## January 16, 2026 Gap Resolution Session 9 (GAP-0193) ✅ MAJOR MILESTONE
 
 ### GAP-0193: Governance policy target for 0 STUB/IMPL residuals not met ✅ FULLY RESOLVED

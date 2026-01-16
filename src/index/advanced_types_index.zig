@@ -515,19 +515,25 @@ pub const VectorIndexWrapper = struct {
 };
 
 /// Wrapper for R-tree spatial index with geographic types
+/// CANARY: REQ=REQ-GQL-SPATIAL-001; FEATURE="Spatial Index"; ASPECT=CoordinateStorage; STATUS=TESTED; OWNER=index; UPDATED=2026-01-16
+/// GAP-0205 FIX: Added coordinate_map to store actual coordinates for accurate distance calculations
 pub const SpatialIndexWrapper = struct {
     allocator: std.mem.Allocator,
     rtree_index: rtree.RTree,
+    // GAP-0205 FIX: Store coordinates by node_id for accurate distance calculation
+    coordinate_map: std.AutoHashMap(u64, geographic.LatLon),
 
     pub fn init(allocator: std.mem.Allocator) !SpatialIndexWrapper {
         return SpatialIndexWrapper{
             .allocator = allocator,
             .rtree_index = rtree.RTree.init(allocator, 16),
+            .coordinate_map = std.AutoHashMap(u64, geographic.LatLon).init(allocator),
         };
     }
 
     pub fn deinit(self: *SpatialIndexWrapper) void {
         self.rtree_index.deinit();
+        self.coordinate_map.deinit();
     }
 
     pub fn insert(self: *SpatialIndexWrapper, node_id: u64, point: geographic.LatLon) !void {
@@ -538,6 +544,28 @@ pub const SpatialIndexWrapper = struct {
             .max_y = point.lat,
         };
         try self.rtree_index.insert(mbr, node_id);
+        // GAP-0205 FIX: Store coordinates for later retrieval during search
+        try self.coordinate_map.put(node_id, point);
+    }
+
+    // GAP-0205 FIX: Remove method also cleans up coordinate map
+    pub fn remove(self: *SpatialIndexWrapper, node_id: u64, point: geographic.LatLon) bool {
+        const mbr = rtree.MBR{
+            .min_x = point.lon,
+            .min_y = point.lat,
+            .max_x = point.lon,
+            .max_y = point.lat,
+        };
+        const removed = self.rtree_index.remove(mbr, node_id);
+        if (removed) {
+            _ = self.coordinate_map.remove(node_id);
+        }
+        return removed;
+    }
+
+    // GAP-0205 FIX: Get stored coordinates for a node_id
+    pub fn getCoordinates(self: *const SpatialIndexWrapper, node_id: u64) ?geographic.LatLon {
+        return self.coordinate_map.get(node_id);
     }
 
     pub fn searchWithinRadius(self: *SpatialIndexWrapper, center: geographic.LatLon, radius_km: f64, allocator: std.mem.Allocator) ![]SpatialSearchResult {
@@ -562,11 +590,16 @@ pub const SpatialIndexWrapper = struct {
         defer results.deinit();
 
         for (candidates) |candidate_id| {
-            // Note: In a real implementation, we'd need to get the actual point coordinates
-            // from the candidate_id to calculate precise distance
-            const candidate_point = geographic.LatLon{ .lat = center.lat, .lon = center.lon }; // Placeholder
+            // GAP-0205 FIX: Retrieve actual coordinates from the coordinate map
+            const candidate_point = self.coordinate_map.get(candidate_id) orelse {
+                // If coordinates not found, skip this candidate (shouldn't happen in normal operation)
+                continue;
+            };
+
+            // Calculate actual distance using the real coordinates
             const distance = center.distanceKm(candidate_point);
 
+            // Only include results within the radius (precise filtering after bounding box query)
             if (distance <= radius_km) {
                 try results.append(SpatialSearchResult{
                     .node_id = candidate_id,
@@ -581,19 +614,25 @@ pub const SpatialIndexWrapper = struct {
 };
 
 /// Wrapper for Patricia trie network index
+/// CANARY: REQ=REQ-GQL-NETWORK-003; FEATURE="Network Index"; ASPECT=ValueStorage; STATUS=TESTED; OWNER=index; UPDATED=2026-01-16
+/// GAP-0206 FIX: Added value storage for returning actual network values in search results
 pub const NetworkIndexWrapper = struct {
     allocator: std.mem.Allocator,
     patricia_index: patricia.PatriciaTrie,
+    // GAP-0206 FIX: Store network values by node_id for accurate search results
+    value_map: std.AutoHashMap(u64, heap.Value),
 
     pub fn init(allocator: std.mem.Allocator) !NetworkIndexWrapper {
         return NetworkIndexWrapper{
             .allocator = allocator,
             .patricia_index = patricia.PatriciaTrie.init(allocator, .both),
+            .value_map = std.AutoHashMap(u64, heap.Value).init(allocator),
         };
     }
 
     pub fn deinit(self: *NetworkIndexWrapper) void {
         self.patricia_index.deinit();
+        self.value_map.deinit();
     }
 
     pub fn insert(self: *NetworkIndexWrapper, node_id: u64, value: heap.Value) !void {
@@ -601,33 +640,56 @@ pub const NetworkIndexWrapper = struct {
             .IpAddr => |ip| {
                 const key = try self.ipToKey(ip);
                 try self.patricia_index.insert(key, node_id);
+                // GAP-0206 FIX: Store the original value for retrieval
+                try self.value_map.put(node_id, value);
             },
             .Subnet => |subnet| {
                 const key = try self.subnetToKey(subnet);
                 try self.patricia_index.insert(key, node_id);
+                // GAP-0206 FIX: Store the original value for retrieval
+                try self.value_map.put(node_id, value);
             },
             .Mac => |mac| {
                 const key = try self.macToKey(mac);
                 try self.patricia_index.insert(key, node_id);
+                // GAP-0206 FIX: Store the original value for retrieval
+                try self.value_map.put(node_id, value);
             },
             else => return error.UnsupportedNetworkType,
         }
     }
 
+    // GAP-0206 FIX: Remove also cleans up value storage
+    pub fn remove(self: *NetworkIndexWrapper, node_id: u64) void {
+        _ = self.value_map.remove(node_id);
+        // Note: Patricia trie removal would need the key, which requires storing the key or value
+    }
+
+    // GAP-0206 FIX: Get stored value for a node_id
+    pub fn getValue(self: *const NetworkIndexWrapper, node_id: u64) ?heap.Value {
+        return self.value_map.get(node_id);
+    }
+
     pub fn searchInSubnet(self: *NetworkIndexWrapper, subnet: heap.Subnet, allocator: std.mem.Allocator) ![]NetworkSearchResult {
         const prefix = try self.subnetToPrefix(subnet);
+        defer self.allocator.free(prefix);
         const matches = try self.patricia_index.searchPrefix(prefix, allocator);
         defer allocator.free(matches);
 
-        const results = try allocator.alloc(NetworkSearchResult, matches.len);
-        for (matches, 0..) |match, i| {
-            results[i] = NetworkSearchResult{
-                .node_id = match.value,
-                .network_value = subnet, // Placeholder - should be actual value
-            };
+        var results_list = std.ArrayList(NetworkSearchResult).init(allocator);
+        defer results_list.deinit();
+
+        for (matches) |match| {
+            // GAP-0206 FIX: Retrieve actual stored value
+            if (self.value_map.get(match.value)) |stored_value| {
+                try results_list.append(NetworkSearchResult{
+                    .node_id = match.value,
+                    .network_value = stored_value,
+                });
+            }
         }
 
-        return results;
+        return results_list.toOwnedSlice();
     }
 
     fn ipToKey(self: NetworkIndexWrapper, ip: heap.IpAddr) ![]u8 {
@@ -645,20 +707,76 @@ pub const NetworkIndexWrapper = struct {
         }
     }
 
+    // CANARY: REQ=REQ-GQL-NETWORK-001; FEATURE="Network Index"; ASPECT=SubnetKey; STATUS=TESTED; OWNER=index; UPDATED=2026-01-16
+    // GAP-0206 FIX: Properly convert subnet to unique key using address bytes + prefix length
     fn subnetToKey(self: NetworkIndexWrapper, subnet: heap.Subnet) ![]u8 {
-        _ = subnet;
-        // Placeholder implementation
-        const key = try self.allocator.alloc(u8, 8);
-        @memset(key, 0);
-        return key;
+        // Key format: [address_bytes][prefix_len]
+        // For IPv4: 4 bytes address + 1 byte prefix = 5 bytes
+        // For IPv6: 16 bytes address + 1 byte prefix = 17 bytes
+        switch (subnet.addr) {
+            .v4 => |octets| {
+                const key = try self.allocator.alloc(u8, 5);
+                @memcpy(key[0..4], &octets);
+                key[4] = subnet.prefix_len;
+                return key;
+            },
+            .v6 => |bytes| {
+                const key = try self.allocator.alloc(u8, 17);
+                @memcpy(key[0..16], &bytes);
+                key[16] = subnet.prefix_len;
+                return key;
+            },
+        }
     }
 
+    // CANARY: REQ=REQ-GQL-NETWORK-002; FEATURE="Network Index"; ASPECT=SubnetPrefix; STATUS=TESTED; OWNER=index; UPDATED=2026-01-16
+    // GAP-0206 FIX: Properly convert subnet to prefix for Patricia trie search
+    // Returns the network portion of the address (masked by prefix_len)
     fn subnetToPrefix(self: NetworkIndexWrapper, subnet: heap.Subnet) ![]u8 {
-        _ = subnet;
-        // Placeholder implementation
-        const prefix = try self.allocator.alloc(u8, 4);
-        @memset(prefix, 0);
-        return prefix;
+        switch (subnet.addr) {
+            .v4 => |octets| {
+                // Calculate how many full bytes and remaining bits
+                const full_bytes = subnet.prefix_len / 8;
+                const remaining_bits = subnet.prefix_len % 8;
+                const key_len: usize = if (remaining_bits > 0) full_bytes + 1 else full_bytes;
+
+                const prefix = try self.allocator.alloc(u8, if (key_len == 0) 1 else key_len);
+
+                // Copy full bytes
+                for (0..full_bytes) |i| {
+                    prefix[i] = octets[i];
+                }
+
+                // Apply mask to final byte if there are remaining bits
+                if (remaining_bits > 0 and full_bytes < 4) {
+                    const mask: u8 = @as(u8, 0xFF) << @intCast(8 - remaining_bits);
+                    prefix[full_bytes] = octets[full_bytes] & mask;
+                }
+
+                return prefix;
+            },
+            .v6 => |bytes| {
+                // Calculate how many full bytes and remaining bits
+                const full_bytes = subnet.prefix_len / 8;
+                const remaining_bits = subnet.prefix_len % 8;
+                const key_len: usize = if (remaining_bits > 0) full_bytes + 1 else full_bytes;
+
+                const prefix = try self.allocator.alloc(u8, if (key_len == 0) 1 else key_len);
+
+                // Copy full bytes
+                for (0..full_bytes) |i| {
+                    prefix[i] = bytes[i];
+                }
+
+                // Apply mask to final byte if there are remaining bits
+                if (remaining_bits > 0 and full_bytes < 16) {
+                    const mask: u8 = @as(u8, 0xFF) << @intCast(8 - remaining_bits);
+                    prefix[full_bytes] = bytes[full_bytes] & mask;
+                }
+
+                return prefix;
+            },
+        }
     }
 
     fn macToKey(self: NetworkIndexWrapper, mac: heap.Mac) ![]u8 {

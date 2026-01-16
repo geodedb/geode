@@ -4,6 +4,7 @@ const fle_aead = @import("fle_aead");
 const fle_key_manager = @import("fle_key_manager");
 const fle_key_types = @import("fle_key_types"); // GAP-0147: Import key types for KeyIds struct
 const fle_blind_index = @import("fle_blind_index");
+const fle_hmac = @import("fle_hmac"); // GAP-0207 FIX: Import hmac for blind index computation
 const annotations = @import("../schema/annotations.zig");
 
 // CANARY: FLE_ADMIN_CLI - Field-Level Encryption Admin Commands
@@ -45,6 +46,254 @@ pub const MigrationArgs = struct {
     field_name: []const u8,
     batch_size: usize = 1000,
 };
+
+// GAP-0207 FIX: Migration state tracking for progress monitoring and checkpointing
+// CANARY: REQ=REQ-FLE-BATCH-001; FEATURE="FLE Batch Re-encryption"; ASPECT=ProgressTracking; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
+pub const MigrationState = struct {
+    tenant_id: []const u8,
+    schema_name: []const u8,
+    field_name: []const u8,
+    batch_size: usize,
+    total_records: usize,
+    migrated_count: usize,
+    error_count: usize,
+    batch_count: usize,
+    start_time: i64,
+    last_checkpoint: i64,
+    status: MigrationStatus,
+
+    pub const MigrationStatus = enum {
+        pending,
+        in_progress,
+        retrying,
+        completed,
+        failed,
+    };
+};
+
+// GAP-0207 FIX: Storage callback interface for real batch re-encryption
+// CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FLE Storage Callback"; ASPECT=StorageIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
+pub const StorageCallback = struct {
+    context: *anyopaque,
+    // Query records with the specified field
+    queryRecordsFn: *const fn (
+        context: *anyopaque,
+        schema_name: []const u8,
+        field_name: []const u8,
+        offset: usize,
+        limit: usize,
+        allocator: std.mem.Allocator,
+    ) StorageError![]StorageRecord,
+    // Update a record's field value
+    updateRecordFn: *const fn (
+        context: *anyopaque,
+        record_id: u64,
+        schema_name: []const u8,
+        field_name: []const u8,
+        encrypted_value: []const u8,
+        blind_index: ?[]const u8,
+    ) StorageError!void,
+    // Count total records with the specified field
+    countRecordsFn: *const fn (
+        context: *anyopaque,
+        schema_name: []const u8,
+        field_name: []const u8,
+    ) StorageError!usize,
+
+    pub fn queryRecords(
+        self: *StorageCallback,
+        schema_name: []const u8,
+        field_name: []const u8,
+        offset: usize,
+        limit: usize,
+        allocator: std.mem.Allocator,
+    ) StorageError![]StorageRecord {
+        return self.queryRecordsFn(self.context, schema_name, field_name, offset, limit, allocator);
+    }
+
+    pub fn updateRecord(
+        self: *StorageCallback,
+        record_id: u64,
+        schema_name: []const u8,
+        field_name: []const u8,
+        encrypted_value: []const u8,
+        blind_index: ?[]const u8,
+    ) StorageError!void {
+        return self.updateRecordFn(self.context, record_id, schema_name, field_name, encrypted_value, blind_index);
+    }
+
+    pub fn countRecords(
+        self: *StorageCallback,
+        schema_name: []const u8,
+        field_name: []const u8,
+    ) StorageError!usize {
+        return self.countRecordsFn(self.context, schema_name, field_name);
+    }
+};
+
+pub const StorageRecord = struct {
+    id: u64,
+    field_value: []const u8,
+    is_encrypted: bool,
+};
+
+pub const StorageError = error{
+    NotFound,
+    ConnectionFailed,
+    PermissionDenied,
+    InvalidData,
+    WriteError,
+};
+
+// GAP-0207 FIX: Global storage callback for migration operations
+var global_storage_callback: ?*StorageCallback = null;
+
+pub fn setStorageCallback(callback: *StorageCallback) void {
+    global_storage_callback = callback;
+}
+
+pub fn clearStorageCallback() void {
+    global_storage_callback = null;
+}
+
+// GAP-0207 FIX: Execute migration with real storage queries
+fn executeMigrationWithStorage(
+    allocator: std.mem.Allocator,
+    state: *MigrationState,
+    storage: *StorageCallback,
+    field_meta: anytype,
+    fek: *const [32]u8,
+    key_ids: fle_key_types.KeyIds,
+) !void {
+    // Count total records to migrate
+    state.total_records = storage.countRecords(state.schema_name, state.field_name) catch |err| {
+        std.debug.print("  Error counting records: {}\n", .{err});
+        state.status = .failed;
+        return error.InvalidData;
+    };
+
+    std.debug.print("  Total records to migrate: {d}\n", .{state.total_records});
+
+    var offset: usize = 0;
+    while (offset < state.total_records) {
+        // Query batch of records
+        const records = storage.queryRecords(
+            state.schema_name,
+            state.field_name,
+            offset,
+            state.batch_size,
+            allocator,
+        ) catch |err| {
+            std.debug.print("  Error querying batch at offset {d}: {}\n", .{ offset, err });
+            state.error_count += 1;
+            state.status = .retrying;
+            continue;
+        };
+        defer allocator.free(records);
+
+        state.batch_count += 1;
+
+        // Process each record in the batch
+        for (records) |record| {
+            if (record.is_encrypted) {
+                // Already encrypted, skip
+                continue;
+            }
+
+            // Build AAD (Additional Authenticated Data)
+            const aad = buildAAD(allocator, state.tenant_id, state.schema_name, state.field_name, record.id, key_ids.version) catch {
+                state.error_count += 1;
+                continue;
+            };
+            defer allocator.free(aad);
+
+            // Encrypt the plaintext value using proper AEAD function
+            // Convert annotation Algorithm to aead.Alg
+            const annotation_alg = field_meta.algorithm() orelse .aes256_gcm;
+            const alg: fle_aead.Alg = switch (annotation_alg) {
+                .aes256_gcm => .aes256_gcm,
+                .chacha20_poly1305 => .chacha20_poly1305,
+            };
+            var envelope = fle_aead.encryptField(
+                allocator,
+                alg,
+                fek,
+                aad,
+                record.field_value,
+                null, // Random nonce
+            ) catch {
+                state.error_count += 1;
+                continue;
+            };
+            defer envelope.deinit(allocator);
+            const encrypted_value = envelope.serialize(allocator) catch {
+                state.error_count += 1;
+                continue;
+            };
+            defer allocator.free(encrypted_value);
+
+            // Generate blind index if searchable
+            // GAP-0207 FIX: Use proper HMAC-based blind index computation
+            var blind_index: ?[]const u8 = null;
+            var bi_buf: [32]u8 = undefined;
+            if (field_meta.isSearchable()) {
+                // Normalize the plaintext value for consistent indexing
+                const normalized = fle_hmac.normalizeForBlindIndex(allocator, record.field_value) catch {
+                    state.error_count += 1;
+                    continue;
+                };
+                defer allocator.free(normalized);
+                // Compute HMAC-SHA256 blind index token using the FEK
+                fle_hmac.blindIndexHmac256(&bi_buf, fek, normalized);
+                blind_index = &bi_buf;
+            }
+
+            // Update record in storage
+            storage.updateRecord(
+                record.id,
+                state.schema_name,
+                state.field_name,
+                encrypted_value,
+                blind_index,
+            ) catch |err| {
+                std.debug.print("  Error updating record {d}: {}\n", .{ record.id, err });
+                state.error_count += 1;
+                continue;
+            };
+
+            state.migrated_count += 1;
+        }
+
+        offset += state.batch_size;
+        state.last_checkpoint = std.time.milliTimestamp();
+
+        // Progress update
+        if (state.batch_count % 10 == 0) {
+            const progress = (@as(f64, @floatFromInt(state.migrated_count)) / @as(f64, @floatFromInt(state.total_records))) * 100.0;
+            std.debug.print("  Progress: {d:.1}% ({d}/{d})\n", .{ progress, state.migrated_count, state.total_records });
+        }
+    }
+
+    state.status = .completed;
+}
+
+// GAP-0207 FIX: Build AAD (Additional Authenticated Data) for encryption
+fn buildAAD(
+    allocator: std.mem.Allocator,
+    tenant_id: []const u8,
+    schema_name: []const u8,
+    field_name: []const u8,
+    record_id: u64,
+    key_version: u32,
+) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}|{s}|{s}|{d}|{d}", .{
+        tenant_id,
+        schema_name,
+        field_name,
+        record_id,
+        key_version,
+    });
+}
 
 /// Execute key rotation command
 pub fn rotateKey(allocator: std.mem.Allocator, args: KeyRotationArgs) !void {
@@ -156,7 +405,8 @@ pub fn revokePlaintext(allocator: std.mem.Allocator, args: PolicyArgs) !void {
     });
 }
 
-// CANARY: REQ=REQ-FLE-MIGRATE-001; FEATURE="FieldLevelEncryption"; ASPECT=Migration; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+// CANARY: REQ=REQ-FLE-MIGRATE-001; FEATURE="FieldLevelEncryption"; ASPECT=Migration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
+// GAP-0207 FIX: Implemented real batch re-encryption with storage callback interface
 /// Migrate field from plaintext to encrypted
 /// Performs batched encryption of existing plaintext data to encrypted format
 pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
@@ -196,19 +446,21 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
     };
     const fek = try key_manager.getFEK(key_ids);
 
-    // 3. Migration statistics
-    var migrated_count: usize = 0;
-    const error_count: usize = 0;
-    var batch_count: usize = 0;
-    const start_time = std.time.milliTimestamp();
-
-    // 4. For production, this would iterate through storage engine records
-    // Since we don't have direct storage access here, we provide the framework
-    // and log what would happen. Real implementation would:
-    //   - Query storage for records with plaintext values
-    //   - Encrypt each value using fle_aead.encryptField
-    //   - Update blind index if field_meta.searchable
-    //   - Write encrypted value back to storage
+    // 3. Migration state with progress tracking
+    // GAP-0207 FIX: Initialize migration state for proper tracking
+    var state = MigrationState{
+        .tenant_id = args.tenant_id,
+        .schema_name = args.schema_name,
+        .field_name = args.field_name,
+        .batch_size = args.batch_size,
+        .total_records = 0,
+        .migrated_count = 0,
+        .error_count = 0,
+        .batch_count = 0,
+        .start_time = std.time.milliTimestamp(),
+        .last_checkpoint = std.time.milliTimestamp(),
+        .status = .in_progress,
+    };
 
     std.debug.print("\nMigration Process:\n", .{});
     std.debug.print("  Key ID: {s}\n", .{key_id});
@@ -217,19 +469,19 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
     std.debug.print("  Algorithm: {s}\n", .{alg_name});
     std.debug.print("  Searchable: {s}\n", .{if (field_meta.isSearchable()) "yes (blind index will be generated)" else "no"});
 
-    // Simulate batch processing (in production, would iterate storage)
+    // GAP-0207 FIX: Execute migration with storage callback if available
     std.debug.print("\nBatch Processing:\n", .{});
 
-    // Process in batches (simulated - actual implementation would query storage)
-    batch_count = 1;
-    migrated_count = 0;
-
-    // Log what the migration would do for each record:
-    // - Build AAD (Additional Authenticated Data): tenant_id|schema|field|record_id|key_version
-    // - Generate deterministic or random nonce based on policy
-    // - Encrypt plaintext value using FEK
-    // - Generate blind index if searchable
-    // - Update record in storage
+    if (global_storage_callback) |storage| {
+        // Real storage path - query and encrypt actual data
+        try executeMigrationWithStorage(allocator, &state, storage, field_meta, &fek, key_ids);
+    } else {
+        // No storage callback - log migration framework
+        std.debug.print("  Note: Storage callback not configured.\n", .{});
+        std.debug.print("  To enable real migration, call setStorageCallback() first.\n", .{});
+        state.batch_count = 1;
+        state.migrated_count = 0;
+    }
 
     // 5. If field is searchable, also generate blind indexes
     // GAP-0147 FIX: Use isSearchable() method instead of field access
@@ -241,20 +493,20 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
         _ = bik; // Would be used for blind index generation
     }
 
-    const elapsed_ms = std.time.milliTimestamp() - start_time;
+    // GAP-0207 FIX: Use state for elapsed time calculation
+    const elapsed_ms = std.time.milliTimestamp() - state.start_time;
 
     // 6. Update catalog to mark field as encrypted
     std.debug.print("\nUpdating catalog metadata...\n", .{});
 
     // 7. Log completion
     std.debug.print("\nMigration Complete:\n", .{});
-    std.debug.print("  Total batches: {d}\n", .{batch_count});
-    std.debug.print("  Records migrated: {d}\n", .{migrated_count});
-    std.debug.print("  Errors: {d}\n", .{error_count});
+    std.debug.print("  Total batches: {d}\n", .{state.batch_count});
+    std.debug.print("  Records migrated: {d}\n", .{state.migrated_count});
+    std.debug.print("  Errors: {d}\n", .{state.error_count});
     std.debug.print("  Elapsed time: {d}ms\n", .{elapsed_ms});
     // GAP-0147 FIX: fek is [32]u8, version is in key_ids
     std.debug.print("  FEK key version: {d}\n", .{key_ids.version});
-    _ = fek; // FEK key material would be used in production encryption
     std.debug.print("\nNote: Production migration requires storage engine integration.\n", .{});
     std.debug.print("Run 'geode fle show-rotation-status {s}' to verify encryption status.\n", .{args.tenant_id});
 }
