@@ -24,6 +24,8 @@ tests:
 
   # Count Aggregation (previously fixed)
   - name: simple-count
+    setup:
+      - "query \"CREATE (a:Person {name: 'TestPerson1', age: 25}), (b:Person {name: 'TestPerson2', age: 30})\" --format json"
     args: ["query", "MATCH (n:Person) RETURN count(n) AS total", "--format", "json"]
     expect:
       exit_code: 0

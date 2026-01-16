@@ -78,6 +78,7 @@ const _gap_0193_batch2_misc = @import("test_gap_0193_batch2_misc.zig");
 const _gap_0193_batch3_comprehensive = @import("test_gap_0193_batch3_comprehensive.zig");
 const _gap_0193_batch4_comprehensive = @import("test_gap_0193_batch4_comprehensive.zig");
 const _gap_0193_batch5_comprehensive = @import("test_gap_0193_batch5_comprehensive.zig");
+const _gap_0193_batch6_comprehensive = @import("test_gap_0193_batch6_comprehensive.zig");
 
 // v0.18 feature tests
 const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");
