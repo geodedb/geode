@@ -95,7 +95,8 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         const with_clause = agg_query.with_clause.?;
 
         // Collect all input rows
-        var input_envs = std.ArrayList(Env).initCapacity(allocator, current_result.rows.len) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var input_envs = try std.ArrayList(Env).initCapacity(allocator, current_result.rows.len);
         defer {
             for (input_envs.items) |env| {
                 allocator.free(env.names);
@@ -343,7 +344,8 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
     if (final_has_aggregation) {
         // Process all rows together through the chain, then aggregate at the end
         // First transform all current_result rows through intermediate WITH clauses
-        var all_chain_envs = std.ArrayList(Env).initCapacity(allocator, current_result.rows.len) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var all_chain_envs = try std.ArrayList(Env).initCapacity(allocator, current_result.rows.len);
         defer {
             for (all_chain_envs.items) |env| {
                 allocator.free(env.names);
@@ -400,7 +402,8 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                     var modified_query = q.*;
 
                     // Build RETURN items for each match variable in the query's MATCH pattern
-                    var return_items = std.ArrayList(ast.ReturnItem).initCapacity(allocator, q.match.chains.len) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var return_items = try std.ArrayList(ast.ReturnItem).initCapacity(allocator, q.match.chains.len);
                     for (q.match.chains) |chain| {
                         if (chain.head) |node_pattern| {
                             if (node_pattern.name) |var_name| {
@@ -570,9 +573,11 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
 
     // Now execute the next query with the current result as bindings
     // For each row in current_result, execute next_query with those bindings
-    var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
     var final_columns: [][]const u8 = &.{};
-    var final_flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, 0);
 
     // If current result has no rows, still execute next query once with empty bindings
     if (current_result.rows.len == 0) {
@@ -749,7 +754,8 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         if (has_aggregation and next_query_ptr.next_query == null) {
             // Process all rows together for aggregation
             // First apply WITH clause and WHERE filter to each row, collect filtered bindings
-            var filtered_envs = std.ArrayList(Env).initCapacity(allocator, current_result.rows.len) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var filtered_envs = try std.ArrayList(Env).initCapacity(allocator, current_result.rows.len);
             defer {
                 for (filtered_envs.items) |env| {
                     allocator.free(env.names);
@@ -876,9 +882,11 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         }
 
         // Chain to next query using the result as bindings (original per-row logic)
-        var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
         var final_columns: [][]const u8 = &.{};
-        var final_flags = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+    var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, 0);
 
         for (current_result.rows) |current_row| {
             // Validate that current_row length matches columns length
@@ -887,9 +895,11 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
                 return error.MismatchedRowColumnLength;
             }
 
-            var param_names = std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var param_names = try std.ArrayList([]const u8).initCapacity(allocator, current_result.columns.len);
             defer param_names.deinit(allocator);
-            var param_values = std.ArrayList(Value).initCapacity(allocator, current_result.columns.len) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var param_values = try std.ArrayList(Value).initCapacity(allocator, current_result.columns.len);
             defer param_values.deinit(allocator);
 
             for (current_result.columns, current_row) |col_name, col_value| {
@@ -1114,9 +1124,11 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
 
     // Check if this is a simple MATCH with only node patterns (no relationships)
     var all_vars_bound = true;
-    var bound_var_env_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var bound_var_env_names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     defer bound_var_env_names.deinit(allocator);
-    var bound_var_env_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var bound_var_env_values = try std.ArrayList(Value).initCapacity(allocator, 0);
     defer bound_var_env_values.deinit(allocator);
 
     // CANARY: REQ=REQ-GQL-CHAIN-FIX-002; FEATURE="BoundVariableShortcutFix"; ASPECT=HopsCheck; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
@@ -1323,9 +1335,11 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     }
 
     // Evaluate LET bindings first and add them to parameter environment
-    var param_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var param_names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     defer param_names.deinit(allocator);
-    var param_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var param_values = try std.ArrayList(Value).initCapacity(allocator, 0);
     defer param_values.deinit(allocator);
 
     if (context.query_param_names.len != 0) {
@@ -1393,7 +1407,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
             // Apply WHERE filter if present
             const filtered_result = if (q.where_clause) |where_expr| blk: {
-                var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
                 for (with_result.rows) |row| {
                     const env = Env{
@@ -1424,7 +1439,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             } else with_result;
 
             // Apply RETURN clause to transform results
-            var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
             for (filtered_result.rows) |row| {
                 var return_row = try allocator.alloc(Value, q.ret.items.len);
@@ -1480,7 +1496,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             return result;
         } else {
             // No WITH clause, just apply WHERE/RETURN to CALL results
-            var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
             if (q.where_clause) |where_expr| {
                 for (call_result.rows) |row| {
@@ -1511,7 +1528,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             }
 
             // Apply RETURN clause
-            var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
             for (filtered_rows.items) |row| {
                 var return_row = try allocator.alloc(Value, q.ret.items.len);
@@ -1588,7 +1606,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         }
 
         // Now evaluate RETURN using the WITH results as environment
-        var final_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
         for (with_result.rows) |with_row| {
             var return_row = try allocator.alloc(Value, q.ret.items.len);

@@ -1086,9 +1086,10 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     }
 
     // Process the pattern to create nodes and relationships
-    var created_nodes = std.ArrayList(graph_exec.NodeId).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation instead of catch unreachable
+    var created_nodes = try std.ArrayList(graph_exec.NodeId).initCapacity(allocator, 0);
     defer created_nodes.deinit(allocator);
-    var created_edges = std.ArrayList(graph_exec.EdgeId).initCapacity(allocator, 0) catch unreachable;
+    var created_edges = try std.ArrayList(graph_exec.EdgeId).initCapacity(allocator, 0);
     defer created_edges.deinit(allocator);
 
     // Create nodes from the pattern
@@ -1178,7 +1179,8 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     }
 
     // Build response
-    var response = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var response = try std.ArrayList(u8).initCapacity(allocator, 0);
     const writer = response.writer(allocator);
 
     // Return created nodes/edges if RETURN clause present
@@ -1281,7 +1283,8 @@ fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     }
 
     // Build response
-    var response = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var response = try std.ArrayList(u8).initCapacity(allocator, 0);
     const writer = response.writer(allocator);
 
     // Return delete count
@@ -1334,7 +1337,8 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
         created = true;
 
         // Create the pattern (similar to CREATE logic)
-        var created_nodes = std.ArrayList(graph_exec.NodeId).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var created_nodes = try std.ArrayList(graph_exec.NodeId).initCapacity(allocator, 0);
         defer created_nodes.deinit(allocator);
 
         for (stmt.pattern.chains) |chain| {
@@ -1366,7 +1370,8 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
     }
 
     // Build response
-    var response = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var response = try std.ArrayList(u8).initCapacity(allocator, 0);
     const writer = response.writer(allocator);
 
     // Return merge result

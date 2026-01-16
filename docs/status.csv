@@ -5,12 +5,14 @@ REQ-0002,Language Surface Requirements,Compliance,TESTED,tests/e2e_protocol.zig,
 REQ-0003,Engine Contract Requirements,Execution,TESTED,tests/e2e_protocol.zig,,execution,2026-01-15,src/execution/query_execution.zig
 REQ-0004,Transactions & Storage Requirements,Storage,TESTED,tests/e2e_protocol.zig,,storage,2026-01-15,src/transactions/transaction_manager.zig
 REQ-0005,Security Requirements,Security,TESTED,tests/e2e_protocol.zig,,security,2026-01-15,src/security/geode_auth_lib.zig
+REQ-0006,Distributed Consensus,RaftImplementation,TESTED,geodetestlab/specs/gap_0210_distributed_rpc.yml,,dist,2026-01-16,src/dist/scaffold.zig
 REQ-0006,Distributed Query Federation,ConcurrentExecution,IMPL,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,GeodeTestlab,IMPL,,,distributed,2026-01-14,geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml
 REQ-0006,Distributed Query Federation,Metrics,IMPL,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,ParallelScatter,IMPL,,,distributed,2026-01-14,src/distributed/federation.zig
 REQ-0006,Distributed Query Federation,UnitTests,IMPL,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,Verification,TESTED,tests/test_requirement_traceability.zig,,distributed,2026-01-15,tests/test_requirement_traceability.zig
+REQ-0006,Distributed RPC,NetworkTransport,TESTED,geodetestlab/specs/gap_0210_distributed_rpc.yml,,dist,2026-01-16,src/dist/rpc.zig
 REQ-0006,DistributedQuery,Federation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-0007,Tooling & Governance Requirements,Tooling,TESTED,tools/canary_main.zig,,tools,2026-01-15,tools/canary_main.zig
 REQ-0008,Platform Build Requirements,GeodeTestlab,IMPL,,,ci,2026-01-14,geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml

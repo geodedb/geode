@@ -367,7 +367,8 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
     const filter_graph = if (context.session_state) |session| (session.graph orelse "default") else "default";
 
     // Match each chain separately and collect bindings
-    var chain_matches = std.ArrayList(std.StringHashMap(u64)).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var chain_matches = try std.ArrayList(std.StringHashMap(u64)).initCapacity(allocator, 0);
     defer {
         for (chain_matches.items) |*chain_match| {
             chain_match.deinit();
@@ -611,7 +612,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     // For each chain, find all matching nodes
     for (q.match.chains) |chain| {
         const node_pattern = chain.head.?;
-        var matches = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var matches = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
 
         var node_iter = store.nodes.iterator();
         while (node_iter.next()) |entry| {
@@ -697,7 +699,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
     if (items.len == 0) {
         // No RETURN clause - return matched variables
-        var col_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var col_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
         defer col_list.deinit(allocator);
 
         for (chain_vars.items) |var_name| {
@@ -712,7 +715,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     }
 
     // Generate Cartesian product of all matching nodes
-    var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
     // Recursive function to generate combinations
     const Context = struct {
@@ -827,7 +831,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         .param_values = param_values,
     };
 
-    var current_combo = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var current_combo = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
     defer current_combo.deinit(allocator);
 
     try context.generateCombinations(&current_combo, 0);
@@ -849,7 +854,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
             // First, we need the raw bindings, not the evaluated RETURN expressions
             // Re-collect bindings by iterating through matches again
             var binding_groups = std.StringHashMap(std.ArrayList(Env)).init(allocator);
-            var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
             defer {
                 var giter = binding_groups.iterator();
                 while (giter.next()) |entry| {
@@ -947,7 +953,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // Compute group key
-                        var key_buf = std.ArrayList(u8).initCapacity(self.allocator, 128) catch unreachable;
+                        // GAP-0220 FIX: Use try for proper error propagation
+                        var key_buf = try std.ArrayList(u8).initCapacity(self.allocator, 128);
                         const key_writer = key_buf.writer(self.allocator);
                         for (self.group_by.keys, 0..) |key_expr, k| {
                             if (k > 0) key_writer.writeAll("|") catch {};
@@ -968,7 +975,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                             group_list.append(self.allocator, env) catch {};
                             self.allocator.free(group_key);
                         } else {
-                            var new_list = std.ArrayList(Env).initCapacity(self.allocator, 4) catch unreachable;
+                            // GAP-0220 FIX: Use try for proper error propagation
+                            var new_list = try std.ArrayList(Env).initCapacity(self.allocator, 4);
                             new_list.append(self.allocator, env) catch {};
                             self.binding_groups.put(group_key, new_list) catch {};
                             self.group_keys_list.append(self.allocator, group_key) catch {};
@@ -996,7 +1004,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 .group_by = group_by,
             };
 
-            var combo = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var combo = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
             defer combo.deinit(allocator);
             try binding_context.collectBindings(&combo, 0);
 
@@ -1196,7 +1205,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     };
 
     // Start with first chain and build bindings
-    var bindings = std.ArrayList(MatchBinding).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, 0);
     defer {
         for (bindings.items) |*b| b.deinit();
         bindings.deinit(allocator);
@@ -1274,7 +1284,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         const right_var = hop.right.name;
 
         // For each existing binding, try to extend with this chain
-        var new_bindings = std.ArrayList(MatchBinding).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var new_bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, 0);
 
         for (bindings.items) |*existing| {
             // Get the node bound to left_var (if it exists in this binding)
@@ -1343,13 +1354,16 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     const columns = try generateUniqueColumnNames(allocator, items);
 
     // Evaluate RETURN expressions for each binding
-    var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
     for (bindings.items) |*binding| {
         // Build environment from binding
-        var env_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var env_names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
         defer env_names.deinit(allocator);
-        var env_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var env_values = try std.ArrayList(Value).initCapacity(allocator, 0);
         defer env_values.deinit(allocator);
 
         var var_iter = binding.vars.iterator();
@@ -1645,7 +1659,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     const required_labels = required_pattern.labels;
 
     // Find all nodes matching the required pattern
-    var base_nodes = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var base_nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
     defer base_nodes.deinit(allocator);
 
     var node_iter = store.nodes.iterator();
@@ -1765,10 +1780,12 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     }
 
     // Step 2: For each base node, try to extend with optional chains
-    var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
     // Collect all variable names for columns
-    var all_vars = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var all_vars = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     defer all_vars.deinit(allocator);
 
     // Add required variable
@@ -1798,7 +1815,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     // The third MATCH is required but comes after optional chains - we need to handle it
     // Section 14.4 Fix: Also handle required chains WITH hops (relationship patterns)
     // e.g., MATCH (n) OPTIONAL MATCH (n)-[:CHILD]->(c) MATCH (c)-[:CHILD]->(gc)
-    var required_chains_after_optional = std.ArrayList(usize).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var required_chains_after_optional = try std.ArrayList(usize).initCapacity(allocator, 0);
     defer required_chains_after_optional.deinit(allocator);
     var seen_optional = false;
     for (q.match.chains[1..], 1..) |chain, idx| {
@@ -1832,7 +1850,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         right_var_pos: ?usize, // position in all_vars for right node variable
         node_var_pos: ?usize, // position for node-only patterns
     };
-    var chain_var_info = std.ArrayList(ChainVarInfo).initCapacity(allocator, 0) catch unreachable;
+    // GAP-0220 FIX: Use try for proper error propagation
+    var chain_var_info = try std.ArrayList(ChainVarInfo).initCapacity(allocator, 0);
     defer chain_var_info.deinit(allocator);
 
     // Calculate positions for each optional chain's variables
@@ -1867,7 +1886,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
     for (base_nodes.items) |base_node| {
         // Start with a single row containing just the base node and NULLs
-        var current_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var current_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
         defer current_rows.deinit(allocator);
 
         // Initialize with base row
@@ -1890,12 +1910,14 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             const var_info = chain_var_info.items[chain_info_idx];
             chain_info_idx += 1;
 
-            var new_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var new_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
             defer new_rows.deinit(allocator);
 
             // For each existing row, try to extend with this optional chain
             for (current_rows.items) |existing_row| {
-                var matches_found = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var matches_found = try std.ArrayList([]Value).initCapacity(allocator, 0);
                 defer matches_found.deinit(allocator);
 
                 // Handle node-only OPTIONAL MATCH (e.g., OPTIONAL MATCH (e:Employee {prop: value}))
@@ -2179,7 +2201,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     // Section 14.4 Fix: Also handle chains with hops (relationship patterns)
     // For each row, look up nodes matching required chains with property patterns that reference other variables
     if (required_chains_after_optional.items.len > 0) {
-        var processed_rows = std.ArrayList([]Value).initCapacity(allocator, rows.items.len) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var processed_rows = try std.ArrayList([]Value).initCapacity(allocator, rows.items.len);
         defer processed_rows.deinit(allocator);
 
         for (rows.items) |row| {
@@ -2431,7 +2454,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         rows.deinit(allocator);
         rows = processed_rows;
         // Transfer ownership - don't deinit processed_rows
-        processed_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        processed_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
     }
 
     // Build columns
@@ -2462,7 +2486,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
         if (references_optional_var) {
             // Filter rows based on WHERE clause evaluation
-            var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
             defer filtered_rows.deinit(allocator);
 
             for (intermediate_result.rows) |row| {
@@ -2507,7 +2532,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             }
         }
 
-        var with_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var with_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
         if (has_aggregation) {
             // Group by non-aggregation expressions
@@ -2525,7 +2551,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
             for (intermediate_result.rows) |input_row| {
                 // Build group key from non-aggregation WITH items
-                var key_parts = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var key_parts = try std.ArrayList(u8).initCapacity(allocator, 0);
                 defer key_parts.deinit(allocator);
                 const writer = key_parts.writer(allocator);
 
@@ -2555,7 +2582,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     allocator.free(key);
                 } else {
                     // New entry - HashMap takes ownership of the key
-                    gop.value_ptr.* = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    gop.value_ptr.* = try std.ArrayList([]Value).initCapacity(allocator, 0);
                 }
                 try gop.value_ptr.append(allocator, input_row);
             }
@@ -2636,7 +2664,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
         // Group intermediate rows by GROUP BY key values
         var groups = std.StringHashMap(std.ArrayList([]Value)).init(allocator);
-        var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
         defer {
             var iter = groups.iterator();
             while (iter.next()) |entry| {
@@ -2661,7 +2690,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             };
 
             // Evaluate GROUP BY key(s) and serialize to string
-            var key_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
             const key_writer = key_buf.writer(allocator);
             for (group_by.keys, 0..) |key_expr, k| {
                 if (k > 0) key_writer.writeAll("|") catch {};
@@ -2684,7 +2714,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 group_list.append(allocator, input_row) catch {};
                 allocator.free(group_key);
             } else {
-                var new_list = std.ArrayList([]Value).initCapacity(allocator, 4) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var new_list = try std.ArrayList([]Value).initCapacity(allocator, 4);
                 new_list.append(allocator, input_row) catch {};
                 groups.put(group_key, new_list) catch {};
                 group_keys_list.append(allocator, group_key) catch {};
@@ -2692,7 +2723,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
 
         // For each group, compute aggregations and produce one output row
-        var result_rows = std.ArrayList([]Value).initCapacity(allocator, groups.count()) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var result_rows = try std.ArrayList([]Value).initCapacity(allocator, groups.count());
 
         var group_iter = groups.iterator();
         while (group_iter.next()) |group_entry| {
@@ -3133,7 +3165,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     var binding_groups_mh = std.StringHashMap(std.ArrayList(MultiHopBinding)).init(allocator);
-                    var group_keys_list_mh = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var group_keys_list_mh = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                     defer {
                         var giter_mh = binding_groups_mh.iterator();
                         while (giter_mh.next()) |entry| {
@@ -3151,7 +3184,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Initialize with first hop's left nodes
-                    var current_bindings_mh = std.ArrayList(MultiHopBinding).initCapacity(allocator, 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var current_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
                     defer {
                         for (current_bindings_mh.items) |binding| {
                             allocator.free(binding.env_names);
@@ -3239,7 +3273,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // Process each hop
                     for (chain.hops, 0..) |hop, hop_idx| {
-                        var next_bindings_mh = std.ArrayList(MultiHopBinding).initCapacity(allocator, 0) catch unreachable;
+                        // GAP-0220 FIX: Use try for proper error propagation
+                        var next_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
 
                         for (current_bindings_mh.items) |binding| {
                             const current_node_var = if (hop_idx == 0)
@@ -3403,7 +3438,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             allocator.free(group_key);
                         } else {
                             try group_keys_list_mh.append(allocator, group_key);
-                            var new_group = std.ArrayList(MultiHopBinding).initCapacity(allocator, 0) catch unreachable;
+                            // GAP-0220 FIX: Use try for proper error propagation
+                            var new_group = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
                             try new_group.append(allocator, MultiHopBinding{
                                 .env_names = copy_names,
                                 .env_values = copy_values,
@@ -3413,7 +3449,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Generate result rows from groups
-                    var rows_mh = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var rows_mh = try std.ArrayList([]Value).initCapacity(allocator, 0);
                     var group_iter_mh = binding_groups_mh.iterator();
                     while (group_iter_mh.next()) |group_entry| {
                         const group_bindings = group_entry.value_ptr.*;
@@ -3464,7 +3501,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 var binding_groups = std.StringHashMap(std.ArrayList(BindingRow)).init(allocator);
-                var group_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+            var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                 defer {
                     var giter = binding_groups.iterator();
                     while (giter.next()) |entry| {
@@ -3667,7 +3705,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // Evaluate GROUP BY key(s) and serialize to string
-                        var key_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+                        // GAP-0220 FIX: Use try for proper error propagation
+            var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
                         const key_writer = key_buf.writer(allocator);
                         for (group_by.keys, 0..) |key_expr, k| {
                             if (k > 0) key_writer.writeAll("|") catch {};
@@ -3689,7 +3728,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
                             allocator.free(group_key);
                         } else {
-                            var new_list = std.ArrayList(BindingRow).initCapacity(allocator, 4) catch unreachable;
+                            // GAP-0220 FIX: Use try for proper error propagation
+                            var new_list = try std.ArrayList(BindingRow).initCapacity(allocator, 4);
                             new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
                             binding_groups.put(group_key, new_list) catch {};
                             group_keys_list.append(allocator, group_key) catch {};
@@ -3698,7 +3738,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
 
                 // Generate rows for each group
-                var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
                 var group_iter = binding_groups.iterator();
                 while (group_iter.next()) |group_entry| {
                     const group_bindings = group_entry.value_ptr.items;
@@ -3759,7 +3800,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Simple node pattern GROUP BY (original code path)
             // GROUP BY with aggregations - group rows and compute aggregations per group
             var groups = std.StringHashMap(std.ArrayList(*graph_store.Node)).init(allocator);
-            var group_keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var group_keys = try std.ArrayList([]const u8).initCapacity(allocator, 0);
             defer {
                 var iter = groups.iterator();
                 while (iter.next()) |entry| {
@@ -3902,7 +3944,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         // Create new group with allocated key
                         const stored_key = try allocator.dupe(u8, group_key);
                         try group_keys.append(allocator, stored_key);
-                        var new_group = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+                        // GAP-0220 FIX: Use try for proper error propagation
+                        var new_group = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
                         try new_group.append(allocator, node);
                         try groups.put(stored_key, new_group);
                     }
@@ -3910,7 +3953,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // Generate rows for each group
-            var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
             var group_iter = groups.iterator();
             while (group_iter.next()) |group_entry| {
                 _ = group_entry.key_ptr.*;
@@ -3970,7 +4014,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // CANARY: REQ=REQ-GQL-AGGREGATE-WHERE; FEATURE="AggregateWithWHERE"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-13
             // Fix: Collect matched nodes that pass WHERE clause before aggregating
 
-            var matched_nodes = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var matched_nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
             defer matched_nodes.deinit(allocator);
 
             // CANARY: REQ=REQ-GQL-REL-AGG-NO-GROUPBY-001; FEATURE="RelationshipAggregationNoGroupBy"; ASPECT=EdgeCollection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
@@ -3983,7 +4028,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     env_values: []Value,
                 };
 
-                var bindings = std.ArrayList(BindingRow).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var bindings = try std.ArrayList(BindingRow).initCapacity(allocator, 0);
                 defer {
                     for (bindings.items) |binding| {
                         allocator.free(binding.env_names);
@@ -4587,7 +4633,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Apply WHERE clause filtering AFTER WITH transformation
                 // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
                 if (q.where_clause) |where_expr| {
-                    var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
                     for (with_result.rows) |row| {
                         const where_env = Env{
                             .names = with_result.columns,
@@ -4682,7 +4729,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // Non-aggregation query - return one row per matching pattern
         // CANARY: REQ=REQ-GQL-WITH-RETURN; FEATURE="WithReturnExpressions"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-12
 
-        var rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
         if (has_relationship) {
             // CANARY: REQ=REQ-GQL-MULTIHOP-001; FEATURE="MultiHopPatterns"; ASPECT=Execution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
@@ -4696,7 +4744,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     env_values: []Value,
                 };
 
-                var current_bindings = std.ArrayList(MultiHopBinding).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var current_bindings = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
                 defer {
                     for (current_bindings.items) |binding| {
                         allocator.free(binding.env_names);
@@ -4785,7 +4834,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Process each hop
                 for (chain.hops, 0..) |hop, hop_idx| {
-                    var next_bindings = std.ArrayList(MultiHopBinding).initCapacity(allocator, 0) catch unreachable;
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var next_bindings = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
 
                     for (current_bindings.items) |binding| {
                         // Find the current node from the binding
@@ -5161,7 +5211,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // If left node is bound, only process that single node; otherwise iterate all nodes
-            var left_nodes_to_process = std.ArrayList(*graph_store.Node).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+            var left_nodes_to_process = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
             defer left_nodes_to_process.deinit(allocator);
 
             if (bound_left_node) |bln| {
@@ -5361,8 +5412,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (chain_path_var) |var_name| {
                             // Build the path value from the PathInfo
                             // Use dynamic arrays to handle missing nodes/edges gracefully
-                            var path_nodes_list = std.ArrayList(*const graph_store.Node).initCapacity(allocator, path.nodes.items.len) catch unreachable;
-                            var path_edges_list = std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len) catch unreachable;
+                            // GAP-0220 FIX: Use try for proper error propagation
+                            var path_nodes_list = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, path.nodes.items.len);
+                            // GAP-0220 FIX: Use try for proper error propagation
+                            var path_edges_list = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len);
 
                             for (path.nodes.items) |node_id| {
                                 if (store.nodes.getPtr(node_id)) |node_ptr| {
@@ -5949,8 +6002,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Evaluate inline LET bindings and extend environment
                 var extended_env = env;
-                var inline_let_names = std.ArrayList([]const u8).initCapacity(allocator, inline_let_bindings.len) catch unreachable;
-                var inline_let_values = std.ArrayList(Value).initCapacity(allocator, inline_let_bindings.len) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+                var inline_let_names = try std.ArrayList([]const u8).initCapacity(allocator, inline_let_bindings.len);
+                // GAP-0220 FIX: Use try for proper error propagation
+                var inline_let_values = try std.ArrayList(Value).initCapacity(allocator, inline_let_bindings.len);
                 defer inline_let_names.deinit(allocator);
                 defer inline_let_values.deinit(allocator);
 
@@ -6059,7 +6114,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Extract variable names from the match pattern
             // For simple node matches, we have match_variable
             // For relationship matches, we have left_node_var, rel_var, right_node_var
-            var col_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+            // GAP-0220 FIX: Use try for proper error propagation
+        var col_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
             defer col_list.deinit(allocator);
 
             if (has_relationship) {
@@ -6113,7 +6169,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Apply WHERE clause filtering AFTER WITH transformation (non-aggregation path)
             // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
             if (q.where_clause) |where_expr| {
-                var filtered_rows = std.ArrayList([]Value).initCapacity(allocator, 0) catch unreachable;
+                // GAP-0220 FIX: Use try for proper error propagation
+            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
                 for (with_result.rows) |row| {
                     const where_env = Env{
                         .names = with_result.columns,

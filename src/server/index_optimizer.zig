@@ -210,7 +210,7 @@ pub const IndexOptimizer = struct {
         prop_key: ?[]const u8,
         prop_val: ?PropertyValue,
     ) ![]Binding {
-        var results = std.ArrayList(Binding).initCapacity(self.allocator, 0) catch unreachable;
+        var results = try std.ArrayList(Binding).initCapacity(self.allocator, 0);
 
         var iter = graph.nodes.iterator();
         while (iter.next()) |entry| {
@@ -262,7 +262,7 @@ pub const IndexOptimizer = struct {
         prop_key: ?[]const u8,
         prop_val: ?PropertyValue,
     ) ![]Binding {
-        var results = std.ArrayList(Binding).initCapacity(self.allocator, 0) catch unreachable;
+        var results = try std.ArrayList(Binding).initCapacity(self.allocator, 0);
         defer results.deinit(self.allocator);
 
         // Convert property value to search key
@@ -1599,7 +1599,7 @@ pub const VectorKNNOptimizer = struct {
         labels: []const []const u8,
         var_name: ?[]const u8,
     ) ![]Binding {
-        var results = std.ArrayList(Binding).initCapacity(self.allocator, 0) catch unreachable;
+        var results = try std.ArrayList(Binding).initCapacity(self.allocator, 0);
         defer results.deinit(self.allocator);
 
         // Get the vector index from index manager
@@ -1669,7 +1669,8 @@ pub const VectorKNNOptimizer = struct {
     ) ![]Binding {
         // This is a simplified implementation that would compute distances
         // for all nodes and select the top-k results
-        var candidates = std.ArrayList(struct { node: *graph_common.Node, distance: f64 }).initCapacity(self.allocator, 0) catch unreachable;
+        // GAP-0220 FIX: Use try for proper error propagation
+        var candidates = try std.ArrayList(struct { node: *graph_common.Node, distance: f64 }).initCapacity(self.allocator, 0);
         defer candidates.deinit(self.allocator);
 
         // Scan all nodes
@@ -1707,7 +1708,7 @@ pub const VectorKNNOptimizer = struct {
         }.lessThan);
 
         // Convert to bindings
-        var results = std.ArrayList(Binding).initCapacity(self.allocator, 0) catch unreachable;
+        var results = try std.ArrayList(Binding).initCapacity(self.allocator, 0);
         defer results.deinit(self.allocator);
 
         const k = @min(knn_info.k, candidates.items.len);

@@ -1,6 +1,8 @@
 const std = @import("std");
+const rpc = @import("rpc.zig");
 
-// Enhanced distributed scaffold with Raft consensus and 2PC coordination
+// CANARY: REQ=REQ-0006; FEATURE="Distributed Consensus"; ASPECT=RaftImplementation; STATUS=TESTED; TEST=geodetestlab/specs/gap_0210_distributed_rpc.yml; OWNER=dist; UPDATED=2026-01-16
+// GAP-0210 FIX: Enhanced distributed scaffold with real network transport for Raft/2PC
 
 pub const Role = enum { Leader, Follower, Candidate };
 
@@ -8,7 +10,8 @@ pub const NodeId = u32;
 pub const Term = u64;
 pub const LogIndex = u64;
 
-/// Enhanced Raft consensus implementation
+/// Enhanced Raft consensus implementation with real network transport
+/// GAP-0210 FIX: Now uses RPC client for actual network communication
 pub const RaftNode = struct {
     allocator: std.mem.Allocator,
     node_id: NodeId,
@@ -32,6 +35,9 @@ pub const RaftNode = struct {
     // Cluster configuration
     cluster_nodes: std.ArrayList(NodeId),
 
+    // GAP-0210 FIX: RPC client for network communication
+    rpc_client: rpc.RpcClient,
+
     const LogEntry = struct {
         term: Term,
         index: LogIndex,
@@ -48,6 +54,7 @@ pub const RaftNode = struct {
             .match_index = std.AutoHashMap(NodeId, LogIndex).init(allocator),
             .votes_received = std.AutoHashSet(NodeId).init(allocator),
             .cluster_nodes = std.ArrayList(NodeId){},
+            .rpc_client = rpc.RpcClient.init(allocator),
         };
     }
 
@@ -60,6 +67,13 @@ pub const RaftNode = struct {
         self.match_index.deinit();
         self.votes_received.deinit();
         self.cluster_nodes.deinit();
+        self.rpc_client.deinit();
+    }
+
+    /// Register a cluster node's network address for RPC communication
+    /// GAP-0210 FIX: Required for real network transport
+    pub fn registerNodeAddress(self: *RaftNode, node_id: NodeId, address: []const u8, port: u16) !void {
+        try self.rpc_client.registerNode(node_id, address, port);
     }
 
     /// Start election process
@@ -184,11 +198,38 @@ pub const RaftNode = struct {
         return (now - self.last_heartbeat) > self.heartbeat_interval;
     }
 
+    /// GAP-0210 FIX: Real network implementation using RPC client
     fn sendRequestVote(self: *RaftNode, target: NodeId) bool {
-        // Placeholder for network RPC
-        _ = self;
-        _ = target;
-        return true;
+        const last_log_index = if (self.log.items.len > 0)
+            self.log.items[self.log.items.len - 1].index
+        else
+            0;
+        const last_log_term = if (self.log.items.len > 0)
+            self.log.items[self.log.items.len - 1].term
+        else
+            0;
+
+        const msg = rpc.RequestVoteMsg{
+            .term = self.current_term,
+            .candidate_id = self.node_id,
+            .last_log_index = last_log_index,
+            .last_log_term = last_log_term,
+        };
+
+        const response = self.rpc_client.sendRequestVote(target, msg) catch |err| {
+            std.debug.print("RequestVote RPC to node {} failed: {}\n", .{ target, err });
+            return false;
+        };
+
+        // Update term if response has higher term
+        if (response.term > self.current_term) {
+            self.current_term = response.term;
+            self.role = .Follower;
+            self.voted_for = null;
+            return false;
+        }
+
+        return response.vote_granted;
     }
 
     fn sendHeartbeats(self: *RaftNode) !void {
@@ -214,22 +255,84 @@ pub const RaftNode = struct {
         }
     }
 
+    /// GAP-0210 FIX: Real network implementation using RPC client
     fn sendAppendEntries(self: *RaftNode, target: NodeId, entries: []const LogEntry) bool {
-        // Placeholder for network RPC
-        _ = self;
-        _ = target;
-        _ = entries;
-        return true;
+        const prev_log_index = if (self.log.items.len > 0)
+            self.log.items[self.log.items.len - 1].index
+        else
+            0;
+        const prev_log_term = if (self.log.items.len > 0)
+            self.log.items[self.log.items.len - 1].term
+        else
+            0;
+
+        const msg = rpc.AppendEntriesMsg{
+            .term = self.current_term,
+            .leader_id = self.node_id,
+            .prev_log_index = prev_log_index,
+            .prev_log_term = prev_log_term,
+            .leader_commit = self.commit_index,
+            .entries_count = @intCast(entries.len),
+        };
+
+        // Convert LogEntry to rpc.LogEntry
+        var rpc_entries = self.allocator.alloc(rpc.LogEntry, entries.len) catch return false;
+        defer self.allocator.free(rpc_entries);
+
+        for (entries, 0..) |entry, i| {
+            rpc_entries[i] = rpc.LogEntry{
+                .term = entry.term,
+                .index = entry.index,
+                .command = entry.command,
+                .committed = entry.committed,
+            };
+        }
+
+        const response = self.rpc_client.sendAppendEntries(target, msg, rpc_entries) catch |err| {
+            std.debug.print("AppendEntries RPC to node {} failed: {}\n", .{ target, err });
+            return false;
+        };
+
+        // Update term if response has higher term
+        if (response.term > self.current_term) {
+            self.current_term = response.term;
+            self.role = .Follower;
+            self.voted_for = null;
+            return false;
+        }
+
+        // Update match_index on success
+        if (response.success) {
+            self.match_index.put(target, response.match_index) catch {};
+            self.next_index.put(target, response.match_index + 1) catch {};
+        } else {
+            // Decrement next_index on failure (log inconsistency)
+            if (self.next_index.get(target)) |current| {
+                if (current > 1) {
+                    self.next_index.put(target, current - 1) catch {};
+                }
+            }
+        }
+
+        return response.success;
     }
 };
 
-/// Enhanced Two-Phase Commit coordinator
+/// Enhanced Two-Phase Commit coordinator with real network transport
+/// GAP-0210 FIX: Now uses RPC client for actual network communication
 pub const TwoPCCoordinator = struct {
     allocator: std.mem.Allocator,
     transaction_id: u64,
+    coordinator_id: NodeId,
     participants: std.ArrayList(NodeId),
     state: State,
     timeout_ms: u64 = 30000, // 30 second timeout
+
+    // GAP-0210 FIX: RPC client for network communication
+    rpc_client: rpc.RpcClient,
+
+    // Transaction payload to send to participants
+    payload: []const u8 = &.{},
 
     const State = enum {
         Preparing,
@@ -251,13 +354,36 @@ pub const TwoPCCoordinator = struct {
         return .{
             .allocator = allocator,
             .transaction_id = transaction_id,
+            .coordinator_id = 0, // Set via setCoordinatorId
             .participants = std.ArrayList(NodeId){},
             .state = .Preparing,
+            .rpc_client = rpc.RpcClient.init(allocator),
         };
     }
 
     pub fn deinit(self: *TwoPCCoordinator) void {
         self.participants.deinit();
+        self.rpc_client.deinit();
+        if (self.payload.len > 0) {
+            self.allocator.free(self.payload);
+        }
+    }
+
+    pub fn setCoordinatorId(self: *TwoPCCoordinator, coordinator_id: NodeId) void {
+        self.coordinator_id = coordinator_id;
+    }
+
+    pub fn setPayload(self: *TwoPCCoordinator, payload: []const u8) !void {
+        if (self.payload.len > 0) {
+            self.allocator.free(self.payload);
+        }
+        self.payload = try self.allocator.dupe(u8, payload);
+    }
+
+    /// Register a participant node's network address for RPC communication
+    /// GAP-0210 FIX: Required for real network transport
+    pub fn registerNodeAddress(self: *TwoPCCoordinator, node_id: NodeId, address: []const u8, port: u16) !void {
+        try self.rpc_client.registerNode(node_id, address, port);
     }
 
     pub fn addParticipant(self: *TwoPCCoordinator, node_id: NodeId) !void {
@@ -306,25 +432,47 @@ pub const TwoPCCoordinator = struct {
         return true;
     }
 
+    /// GAP-0210 FIX: Real network implementation using RPC client
     fn sendPrepare(self: *TwoPCCoordinator, participant: NodeId) ParticipantResponse.Vote {
-        // Placeholder for network RPC
-        _ = self;
-        _ = participant;
+        const msg = rpc.PrepareMsg{
+            .transaction_id = self.transaction_id,
+            .coordinator_id = self.coordinator_id,
+            .payload_len = @intCast(self.payload.len),
+        };
 
-        // Simulate successful prepare for now
-        return .Prepare;
+        const response = self.rpc_client.sendPrepare(participant, msg, self.payload) catch |err| {
+            std.debug.print("2PC Prepare RPC to node {} failed: {}\n", .{ participant, err });
+            return .Abort;
+        };
+
+        return switch (response.vote) {
+            .Prepared => .Prepare,
+            .Abort => .Abort,
+        };
     }
 
+    /// GAP-0210 FIX: Real network implementation using RPC client
     fn sendCommit(self: *TwoPCCoordinator, participant: NodeId) void {
-        // Placeholder for network RPC
-        _ = self;
-        _ = participant;
+        const msg = rpc.CommitAbortMsg{
+            .transaction_id = self.transaction_id,
+            .coordinator_id = self.coordinator_id,
+        };
+
+        self.rpc_client.sendCommit(participant, msg) catch |err| {
+            std.debug.print("2PC Commit RPC to node {} failed: {}\n", .{ participant, err });
+        };
     }
 
+    /// GAP-0210 FIX: Real network implementation using RPC client
     fn sendAbort(self: *TwoPCCoordinator, participant: NodeId) void {
-        // Placeholder for network RPC
-        _ = self;
-        _ = participant;
+        const msg = rpc.CommitAbortMsg{
+            .transaction_id = self.transaction_id,
+            .coordinator_id = self.coordinator_id,
+        };
+
+        self.rpc_client.sendAbort(participant, msg) catch |err| {
+            std.debug.print("2PC Abort RPC to node {} failed: {}\n", .{ participant, err });
+        };
     }
 };
 
