@@ -5319,10 +5319,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // CANARY: REQ=REQ-GQL-167; FEATURE="Variable-Length Path Binding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
                         // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-004; FEATURE="ZeroLengthPaths"; ASPECT=EdgeBinding; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
-                        // B07 Fix: For 0-length paths (single node, no edges), edge is null but path is still valid
-                        // For variable-length paths, bind the entire path or the last edge
-                        const last_edge_id: ?u64 = if (path.edges.items.len > 0) path.edges.items[path.edges.items.len - 1] else null;
-                        const edge_ptr: ?*graph_store.Edge = if (last_edge_id) |eid| store.edges.getPtr(eid) else null;
+                        // B07 Fix: For 0-length paths (single node, no edges), edge list is empty but path is still valid
 
                         // Create environment with all matched elements (including path variable if present)
                         var env_count: usize = 0;
@@ -5347,11 +5344,18 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
                         if (rel_var) |var_name| {
                             env_names[env_idx] = var_name;
-                            if (edge_ptr) |ep| {
-                                env_values[env_idx] = Value{ .Edge = ep };
-                            } else {
-                                env_values[env_idx] = Value{ .Null = {} };
+                            // CANARY: REQ=REQ-GQL-VARLEN-RELVAR-LIST; FEATURE="VariableLengthPathRelList"; ASPECT=EdgeListBinding; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-15
+                            // For variable-length paths, bind rel_var to the list of all edges
+                            // This enables all(rel IN r WHERE ...) to iterate over all relationships in the path
+                            var edge_values = try allocator.alloc(Value, path.edges.items.len);
+                            for (path.edges.items, 0..) |eid, i| {
+                                if (store.edges.getPtr(eid)) |ep| {
+                                    edge_values[i] = Value{ .Edge = ep };
+                                } else {
+                                    edge_values[i] = Value{ .Null = {} };
+                                }
                             }
+                            env_values[env_idx] = Value{ .List = edge_values };
                             env_idx += 1;
                         }
                         if (chain_path_var) |var_name| {

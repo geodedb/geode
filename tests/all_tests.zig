@@ -62,6 +62,14 @@ const _advanced_types_operators = @import("advanced_types_operators.zig");
 // Gap Analysis Fix Tests (January 2026)
 const _gap_analysis_fixes = @import("test_gap_analysis_fixes.zig");
 const _unit_gap_0013_0016 = @import("unit_gap_0013_0016_fixes.zig");
+const _gap_analysis_january_2026 = @import("test_gap_analysis_january_2026.zig");
+const _shell_requirements_verification = @import("test_shell_requirements_verification.zig");
+const _gap_0193_impl_verification = @import("test_gap_0193_impl_verification.zig");
+const _gap_0193_high_priority = @import("test_gap_0193_high_priority.zig");
+const _gap_0193_impl_batch_promotion = @import("test_gap_0193_impl_batch_promotion.zig");
+const _gap_0193_priority_categories = @import("test_gap_0193_priority_categories.zig");
+const _gap_0193_remaining_categories = @import("test_gap_0193_remaining_categories.zig");
+const _gap_0193_high_priority_comprehensive = @import("test_gap_0193_high_priority_comprehensive.zig");
 
 // v0.18 feature tests
 const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");
