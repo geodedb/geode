@@ -231,7 +231,8 @@ pub const KeyRegistry = struct {
         std.crypto.random.bytes(&plaintext);
         // Wrap key using KMS client
         const kms = @import("external_kms_client.zig");
-        var client = kms.Client.init(self.allocator.*, self.kms_seed.?);
+        // GAP-0216: Handle potential error from LocalSimulated KMS init
+        var client = try kms.Client.init(self.allocator.*, self.kms_seed.?);
         const env = try client.wrap(plaintext);
         const env_json = try kms.envelopeToJson(env, self.allocator.*);
         const key_ref: DataKeyRef = .{
@@ -431,7 +432,11 @@ pub const KeyRegistry = struct {
                     var wrapped_flag = true;
                     if (self.kms_seed) |seed| {
                         const kms = @import("external_kms_client.zig");
-                        var client = kms.Client.init(self.allocator.*, seed);
+                        // GAP-0216: Handle potential error from LocalSimulated KMS init
+                        var client = kms.Client.init(self.allocator.*, seed) catch {
+                            wrapped_flag = false; // KMS init failed (production block)
+                            continue;
+                        };
                         const parsed = kms.envelopeFromJson(env_slice) catch {
                             wrapped_flag = false; // mark invalid
                             continue;

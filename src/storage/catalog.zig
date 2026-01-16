@@ -1,6 +1,9 @@
 const std = @import("std");
 const storage = @import("storage_page_manager");
 
+// GAP-0215 FIX: Index serialization now properly persists and loads index metadata
+// CANARY: REQ=REQ-CATALOG-INDEX-PERSIST-001; FEATURE="IndexMetadataPersistence"; ASPECT=Storage; STATUS=TESTED; TEST=test_gap_0215_index_serialization; OWNER=storage; UPDATED=2026-01-16
+
 /// Persistent storage catalog for metadata management
 pub const StorageCatalog = struct {
     allocator: std.mem.Allocator,
@@ -170,10 +173,36 @@ pub const StorageCatalog = struct {
             offset += 4;
         }
 
-        // Write index count (placeholder)
+        // GAP-0215 FIX: Write index count and index entries (was placeholder)
         const index_count: u32 = @intCast(self.indexes.count());
         std.mem.writeInt(u32, page[offset..][0..4], index_count, .little);
         offset += 4;
+
+        // GAP-0215 FIX: Write index entries (name, table_name, root_page_id)
+        var index_iter = self.indexes.iterator();
+        while (index_iter.next()) |entry| {
+            const idx_meta = entry.value_ptr;
+
+            // Write index name
+            const idx_name_len: u32 = @intCast(idx_meta.name.len);
+            std.mem.writeInt(u32, page[offset..][0..4], idx_name_len, .little);
+            offset += 4;
+            @memcpy(page[offset .. offset + idx_meta.name.len], idx_meta.name);
+            offset += idx_meta.name.len;
+
+            // Write table name
+            const tbl_name_len: u32 = @intCast(idx_meta.table_name.len);
+            std.mem.writeInt(u32, page[offset..][0..4], tbl_name_len, .little);
+            offset += 4;
+            @memcpy(page[offset .. offset + idx_meta.table_name.len], idx_meta.table_name);
+            offset += idx_meta.table_name.len;
+
+            // Write root page ID and unique flag
+            std.mem.writeInt(u32, page[offset..][0..4], idx_meta.root_page_id, .little);
+            offset += 4;
+            page[offset] = if (idx_meta.unique) 1 else 0;
+            offset += 1;
+        }
 
         // Mark remaining space as unused
         @memset(page[offset..], 0);
@@ -213,9 +242,42 @@ pub const StorageCatalog = struct {
             try self.tables.put(name, table_meta);
         }
 
-        // Read index count (placeholder)
+        // GAP-0215 FIX: Read index count and index entries (was placeholder)
         const index_count = std.mem.readInt(u32, page[offset..][0..4], .little);
-        _ = index_count; // Unused for now
+        offset += 4;
+
+        // GAP-0215 FIX: Read index entries
+        for (0..index_count) |_| {
+            // Read index name
+            const idx_name_len = std.mem.readInt(u32, page[offset..][0..4], .little);
+            offset += 4;
+            const idx_name = try self.allocator.dupe(u8, page[offset .. offset + idx_name_len]);
+            offset += idx_name_len;
+
+            // Read table name
+            const tbl_name_len = std.mem.readInt(u32, page[offset..][0..4], .little);
+            offset += 4;
+            const tbl_name = try self.allocator.dupe(u8, page[offset .. offset + tbl_name_len]);
+            offset += tbl_name_len;
+
+            // Read root page ID and unique flag
+            const root_page_id = std.mem.readInt(u32, page[offset..][0..4], .little);
+            offset += 4;
+            const unique = page[offset] == 1;
+            offset += 1;
+
+            // Create index metadata
+            const idx_meta = IndexMetadata{
+                .name = idx_name,
+                .table_name = tbl_name,
+                .columns = &.{}, // Columns not persisted yet
+                .unique = unique,
+                .root_page_id = root_page_id,
+                .created_at = 0,
+            };
+
+            try self.indexes.put(idx_name, idx_meta);
+        }
     }
 
     /// Create a new table in the catalog

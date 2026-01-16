@@ -1835,15 +1835,89 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid restore path\"}}\n", .{});
     }
 
-    // For verify_only mode, just check if the backup file is readable and valid
+    // GAP-0214 FIX: Real backup file reading and validation
+    // CANARY: REQ=REQ-BACKUP-VERIFY-001; FEATURE="RealBackupVerification"; ASPECT=DataIntegrity; STATUS=TESTED; TEST=test_gap_0214_backup_verify; OWNER=backup; UPDATED=2026-01-16
     if (stmt.verify_only) {
         const file = std.fs.cwd().openFile(stmt.path, .{}) catch |err| {
             return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Cannot open backup file: {s}\"}}\n", .{@errorName(err)});
         };
         defer file.close();
 
-        // Simple validation - could be enhanced with backup manager validation
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Backup file verification completed successfully\"}}\n", .{});
+        // GAP-0214 FIX: Read and validate backup header structure
+        const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
+        const BACKUP_VERSION_MIN: u16 = 1;
+        const BACKUP_VERSION_MAX: u16 = 3;
+
+        // Read backup header
+        const BackupHeader = extern struct {
+            magic: u32,
+            version: u16,
+            backup_type: u8,
+            _pad1: u8 = 0,
+            timestamp: i64,
+            compression: u8,
+            encrypted: bool = false,
+            _padding: [2]u8 = .{0} ** 2,
+            start_lsn: u64 = 0,
+            end_lsn: u64 = 0,
+            parent_backup_id: u128 = 0,
+        };
+
+        var header_bytes: [@sizeOf(BackupHeader)]u8 = undefined;
+        const bytes_read = file.readAll(&header_bytes) catch |err| {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Failed to read backup header: {s}\"}}\n", .{@errorName(err)});
+        };
+
+        if (bytes_read < @sizeOf(BackupHeader)) {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup file: header too short (got {} bytes, expected {})\"}}\n", .{ bytes_read, @sizeOf(BackupHeader) });
+        }
+
+        // Parse header and validate
+        const header: *const BackupHeader = @ptrCast(&header_bytes);
+
+        // Validate magic number
+        if (header.magic != BACKUP_MAGIC) {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup file: bad magic number (expected 0x{X:0>8}, got 0x{X:0>8})\"}}\n", .{ BACKUP_MAGIC, header.magic });
+        }
+
+        // Validate version
+        if (header.version < BACKUP_VERSION_MIN or header.version > BACKUP_VERSION_MAX) {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Unsupported backup version: {} (supported: {}-{})\"}}\n", .{ header.version, BACKUP_VERSION_MIN, BACKUP_VERSION_MAX });
+        }
+
+        // Validate timestamp (must be positive and not in the future)
+        const current_time = std.time.milliTimestamp();
+        if (header.timestamp <= 0 or header.timestamp > current_time + 86400000) { // Allow 1 day clock skew
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup timestamp: {}\"}}\n", .{header.timestamp});
+        }
+
+        // Validate LSN ordering (end_lsn must be >= start_lsn)
+        if (header.end_lsn < header.start_lsn) {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup LSN range: start={} > end={}\"}}\n", .{ header.start_lsn, header.end_lsn });
+        }
+
+        // Get file size for reporting
+        const file_stat = file.stat() catch |err| {
+            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Failed to get file stats: {s}\"}}\n", .{@errorName(err)});
+        };
+
+        // Backup type description
+        const backup_type_name = switch (header.backup_type) {
+            0 => "full",
+            1 => "incremental",
+            2 => "differential",
+            else => "unknown",
+        };
+
+        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Backup verification successful\",\"version\":{},\"type\":\"{s}\",\"timestamp\":{},\"encrypted\":{},\"start_lsn\":{},\"end_lsn\":{},\"size_bytes\":{}}}\n", .{
+            header.version,
+            backup_type_name,
+            header.timestamp,
+            header.encrypted,
+            header.start_lsn,
+            header.end_lsn,
+            file_stat.size,
+        });
     }
 
     // Determine target timestamp for point-in-time recovery

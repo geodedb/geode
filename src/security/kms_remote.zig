@@ -418,7 +418,8 @@ pub const RemoteKmsClient = struct {
         // If not connected, fall back to local generation
         if (!self.connected) {
             const ext = @import("external_kms_client.zig");
-            var client = ext.Client.init(self.allocator, 0x12345678);
+            // GAP-0216: Handle potential error from LocalSimulated KMS init
+            var client = try ext.Client.init(self.allocator, 0x12345678);
             var key: [32]u8 = undefined;
             std.crypto.random.bytes(&key);
             const ext_envelope = try client.wrap(key);
@@ -457,7 +458,8 @@ pub const RemoteKmsClient = struct {
         // If not connected, fall back to local unwrapping
         if (!self.connected) {
             const ext = @import("external_kms_client.zig");
-            var client = ext.Client.init(self.allocator, 0x12345678);
+            // GAP-0216: Handle potential error from LocalSimulated KMS init
+            var client = try ext.Client.init(self.allocator, 0x12345678);
             const ext_envelope = ext.Envelope{
                 .version = env.version,
                 .alg = env.alg,

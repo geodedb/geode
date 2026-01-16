@@ -31,7 +31,7 @@ variables:
 
 # =============================================================================
 # Governance Stage - Status and Feature Flag Checks
-# CANARY: REQ=REQ-CI-GOV-001; FEATURE="CI Governance Checks"; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
+# CANARY: REQ=REQ-CI-GOV-001; FEATURE="CI Governance Checks"; STATUS=TESTED; TEST=GAP-0219-CI-Tests-Block-Merge; OWNER=ci; UPDATED=2026-01-16
 # GAP-0160: Adds CI enforcement for status-generate and no-feature-flags
 # =============================================================================
 
@@ -118,11 +118,12 @@ test-zig-unit:
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
-  allow_failure: true
+  # GAP-0219 FIX: Unit tests must block merge on failure
+  allow_failure: false
 
 # =============================================================================
 # Test Stage - ReleaseSafe Build and Test (REQ-0008 enforcement)
-# CANARY: REQ=REQ-0008; FEATURE="Platform Build Requirements"; ASPECT=ReleaseSafe; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
+# CANARY: REQ=REQ-0008; FEATURE="Platform Build Requirements"; ASPECT=ReleaseSafe; STATUS=TESTED; TEST=test-zig-release-safe; OWNER=ci; UPDATED=2026-01-16
 # GAP-0183: Enforces ReleaseSafe build requirements per REQ-0008
 # =============================================================================
 
@@ -239,7 +240,8 @@ test-geodetestlab-comprehensive:
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
-  allow_failure: true
+  # GAP-0219 FIX: Comprehensive tests should block merge to ensure quality
+  allow_failure: false
 
 # =============================================================================
 # Release Stage - GoReleaser with Zig Cross-Compilation

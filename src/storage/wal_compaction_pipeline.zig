@@ -64,10 +64,104 @@ pub const Pipeline = struct {
         return .{ .checkpoint = did_ckpt, .compacted = did_compact, .archived = did_archive };
     }
 
-    /// Archival hook placeholder - would upload / snapshot compacted WAL range to cold storage.
+    /// GAP-0217 FIX: Real WAL archival hook implementation
+    /// Archives compacted WAL segments to a backup location
+    /// CANARY: REQ=REQ-GQL-WAL-ARCHIVE-001; FEATURE="RealWALArchival"; ASPECT=ColdStorage; STATUS=TESTED; TEST=test_gap_0217_wal_archive; OWNER=storage; UPDATED=2026-01-16
     fn fireArchivalHook(self: *Pipeline, upto_lsn: u64) !void {
-        _ = self; // currently unused
-        // For now just log; tests will intercept via scanning stdout/stderr if needed.
-        std.log.info("archival hook fired upto_lsn={d}", .{upto_lsn});
+        const archive_dir = "wal_archive";
+        const timestamp = std.time.milliTimestamp();
+
+        // Create archive directory if it doesn't exist
+        std.fs.cwd().makePath(archive_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => {
+                std.log.err("WAL archival failed: cannot create archive dir: {}", .{err});
+                return err;
+            },
+        };
+
+        // Generate archive filename with LSN and timestamp
+        var archive_name_buf: [128]u8 = undefined;
+        const archive_name = std.fmt.bufPrint(&archive_name_buf, "{s}/wal_archive_{d}_{d}.bin", .{
+            archive_dir,
+            upto_lsn,
+            timestamp,
+        }) catch {
+            std.log.err("WAL archival failed: filename buffer overflow", .{});
+            return error.BufferOverflow;
+        };
+
+        // Create archive file and write header
+        const archive_file = std.fs.cwd().createFile(archive_name, .{}) catch |err| {
+            std.log.err("WAL archival failed: cannot create archive file: {}", .{err});
+            return err;
+        };
+        defer archive_file.close();
+
+        // Write archive header with magic, version, and LSN info
+        const ArchiveHeader = extern struct {
+            magic: u32 = 0x57414C41, // "WALA" (WAL Archive)
+            version: u16 = 1,
+            _pad: u16 = 0,
+            lsn_start: u64,
+            lsn_end: u64,
+            timestamp: i64,
+            checksum: u32 = 0,
+        };
+
+        var header = ArchiveHeader{
+            .lsn_start = self.last_archival_lsn - self.config.archival_window,
+            .lsn_end = upto_lsn,
+            .timestamp = timestamp,
+        };
+
+        // Compute simple checksum of header fields
+        header.checksum = @truncate(header.lsn_start ^ header.lsn_end ^ @as(u64, @bitCast(header.timestamp)));
+
+        // Write header
+        const header_bytes = std.mem.asBytes(&header);
+        archive_file.writeAll(header_bytes) catch |err| {
+            std.log.err("WAL archival failed: write header error: {}", .{err});
+            return err;
+        };
+
+        // Get WAL data to archive (read from WAL manager)
+        // Archive the compacted WAL segments by reading from the WAL file
+        if (self.w.file) |wal_file| {
+            // Read WAL data up to the specified LSN
+            const current_pos = try wal_file.getPos();
+            try wal_file.seekTo(0);
+
+            // Read WAL entries and write to archive
+            var buffer: [4096]u8 = undefined;
+            var total_archived: usize = 0;
+            const max_archive_size = upto_lsn * 64; // Approximate: LSN * avg entry size
+
+            while (total_archived < max_archive_size) {
+                const bytes_read = wal_file.read(&buffer) catch break;
+                if (bytes_read == 0) break;
+
+                archive_file.writeAll(buffer[0..bytes_read]) catch |err| {
+                    std.log.err("WAL archival failed: write data error: {}", .{err});
+                    return err;
+                };
+                total_archived += bytes_read;
+            }
+
+            // Restore original position
+            try wal_file.seekTo(current_pos);
+
+            std.log.info("WAL archival completed: lsn={d} file={s} size={d} bytes", .{
+                upto_lsn,
+                archive_name,
+                total_archived + header_bytes.len,
+            });
+        } else {
+            // No WAL file available, just write the header as a marker
+            std.log.info("WAL archival marker created: lsn={d} file={s} (no WAL data)", .{
+                upto_lsn,
+                archive_name,
+            });
+        }
     }
 };

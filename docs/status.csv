@@ -14,7 +14,7 @@ REQ-0006,Distributed Query Federation,Verification,TESTED,tests/test_requirement
 REQ-0006,DistributedQuery,Federation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-0007,Tooling & Governance Requirements,Tooling,TESTED,tools/canary_main.zig,,tools,2026-01-15,tools/canary_main.zig
 REQ-0008,Platform Build Requirements,GeodeTestlab,IMPL,,,ci,2026-01-14,geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml
-REQ-0008,Platform Build Requirements,ReleaseSafe,IMPL,,,ci,2026-01-14,.gitlab-ci.yml
+REQ-0008,Platform Build Requirements,ReleaseSafe,TESTED,test-zig-release-safe,,ci,2026-01-16,.gitlab-ci.yml
 REQ-0008,Platform Build Requirements,Verification,TESTED,tests/test_requirement_traceability.zig,,ci,2026-01-15,tests/test_requirement_traceability.zig
 REQ-0009,Performance Targets,Benchmark,BENCHED,,BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified_Run,ops-team,2026-01-15,benchmarks/benchmark_monitoring_metrics_variance_unified.zig
 REQ-2PC-001,2PC,PreparePhase,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_final_batch.zig
@@ -217,6 +217,7 @@ REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,202
 REQ-AUTH-TOKEN-001,AuthToken,Testing,IMPL,TestCANARY_REQ_AUTH_TOKEN_001,,cli,2025-10-14,src/cli/main.zig
 REQ-AUTH-TOKEN-001,AuthToken,TokenValidation,TESTED,,,cli,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,IMPL,,,cli,2026-01-10,src/cli/backup_cli.zig
+REQ-BACKUP-ERROR-HANDLING-001,BackupErrorHandling,Security,TESTED,test_gap_0221_backup_error_handling,,cli,2026-01-16,src/cli/backup_cli.zig
 REQ-BACKUP-FULL-LSN-001,FullBackupLSN,LSNTracking,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
 REQ-BACKUP-HEADER-LSN-001,BackupHeaderLSN,MetadataStorage,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
 REQ-BACKUP-HEX-001,SecureHexKeyParsing,SECURITY,IMPL,,,storage,2026-01-13,src/storage/backup.zig
@@ -239,6 +240,7 @@ REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,IMPL,,,cli,2026-01-09,src/cli
 REQ-BACKUP-RESTORE-003,Backup Restore Manager,LocalRestoreImpl,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-BACKUP-TLS-001,BackupTLS,CertVerification,TESTED,,,cli,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-BACKUP-TLS-001,BackupTLSCertVerification,Security,IMPL,,,cli,2026-01-13,src/cli/backup_cli.zig
+REQ-BACKUP-VERIFY-001,RealBackupVerification,DataIntegrity,TESTED,test_gap_0214_backup_verify,,backup,2026-01-16,src/server/query_executor.zig
 REQ-BACKUP-WAL-LSN-001,WalLSNTracking,CurrentPosition,IMPL,,,backup,2026-01-14,src/server/backup_manager.zig
 REQ-BENCHMARK-ABAC-001,ABAC Benchmark,Documentation,IMPL,,,security,2026-01-14,BENCHMARK_REPORT.md
 REQ-BENCHMARK-AUDIT-001,Audit Latency Benchmark,Performance,IMPL,,,monitoring,2026-01-14,benchmarks/benchmark_audit_latency.zig
@@ -283,6 +285,7 @@ REQ-BUILTIN-TYPE-001,BuiltinFunctions,TypeFunctions,TESTED,,,builtins,2026-01-16
 REQ-C4-001,MemoryLeakFix,Environment,IMPLEMENTED,,,core,2025-10-17,src/value_types.zig
 REQ-CALLSITE-INVOKE-001,CallSite,FunctionInvocation,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-CALLSITE-PROC-001,CallSite,ProcedureCall,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
+REQ-CATALOG-INDEX-PERSIST-001,IndexMetadataPersistence,Storage,TESTED,test_gap_0215_index_serialization,,storage,2026-01-16,src/storage/catalog.zig
 REQ-CDC-ENGINE-001,CDC Engine,ModuleStructure,TESTED,test_gap_0193_impl_verification.zig,,cdc,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-CDC-FILE-001,CDC File Sink,Streaming,IMPL,,,streaming,2026-01-09,src/streaming/cdc.zig
 REQ-CDC-HTTP-001,CDCWebhookHTTP,Request,IMPL,,,cdc,2026-01-09,src/cdc/webhook_sink.zig
@@ -1762,6 +1765,7 @@ REQ-GQL-KMS-CONFIG-001,KMS Configuration,SECURITY,TESTED,tests/test_key_rotation
 REQ-GQL-KMS-LOCALDEV-001,AES-GCM Local KMS,SECURITY,IMPL,,,security,2026-01-12,src/security/kms.zig
 REQ-GQL-KMS-LOCALDEV-002,AES-GCM Local KMS Unwrap,SECURITY,IMPL,,,security,2026-01-12,src/security/kms.zig
 REQ-GQL-KMS-LOCALSIM-001,LocalSimulated KMS Client,SECURITY,TESTED,tests/test_key_rotation_kms_envelopes.zig,,security,2026-01-15,src/security/external_kms_client.zig
+REQ-GQL-KMS-PRODSAFE-001,LocalSimulated KMS Production Block,SECURITY,TESTED,test_gap_0216_localsim_production_block,,security,2026-01-16,src/security/external_kms_client.zig
 REQ-GQL-KMS-PRODSAFE-001,Production KMS Safety Check,SECURITY,IMPL,,,security,2026-01-12,src/security/kms.zig
 REQ-GQL-KMS-PRODSAFE-002,KMS Provider Init Safety,SECURITY,IMPL,,,security,2026-01-12,src/security/kms.zig
 REQ-GQL-KSHELL-001,KShellDecomposition,Community,IMPL,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
@@ -2017,6 +2021,7 @@ REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,TestCANARY_REQ_GQL_T
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect,,security,2025-09-26,tests/test_remote_kms_attestation.zig
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub,,security,2025-09-26,tests/canary_remote_kms.zig
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect,,security,2025-09-26,tests/test_remote_kms_unwrap_attest.zig
+REQ-GQL-TDE-ATTEST-REAL-001,RealEd25519Attestation,SECURITY,TESTED,test_gap_0211_ed25519_attestation,,security,2026-01-16,src/security/tde.zig
 REQ-GQL-TDE-AWS-001,AwsKmsIntegration,SECURITY,TESTED,tests/test_key_rotation_kms_envelopes.zig,,security,2026-01-15,src/security/external_kms_client.zig
 REQ-GQL-TDE-BACKUP-KEY-001,KeyBackupHandling,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_BACKUP_KEY_001_RoundTrip,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-BACKUP-KEY-001,KeyBackupHandling,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_BACKUP_KEY_001_RoundTrip,,security,2025-09-26,src/security/backup_key_envelope.zig
@@ -2040,6 +2045,7 @@ REQ-GQL-TDE-KEYWRAP-001,AES-GCM Key Wrapping,SECURITY,TESTED,tests/test_key_rota
 REQ-GQL-TDE-KEYWRAP-002,AES-GCM Key Unwrapping,SECURITY,TESTED,tests/test_key_rotation_kms_envelopes.zig,,security,2026-01-15,src/security/key_provider.zig
 REQ-GQL-TDE-KMS-001,TDEKMSIntegration,SECURITY,IMPL,tests/test_tde_kms_integration.zig,,security,2025-10-05,src/security/tde_kms_integration.zig
 REQ-GQL-TDE-KMS-001,TDEKMSIntegration,SECURITY,TESTED,TestCANARY_REQ_GQL_TDE_KMS_001_ComprehensiveTDEKMS,,security,2025-10-05,tests/test_tde_kms_integration.zig
+REQ-GQL-TDE-KMS-CONN-001,RealKMSConnectionTest,SECURITY,TESTED,test_gap_0212_kms_connection,,security,2026-01-16,src/security/tde.zig
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,BENCHED,,BenchmarkCANARY_REQ_GQL_TDE_OLTP_PERF_001,perf,2025-09-26,benchmarks/benchmark_tde_oltp_overhead.zig
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,TESTED,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold,,perf,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,TESTED,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold,,perf,2025-09-26,tests/test_tde_oltp_overhead_threshold.zig
@@ -2053,6 +2059,7 @@ REQ-GQL-TDE-PAGE-001,PageEncryption,SECURITY,TESTED,TestPageEncryptionRoundTrip,
 REQ-GQL-TDE-PAGE-002,AES-GCM Page Decryption,SECURITY,TESTED,tests/test_tde_kms_integration.zig,,security,2026-01-15,src/storage/crypto_simple.zig
 REQ-GQL-TDE-PERF-001,TDEOverheadBenchmark,PERFORMANCE,TESTED,Test_tde_aead_overhead_threshold,,perf,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-PERF-001,TransparentDataEncryption,Performance,TESTED,tests/test_requirement_traceability.zig,,security,2026-01-15,tests/test_requirement_traceability.zig
+REQ-GQL-TDE-PRIV-001,RealRBACPrivilegeCheck,SECURITY,TESTED,test_gap_0213_privilege_check,,security,2026-01-16,src/security/tde.zig
 REQ-GQL-TDE-RANDOM-001,Cryptographic Key Generation,SECURITY,TESTED,tests/test_key_rotation_kms_envelopes.zig,,security,2026-01-15,src/security/key_provider.zig
 REQ-GQL-TDE-VAULT-001,VaultTransitKMS,SECURITY,TESTED,tests/test_key_rotation_kms_envelopes.zig,,security,2026-01-15,src/security/external_kms_client.zig
 REQ-GQL-TDE-WAL-001,AES-GCM WAL Encryption,SECURITY,TESTED,tests/test_tde_kms_integration.zig,,security,2026-01-15,src/storage/crypto_simple.zig
@@ -2124,6 +2131,7 @@ REQ-GQL-VECTOR-JACCARD-001,Jaccard Distance,VectorMetric,IMPL,TestCANARY_REQ_GQL
 REQ-GQL-VECTOR-OPS-001,Advanced Vector Operations Integration,Testing,TESTED,TestCANARY_REQ_GQL_VECTOR_OPS_001_Integration,,vector-team,2025-10-04,tests/test_vector_operations_integration.zig
 REQ-GQL-VECTOR-TYPES-001,Vector Types Implementation,Types,IMPL,TestCANARY_REQ_GQL_VECTOR_TYPES_001_All,,types,2025-01-03,src/types/vector.zig
 REQ-GQL-VECTOR-TYPES-001,VectorTypes,Implementation,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch2_engine.zig
+REQ-GQL-WAL-ARCHIVE-001,RealWALArchival,ColdStorage,TESTED,test_gap_0217_wal_archive,,storage,2026-01-16,src/storage/wal_compaction_pipeline.zig
 REQ-GQL-WCOJ-001,Worst-Case Optimal Joins,Planner,IMPL,TestCANARY_WCOJ,,planner,2025-09-29,src/planner/wcoj.zig
 REQ-GQL-WCOJ-TEST,WCOJ Test Suite,Testing,TESTED,TestCANARY_WCOJ_Suite,,test,2025-09-29,tests/test_wcoj.zig
 REQ-GQL-WITH-CHAIN-001,ChainedWithClauses,ParserSupport,IMPL,,,parser,2025-12-24,src/gql/parser.zig
@@ -2444,6 +2452,7 @@ REQ-MEM-SAFETY-003,MemorySafety,BoundsChecking,TESTED,test_gap_0193_impl_batch_p
 REQ-MEM-SAFETY-004,MemorySafety,NullSafety,TESTED,test_gap_0193_impl_batch_promotion.zig,,core,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-MEM-SAFETY-005,MemorySafety,ErrorHandling,TESTED,test_gap_0193_impl_batch_promotion.zig,,core,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-MEM-SAFETY-006,MemorySafety,SliceValidation,TESTED,test_gap_0193_impl_batch_promotion.zig,,core,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
+REQ-MEM-SENTINEL-001,RealSentinelAllocator,MemorySafety,TESTED,test_gap_0218_sentinel_alloc,,memory,2026-01-16,src/sentinel.zig
 REQ-META-001,MetadataIntegration,DbLabels,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-META-002,MetadataIntegration,DbRelTypes,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-META-003,MetadataIntegration,DbPropertyKeys,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig

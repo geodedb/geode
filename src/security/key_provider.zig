@@ -166,7 +166,8 @@ fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     const seed = std.mem.readInt(u64, seed_digest[0..8], .little);
 
     const kms = @import("external_kms_client.zig");
-    var client = kms.Client.init(allocator, seed);
+    // GAP-0216: Handle potential error from LocalSimulated KMS init
+    var client = try kms.Client.init(allocator, seed);
 
     // Generate cryptographically secure random keys using std.crypto.random
     // CANARY: REQ=REQ-GQL-TDE-RANDOM-001; FEATURE="Cryptographic Key Generation"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15

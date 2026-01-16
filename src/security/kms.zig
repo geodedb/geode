@@ -218,7 +218,8 @@ pub const KMSProvider = struct {
 
         const seed = self.config.seed orelse 0x1234567890ABCDEF;
         if (self.external_client == null) {
-            self.external_client = external_kms.Client.init(self.allocator, seed);
+            // GAP-0216: Handle potential error from LocalSimulated KMS init
+            self.external_client = try external_kms.Client.init(self.allocator, seed);
         }
 
         var plaintext_32: [32]u8 = undefined;
@@ -246,7 +247,8 @@ pub const KMSProvider = struct {
 
         const seed = self.config.seed orelse 0x1234567890ABCDEF;
         if (self.external_client == null) {
-            self.external_client = external_kms.Client.init(self.allocator, seed);
+            // GAP-0216: Handle potential error from LocalSimulated KMS init
+            self.external_client = try external_kms.Client.init(self.allocator, seed);
         }
 
         // Parse envelope from metadata

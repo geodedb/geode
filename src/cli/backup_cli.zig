@@ -14,6 +14,9 @@ const migration = @import("migration");
 // GAP-0137 SECURITY FIX: Add TLS certificate verification support for backup/migrate CLI
 // CANARY: REQ=REQ-BACKUP-TLS-001; FEATURE="BackupTLSCertVerification"; ASPECT=Security; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-13
 
+// GAP-0221 SECURITY FIX: Replace silent catch 0 with logged error handling
+// CANARY: REQ=REQ-BACKUP-ERROR-HANDLING-001; FEATURE="BackupErrorHandling"; ASPECT=Security; STATUS=TESTED; TEST=test_gap_0221_backup_error_handling; OWNER=cli; UPDATED=2026-01-16
+
 // Exit codes for consistency with main CLI
 const ExitCode = enum(u8) {
     success = 0,
@@ -358,7 +361,11 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                         if (dir.openFile(entry.name, .{})) |file| {
                             defer file.close();
                             var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
-                            const bytes_read = file.readAll(&header_buf) catch 0;
+                            // GAP-0221 FIX: Log read errors instead of silent catch 0
+                            const bytes_read = file.readAll(&header_buf) catch |err| blk: {
+                                std.log.debug("Failed to read backup header: {}", .{err});
+                                break :blk 0;
+                            };
                             if (bytes_read == @sizeOf(BackupHeader)) {
                                 const header = @as(*const BackupHeader, @ptrCast(@alignCast(&header_buf))).*;
                                 if (header.magic == BACKUP_MAGIC) {
@@ -462,7 +469,11 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
     // Read first few bytes to detect format
     var magic_buf: [4]u8 = undefined;
-    const magic_read = file.readAll(&magic_buf) catch 0;
+    // GAP-0221 FIX: Log read errors instead of silent catch 0
+    const magic_read = file.readAll(&magic_buf) catch |err| blk: {
+        std.log.debug("Failed to read magic bytes: {}", .{err});
+        break :blk 0;
+    };
 
     // Check for gzip magic (0x1f 0x8b)
     const is_gzip_magic = magic_read >= 2 and magic_buf[0] == 0x1f and magic_buf[1] == 0x8b;
@@ -505,7 +516,11 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         file.seekTo(0) catch {};
 
         var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
-        const bytes_read = file.readAll(&header_buf) catch 0;
+        // GAP-0221 FIX: Log read errors instead of silent catch 0
+        const bytes_read = file.readAll(&header_buf) catch |err| blk: {
+            std.log.debug("Failed to read backup header: {}", .{err});
+            break :blk 0;
+        };
 
         if (bytes_read == @sizeOf(BackupHeader)) {
             const header = @as(*const BackupHeader, @ptrCast(@alignCast(&header_buf))).*;
@@ -528,7 +543,11 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
                 // Try to read catalog size (next 8 bytes after header)
                 var catalog_size_buf: [8]u8 = undefined;
-                const catalog_bytes = file.readAll(&catalog_size_buf) catch 0;
+                // GAP-0221 FIX: Log read errors instead of silent catch 0
+                const catalog_bytes = file.readAll(&catalog_size_buf) catch |err| blk: {
+                    std.log.debug("Failed to read catalog size: {}", .{err});
+                    break :blk 0;
+                };
                 if (catalog_bytes == 8) {
                     const catalog_size = std.mem.readInt(u64, &catalog_size_buf, .little);
                     std.debug.print("  Catalog Size:  {} bytes\n", .{catalog_size});
@@ -2395,7 +2414,11 @@ const SimplifiedRestoreManager = struct {
             var payload: ?[]u8 = null;
             if (plen > 0) {
                 payload = self.allocator.alloc(u8, plen) catch break;
-                const got = file.readAll(payload.?) catch 0;
+                // GAP-0221 FIX: Log read errors for WAL payload
+                const got = file.readAll(payload.?) catch |err| blk: {
+                    std.log.warn("WAL payload read failed: {}", .{err});
+                    break :blk 0;
+                };
                 if (got != plen) {
                     if (payload) |p| self.allocator.free(p);
                     break;
@@ -2405,7 +2428,11 @@ const SimplifiedRestoreManager = struct {
 
             // Read and verify sentinel
             var sentinel_buf: [4]u8 = undefined;
-            const sn = file.readAll(&sentinel_buf) catch 0;
+            // GAP-0221 FIX: Log read errors for WAL sentinel
+            const sn = file.readAll(&sentinel_buf) catch |err| blk: {
+                std.log.warn("WAL sentinel read failed: {}", .{err});
+                break :blk 0;
+            };
             if (sn != 4) break;
             const sent_val = std.mem.readInt(u32, &sentinel_buf, .little);
             if (sent_val != 0xEC0DDBAD) break;

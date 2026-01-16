@@ -702,7 +702,8 @@ pub fn createKmsProvider(allocator: std.mem.Allocator, config: KmsConfig) !KmsPr
                 break :blk std.mem.readInt(u64, digest[0..8], .little);
             };
             const client_ptr = try allocator.create(Client);
-            client_ptr.* = Client.init(allocator, seed);
+            // GAP-0216: Handle potential error from LocalSimulated KMS init
+            client_ptr.* = try Client.init(allocator, seed);
             return .{
                 .ctx = client_ptr,
                 .vtable = &local_vtable,
@@ -768,18 +769,27 @@ pub const Envelope = struct {
 /// Uses local AES-256-GCM with deterministic key derived from seed
 /// WARNING: This is NOT a real KMS integration. Production must use VaultTransit or AwsKms.
 /// CANARY: REQ=REQ-GQL-KMS-LOCALSIM-001; FEATURE="LocalSimulated KMS Client"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
+/// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-001; FEATURE="LocalSimulated KMS Production Block"; ASPECT=SECURITY; STATUS=TESTED; TEST=test_gap_0216_localsim_production_block; OWNER=security; UPDATED=2026-01-16
+/// GAP-0216 SECURITY FIX: Block LocalSimulated KMS in production unless GEODE_ALLOW_LOCAL_KMS env var is set
 pub const Client = struct {
     allocator: std.mem.Allocator,
     kek: [32]u8, // simulated Key Encryption Key (would be remote / HSM-controlled)
     prng: std.Random.DefaultPrng,
 
-    /// Initialize LocalSimulated client with production safety warning
-    /// In production builds, this will log a security warning
-    pub fn init(allocator: std.mem.Allocator, seed: u64) Client {
-        // Production safety warning
+    /// Initialize LocalSimulated client
+    /// GAP-0216 SECURITY FIX: Block LocalSimulated in production builds unless GEODE_ALLOW_LOCAL_KMS is set
+    pub fn init(allocator: std.mem.Allocator, seed: u64) !Client {
+        // GAP-0216: Production safety check - block unless explicitly allowed
         if (is_production_build) {
-            std.log.warn("SECURITY WARNING: Using LocalSimulated KMS client in production build. " ++
-                "This is NOT secure. Configure VaultTransit or AwsKms for production.", .{});
+            // Check for explicit override via environment variable
+            if (std.process.getenv("GEODE_ALLOW_LOCAL_KMS")) |_| {
+                std.log.warn("SECURITY WARNING: LocalSimulated KMS allowed in production via GEODE_ALLOW_LOCAL_KMS. " ++
+                    "This is NOT secure. Configure VaultTransit or AwsKms for production.", .{});
+            } else {
+                std.log.err("SECURITY ERROR: LocalSimulated KMS cannot be used in production builds. " ++
+                    "Set GEODE_ALLOW_LOCAL_KMS=1 to override (NOT RECOMMENDED) or configure VaultTransit/AwsKms.", .{});
+                return error.InsecureKmsInProduction;
+            }
         }
 
         var prng = std.Random.DefaultPrng.init(seed);
@@ -883,7 +893,8 @@ pub fn envelopeFromJson(json: []const u8) !Envelope {
 test "external kms client wrap/unwrap round trip" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    var client = Client.init(gpa.allocator(), 0xDEEFA55E);
+    // GAP-0216: Handle error union from init (succeeds in test mode)
+    var client = try Client.init(gpa.allocator(), 0xDEEFA55E);
     var key: [32]u8 = undefined;
     @memset(&key, 0x11);
     const env1 = try client.wrap(key);
