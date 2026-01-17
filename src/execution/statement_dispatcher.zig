@@ -118,7 +118,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .Delete => |d| {
             // Check write permission
             try checkPermission(context, .Write);
-            // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-002; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphContext; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-002; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphContext; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             const delete_graph = if (context.session_state) |session| session.graph else null;
             return executeDelete(allocator, d, delete_graph);
         },

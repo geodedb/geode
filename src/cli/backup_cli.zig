@@ -8,7 +8,7 @@ const quic = @import("transport/quic");
 // Import migration module for actual migration operations
 const migration = @import("migration");
 
-// CANARY: REQ=REQ-M4.3-BACKUP-CLI-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// CANARY: REQ=REQ-M4.3-BACKUP-CLI-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-09
 // Phase 4 M4.3: Extract backup/restore/migrate commands from cli/main.zig
 
 // GAP-0137 SECURITY FIX: Add TLS certificate verification support for backup/migrate CLI

@@ -79,7 +79,7 @@ pub const Node = struct {
     id: u64,
     labels: [][]const u8,
     properties: std.StringHashMap(PropertyValue),
-    // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphTag; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphTag; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Graph name this node belongs to - enables per-graph data isolation
     graph_name: []const u8 = "default",
 };
@@ -90,7 +90,7 @@ pub const Edge = struct {
     to_id: u64,
     label: []const u8,
     properties: std.StringHashMap(PropertyValue),
-    // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphTag; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphTag; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Graph name this edge belongs to - enables per-graph data isolation
     graph_name: []const u8 = "default",
 };
@@ -214,7 +214,7 @@ pub const GraphStore = struct {
     }
 
     // Clear only nodes and edges for a specific graph
-    // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=ClearGraphNodes; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=ClearGraphNodes; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-23
     pub fn clearNodesForGraph(self: *GraphStore, graph_name: []const u8) void {
         // Collect node IDs to remove (can't modify while iterating)
         var nodes_to_remove = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return;
@@ -286,7 +286,7 @@ pub const GraphStore = struct {
         }
     }
 
-    // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create node with optional graph name for per-graph data isolation
     pub fn createNodeWithGraph(self: *GraphStore, labels: [][]const u8, graph_name: []const u8) !u64 {
         // Generate UUIDv7-style time-based unique ID
@@ -481,7 +481,7 @@ pub const GraphStore = struct {
         return self.nodes.count();
     }
 
-    // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create edge with optional graph name for per-graph data isolation
     pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
         // Generate UUIDv7-style time-based unique ID
@@ -904,7 +904,7 @@ pub const GraphStore = struct {
                 }
             }
 
-            // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNamePersistence; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNamePersistence; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             // Write graph_name length and graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &graph_name_len_buf, @intCast(node.graph_name.len), .little);
@@ -1029,7 +1029,7 @@ pub const GraphStore = struct {
                 }
             }
 
-            // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNamePersistence; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNamePersistence; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             // Write graph_name length and graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &graph_name_len_buf, @intCast(edge.graph_name.len), .little);
@@ -1444,7 +1444,7 @@ pub const GraphStore = struct {
                 try node.properties.put(key_data, value);
             }
 
-            // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNameLoad; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNameLoad; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             // Read graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
             if ((try file.read(&graph_name_len_buf)) < 4) break;
@@ -1536,7 +1536,7 @@ pub const GraphStore = struct {
                 try properties.put(key_data, value);
             }
 
-            // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNameLoad; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNameLoad; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             // Read graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
             if ((try file.read(&graph_name_len_buf)) < 4) break;
@@ -1561,7 +1561,7 @@ pub const GraphStore = struct {
         }
     }
 
-    // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
     // NoSave versions of mutation methods for transaction undo/redo operations
     // These methods modify the store without triggering auto-save to disk
 

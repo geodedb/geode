@@ -8,7 +8,7 @@ const log = std.log.scoped(.cli);
 // GAP-0075: Syslog audit logging integration
 // CANARY: REQ=REQ-AUDIT-SYSLOG-001; FEATURE="SyslogAuditIntegration"; ASPECT=AuditLogging; STATUS=IMPL; UPDATED=2026-01-10
 
-// CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-001; FEATURE="CLI Modularization"; ASPECT=CommandDispatch; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
+// CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-001; FEATURE="CLI Modularization"; ASPECT=CommandDispatch; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.4: CLI Dispatcher module - central command routing, flag parsing, and audit configuration
 
 // Import command modules

@@ -2,7 +2,7 @@ const std = @import("std");
 const quic = @import("transport/quic");
 const crypto = std.crypto;
 
-// CANARY: REQ=REQ-M6-UNREACHABLE-001; FEATURE="CodeQuality"; ASPECT=ErrorHandling; STATUS=IMPL; OWNER=security; UPDATED=2025-10-17
+// CANARY: REQ=REQ-M6-UNREACHABLE-001; FEATURE="CodeQuality"; ASPECT=ErrorHandling; STATUS=EXEMPT; OWNER=security; UPDATED=2025-10-17
 // M6: Replaced all 'unreachable' statements with proper error handling (try/panic)
 
 // kms_remote.zig

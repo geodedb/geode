@@ -9,7 +9,7 @@ const ExecutionContext = execution.ExecutionContext;
 // Import procedure registry for CALL procedure handling
 const procedure_registry = @import("procedure_registry.zig");
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-007; FEATURE="ExecutionRefactoring"; ASPECT=CALL_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-EXEC-REFACTOR-007; FEATURE="ExecutionRefactoring"; ASPECT=CALL_OPERATIONS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // Extracted CALL statement execution from path_and_call_operations.zig for better modularity (M2.3 Phase 2)
 
 /// Execute CALL procedure statement

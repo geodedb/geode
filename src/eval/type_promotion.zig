@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-001; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotion; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-001; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotion; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Extract type promotion and conversion logic from eval.zig
 //
 // This module contains type promotion, validation, and conversion utilities

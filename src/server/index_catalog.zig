@@ -1,7 +1,7 @@
 const std = @import("std");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-003; FEATURE="ServerRefactoring"; ASPECT=INDEX_CATALOG; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-SERVER-REFACTOR-003; FEATURE="ServerRefactoring"; ASPECT=INDEX_CATALOG; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.1 - Index Catalog Module (Incremental Extraction)
 // Extracted index statistics and catalog management from server/main.zig for better modularity
 

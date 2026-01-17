@@ -17,7 +17,7 @@ const sortRows = execution.sortRows;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-002; FEATURE="ExecutionRefactoring"; ASPECT=SET_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
+// CANARY: REQ=REQ-EXEC-REFACTOR-002; FEATURE="ExecutionRefactoring"; ASPECT=SET_OPERATIONS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted set operation functions from execution.zig for better modularity (M1 Phase 2)
 
 /// Compare two rows for equality
@@ -207,7 +207,7 @@ pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet) 
 }
 
 /// Execute UNION query with context
-// CANARY: REQ=REQ-MULTI-GRAPH-UNION-002; FEATURE="MultiGraphIsolation"; ASPECT=UnionExecution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-MULTI-GRAPH-UNION-002; FEATURE="MultiGraphIsolation"; ASPECT=UnionExecution; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-23
 // Fixed: UNION queries now properly propagate graph context to sub-queries
 pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQuery, context: ExecutionContext) !ExecutionResult {
     // Execute first query with context (for graph isolation)

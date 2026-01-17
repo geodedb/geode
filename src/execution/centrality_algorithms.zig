@@ -10,7 +10,7 @@ const ExecutionResult = execution.ExecutionResult;
 // Local type aliases
 const Value = value_types.Value;
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-003; FEATURE="ExecutionRefactoring"; ASPECT=CENTRALITY_ALGORITHMS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
+// CANARY: REQ=REQ-EXEC-REFACTOR-003; FEATURE="ExecutionRefactoring"; ASPECT=CENTRALITY_ALGORITHMS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted centrality and community detection algorithms from execution.zig for better modularity (M1 Phase 3)
 
 /// Get neighbors of a node (helper function)

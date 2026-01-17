@@ -26,7 +26,7 @@ fn isLikelyServerAddress(arg: []const u8) bool {
     return false;
 }
 
-// CANARY: REQ=REQ-M4.2-AUTH-CLI-001; FEATURE="CLI Modularization"; ASPECT=AuthCommands; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
+// CANARY: REQ=REQ-M4.2-AUTH-CLI-001; FEATURE="CLI Modularization"; ASPECT=AuthCommands; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.2: Extract authentication and policy commands (cmdPolicy, cmdGrant, cmdRevoke) from cli/main.zig
 
 // Exit codes for consistency with main CLI

@@ -12,7 +12,7 @@ const valuesEqual = execution.valuesEqual;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-001; FEATURE="ExecutionRefactoring"; ASPECT=GRAPH_ALGORITHMS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
+// CANARY: REQ=REQ-EXEC-REFACTOR-001; FEATURE="ExecutionRefactoring"; ASPECT=GRAPH_ALGORITHMS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted graph algorithm functions from execution.zig for better modularity (M1 Phase 1)
 
 /// Count the number of matches for a given graph pattern

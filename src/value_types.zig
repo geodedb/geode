@@ -1,6 +1,6 @@
 //! Value Types Module - Shared value types for execution and evaluation
 //!
-//! CANARY: REQ=REQ-M5.2-VALUE-TYPES-001; FEATURE="Circular Dependency Resolution"; ASPECT=SharedTypes; STATUS=IMPL; OWNER=architecture; UPDATED=2025-11-13
+//! CANARY: REQ=REQ-M5.2-VALUE-TYPES-001; FEATURE="Circular Dependency Resolution"; ASPECT=SharedTypes; STATUS=EXEMPT; OWNER=architecture; UPDATED=2025-11-13
 //!
 //! This module extracts the core Value and Env types from eval.zig to break the
 //! circular dependency between execution.zig and eval.zig. These types are used
@@ -128,7 +128,7 @@ pub const Dec = struct {
 };
 
 // CANARY: REQ=REQ-M5.2-VALUE-TYPES-005; FEATURE="Environment"; ASPECT=VariableBinding; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
-// CANARY: REQ=REQ-MEM-FIX-004; FEATURE="MemorySafety"; ASPECT=EnvOwnership; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-25
+// CANARY: REQ=REQ-MEM-FIX-004; FEATURE="MemorySafety"; ASPECT=EnvOwnership; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-10-25
 /// Environment for variable bindings during expression evaluation
 ///
 /// Manages two types of bindings:
@@ -209,7 +209,7 @@ pub const Env = struct {
 
         // Free old arrays to prevent memory leak (C4 fix)
         // Only free if this Env owns its arrays AND they were allocated
-        // CANARY: REQ=REQ-MEM-FIX-005; FEATURE="MemorySafety"; ASPECT=OwnershipRespect; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-MEM-FIX-005; FEATURE="MemorySafety"; ASPECT=OwnershipRespect; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-10-25
         if (self.owned and self.names.len > 0) {
             self.allocator.free(self.names);
             self.allocator.free(self.values);

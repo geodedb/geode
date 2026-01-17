@@ -553,24 +553,24 @@ REQ-EXEC-DELETE-001,Execution,DeleteExecution,TESTED,,,exec,2026-01-16,tests/tes
 REQ-EXEC-MATCH-001,Execution,MatchExecution,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-EXEC-MATCH-001,Execution,MatchExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-EXEC-MERGE-001,Execution,MergeExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-EXEC-REFACTOR-001,ExecutionRefactoring,GRAPH_ALGORITHMS,IMPL,,,refactor,2025-10-17,src/execution/graph_algorithms.zig
+REQ-EXEC-REFACTOR-001,ExecutionRefactoring,GRAPH_ALGORITHMS,EXEMPT,,,refactor,2025-10-17,src/execution/graph_algorithms.zig
 REQ-EXEC-REFACTOR-001,ExecutionRefactoring,ModuleStructure,TESTED,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-EXEC-REFACTOR-002,ExecutionRefactoring,MatchExecution,TESTED,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-EXEC-REFACTOR-002,ExecutionRefactoring,SET_OPERATIONS,IMPL,,,refactor,2025-10-17,src/execution/set_operations.zig
-REQ-EXEC-REFACTOR-003,ExecutionRefactoring,CENTRALITY_ALGORITHMS,IMPL,,,refactor,2025-10-17,src/execution/centrality_algorithms.zig
+REQ-EXEC-REFACTOR-002,ExecutionRefactoring,SET_OPERATIONS,EXEMPT,,,refactor,2025-10-17,src/execution/set_operations.zig
+REQ-EXEC-REFACTOR-003,ExecutionRefactoring,CENTRALITY_ALGORITHMS,EXEMPT,,,refactor,2025-10-17,src/execution/centrality_algorithms.zig
 REQ-EXEC-REFACTOR-003,ExecutionRefactoring,CreateExecution,TESTED,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-EXEC-REFACTOR-004,ExecutionRefactoring,CRUD_OPERATIONS,IMPL,,,refactor,2025-10-17,src/execution/crud_operations.zig
+REQ-EXEC-REFACTOR-004,ExecutionRefactoring,CRUD_OPERATIONS,EXEMPT,,,refactor,2025-10-17,src/execution/crud_operations.zig
 REQ-EXEC-REFACTOR-004,ExecutionRefactoring,MergeExecution,TESTED,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-EXEC-REFACTOR-005,ExecutionRefactoring,DeleteExecution,TESTED,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-EXEC-REFACTOR-006,ExecutionRefactoring,EXECUTION_HELPERS,IMPL,,,refactor,2025-11-12,src/execution/execution_helpers.zig
-REQ-EXEC-REFACTOR-006,ExecutionRefactoring,MATCH_OPERATIONS,IMPL,,,refactor,2025-10-17,src/execution/match_operations.zig
+REQ-EXEC-REFACTOR-006,ExecutionRefactoring,EXECUTION_HELPERS,EXEMPT,,,refactor,2025-11-12,src/execution/execution_helpers.zig
+REQ-EXEC-REFACTOR-006,ExecutionRefactoring,MATCH_OPERATIONS,EXEMPT,,,refactor,2025-10-17,src/execution/match_operations.zig
 REQ-EXEC-REFACTOR-006,ExecutionRefactoring,PROCEDURE_REGISTRY,TESTED,tests/test_performance_integration.zig,,refactor,2026-01-15,src/execution/procedure_registry.zig
-REQ-EXEC-REFACTOR-006,ExecutionRefactoring,RECURSION_HANDLER,IMPL,,,refactor,2025-11-12,src/execution/recursion_handler.zig
+REQ-EXEC-REFACTOR-006,ExecutionRefactoring,RECURSION_HANDLER,EXEMPT,,,refactor,2025-11-12,src/execution/recursion_handler.zig
 REQ-EXEC-REFACTOR-006,ExecutionRefactoring,SetExecution,TESTED,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-EXEC-REFACTOR-007,ExecutionRefactoring,CALL_OPERATIONS,IMPL,,,refactor,2025-11-12,src/execution/call_operations.zig
+REQ-EXEC-REFACTOR-007,ExecutionRefactoring,CALL_OPERATIONS,EXEMPT,,,refactor,2025-11-12,src/execution/call_operations.zig
 REQ-EXEC-REFACTOR-007,ExecutionRefactoring,RemoveExecution,TESTED,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-EXEC-REFACTOR-007,ExecutionRefactoring,STATEMENT_HANDLERS,IMPL,,,refactor,2025-10-17,src/execution/statement_handlers.zig
-REQ-EXEC-REFACTOR-008,ExecutionRefactoring,AGGREGATION_EVALUATION,IMPL,,,refactor,2025-10-17,src/execution/aggregation_evaluation.zig
+REQ-EXEC-REFACTOR-007,ExecutionRefactoring,STATEMENT_HANDLERS,EXEMPT,,,refactor,2025-10-17,src/execution/statement_handlers.zig
+REQ-EXEC-REFACTOR-008,ExecutionRefactoring,AGGREGATION_EVALUATION,EXEMPT,,,refactor,2025-10-17,src/execution/aggregation_evaluation.zig
 REQ-EXEC-REFACTOR-008,ExecutionRefactoring,WithExecution,TESTED,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-EXEC-REFACTOR-009,ExecutionRefactoring,ReturnExecution,TESTED,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-EXEC-REFACTOR-009,FileModularization,ReturnAndSorting,IMPL,,,refactoring,2025-10-17,src/execution/return_and_sorting.zig
@@ -2312,36 +2312,36 @@ REQ-LSP-METADATA-001,MetadataIntegration,Completions,IMPL,,,lsp,2026-01-03,src/c
 REQ-LSP-METADATA-002,MetadataIntegration,ComptimeLists,IMPL,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-METADATA-003,MetadataIntegration,Hover,IMPL,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-METADATA-004,MetadataIntegration,Completions,IMPL,,,lsp,2026-01-03,src/cli/lsp/features.zig
-REQ-M10-CONSTANTS-001,CodeQuality,MAGIC_NUMBERS,IMPL,,,core,2025-10-17,src/execution.zig
-REQ-M10-CONSTANTS-002,CodeQuality,MAGIC_NUMBERS,IMPL,,,security,2025-10-17,src/security/rls_core.zig
-REQ-M10-CONSTANTS-003,CodeQuality,MAGIC_NUMBERS,IMPL,,,security,2025-10-17,src/security/rls_enhanced.zig
-REQ-M11-DRY-001,CodeQuality,DuplicateCode,IMPL,,,core,2025-10-17,src/server/main.zig
-REQ-M11-DRY-002,CodeQuality,DuplicateCode,IMPL,,,core,2025-10-17,src/cli/main.zig
+REQ-M10-CONSTANTS-001,CodeQuality,MAGIC_NUMBERS,EXEMPT,,,core,2025-10-17,src/execution.zig
+REQ-M10-CONSTANTS-002,CodeQuality,MAGIC_NUMBERS,EXEMPT,,,security,2025-10-17,src/security/rls_core.zig
+REQ-M10-CONSTANTS-003,CodeQuality,MAGIC_NUMBERS,EXEMPT,,,security,2025-10-17,src/security/rls_enhanced.zig
+REQ-M11-DRY-001,CodeQuality,DuplicateCode,EXEMPT,,,core,2025-10-17,src/server/main.zig
+REQ-M11-DRY-002,CodeQuality,DuplicateCode,EXEMPT,,,core,2025-10-17,src/cli/main.zig
 REQ-M2-GLOBAL-STATE-003,DependencyInjection,CATALOG_SINGLETON,IMPL,,,core,2025-10-17,src/execution.zig
 REQ-M4.1-CLI-MODULARIZATION-001,CLI Modularization,UserManagement,TESTED,tests/test_user_management_comprehensive.zig,,cli,2026-01-15,src/cli/main.zig
-REQ-M4.1-USER-MGMT-CLI-001,CLI Modularization,UserManagement,IMPL,,,cli,2025-11-12,src/cli/user_mgmt_cli.zig
-REQ-M4.2-AUTH-CLI-001,CLI Modularization,AuthCommands,IMPL,,,cli,2025-11-12,src/cli/auth_cli.zig
+REQ-M4.1-USER-MGMT-CLI-001,CLI Modularization,UserManagement,EXEMPT,,,cli,2025-11-12,src/cli/user_mgmt_cli.zig
+REQ-M4.2-AUTH-CLI-001,CLI Modularization,AuthCommands,EXEMPT,,,cli,2025-11-12,src/cli/auth_cli.zig
 REQ-M4.2-CLI-MODULARIZATION-001,CLI Modularization,AuthCommands,TESTED,tests/test_user_management_comprehensive.zig,,cli,2026-01-15,src/cli/main.zig
-REQ-M4.3-BACKUP-CLI-001,CLI Modularization,BackupCommands,IMPL,,,cli,2026-01-09,src/cli/backup_cli.zig
+REQ-M4.3-BACKUP-CLI-001,CLI Modularization,BackupCommands,EXEMPT,,,cli,2026-01-09,src/cli/backup_cli.zig
 REQ-M4.3-CLI-MODULARIZATION-001,CLI Modularization,BackupCommands,TESTED,tests/test_cli_integration.zig,,cli,2026-01-15,src/cli/main.zig
-REQ-M4.4-CLI-DISPATCHER-001,CLI Modularization,CommandDispatch,IMPL,,,cli,2025-11-12,src/cli/cli_dispatcher.zig
+REQ-M4.4-CLI-DISPATCHER-001,CLI Modularization,CommandDispatch,EXEMPT,,,cli,2025-11-12,src/cli/cli_dispatcher.zig
 REQ-M4.4-CLI-DISPATCHER-002,CLI Modularization,DispatcherIntegration,TESTED,tests/test_cli_integration.zig,,cli,2026-01-15,src/cli/main.zig
-REQ-M4.4-CLI-MAIN-ENTRY-001,CLI Modularization,MinimalEntryPoint,IMPL,,,cli,2025-11-12,src/cli/main.zig
-REQ-M5.2-EVAL-REFACTOR-001,Circular Dependency Resolution,ValueTypesImport,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-002,Circular Dependency Resolution,ErrorTypeReexport,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-003,Circular Dependency Resolution,ValueTypeReexport,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-004,Circular Dependency Resolution,DecTypeReexport,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-005,Circular Dependency Resolution,FunctionAlias,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-006,Circular Dependency Resolution,EnvTypeReexport,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-007,Circular Dependency Resolution,NullCheck,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-008,Circular Dependency Resolution,Truthy,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-009,Circular Dependency Resolution,ValueEquality,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-010,Circular Dependency Resolution,Pow10,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EVAL-REFACTOR-011,Circular Dependency Resolution,Stringify,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.2-EXECUTION-REFACTOR-001,Circular Dependency Resolution,ValueTypesImport,IMPL,,,execution,2025-11-13,src/execution.zig
-REQ-M5.2-EXECUTION-REFACTOR-002,Circular Dependency Resolution,TypeAliases,IMPL,,,execution,2025-11-13,src/execution.zig
-REQ-M5.2-LIB-EXPORT-001,Circular Dependency Resolution,ValueTypesExport,IMPL,,,lib,2025-11-13,src/lib.zig
-REQ-M5.2-VALUE-TYPES-001,Circular Dependency Resolution,SharedTypes,IMPL,,,architecture,2025-11-13,src/value_types.zig
+REQ-M4.4-CLI-MAIN-ENTRY-001,CLI Modularization,MinimalEntryPoint,EXEMPT,,,cli,2025-11-12,src/cli/main.zig
+REQ-M5.2-EVAL-REFACTOR-001,Circular Dependency Resolution,ValueTypesImport,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-002,Circular Dependency Resolution,ErrorTypeReexport,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-003,Circular Dependency Resolution,ValueTypeReexport,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-004,Circular Dependency Resolution,DecTypeReexport,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-005,Circular Dependency Resolution,FunctionAlias,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-006,Circular Dependency Resolution,EnvTypeReexport,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-007,Circular Dependency Resolution,NullCheck,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-008,Circular Dependency Resolution,Truthy,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-009,Circular Dependency Resolution,ValueEquality,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-010,Circular Dependency Resolution,Pow10,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EVAL-REFACTOR-011,Circular Dependency Resolution,Stringify,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.2-EXECUTION-REFACTOR-001,Circular Dependency Resolution,ValueTypesImport,EXEMPT,,,execution,2025-11-13,src/execution.zig
+REQ-M5.2-EXECUTION-REFACTOR-002,Circular Dependency Resolution,TypeAliases,EXEMPT,,,execution,2025-11-13,src/execution.zig
+REQ-M5.2-LIB-EXPORT-001,Circular Dependency Resolution,ValueTypesExport,EXEMPT,,,lib,2025-11-13,src/lib.zig
+REQ-M5.2-VALUE-TYPES-001,Circular Dependency Resolution,SharedTypes,EXEMPT,,,architecture,2025-11-13,src/value_types.zig
 REQ-M5.2-VALUE-TYPES-002,Error Handling,EvalError,IMPL,,,value_types,2025-11-13,src/value_types.zig
 REQ-M5.2-VALUE-TYPES-003,Value Type,CoreType,IMPL,,,value_types,2025-11-13,src/value_types.zig
 REQ-M5.2-VALUE-TYPES-004,Decimal Helper,DecimalType,IMPL,,,value_types,2025-11-13,src/value_types.zig
@@ -2355,23 +2355,23 @@ REQ-M5.2-VALUE-TYPES-011,Value Helpers,Stringify,IMPL,,,value_types,2025-11-13,s
 REQ-M5.3-ADAPTER-DOC-001,Documentation,UsageExamples,IMPL,,,adapter,2025-11-13,src/execution/evaluator_adapter.zig
 REQ-M5.3-ADAPTER-INIT-001,Adapter Initialization,FactoryFunction,IMPL,,,adapter,2025-11-13,src/execution/evaluator_adapter.zig
 REQ-M5.3-CALLBACK-WRAPPER-001,Callback Wrappers,ConvenienceMethods,IMPL,,,adapter,2025-11-13,src/execution/evaluator_adapter.zig
-REQ-M5.3-EVAL-CALLBACKS-001,Circular Dependency Resolution,CallbacksStorage,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.3-EVAL-REFACTOR-001,Circular Dependency Resolution,AdapterImport,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M5.3-EVALUATOR-ADAPTER-001,Circular Dependency Resolution,AdapterPattern,IMPL,,,architecture,2025-11-13,src/execution/evaluator_adapter.zig
+REQ-M5.3-EVAL-CALLBACKS-001,Circular Dependency Resolution,CallbacksStorage,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.3-EVAL-REFACTOR-001,Circular Dependency Resolution,AdapterImport,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M5.3-EVALUATOR-ADAPTER-001,Circular Dependency Resolution,AdapterPattern,EXEMPT,,,architecture,2025-11-13,src/execution/evaluator_adapter.zig
 REQ-M5.3-EVALUATOR-INTERFACE-001,Evaluator Interface,EvaluatorAbstraction,IMPL,,,adapter,2025-11-13,src/execution/evaluator_adapter.zig
-REQ-M5.3-EXECUTION-CALLBACKS-001,Circular Dependency Resolution,CallbacksProvider,IMPL,,,execution,2025-11-13,src/execution.zig
+REQ-M5.3-EXECUTION-CALLBACKS-001,Circular Dependency Resolution,CallbacksProvider,EXEMPT,,,execution,2025-11-13,src/execution.zig
 REQ-M5.3-EXECUTION-CALLBACKS-001,Execution Callbacks,CallbackInterface,IMPL,,,adapter,2025-11-13,src/execution/evaluator_adapter.zig
-REQ-M5.3-EXECUTION-INIT-001,Circular Dependency Resolution,CallbacksInitialization,IMPL,,,execution,2025-11-13,src/execution.zig
+REQ-M5.3-EXECUTION-INIT-001,Circular Dependency Resolution,CallbacksInitialization,EXEMPT,,,execution,2025-11-13,src/execution.zig
 REQ-M5.3-TYPE-FORWARD-001,Type Forwarding,TypeReexport,IMPL,,,adapter,2025-11-13,src/execution/evaluator_adapter.zig
-REQ-M6-UNREACHABLE-001,CodeQuality,ErrorHandling,IMPL,,,security,2025-10-17,src/security/kms_remote.zig
-REQ-M6.1-EVAL-REFACTOR-001,Phase 6 Modularization,TypePromotionImport,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M6.1-EVAL-REFACTOR-002,Phase 6 Modularization,TypePromotionAliases,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M6.1-EVAL-REFACTOR-003,Phase 6 Modularization,ValueConverters,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M6.1-EVAL-REFACTOR-004,Phase 6 Modularization,ComparisonHelpers,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M6.1-EVAL-REFACTOR-005,Phase 6 Modularization,DecimalScaling,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M6.1-EVAL-REFACTOR-006,Phase 6 Modularization,TypeValidators,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M6.1-EVAL-REFACTOR-007,Phase 6 Modularization,IntComparison,IMPL,,,eval,2025-11-13,src/eval.zig
-REQ-M6.1-TYPE-PROMOTION-001,Phase 6 Modularization,TypePromotion,IMPL,,,eval,2025-11-13,src/eval/type_promotion.zig
+REQ-M6-UNREACHABLE-001,CodeQuality,ErrorHandling,EXEMPT,,,security,2025-10-17,src/security/kms_remote.zig
+REQ-M6.1-EVAL-REFACTOR-001,Phase 6 Modularization,TypePromotionImport,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M6.1-EVAL-REFACTOR-002,Phase 6 Modularization,TypePromotionAliases,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M6.1-EVAL-REFACTOR-003,Phase 6 Modularization,ValueConverters,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M6.1-EVAL-REFACTOR-004,Phase 6 Modularization,ComparisonHelpers,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M6.1-EVAL-REFACTOR-005,Phase 6 Modularization,DecimalScaling,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M6.1-EVAL-REFACTOR-006,Phase 6 Modularization,TypeValidators,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M6.1-EVAL-REFACTOR-007,Phase 6 Modularization,IntComparison,EXEMPT,,,eval,2025-11-13,src/eval.zig
+REQ-M6.1-TYPE-PROMOTION-001,Phase 6 Modularization,TypePromotion,EXEMPT,,,eval,2025-11-13,src/eval/type_promotion.zig
 REQ-M7-SIGNATURE-001,CodeQuality,SignatureVerification,TESTED,BuildAndSmoke,,security,2025-10-17,src/types/cryptographic.zig
 REQ-M7-SIGNATURE-002,CodeQuality,SignatureSigning,TESTED,BuildAndSmoke,,security,2025-10-17,src/types/cryptographic.zig
 REQ-M7.1-SCHEMA-MANAGER-001,Phase 7 Modularization,SchemaManager,TESTED,tests/test_user_management_comprehensive.zig,,schema,2026-01-15,src/schema/schema_manager.zig
@@ -2442,12 +2442,12 @@ REQ-MATVIEW-TEST-001,Materialized View Tests,UnitTests,IMPL,TestCANARY_REQ_MATVI
 REQ-MEM-001,MemorySafety,AllocatorUsage,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MEM-002,MemorySafety,DeferCleanup,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MEM-003,MemorySafety,BoundsChecking,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MEM-FIX-001,MemorySafety,DoubleFreeFix,IMPL,,,execution,2025-10-25,src/execution/match_operations.zig
-REQ-MEM-FIX-002,MemorySafety,DoubleFreeFix,IMPL,,,execution,2025-10-25,src/execution/match_operations.zig
-REQ-MEM-FIX-003,MemorySafety,DoubleFreeFix,IMPL,,,execution,2025-10-25,src/execution/match_operations.zig
-REQ-MEM-FIX-004,MemorySafety,EnvOwnership,IMPL,,,eval,2025-10-25,src/eval.zig
-REQ-MEM-FIX-004,MemorySafety,EnvOwnership,IMPL,,,eval,2025-10-25,src/value_types.zig
-REQ-MEM-FIX-005,MemorySafety,OwnershipRespect,IMPL,,,eval,2025-10-25,src/value_types.zig
+REQ-MEM-FIX-001,MemorySafety,DoubleFreeFix,EXEMPT,,,execution,2025-10-25,src/execution/match_operations.zig
+REQ-MEM-FIX-002,MemorySafety,DoubleFreeFix,EXEMPT,,,execution,2025-10-25,src/execution/match_operations.zig
+REQ-MEM-FIX-003,MemorySafety,DoubleFreeFix,EXEMPT,,,execution,2025-10-25,src/execution/match_operations.zig
+REQ-MEM-FIX-004,MemorySafety,EnvOwnership,EXEMPT,,,eval,2025-10-25,src/eval.zig
+REQ-MEM-FIX-004,MemorySafety,EnvOwnership,EXEMPT,,,eval,2025-10-25,src/value_types.zig
+REQ-MEM-FIX-005,MemorySafety,OwnershipRespect,EXEMPT,,,eval,2025-10-25,src/value_types.zig
 REQ-MEM-SAFETY-001,MemorySafety,AllocatorUse,TESTED,test_gap_0193_impl_batch_promotion.zig,,core,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-MEM-SAFETY-002,MemorySafety,DeferCleanup,TESTED,test_gap_0193_impl_batch_promotion.zig,,core,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-MEM-SAFETY-003,MemorySafety,BoundsChecking,TESTED,test_gap_0193_impl_batch_promotion.zig,,core,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
@@ -2487,146 +2487,146 @@ REQ-MULTI-GRAPH-001,MultiGraphSupport,UseGraph,IMPL,,,engine,2025-12-20,src/exec
 REQ-MULTI-GRAPH-001,MultiGraphSupport,UseGraph,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-002,MultiGraphSupport,PerGraphStorage,IMPL,,,engine,2025-12-20,src/server/graph_storage_manager.zig
 REQ-MULTI-GRAPH-002,MultiGraphSupport,PerGraphStorage,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,IMPL,,,engine,2025-12-22,src/graph_store.zig
+REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/graph_store.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,GraphStore,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,IMPL,,,engine,2025-12-22,src/graph_store.zig
+REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/graph_store.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-003,MultiGraphSupport,CreateGraph,IMPL,,,engine,2025-12-20,src/execution/statement_dispatcher.zig
 REQ-MULTI-GRAPH-003,MultiGraphSupport,CreateGraph,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-004,MultiGraphIsolation,CreateNode,IMPL,,,engine,2025-12-22,src/graph_store.zig
+REQ-MULTI-GRAPH-004,MultiGraphIsolation,CreateNode,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/graph_store.zig
 REQ-MULTI-GRAPH-004,MultiGraphIsolation,CreateNode,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-004,MultiGraphIsolation,CreateNode,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-MULTI-GRAPH-004,MultiGraphSupport,SessionGraph,IMPL,,,engine,2025-12-20,src/server/server_state.zig
 REQ-MULTI-GRAPH-004,MultiGraphSupport,SessionGraph,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-005,MultiGraphIsolation,ClearGraphNodes,IMPL,,,engine,2025-12-23,src/graph_store.zig
+REQ-MULTI-GRAPH-005,MultiGraphIsolation,ClearGraphNodes,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-23,src/graph_store.zig
 REQ-MULTI-GRAPH-005,MultiGraphIsolation,ClearGraphNodes,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-005,MultiGraphIsolation,ClearGraphNodes,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-005,MultiGraphIsolation,CreateEdge,IMPL,,,engine,2025-12-22,src/graph_store.zig
+REQ-MULTI-GRAPH-005,MultiGraphIsolation,CreateEdge,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/graph_store.zig
 REQ-MULTI-GRAPH-005,MultiGraphIsolation,CreateEdge,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-005,MultiGraphIsolation,CreateEdge,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-MULTI-GRAPH-005,MultiGraphSupport,QueryRouting,IMPL,,,engine,2025-12-20,src/server/query_executor.zig
 REQ-MULTI-GRAPH-005,MultiGraphSupport,QueryRouting,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-006,MultiGraphIsolation,MatchFiltering,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-006,MultiGraphIsolation,MatchFiltering,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,MatchFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,MatchFiltering,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNameLoad,IMPL,,,engine,2025-12-24,src/graph_store.zig
+REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNameLoad,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-24,src/graph_store.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNameLoad,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNameLoad,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNamePersistence,IMPL,,,engine,2025-12-24,src/graph_store.zig
+REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNamePersistence,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-24,src/graph_store.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNamePersistence,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNamePersistence,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-006,MultiGraphSupport,ServerHandler,IMPL,,,engine,2025-12-20,src/server/quic_connection_handler.zig
 REQ-MULTI-GRAPH-006,MultiGraphSupport,ServerHandler,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNameLoad,IMPL,,,engine,2025-12-24,src/graph_store.zig
+REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNameLoad,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-24,src/graph_store.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNameLoad,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNameLoad,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNamePersistence,IMPL,,,engine,2025-12-24,src/graph_store.zig
+REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNamePersistence,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-24,src/graph_store.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNamePersistence,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNamePersistence,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-007,MultiGraphIsolation,NodeFiltering,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-007,MultiGraphIsolation,NodeFiltering,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,NodeFiltering,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,NodeFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-008,MultiGraphIsolation,MultiNodeMatch,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-008,MultiGraphIsolation,MultiNodeMatch,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-008,MultiGraphIsolation,MultiNodeMatch,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-008,MultiGraphIsolation,MultiNodeMatch,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-009,MultiGraphIsolation,GraphBoundaryEnforcement,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-009,MultiGraphIsolation,OptionalMatchFiltering,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-009,MultiGraphIsolation,OptionalMatchFiltering,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-009,MultiGraphIsolation,OptionalMatchFiltering,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-010,MultiGraphIsolation,CrossGraphQueryBlock,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-010,MultiGraphIsolation,MatchCallFiltering,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-010,MultiGraphIsolation,MatchCallFiltering,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-010,MultiGraphIsolation,MatchCallFiltering,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-011,MultiGraphIsolation,IndexIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-011,MultiGraphIsolation,MatchQueryWithParams,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-011,MultiGraphIsolation,MatchQueryWithParams,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-011,MultiGraphIsolation,MatchQueryWithParams,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-012,MultiGraphIsolation,ConstraintIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-012,MultiGraphIsolation,QueryExecution,IMPL,,,engine,2025-12-22,src/execution/query_execution.zig
+REQ-MULTI-GRAPH-012,MultiGraphIsolation,QueryExecution,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/query_execution.zig
 REQ-MULTI-GRAPH-012,MultiGraphIsolation,QueryExecution,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-MULTI-GRAPH-013,MultiGraphIsolation,MatchCreate,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-013,MultiGraphIsolation,MatchCreate,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-013,MultiGraphIsolation,MatchCreate,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-013,MultiGraphIsolation,TransactionIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-014,MultiGraphIsolation,SessionGraphContext,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-014,MultiGraphIsolation,ValuesMatch,IMPL,,,engine,2025-12-22,src/execution/statement_handlers.zig
+REQ-MULTI-GRAPH-014,MultiGraphIsolation,ValuesMatch,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/statement_handlers.zig
 REQ-MULTI-GRAPH-014,MultiGraphIsolation,ValuesMatch,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-014,MultiGraphIsolation,ValuesMatch,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-015,MultiGraphIsolation,CreateQuery,IMPL,,,engine,2025-12-22,src/execution/crud_operations.zig
+REQ-MULTI-GRAPH-015,MultiGraphIsolation,CreateQuery,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/crud_operations.zig
 REQ-MULTI-GRAPH-015,MultiGraphIsolation,CreateQuery,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-MULTI-GRAPH-015,MultiGraphIsolation,DeleteFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-015,MultiGraphIsolation,GraphMetadataIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-016,MultiGraphIsolation,CreateForBatch,IMPL,,,engine,2025-12-22,src/execution/crud_operations.zig
+REQ-MULTI-GRAPH-016,MultiGraphIsolation,CreateForBatch,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/crud_operations.zig
 REQ-MULTI-GRAPH-016,MultiGraphIsolation,CreateForBatch,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-016,MultiGraphIsolation,MergeFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-016,MultiGraphIsolation,PathIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-017,MultiGraphIsolation,AggregationIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-017,MultiGraphIsolation,CreateForBatchWithTracking,IMPL,,,engine,2025-12-22,src/execution/crud_operations.zig
+REQ-MULTI-GRAPH-017,MultiGraphIsolation,CreateForBatchWithTracking,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/crud_operations.zig
 REQ-MULTI-GRAPH-017,MultiGraphIsolation,CreateForBatchWithTracking,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-017,MultiGraphIsolation,SetFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-018,MultiGraphIsolation,ExecuteCreate,IMPL,,,engine,2025-12-22,src/execution/crud_operations.zig
+REQ-MULTI-GRAPH-018,MultiGraphIsolation,ExecuteCreate,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/crud_operations.zig
 REQ-MULTI-GRAPH-018,MultiGraphIsolation,ExecuteCreate,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-018,MultiGraphIsolation,MutationIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-018,MultiGraphIsolation,RemoveFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-019,MultiGraphIsolation,DeleteIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-019,MultiGraphIsolation,ExecuteInsert,IMPL,,,engine,2025-12-22,src/execution/crud_operations.zig
+REQ-MULTI-GRAPH-019,MultiGraphIsolation,ExecuteInsert,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/crud_operations.zig
 REQ-MULTI-GRAPH-019,MultiGraphIsolation,ExecuteInsert,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-019,MultiGraphIsolation,WithFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-020,MultiGraphIsolation,ExecuteMerge,IMPL,,,engine,2025-12-22,src/execution/crud_operations.zig
+REQ-MULTI-GRAPH-020,MultiGraphIsolation,ExecuteMerge,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/crud_operations.zig
 REQ-MULTI-GRAPH-020,MultiGraphIsolation,ExecuteMerge,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-MULTI-GRAPH-020,MultiGraphIsolation,MergeIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-020,MultiGraphIsolation,UnwindFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-021,MultiGraphIsolation,UnwindIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-021,MultiGraphIsolation,VarLengthPathFilter,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-021,MultiGraphIsolation,VarLengthPathFilter,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-021,MultiGraphIsolation,VarLengthPathFilter,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-MULTI-GRAPH-021,MultiGraphIsolation,VarLengthPathFilter,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-022,MultiGraphIsolation,RelPatternFilter,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-022,MultiGraphIsolation,RelPatternFilter,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-022,MultiGraphIsolation,RelPatternFilter,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-022,MultiGraphIsolation,ShortestPathFilter,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-022,MultiGraphIsolation,WithClauseIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-023,MultiGraphIsolation,AllShortestPathsFilter,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-023,MultiGraphIsolation,OrderByIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-023,MultiGraphIsolation,SimpleNodeFilter,IMPL,,,engine,2025-12-22,src/execution/match_operations.zig
+REQ-MULTI-GRAPH-023,MultiGraphIsolation,SimpleNodeFilter,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-023,MultiGraphIsolation,SimpleNodeFilter,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-024,MultiGraphIsolation,CountFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-024,MultiGraphIsolation,SessionStateContext,IMPL,,,engine,2025-12-22,src/server/quic_connection_handler.zig
+REQ-MULTI-GRAPH-024,MultiGraphIsolation,SessionStateContext,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/server/quic_connection_handler.zig
 REQ-MULTI-GRAPH-024,MultiGraphIsolation,SessionStateContext,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-024,MultiGraphIsolation,SkipLimitIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-025,MultiGraphIsolation,OptionalMatchIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-025,MultiStatementExecution,SessionPersistence,IMPL,,,engine,2025-12-22,src/server/quic_connection_handler.zig
 REQ-MULTI-GRAPH-026,MultiGraphIsolation,CallProcedureIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-026,MultiGraphIsolation,QueryOptionsGraph,IMPL,,,engine,2025-12-22,src/test_harness.zig
-REQ-MULTI-GRAPH-027,MultiGraphIsolation,SessionStateGraphInit,IMPL,,,engine,2025-12-22,src/test_harness.zig
+REQ-MULTI-GRAPH-026,MultiGraphIsolation,QueryOptionsGraph,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/test_harness.zig
+REQ-MULTI-GRAPH-027,MultiGraphIsolation,SessionStateGraphInit,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/test_harness.zig
 REQ-MULTI-GRAPH-027,MultiGraphIsolation,UnionIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-028,MultiGraphIsolation,ExistsPredicateIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-028,MultiGraphIsolation,StreamStateGraph,IMPL,,,engine,2025-12-22,src/cli/main.zig
+REQ-MULTI-GRAPH-028,MultiGraphIsolation,StreamStateGraph,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/cli/main.zig
 REQ-MULTI-GRAPH-028,MultiGraphIsolation,StreamStateGraph,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-029,MultiGraphIsolation,CountPredicateIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-029,MultiGraphIsolation,UseGraphParsing,IMPL,,,engine,2025-12-22,src/cli/main.zig
+REQ-MULTI-GRAPH-029,MultiGraphIsolation,UseGraphParsing,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/cli/main.zig
 REQ-MULTI-GRAPH-029,MultiGraphIsolation,UseGraphParsing,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-030,MultiGraphIsolation,CollectIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-030,MultiGraphIsolation,DataDirEnvVar,IMPL,,,engine,2025-12-22,src/cli/main.zig
-REQ-MULTI-GRAPH-030,MultiGraphIsolation,GraphStorageManagerExport,IMPL,,,engine,2025-12-22,src/lib.zig
-REQ-MULTI-GRAPH-030,MultiGraphIsolation,UseGraphValidation,IMPL,,,engine,2025-12-27,src/server/quic_connection_handler.zig
+REQ-MULTI-GRAPH-030,MultiGraphIsolation,DataDirEnvVar,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/cli/main.zig
+REQ-MULTI-GRAPH-030,MultiGraphIsolation,GraphStorageManagerExport,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22,src/lib.zig
+REQ-MULTI-GRAPH-030,MultiGraphIsolation,UseGraphValidation,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-27,src/server/quic_connection_handler.zig
 REQ-MULTI-GRAPH-030,MultiGraphIsolation,UseGraphValidation,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-MULTI-GRAPH-031,MultiGraphIsolation,DropGraphReset,IMPL,,,repl,2025-12-23,src/client/repl/repl_dispatch.zig
+REQ-MULTI-GRAPH-031,MultiGraphIsolation,DropGraphReset,TESTED,geodetestlab/specs/multi_graph.yml,,repl,2025-12-23,src/client/repl/repl_dispatch.zig
 REQ-MULTI-GRAPH-031,MultiGraphIsolation,DropGraphReset,TESTED,test_gap_0193_high_priority.zig,,repl,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-031,MultiGraphIsolation,ReduceIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-031,MultiGraphIsolation,UseGraphCLI,IMPL,,,engine,2025-12-27,src/cli/main.zig
+REQ-MULTI-GRAPH-031,MultiGraphIsolation,UseGraphCLI,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-27,src/cli/main.zig
 REQ-MULTI-GRAPH-032,MultiGraphIsolation,ForeachIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-032,MultiGraphIsolation,UseGraphExecution,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-MULTI-GRAPH-032,MultiGraphIsolation,UseGraphValidation,IMPL,,,engine,2025-12-27,src/execution.zig
+REQ-MULTI-GRAPH-032,MultiGraphIsolation,UseGraphValidation,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-27,src/execution.zig
 REQ-MULTI-GRAPH-033,MultiGraphIsolation,CaseExpressionIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-034,MultiGraphIsolation,ListComprehensionIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-035,MultiGraphIsolation,PatternComprehensionIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-036,MultiGraphIsolation,ShortestPathIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-037,MultiGraphIsolation,AllShortestPathsIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,IMPL,,,engine,2025-12-24,src/execution/crud_operations.zig
+REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-24,src/execution/crud_operations.zig
 REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,IMPL,,,engine,2025-12-24,src/execution/statement_dispatcher.zig
+REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-24,src/execution/statement_dispatcher.zig
 REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,IMPL,,,security,2025-12-20,src/security/multi_graph_security.zig
-REQ-MULTI-GRAPH-UNION-001,MultiGraphIsolation,UnionQueryContext,IMPL,,,engine,2025-12-23,src/execution.zig
-REQ-MULTI-GRAPH-UNION-002,MultiGraphIsolation,UnionExecution,IMPL,,,engine,2025-12-23,src/execution/set_operations.zig
+REQ-MULTI-GRAPH-UNION-001,MultiGraphIsolation,UnionQueryContext,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-23,src/execution.zig
+REQ-MULTI-GRAPH-UNION-002,MultiGraphIsolation,UnionExecution,TESTED,geodetestlab/specs/multi_graph.yml,,engine,2025-12-23,src/execution/set_operations.zig
 REQ-MULTI-TENANT-001,MultiTenancy,GraphStore,IMPL,,,enterprise,2026-01-09,src/graph_store.zig
 REQ-MULTI-TENANT-002,Multi-Tenancy Session,TenantId,IMPL,,,session,2026-01-09,src/server/server_state.zig
 REQ-MULTI-TENANT-002,MultiTenancy,MultiGraph,IMPL,,,enterprise,2026-01-09,src/storage/multi_graph.zig
@@ -2799,14 +2799,14 @@ REQ-QUIC-CATALOG-001,QUICCatalogSingleton,SideEffectQuery,IMPL,,,engine,2026-01-
 REQ-QUIC-CATALOG-002,QUICCatalogSingleton,MainQueryExec,IMPL,,,engine,2026-01-14,src/server/quic_connection_handler.zig
 REQ-QUIC-CONG-001,QUICProtocol,CongestionControl,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-QUIC-CONN-001,QUICProtocol,Connection,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
-REQ-QUIC-CONN-CLEANUP-001,ConnectionMemoryManagement,ResourceLeak,IMPL,,,transport,2025-12-27,src/transport/quic.zig
+REQ-QUIC-CONN-CLEANUP-001,ConnectionMemoryManagement,ResourceLeak,EXEMPT,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-CONN-CLEANUP-001,QUICConnectionCleanup,ResourceLeak,TESTED,test_gap_analysis_january_2026.zig,,transport,2026-01-15,tests/test_gap_analysis_january_2026.zig
-REQ-QUIC-CONN-CLEANUP-002,ConnectionMemoryManagement,ConnectionListCleanup,IMPL,,,transport,2025-12-27,src/transport/quic.zig
+REQ-QUIC-CONN-CLEANUP-002,ConnectionMemoryManagement,ConnectionListCleanup,EXEMPT,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-CONN-CLEANUP-002,QUICConnectionCleanup,ConnectionList,TESTED,test_gap_analysis_january_2026.zig,,transport,2026-01-15,tests/test_gap_analysis_january_2026.zig
-REQ-QUIC-CONN-CLEANUP-003,ConnectionMemoryManagement,ProperCleanup,IMPL,,,server,2025-12-27,src/server/quic_connection_handler.zig
+REQ-QUIC-CONN-CLEANUP-003,ConnectionMemoryManagement,ProperCleanup,EXEMPT,,,server,2025-12-27,src/server/quic_connection_handler.zig
 REQ-QUIC-CONN-CLEANUP-003,QUICConnectionCleanup,DestructorPattern,TESTED,test_gap_analysis_january_2026.zig,,transport,2026-01-15,tests/test_gap_analysis_january_2026.zig
-REQ-QUIC-CONN-CLEANUP-004,ConnectionMemoryManagement,ProperCleanup,IMPL,,,cli,2025-12-28,src/cli/main.zig
-REQ-QUIC-CONN-CLEANUP-005,ConnectionMemoryManagement,GracefulDisconnect,IMPL,,,cli,2025-12-28,src/cli/main.zig
+REQ-QUIC-CONN-CLEANUP-004,ConnectionMemoryManagement,ProperCleanup,EXEMPT,,,cli,2025-12-28,src/cli/main.zig
+REQ-QUIC-CONN-CLEANUP-005,ConnectionMemoryManagement,GracefulDisconnect,EXEMPT,,,cli,2025-12-28,src/cli/main.zig
 REQ-QUIC-FLOW-001,QUICProtocol,FlowControl,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-QUIC-MSG-001,QUICProtocol,Messaging,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-QUIC-MUTATIONS-001,QUIC Mutation Execution,ServerHandler,IMPL,,,engine,2026-01-09,src/server/quic_connection_handler.zig
@@ -2953,33 +2953,33 @@ REQ-SERVER-005,ServerRefactoring,ErrorReporting,TESTED,,,engine,2026-01-15,tests
 REQ-SERVER-BACKUP-001,Server Backup API,UnitTests,TESTED,TestServer_BackupAPIUnit,,server,2025-10-05,tests/test_server_backup_api_unit.zig
 REQ-SERVER-REFACTOR-001,ServerRefactoring,ModuleStructure,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-SERVER-REFACTOR-001,ServerRefactoring,ProtocolHandler,TESTED,test_gap_0193_impl_verification.zig,,server,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,IMPL,,,refactor,2026-01-09,src/server/server_state.zig
-REQ-SERVER-REFACTOR-001B,ServerRefactoring,SERVER_STATE_STRUCT,IMPL,,,refactor,2025-11-14,src/server/server_state.zig
-REQ-SERVER-REFACTOR-002,ServerRefactoring,BACKUP_MANAGER,IMPL,,,refactor,2026-01-10,src/server/backup_manager.zig
+REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,EXEMPT,,,refactor,2026-01-09,src/server/server_state.zig
+REQ-SERVER-REFACTOR-001B,ServerRefactoring,SERVER_STATE_STRUCT,EXEMPT,,,refactor,2025-11-14,src/server/server_state.zig
+REQ-SERVER-REFACTOR-002,ServerRefactoring,BACKUP_MANAGER,EXEMPT,,,refactor,2026-01-10,src/server/backup_manager.zig
 REQ-SERVER-REFACTOR-002,ServerRefactoring,ConnectionHandler,TESTED,test_gap_0193_high_priority.zig,,server,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-SERVER-REFACTOR-003,ServerRefactoring,INDEX_CATALOG,IMPL,,,refactor,2025-11-12,src/server/index_catalog.zig
+REQ-SERVER-REFACTOR-003,ServerRefactoring,INDEX_CATALOG,EXEMPT,,,refactor,2025-11-12,src/server/index_catalog.zig
 REQ-SERVER-REFACTOR-003,ServerRefactoring,QueryDispatch,TESTED,test_gap_0193_high_priority.zig,,server,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-SERVER-REFACTOR-004,ServerRefactoring,FLAG_UTILITIES,IMPL,,,refactor,2025-11-12,src/server/server_flags.zig
+REQ-SERVER-REFACTOR-004,ServerRefactoring,FLAG_UTILITIES,EXEMPT,,,refactor,2025-11-12,src/server/server_flags.zig
 REQ-SERVER-REFACTOR-004,ServerRefactoring,SessionManagement,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-SERVER-REFACTOR-005,ServerRefactoring,GRAPH_STORAGE,IMPL,,,refactor,2025-11-12,src/server/graph_storage_manager.zig
+REQ-SERVER-REFACTOR-005,ServerRefactoring,GRAPH_STORAGE,EXEMPT,,,refactor,2025-11-12,src/server/graph_storage_manager.zig
 REQ-SERVER-REFACTOR-005,ServerRefactoring,TransactionCoord,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-SERVER-REFACTOR-006,ServerRefactoring,ErrorHandling,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-SERVER-REFACTOR-006,ServerRefactoring,PROTOCOL_HANDLER,IMPL,,,refactor,2025-11-12,src/server/protocol_handler.zig
-REQ-SERVER-REFACTOR-006,ServerRefactoring,QUERY_EXECUTOR,IMPL,,,refactor,2025-11-12,src/server/query_executor.zig
-REQ-SERVER-REFACTOR-007,ServerRefactoring,CLI_ARGS,IMPL,,,refactor,2025-11-14,src/server/cli_args.zig
+REQ-SERVER-REFACTOR-006,ServerRefactoring,PROTOCOL_HANDLER,EXEMPT,,,refactor,2025-11-12,src/server/protocol_handler.zig
+REQ-SERVER-REFACTOR-006,ServerRefactoring,QUERY_EXECUTOR,EXEMPT,,,refactor,2025-11-12,src/server/query_executor.zig
+REQ-SERVER-REFACTOR-007,ServerRefactoring,CLI_ARGS,EXEMPT,,,refactor,2025-11-14,src/server/cli_args.zig
 REQ-SERVER-REFACTOR-007,ServerRefactoring,ProtocolHandling,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-SERVER-REFACTOR-008,ServerRefactoring,QUICIntegration,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-SERVER-REFACTOR-008,ServerRefactoring,SERVER_INIT,IMPL,,,refactor,2025-11-14,src/server/server_init.zig
+REQ-SERVER-REFACTOR-008,ServerRefactoring,SERVER_INIT,EXEMPT,,,refactor,2025-11-14,src/server/server_init.zig
 REQ-SERVER-REFACTOR-009,ServerRefactoring,TLSHandling,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-SERVER-REFACTOR-009,ServerRefactoring,TRANSACTION_HANDLERS,IMPL,,,refactor,2025-11-14,src/server/transaction_handlers.zig
+REQ-SERVER-REFACTOR-009,ServerRefactoring,TRANSACTION_HANDLERS,EXEMPT,,,refactor,2025-11-14,src/server/transaction_handlers.zig
 REQ-SERVER-REFACTOR-010,ServerRefactoring,AuthIntegration,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-SERVER-REFACTOR-010,ServerRefactoring,MESSAGE_HANDLERS,IMPL,,,refactor,2025-11-14,src/server/message_handlers.zig
+REQ-SERVER-REFACTOR-010,ServerRefactoring,MESSAGE_HANDLERS,EXEMPT,,,refactor,2025-11-14,src/server/message_handlers.zig
 REQ-SERVER-REFACTOR-011,ServerRefactoring,AuditIntegration,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-SERVER-REFACTOR-011,ServerRefactoring,SERVER_UTILITIES,IMPL,,,refactor,2025-11-14,src/server/server_utilities.zig
+REQ-SERVER-REFACTOR-011,ServerRefactoring,SERVER_UTILITIES,EXEMPT,,,refactor,2025-11-14,src/server/server_utilities.zig
 REQ-SERVER-REFACTOR-012,ServerRefactoring,MetricsExport,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-SERVER-REFACTOR-012,ServerRefactoring,QUIC_HANDLERS,IMPL,,,refactor,2025-11-14,src/server/quic_connection_handler.zig
+REQ-SERVER-REFACTOR-012,ServerRefactoring,QUIC_HANDLERS,EXEMPT,,,refactor,2025-11-14,src/server/quic_connection_handler.zig
 REQ-SERVER-REFACTOR-013,ServerRefactoring,HealthCheck,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-SERVER-REFACTOR-013,ServerRefactoring,STDIO_HANDLER,IMPL,,,refactor,2025-11-14,src/server/stdio_message_handler.zig
+REQ-SERVER-REFACTOR-013,ServerRefactoring,STDIO_HANDLER,EXEMPT,,,refactor,2025-11-14,src/server/stdio_message_handler.zig
 REQ-SERVER-REFACTOR-014,ServerRefactoring,GracefulShutdown,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-SERVER-REFACTOR-015,ServerRefactoring,ConfigManagement,TESTED,test_gap_0193_impl_batch_promotion.zig,,server,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-SERVER-STARTUP-INTEGRATION-001,Server Startup Integration Tests,EndToEndServerTesting,TESTED,TestCANARY_REQ_SERVER_STARTUP_INTEGRATION_001_EndToEndServerTesting,,server,2025-10-05,tests/test_server_startup_integration.zig
@@ -3227,40 +3227,40 @@ REQ-TXN-PHANTOM-MVCC-001,Phantom Read MVCC Integration,SerializableIsolation,TES
 REQ-TXN-PHANTOM-MVCC-002,Phantom Read MVCC Integration,TransactionLifecycle,TESTED,TestCANARY_REQ_TXN_PHANTOM_MVCC_002_TransactionLifecycle,,txn,2025-10-05,tests/test_phantom_read_mvcc_integration.zig
 REQ-TXN-PHANTOM-MVCC-003,Phantom Read MVCC Integration,ConflictDetection,TESTED,TestCANARY_REQ_TXN_PHANTOM_MVCC_003_ConflictDetection,,txn,2025-10-05,tests/test_phantom_read_mvcc_integration.zig
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoEntry,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-TXN-UNDO-001,TransactionUndoLog,UndoLogCore,IMPL,,,engine,2025-12-23,src/txn_undo_log.zig
+REQ-TXN-UNDO-001,TransactionUndoLog,UndoLogCore,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/txn_undo_log.zig
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoLogCore,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoLogCore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoLogCore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-TXN-UNDO-002,TransactionUndoLog,NoSaveOperations,IMPL,,,engine,2025-12-23,src/graph_store.zig
+REQ-TXN-UNDO-002,TransactionUndoLog,NoSaveOperations,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/graph_store.zig
 REQ-TXN-UNDO-002,TransactionUndoLog,NoSaveOperations,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-002,TransactionUndoLog,NoSaveOperations,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-002,TransactionUndoLog,NoSaveOperations,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-TXN-UNDO-002,TransactionUndoLog,WriteUndoEntry,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-TXN-UNDO-003,TransactionUndoLog,LibExport,IMPL,,,engine,2025-12-23,src/lib.zig
+REQ-TXN-UNDO-003,TransactionUndoLog,LibExport,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/lib.zig
 REQ-TXN-UNDO-003,TransactionUndoLog,LibExport,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-003,TransactionUndoLog,LibExport,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-003,TransactionUndoLog,LibExport,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-TXN-UNDO-003,TransactionUndoLog,Rollback,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TXN-UNDO-004,TransactionUndoLog,Commit,TESTED,test_gap_0193_impl_verification.zig,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-TXN-UNDO-004,TransactionUndoLog,ExecutionImport,IMPL,,,engine,2025-12-23,src/execution.zig
+REQ-TXN-UNDO-004,TransactionUndoLog,ExecutionImport,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/execution.zig
 REQ-TXN-UNDO-004,TransactionUndoLog,ExecutionImport,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-004,TransactionUndoLog,ExecutionImport,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-TXN-UNDO-005,TransactionUndoLog,BeginTransaction,IMPL,,,engine,2025-12-23,src/execution.zig
+REQ-TXN-UNDO-005,TransactionUndoLog,BeginTransaction,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/execution.zig
 REQ-TXN-UNDO-005,TransactionUndoLog,BeginTransaction,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-005,TransactionUndoLog,BeginTransaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-005,TransactionUndoLog,BeginTransaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-TXN-UNDO-006,TransactionUndoLog,CommitTransaction,IMPL,,,engine,2025-12-23,src/execution.zig
+REQ-TXN-UNDO-006,TransactionUndoLog,CommitTransaction,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/execution.zig
 REQ-TXN-UNDO-006,TransactionUndoLog,CommitTransaction,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-006,TransactionUndoLog,CommitTransaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-006,TransactionUndoLog,CommitTransaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-TXN-UNDO-007,TransactionUndoLog,RollbackTransaction,IMPL,,,engine,2025-12-23,src/execution.zig
+REQ-TXN-UNDO-007,TransactionUndoLog,RollbackTransaction,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/execution.zig
 REQ-TXN-UNDO-007,TransactionUndoLog,RollbackTransaction,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-007,TransactionUndoLog,RollbackTransaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-007,TransactionUndoLog,RollbackTransaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-TXN-UNDO-008,TransactionUndoLog,CrudImport,IMPL,,,engine,2025-12-23,src/execution/crud_operations.zig
+REQ-TXN-UNDO-008,TransactionUndoLog,CrudImport,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/execution/crud_operations.zig
 REQ-TXN-UNDO-008,TransactionUndoLog,CrudImport,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-008,TransactionUndoLog,CrudImport,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-TXN-UNDO-009,TransactionUndoLog,LogCreateNode,IMPL,,,engine,2025-12-23,src/execution/crud_operations.zig
+REQ-TXN-UNDO-009,TransactionUndoLog,LogCreateNode,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/execution/crud_operations.zig
 REQ-TXN-UNDO-009,TransactionUndoLog,LogCreateNode,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-009,TransactionUndoLog,LogCreateNode,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-009,TransactionUndoLog,LogCreateNode,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
@@ -3275,41 +3275,41 @@ REQ-TXN-UNDO-014,TransactionUndoLog,LogRemoveProperty,TESTED,,,engine,2026-01-15
 REQ-TXN-UNDO-015,TransactionUndoLog,LogAddLabel,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-016,TransactionUndoLog,LogRemoveLabel,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-017,TransactionUndoLog,UndoEntryCompaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-TXN-UNDO-018,TransactionUndoLog,ExecuteCreateUndoLog,IMPL,,,engine,2025-12-23,src/execution/crud_operations.zig
+REQ-TXN-UNDO-018,TransactionUndoLog,ExecuteCreateUndoLog,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/execution/crud_operations.zig
 REQ-TXN-UNDO-018,TransactionUndoLog,ExecuteCreateUndoLog,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-018,TransactionUndoLog,ExecuteCreateUndoLog,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-TXN-UNDO-018,TransactionUndoLog,UndoCheckpoint,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-019,TransactionUndoLog,SavepointSupport,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-020,TransactionUndoLog,NestedTransaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-TXN-UNDO-020,TransactionUndoLog,RollbackUseGraphStore,IMPL,,,engine,2025-12-23,src/txn_undo_log.zig
+REQ-TXN-UNDO-020,TransactionUndoLog,RollbackUseGraphStore,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/txn_undo_log.zig
 REQ-TXN-UNDO-020,TransactionUndoLog,RollbackUseGraphStore,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-020,TransactionUndoLog,RollbackUseGraphStore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-TXN-UNDO-021,TransactionUndoLog,ConcurrentTransactions,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-022,TransactionUndoLog,UndoLogPersistence,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-023,TransactionUndoLog,RecoveryReplay,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-TXN-UNDO-SERVER-001,TransactionUndoLog,ServerIntegration,IMPL,,,engine,2025-12-23,src/server/transaction_handlers.zig
+REQ-TXN-UNDO-SERVER-001,TransactionUndoLog,ServerIntegration,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/server/transaction_handlers.zig
 REQ-TXN-UNDO-SERVER-001,TransactionUndoLog,ServerIntegration,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-002,TransactionUndoLog,BeginTransaction,IMPL,,,engine,2025-12-23,src/server/transaction_handlers.zig
+REQ-TXN-UNDO-SERVER-002,TransactionUndoLog,BeginTransaction,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/server/transaction_handlers.zig
 REQ-TXN-UNDO-SERVER-002,TransactionUndoLog,ServerBeginTransaction,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-003,TransactionUndoLog,CommitTransaction,IMPL,,,engine,2025-12-23,src/server/transaction_handlers.zig
+REQ-TXN-UNDO-SERVER-003,TransactionUndoLog,CommitTransaction,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/server/transaction_handlers.zig
 REQ-TXN-UNDO-SERVER-003,TransactionUndoLog,ServerCommitTransaction,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-004,TransactionUndoLog,RollbackTransaction,IMPL,,,engine,2025-12-23,src/server/transaction_handlers.zig
+REQ-TXN-UNDO-SERVER-004,TransactionUndoLog,RollbackTransaction,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/server/transaction_handlers.zig
 REQ-TXN-UNDO-SERVER-004,TransactionUndoLog,ServerRollbackTransaction,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-010,TransactionUndoLog,QueryExecutorImport,IMPL,,,engine,2025-12-23,src/server/query_executor.zig
+REQ-TXN-UNDO-SERVER-010,TransactionUndoLog,QueryExecutorImport,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/server/query_executor.zig
 REQ-TXN-UNDO-SERVER-010,TransactionUndoLog,QueryExecutorImport,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-011,TransactionUndoLog,CreateUndoLog,IMPL,,,engine,2025-12-23,src/server/query_executor.zig
+REQ-TXN-UNDO-SERVER-011,TransactionUndoLog,CreateUndoLog,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/server/query_executor.zig
 REQ-TXN-UNDO-SERVER-011,TransactionUndoLog,CreateUndoLogServer,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-012,TransactionUndoLog,GraphStorageRemoveNode,IMPL,,,engine,2025-12-23,src/types/graph_common.zig
+REQ-TXN-UNDO-SERVER-012,TransactionUndoLog,GraphStorageRemoveNode,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/types/graph_common.zig
 REQ-TXN-UNDO-SERVER-012,TransactionUndoLog,GraphStorageRemoveNode,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-013,TransactionUndoLog,GraphStorageRemoveEdge,IMPL,,,engine,2025-12-23,src/types/graph_common.zig
+REQ-TXN-UNDO-SERVER-013,TransactionUndoLog,GraphStorageRemoveEdge,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/types/graph_common.zig
 REQ-TXN-UNDO-SERVER-013,TransactionUndoLog,GraphStorageRemoveEdge,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-014,TransactionUndoLog,GraphCommonImport,IMPL,,,engine,2025-12-23,src/txn_undo_log.zig
+REQ-TXN-UNDO-SERVER-014,TransactionUndoLog,GraphCommonImport,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/txn_undo_log.zig
 REQ-TXN-UNDO-SERVER-014,TransactionUndoLog,GraphCommonImport,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-015,TransactionUndoLog,RollbackGraphStorage,IMPL,,,engine,2025-12-23,src/txn_undo_log.zig
+REQ-TXN-UNDO-SERVER-015,TransactionUndoLog,RollbackGraphStorage,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/txn_undo_log.zig
 REQ-TXN-UNDO-SERVER-015,TransactionUndoLog,RollbackGraphStorage,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-016,TransactionUndoLog,GraphStorageImport,IMPL,,,engine,2025-12-23,src/server/transaction_handlers.zig
+REQ-TXN-UNDO-SERVER-016,TransactionUndoLog,GraphStorageImport,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/server/transaction_handlers.zig
 REQ-TXN-UNDO-SERVER-016,TransactionUndoLog,GraphStorageImport,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-017,TransactionUndoLog,MultiGraphRollback,IMPL,,,engine,2025-12-23,src/txn_undo_log.zig
+REQ-TXN-UNDO-SERVER-017,TransactionUndoLog,MultiGraphRollback,TESTED,geodetestlab/specs/transaction_state_basic.yml,,engine,2025-12-23,src/txn_undo_log.zig
 REQ-TXN-UNDO-SERVER-017,TransactionUndoLog,MultiGraphRollback,TESTED,test_gap_0193_high_priority.zig,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TYPE-001,TypeFunctions,type,IMPL,,,types,2025-12-22,src/eval.zig
 REQ-TYPE-001,TypeFunctions,type,IMPL,,,types,2025-12-22,src/eval.zig

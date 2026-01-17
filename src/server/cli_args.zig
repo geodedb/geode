@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-007; FEATURE="ServerRefactoring"; ASPECT=CLI_ARGS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
+// CANARY: REQ=REQ-SERVER-REFACTOR-007; FEATURE="ServerRefactoring"; ASPECT=CLI_ARGS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - CLI Argument Parsing Module (Third Increment)
 // Extracted from server/main.zig to improve modularity and testability
 

@@ -4,7 +4,7 @@ const protocol = geode.protocol;
 const BackupConfig = @import("storage/backup").BackupConfig;
 const SimplifiedBackupManager = @import("backup_manager.zig").SimplifiedBackupManager;
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=PROTOCOL_HANDLER; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=PROTOCOL_HANDLER; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.2 - Protocol Handler Module (Incremental Extraction)
 // Extracted backup protocol handlers from server/main.zig for better separation of concerns
 

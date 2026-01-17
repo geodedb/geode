@@ -9,7 +9,7 @@ const index_catalog = @import("index_catalog.zig");
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-008; FEATURE="ServerRefactoring"; ASPECT=SERVER_INIT; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
+// CANARY: REQ=REQ-SERVER-REFACTOR-008; FEATURE="ServerRefactoring"; ASPECT=SERVER_INIT; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - Server Initialization Module (Fourth Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
 

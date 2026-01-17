@@ -236,10 +236,10 @@ fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
     result.rows = try unique_rows.toOwnedSlice(allocator);
 }
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=MATCH_OPERATIONS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
+// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=MATCH_OPERATIONS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted MATCH operations from execution.zig for better modularity (M1 Phase 6)
 
-// CANARY: REQ=REQ-MULTI-GRAPH-013; FEATURE="MultiGraphIsolation"; ASPECT=MatchCreate; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+// CANARY: REQ=REQ-MULTI-GRAPH-013; FEATURE="MultiGraphIsolation"; ASPECT=MatchCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, current_graph: ?[]const u8) !ExecutionResult {
     // First execute MATCH to get bindings - use full MATCH path to handle all cases (multi-node, etc)
     const match_result = try executeMatchQueryWithParams(allocator, q, &.{}, &.{}, q.inline_let_bindings, current_graph);
@@ -355,7 +355,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, curre
 }
 
 // Execute MATCH + CALL pattern with node binding
-// CANARY: REQ=REQ-MULTI-GRAPH-010; FEATURE="MultiGraphIsolation"; ASPECT=MatchCallFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+// CANARY: REQ=REQ-MULTI-GRAPH-010; FEATURE="MultiGraphIsolation"; ASPECT=MatchCallFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
     // CANARY: REQ=REQ-GQL-MATCH-CALL-BINDING; FEATURE="MatchCallBinding"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-13
     // Fix: Handle multiple comma-separated MATCH patterns and bind all matched nodes
@@ -578,7 +578,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
     return call_result;
 }
 
-// CANARY: REQ=REQ-MULTI-GRAPH-011; FEATURE="MultiGraphIsolation"; ASPECT=MatchQueryWithParams; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+// CANARY: REQ=REQ-MULTI-GRAPH-011; FEATURE="MultiGraphIsolation"; ASPECT=MatchQueryWithParams; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeMatchQueryWithParams(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     // Call the main executeMatchQuery implementation with parameters stored in a context
     // For now, we'll add the parameters to the environment when evaluating expressions
@@ -590,7 +590,7 @@ pub fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionR
 }
 
 // CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSeparatedMatches"; ASPECT=CartesianProduct; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
-// CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="MultiGraphIsolation"; ASPECT=MultiNodeMatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+// CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="MultiGraphIsolation"; ASPECT=MultiNodeMatch; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Handle comma-separated node patterns by creating Cartesian product with graph isolation
 pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     _ = inline_let_bindings;
@@ -1644,7 +1644,7 @@ fn whereExprReferencesVar(expr: ast.Expr, var_name: []const u8) bool {
 }
 
 // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-004; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoinImpl; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
-// CANARY: REQ=REQ-MULTI-GRAPH-009; FEATURE="MultiGraphIsolation"; ASPECT=OptionalMatchFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+// CANARY: REQ=REQ-MULTI-GRAPH-009; FEATURE="MultiGraphIsolation"; ASPECT=OptionalMatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH + OPTIONAL MATCH patterns as left outer join with graph isolation
 // e.g., MATCH (p:Person) OPTIONAL MATCH (p)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name
 fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
@@ -2924,7 +2924,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     return final_result;
 }
 
-// CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+// CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
@@ -3835,7 +3835,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             while (node_iter.next()) |entry| {
                 const node = entry.value_ptr;
 
-                // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=NodeFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=NodeFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
 
@@ -4208,7 +4208,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 while (start_node_iter.next()) |entry| {
                     const start_node = entry.value_ptr;
 
-                    // CANARY: REQ=REQ-MULTI-GRAPH-021; FEATURE="MultiGraphIsolation"; ASPECT=VarLengthPathFilter; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                    // CANARY: REQ=REQ-MULTI-GRAPH-021; FEATURE="MultiGraphIsolation"; ASPECT=VarLengthPathFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                     // Filter by graph - only include nodes from the current graph
                     if (!std.mem.eql(u8, start_node.graph_name, filter_graph)) continue;
 
@@ -5228,7 +5228,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
             for (left_nodes_to_process.items) |left_node| {
 
-                // CANARY: REQ=REQ-MULTI-GRAPH-022; FEATURE="MultiGraphIsolation"; ASPECT=RelPatternFilter; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                // CANARY: REQ=REQ-MULTI-GRAPH-022; FEATURE="MultiGraphIsolation"; ASPECT=RelPatternFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
 
@@ -5774,7 +5774,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             while (iter.next()) |entry| {
                 const node = entry.value_ptr;
 
-                // CANARY: REQ=REQ-MULTI-GRAPH-023; FEATURE="MultiGraphIsolation"; ASPECT=SimpleNodeFilter; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                // CANARY: REQ=REQ-MULTI-GRAPH-023; FEATURE="MultiGraphIsolation"; ASPECT=SimpleNodeFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
 
@@ -5876,7 +5876,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     if (!passes_where) {
                         // NOTE: Don't free env_names/env_values here as evalExpr for WHERE
                         // may have called withBinding which already freed them.
-                        // CANARY: REQ=REQ-MEM-FIX-002; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=IMPL; OWNER=execution; UPDATED=2025-10-25
+                        // CANARY: REQ=REQ-MEM-FIX-002; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-10-25
                         // if (match_variable != null) {
                         //     allocator.free(env_names);
                         //     allocator.free(env_values);
@@ -5898,7 +5898,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     if (!passes_filter) {
                         // NOTE: Don't free env_names/env_values here as evalExpr for FILTER
                         // may have called withBinding which already freed them.
-                        // CANARY: REQ=REQ-MEM-FIX-003; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=IMPL; OWNER=execution; UPDATED=2025-10-25
+                        // CANARY: REQ=REQ-MEM-FIX-003; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-10-25
                         // if (match_variable != null) {
                         //     allocator.free(env_names);
                         //     allocator.free(env_values);
@@ -6083,7 +6083,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // freed by eval.withBinding during pattern comprehension evaluation.
                 // withBinding takes ownership of the arrays when creating new bindings.
                 // This prevents double-free errors.
-                // CANARY: REQ=REQ-MEM-FIX-001; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=IMPL; OWNER=execution; UPDATED=2025-10-25
+                // CANARY: REQ=REQ-MEM-FIX-001; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-10-25
                 // if (match_variable != null) {
                 //     allocator.free(env_names);
                 //     allocator.free(env_values);

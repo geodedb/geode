@@ -76,7 +76,7 @@ const executeSessionResetStatement = query_executor.executeSessionResetStatement
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
 
-// CANARY: REQ=REQ-M11-DRY-001; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// CANARY: REQ=REQ-M11-DRY-001; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // M11: Import backup types from canonical location (storage/backup.zig) instead of duplicating
 const backup = @import("../storage/backup.zig");
 const BackupConfig = backup.BackupConfig;

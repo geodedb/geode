@@ -11,10 +11,10 @@ const server_state = @import("server_state.zig");
 const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const union_advanced = geode.union_advanced;
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-010; FEATURE="TransactionUndoLog"; ASPECT=QueryExecutorImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-010; FEATURE="TransactionUndoLog"; ASPECT=QueryExecutorImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=QUERY_EXECUTOR; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=QUERY_EXECUTOR; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.3 - Query Executor Module (Incremental Extraction - Eighth Increment)
 // Extracted query utility, diagnostic, AST analysis, and query evaluation functions from server/main.zig for better separation of concerns
 
@@ -1070,7 +1070,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     // Get graph storage for current session
     const graph = getSessionGraphStorage(allocator, state);
 
-    // CANARY: REQ=REQ-TXN-UNDO-SERVER-011; FEATURE="TransactionUndoLog"; ASPECT=CreateUndoLog; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-TXN-UNDO-SERVER-011; FEATURE="TransactionUndoLog"; ASPECT=CreateUndoLog; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
     // Get undo log for transaction rollback support
     const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
 

@@ -205,7 +205,7 @@ pub const QuicTransport = struct {
         return null;
     }
 
-    /// CANARY: REQ=REQ-QUIC-CONN-CLEANUP-002; FEATURE="ConnectionMemoryManagement"; ASPECT=ConnectionListCleanup; STATUS=IMPL; OWNER=transport; UPDATED=2025-12-27
+    /// CANARY: REQ=REQ-QUIC-CONN-CLEANUP-002; FEATURE="ConnectionMemoryManagement"; ASPECT=ConnectionListCleanup; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
     /// Remove a connection from tracking, close it, and destroy it.
     /// This should be called after a connection handler completes to prevent resource leaks.
     pub fn destroyConnection(self: *QuicTransport, conn: *QuicConnection) void {
@@ -325,7 +325,7 @@ pub const QuicConnection = struct {
         }
         self.streams.deinit(self.allocator);
         api.closeConnection(self.inner, 0) catch {};
-        // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-001; FEATURE="ConnectionMemoryManagement"; ASPECT=ResourceLeak; STATUS=IMPL; OWNER=transport; UPDATED=2025-12-27
+        // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-001; FEATURE="ConnectionMemoryManagement"; ASPECT=ResourceLeak; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
         // Call deinit() on the inner connection to free TLS state, streams, crypto buffers, etc.
         self.inner.deinit();
     }

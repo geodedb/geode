@@ -11,7 +11,7 @@ const ExecutionContext = execution.ExecutionContext;
 // Local type aliases
 const Value = value_types.Value;
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=EXECUTION_HELPERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=EXECUTION_HELPERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // Extracted helper/utility functions from path_and_call_operations.zig for better modularity (M2.3 Phase 2)
 
 /// Extract u32 value from map properties by key

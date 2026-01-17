@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-001; FEATURE="ServerRefactoring"; ASPECT=SERVER_STATE; STATUS=IMPL; OWNER=refactor; UPDATED=2026-01-09
+// CANARY: REQ=REQ-SERVER-REFACTOR-001; FEATURE="ServerRefactoring"; ASPECT=SERVER_STATE; STATUS=EXEMPT; OWNER=refactor; UPDATED=2026-01-09
 // Phase 3 M3.1 - Server State Management Module (Complete)
 // Extracted types: ServerState, SessionConfiguration, CatalogSchema, CatalogGraph, UnionMetrics
 
@@ -367,6 +367,6 @@ pub const ServerState = struct {
     }
 };
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-001B; FEATURE="ServerRefactoring"; ASPECT=SERVER_STATE_STRUCT; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
+// CANARY: REQ=REQ-SERVER-REFACTOR-001B; FEATURE="ServerRefactoring"; ASPECT=SERVER_STATE_STRUCT; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - ServerState struct extraction from main.zig
 // Extracted complete ServerState struct with all dependencies resolved

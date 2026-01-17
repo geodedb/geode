@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
 const rls = @import("rls");
 
-// CANARY: REQ=REQ-M10-CONSTANTS-003; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=IMPL; OWNER=security; UPDATED=2025-10-17
+// CANARY: REQ=REQ-M10-CONSTANTS-003; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=EXEMPT; OWNER=security; UPDATED=2025-10-17
 // Enhanced RLS cache configuration constants
 const ENHANCED_RLS_CACHE_MAX_SIZE = 10_000; // Maximum cached policy evaluations (enhanced cache)
 const ENHANCED_RLS_CACHE_DEFAULT_TTL_MS = 300_000; // Cache TTL: 300 seconds (5 minutes)

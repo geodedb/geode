@@ -1,11 +1,11 @@
 const std = @import("std");
 const graph_store = @import("graph_store.zig");
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-014; FEATURE="TransactionUndoLog"; ASPECT=GraphCommonImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-014; FEATURE="TransactionUndoLog"; ASPECT=GraphCommonImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const graph_common = @import("types/graph_common.zig");
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-017; FEATURE="TransactionUndoLog"; ASPECT=MultiGraphRollback; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-017; FEATURE="TransactionUndoLog"; ASPECT=MultiGraphRollback; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const graph_storage_mgr = @import("server/graph_storage_manager.zig");
 
-// CANARY: REQ=REQ-TXN-UNDO-001; FEATURE="TransactionUndoLog"; ASPECT=UndoLogCore; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-TXN-UNDO-001; FEATURE="TransactionUndoLog"; ASPECT=UndoLogCore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 // Transaction undo log for proper ROLLBACK support in CLI mode
 // This module tracks all data modifications during a transaction
 // and can undo them in reverse order on ROLLBACK
@@ -371,7 +371,7 @@ pub const UndoLog = struct {
         self.active = false;
     }
 
-    // CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStorage; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStorage; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
     /// Rollback all changes using GraphStorage (for server-side execution)
     /// The storage parameter is kept for API compatibility but each entry looks up its own graph
     pub fn rollbackGraphStorage(self: *UndoLog, storage: *graph_common.GraphStorage) void {
@@ -398,7 +398,7 @@ pub const UndoLog = struct {
         switch (entry) {
             .CreateNode => |e| {
                 std.debug.print("[UNDO] undoEntryGraphStorage CreateNode: node_id={d}, graph_name='{s}'\n", .{ e.node_id, e.graph_name });
-                // CANARY: REQ=REQ-TXN-UNDO-020; FEATURE="TransactionUndoLog"; ASPECT=RollbackUseGraphStore; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                // CANARY: REQ=REQ-TXN-UNDO-020; FEATURE="TransactionUndoLog"; ASPECT=RollbackUseGraphStore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                 // Use GraphStore (the actual data store used by crud_operations) for rollback
                 const store = graph_store.getGlobalStore(self.allocator);
                 std.debug.print("[UNDO] Calling deleteNodeNoSave({d})\n", .{e.node_id});

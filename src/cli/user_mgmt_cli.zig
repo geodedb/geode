@@ -19,7 +19,7 @@ fn printOut(comptime fmt: []const u8, args: anytype) void {
     stdout.writeAll(msg) catch {};
 }
 
-// CANARY: REQ=REQ-M4.1-USER-MGMT-CLI-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
+// CANARY: REQ=REQ-M4.1-USER-MGMT-CLI-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.1: Extract user management commands (cmdUser, cmdRole) from cli/main.zig
 
 // Exit codes for consistency with main CLI

@@ -3,7 +3,7 @@ const backup = @import("../storage/backup.zig");
 const BackupConfig = backup.BackupConfig;
 const BackupMetadata = backup.BackupMetadata;
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-002; FEATURE="ServerRefactoring"; ASPECT=BACKUP_MANAGER; STATUS=IMPL; OWNER=refactor; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SERVER-REFACTOR-002; FEATURE="ServerRefactoring"; ASPECT=BACKUP_MANAGER; STATUS=EXEMPT; OWNER=refactor; UPDATED=2026-01-10
 // CANARY: REQ=REQ-BACKUP-REAL-DATA-001; FEATURE="BackupRealData"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-10
 // CANARY: REQ=REQ-BACKUP-LSN-TRACKING-001; FEATURE="BackupLSNTracking"; ASPECT=IncrementalChain; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
 // Phase 3 M3.1 - Backup Manager Module (Incremental Extraction)

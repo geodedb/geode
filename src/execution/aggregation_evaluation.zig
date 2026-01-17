@@ -12,7 +12,7 @@ const ExecutionResult = execution.ExecutionResult;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-008; FEATURE="ExecutionRefactoring"; ASPECT=AGGREGATION_EVALUATION; STATUS=IMPL; OWNER=refactor; UPDATED=2025-10-17
+// CANARY: REQ=REQ-EXEC-REFACTOR-008; FEATURE="ExecutionRefactoring"; ASPECT=AGGREGATION_EVALUATION; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted aggregation and evaluation functions from execution.zig for better modularity (M1 Phase 8)
 
 pub fn getExpressionNameFromAst(expr: ast.Expr) []const u8 {

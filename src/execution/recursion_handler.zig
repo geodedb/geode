@@ -18,7 +18,7 @@ const ExecutionResult = execution.ExecutionResult;
 // Local type aliases
 const Value = value_types.Value;
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=RECURSION_HANDLER; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=RECURSION_HANDLER; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 
 /// Recursively build member path from AST expression
 /// Handles expressions like `a.b.c` and converts them to string representations

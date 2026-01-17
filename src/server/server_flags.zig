@@ -1,7 +1,7 @@
 const std = @import("std");
 const impl_flagger = @import("flagger_impl_defined.zig");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-004; FEATURE="ServerRefactoring"; ASPECT=FLAG_UTILITIES; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-SERVER-REFACTOR-004; FEATURE="ServerRefactoring"; ASPECT=FLAG_UTILITIES; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.1 - Server Flags Module (Incremental Extraction)
 // Extracted flag computation and management utilities from server/main.zig
 

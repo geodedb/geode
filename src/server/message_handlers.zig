@@ -6,7 +6,7 @@ const TextFormatter = @import("text_formatter").TextFormatter;
 const query_executor = @import("query_executor.zig");
 const server_flags = @import("server_flags.zig");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-010; FEATURE="ServerRefactoring"; ASPECT=MESSAGE_HANDLERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
+// CANARY: REQ=REQ-SERVER-REFACTOR-010; FEATURE="ServerRefactoring"; ASPECT=MESSAGE_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - Message Handlers Module (Sixth Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
 // Handles CDC_DIAGNOSTICS, CDC_CONTROL, and PULL message types

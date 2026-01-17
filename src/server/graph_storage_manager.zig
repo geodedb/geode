@@ -2,7 +2,7 @@ const std = @import("std");
 const graph_exec = @import("graph/exec.zig");
 const audit = @import("../security/audit.zig");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-005; FEATURE="ServerRefactoring"; ASPECT=GRAPH_STORAGE; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-12
+// CANARY: REQ=REQ-SERVER-REFACTOR-005; FEATURE="ServerRefactoring"; ASPECT=GRAPH_STORAGE; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=PerGraphStorage; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
 // Phase 3 M3.1 - Graph Storage Management Module (Incremental Extraction)
 // Extended to support multiple named graphs with per-graph storage

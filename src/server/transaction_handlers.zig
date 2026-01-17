@@ -1,14 +1,14 @@
 const std = @import("std");
 const ServerState = @import("server_state.zig").ServerState;
 const wal_mod = @import("wal");
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-001; FEATURE="TransactionUndoLog"; ASPECT=ServerIntegration; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-001; FEATURE="TransactionUndoLog"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
 const graph_store = @import("../graph_store.zig");
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-016; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-016; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const graph_exec = @import("graph/exec.zig");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-009; FEATURE="ServerRefactoring"; ASPECT=TRANSACTION_HANDLERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
+// CANARY: REQ=REQ-SERVER-REFACTOR-009; FEATURE="ServerRefactoring"; ASPECT=TRANSACTION_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - Transaction Message Handlers Module (Fifth Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
 
@@ -52,7 +52,7 @@ pub fn handleBegin(allocator: std.mem.Allocator, state: *ServerState) !?[]const 
         }
         state.current_mvcc_txn = state.mvcc_manager.?.beginTransaction(.SnapshotIsolation) catch null;
 
-        // CANARY: REQ=REQ-TXN-UNDO-SERVER-002; FEATURE="TransactionUndoLog"; ASPECT=BeginTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+        // CANARY: REQ=REQ-TXN-UNDO-SERVER-002; FEATURE="TransactionUndoLog"; ASPECT=BeginTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
         // Start undo log for tracking changes during this transaction
         const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
         undo_log.begin();
@@ -129,7 +129,7 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
         state.active_txn = null;
         state.in_txn = false;
 
-        // CANARY: REQ=REQ-TXN-UNDO-SERVER-003; FEATURE="TransactionUndoLog"; ASPECT=CommitTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+        // CANARY: REQ=REQ-TXN-UNDO-SERVER-003; FEATURE="TransactionUndoLog"; ASPECT=CommitTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
         // Commit the undo log - clears the log and keeps changes
         const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
         undo_log.commit();
@@ -177,7 +177,7 @@ pub fn handleRollback(allocator: std.mem.Allocator, state: *ServerState) !?[]con
             }
         }
 
-        // CANARY: REQ=REQ-TXN-UNDO-SERVER-004; FEATURE="TransactionUndoLog"; ASPECT=RollbackTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+        // CANARY: REQ=REQ-TXN-UNDO-SERVER-004; FEATURE="TransactionUndoLog"; ASPECT=RollbackTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
         // Rollback using the undo log - undoes all changes in reverse order
         // Use session graph storage for server-side rollback
         const session_storage = getSessionGraphStorage(allocator, state);

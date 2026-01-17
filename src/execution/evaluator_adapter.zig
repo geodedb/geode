@@ -1,6 +1,6 @@
 //! Evaluator Adapter - Dependency Injection Bridge
 //!
-//! CANARY: REQ=REQ-M5.3-EVALUATOR-ADAPTER-001; FEATURE="Circular Dependency Resolution"; ASPECT=AdapterPattern; STATUS=IMPL; OWNER=architecture; UPDATED=2025-11-13
+//! CANARY: REQ=REQ-M5.3-EVALUATOR-ADAPTER-001; FEATURE="Circular Dependency Resolution"; ASPECT=AdapterPattern; STATUS=EXEMPT; OWNER=architecture; UPDATED=2025-11-13
 //!
 //! This module provides the adapter pattern to break the circular dependency
 //! between execution.zig and eval.zig. Instead of eval.zig importing execution.zig

@@ -765,7 +765,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     // This prevents overlapping with the prompt
     try stdout.writeAll("\r\n");
 
-    // CANARY: REQ=REQ-MULTI-GRAPH-031; FEATURE="MultiGraphIsolation"; ASPECT=DropGraphReset; STATUS=IMPL; OWNER=repl; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-MULTI-GRAPH-031; FEATURE="MultiGraphIsolation"; ASPECT=DropGraphReset; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=repl; UPDATED=2025-12-23
     // Check if this is a DROP GRAPH statement that drops the current graph
     // If so, reset current_graph to null (default graph) after execution
     var dropped_current_graph = false;

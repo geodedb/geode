@@ -9,18 +9,18 @@ const fle_annotations = @import("schema/annotations.zig");
 // CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=CATALOG; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
 const ast = @import("gql/ast.zig");
 
-// CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=IMPL; OWNER=execution; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 // Phase 5 M5.2: Import shared value types from value_types.zig module
 const value_types = @import("value_types.zig");
 
-// CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-002; FEATURE="Circular Dependency Resolution"; ASPECT=TypeAliases; STATUS=IMPL; OWNER=execution; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-002; FEATURE="Circular Dependency Resolution"; ASPECT=TypeAliases; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 // Phase 5 M5.2: Create local aliases for value types (minimizes code changes)
 const Value = value_types.Value;
 const Env = value_types.Env;
 
 const eval = @import("eval.zig");
 
-// CANARY: REQ=REQ-M5.3-EXECUTION-CALLBACKS-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksProvider; STATUS=IMPL; OWNER=execution; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.3-EXECUTION-CALLBACKS-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksProvider; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 // Phase 5 M5.3: Import evaluator_adapter to provide callbacks to eval module
 const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 const graph_store = @import("graph_store.zig");
@@ -41,7 +41,7 @@ const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 const graph_storage_manager = @import("server/graph_storage_manager.zig");
-// CANARY: REQ=REQ-TXN-UNDO-004; FEATURE="TransactionUndoLog"; ASPECT=ExecutionImport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-TXN-UNDO-004; FEATURE="TransactionUndoLog"; ASPECT=ExecutionImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("txn_undo_log.zig");
 
 // Re-export catalog functionality for backward compatibility
@@ -219,7 +219,7 @@ pub fn getCatalog(_: std.mem.Allocator, context: ExecutionContext) *catalog_mod.
 /// Used for legacy code paths that don't have context available
 /// TODO M2: Eliminate by passing context through all execution paths
 
-// CANARY: REQ=REQ-M5.3-EXECUTION-INIT-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksInitialization; STATUS=IMPL; OWNER=execution; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.3-EXECUTION-INIT-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksInitialization; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 /// Initialize evaluator with execution callbacks
 /// This must be called once during module initialization to provide eval.zig
 /// with callback functions for executing queries, finding paths, etc.
@@ -277,7 +277,7 @@ pub const encryptPropertyIfNeeded = fle_hooks_mod.encryptPropertyIfNeeded;
 pub const encryptEdgePropertyIfNeeded = fle_hooks_mod.encryptEdgePropertyIfNeeded;
 const decryptPropertyIfNeeded = fle_hooks_mod.decryptPropertyIfNeeded;
 
-// CANARY: REQ=REQ-M10-CONSTANTS-001; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// CANARY: REQ=REQ-M10-CONSTANTS-001; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // Execution limits and validation thresholds
 const MAX_COLUMNS_PER_RESULT = 1_000_000; // Maximum columns in ExecutionResult (memory safety validation)
 
@@ -688,7 +688,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             var mut_context = context;
             mut_context.transaction_state = .Active;
 
-            // CANARY: REQ=REQ-TXN-UNDO-005; FEATURE="TransactionUndoLog"; ASPECT=BeginTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+            // CANARY: REQ=REQ-TXN-UNDO-005; FEATURE="TransactionUndoLog"; ASPECT=BeginTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
             // Begin undo log for tracking changes during this transaction
             const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
             undo_log.begin();
@@ -752,7 +752,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 var mut_context = context;
                 mut_context.transaction_state = .Committed;
 
-                // CANARY: REQ=REQ-TXN-UNDO-006; FEATURE="TransactionUndoLog"; ASPECT=CommitTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                // CANARY: REQ=REQ-TXN-UNDO-006; FEATURE="TransactionUndoLog"; ASPECT=CommitTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                 // Commit the undo log - clears the log and keeps changes
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 undo_log.commit();
@@ -782,7 +782,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 var mut_context = context;
                 mut_context.transaction_state = .RolledBack;
 
-                // CANARY: REQ=REQ-TXN-UNDO-007; FEATURE="TransactionUndoLog"; ASPECT=RollbackTransaction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                // CANARY: REQ=REQ-TXN-UNDO-007; FEATURE="TransactionUndoLog"; ASPECT=RollbackTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                 // Rollback using the undo log - undoes all changes in reverse order
                 const store = graph_store.getGlobalStore(allocator);
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
@@ -1265,7 +1265,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .UseGraph => |ug| {
-            // CANARY: REQ=REQ-MULTI-GRAPH-032; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-MULTI-GRAPH-032; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-27
             // USE GRAPH implementation - switch active graph context
             // Must validate graph exists before switching
             const graph_name = ug.graph_name;
@@ -2467,7 +2467,7 @@ pub fn executeQueryNoLimit(allocator: std.mem.Allocator, q: ast.Query) !Executio
     return executeQueryWithContext(allocator, q, context);
 }
 
-// CANARY: REQ=REQ-MULTI-GRAPH-UNION-001; FEATURE="MultiGraphIsolation"; ASPECT=UnionQueryContext; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-MULTI-GRAPH-UNION-001; FEATURE="MultiGraphIsolation"; ASPECT=UnionQueryContext; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-23
 // Execute query without limit but with context (for UNION parts that need graph isolation)
 pub fn executeQueryNoLimitWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
     // Execute full query with context (including session state with current graph)

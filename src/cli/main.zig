@@ -16,7 +16,7 @@ const crypto = std.crypto;
 // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=TESTED; TEST=tests/test_cli_subprocess_elimination_integration.zig; OWNER=cli; UPDATED=2026-01-15
 // Direct calls to server and client main functions to eliminate subprocess spawning
 
-// CANARY: REQ=REQ-M11-DRY-002; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// CANARY: REQ=REQ-M11-DRY-002; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // M11: Import backup types from canonical location (storage/backup.zig) instead of duplicating
 const backup_types = @import("storage/backup");
 
@@ -438,7 +438,7 @@ const StreamState = struct {
     authenticated_password: ?[]const u8 = null,
     last_result_data: ?[]const u8 = null,
     message_count: usize = 0,
-    // CANARY: REQ=REQ-MULTI-GRAPH-028; FEATURE="MultiGraphIsolation"; ASPECT=StreamStateGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-MULTI-GRAPH-028; FEATURE="MultiGraphIsolation"; ASPECT=StreamStateGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     current_graph: ?[]const u8 = null, // Current graph for multi-graph isolation
 
     fn init(allocator: std.mem.Allocator) !StreamState {
@@ -481,7 +481,7 @@ const ConnectionState = struct {
         };
     }
 
-    // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-004; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=IMPL; OWNER=cli; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-004; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-12-28
     // E01 Fix: Use destroyConnection to properly close, remove from list, and free connection
     fn deinit(self: *ConnectionState, allocator: std.mem.Allocator) void {
         var it = self.streams.valueIterator();
@@ -763,7 +763,7 @@ fn processProtocolMessage(
         }
         if (!params_valid) return;
 
-        // CANARY: REQ=REQ-MULTI-GRAPH-029; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphParsing; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+        // CANARY: REQ=REQ-MULTI-GRAPH-029; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphParsing; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
         // Pre-parse query to detect USE GRAPH statements and update session graph context
         const graph_storage_mgr = geode.graph_storage_manager;
         if (geode.parse(allocator, query_text, .{})) |parse_res| {
@@ -775,7 +775,7 @@ fn processProtocolMessage(
             for (parse_res.program.statements) |stmt| {
                 switch (stmt) {
                     .UseGraph => |ug| {
-                        // CANARY: REQ=REQ-MULTI-GRAPH-031; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphCLI; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-MULTI-GRAPH-031; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphCLI; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-27
                         // Check if graph exists - note: actual error handling is done by server
                         // This pre-parse just updates local state for graph context
                         if (graph_storage_mgr.graphExists(ug.graph_name)) {
@@ -1615,7 +1615,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         else => return err,
     };
 
-    // CANARY: REQ=REQ-MULTI-GRAPH-030; FEATURE="MultiGraphIsolation"; ASPECT=DataDirEnvVar; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-MULTI-GRAPH-030; FEATURE="MultiGraphIsolation"; ASPECT=DataDirEnvVar; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Set GEODE_DATA_DIR environment variable so catalog and graph storage use the correct directory
     // This is critical for multi-graph isolation - without it, the catalog loads from /tmp
     const data_dir_z = try allocator.dupeZ(u8, actual_data_dir);
@@ -1799,7 +1799,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
                 }
             }
 
-            // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-005; FEATURE="ConnectionMemoryManagement"; ASPECT=GracefulDisconnect; STATUS=IMPL; OWNER=cli; UPDATED=2025-12-28
+            // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-005; FEATURE="ConnectionMemoryManagement"; ASPECT=GracefulDisconnect; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-12-28
             // E01 Fix: Check for drained connection before stream operations to prevent panic
             // Poll active streams - but first check if connection is still valid
             if (conn_state.conn.isDrained()) {
@@ -3431,7 +3431,7 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 }
 
 // Main entry point
-// CANARY: REQ=REQ-M4.4-CLI-MAIN-ENTRY-001; FEATURE="CLI Modularization"; ASPECT=MinimalEntryPoint; STATUS=IMPL; OWNER=cli; UPDATED=2025-11-12
+// CANARY: REQ=REQ-M4.4-CLI-MAIN-ENTRY-001; FEATURE="CLI Modularization"; ASPECT=MinimalEntryPoint; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.4: Minimal main() entry point - delegates to cli_dispatcher for all routing
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

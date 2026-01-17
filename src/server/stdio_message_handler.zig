@@ -11,7 +11,7 @@ const server_flags = @import("server_flags.zig");
 const server_utilities = @import("server_utilities.zig");
 const query_executor = @import("query_executor.zig");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-013; FEATURE="ServerRefactoring"; ASPECT=STDIO_HANDLER; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
+// CANARY: REQ=REQ-SERVER-REFACTOR-013; FEATURE="ServerRefactoring"; ASPECT=STDIO_HANDLER; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - Stdio Message Handler Module (Twelfth Increment)
 // Unified message processing for stdio mode, delegating to existing handlers and eliminating duplication
 

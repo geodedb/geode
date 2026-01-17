@@ -412,7 +412,7 @@ pub const GraphStorage = struct {
         }
     }
 
-    // CANARY: REQ=REQ-TXN-UNDO-SERVER-012; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageRemoveNode; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-TXN-UNDO-SERVER-012; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageRemoveNode; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
     // Remove a node from the graph (for rollback support)
     pub fn removeNode(self: *GraphStorage, node_id: NodeId) void {
         if (self.audit_logger) |logger| {
@@ -475,7 +475,7 @@ pub const GraphStorage = struct {
         _ = self.nodes.remove(node_id);
     }
 
-    // CANARY: REQ=REQ-TXN-UNDO-SERVER-013; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageRemoveEdge; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-TXN-UNDO-SERVER-013; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageRemoveEdge; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
     // Mark an edge as deleted (for rollback support) - we can't actually remove from ArrayList
     // without reindexing, so we mark it by setting source/target to max value
     pub fn removeEdge(self: *GraphStorage, edge_id: EdgeId) void {

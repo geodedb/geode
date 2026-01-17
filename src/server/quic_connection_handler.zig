@@ -21,7 +21,7 @@ const graph_storage_mgr = @import("graph_storage_manager.zig");
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
+// CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
 // Contains handleQuicConnection and processMessage functions for QUIC protocol handling
@@ -74,7 +74,7 @@ pub fn handleQuicConnection(
 ) !void {
     _ = env_wal_compact_interval;
     _ = _force_serialization_failure_unused;
-    // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=IMPL; OWNER=server; UPDATED=2025-12-27
+    // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
     // Use destroyConnection to properly remove from transport list, close, and free resources
     defer transport.destroyConnection(conn);
     std.debug.print("[QUIC-HANDLER] Entering handleQuicConnection\n", .{});
@@ -357,7 +357,7 @@ pub fn processMessage(
                             // Execute side-effect statements (USE GRAPH, CREATE GRAPH, etc.)
                             switch (earlier_st) {
                                 .UseGraph => |ug| {
-                                    // CANARY: REQ=REQ-MULTI-GRAPH-030; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-27
+                                    // CANARY: REQ=REQ-MULTI-GRAPH-030; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-27
                                     // Check if graph exists before switching - return error if not
                                     if (!graph_storage_mgr.graphExists(ug.graph_name)) {
                                         return protocol.buildErrorLine(gpa, "GraphNotFound", "Graph does not exist", "") catch try gpa.dupe(u8, "");
@@ -480,7 +480,7 @@ pub fn processMessage(
                                 // Extract first row of parameters (most queries have single parameter row)
                                 const param_values = if (pr.len > 0) pr[0] else &[_]eval.Value{};
 
-                                // CANARY: REQ=REQ-MULTI-GRAPH-024; FEATURE="MultiGraphIsolation"; ASPECT=SessionStateContext; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                                // CANARY: REQ=REQ-MULTI-GRAPH-024; FEATURE="MultiGraphIsolation"; ASPECT=SessionStateContext; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                                 // Create SessionState with current graph for multi-graph isolation
                                 var session_state = execution.SessionState.init(gpa);
                                 session_state.graph = state.current_graph;

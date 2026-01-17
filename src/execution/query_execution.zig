@@ -1315,7 +1315,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         allocator.free(combined.names);
         allocator.free(combined.values);
     };
-    // CANARY: REQ=REQ-MULTI-GRAPH-012; FEATURE="MultiGraphIsolation"; ASPECT=QueryExecution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-MULTI-GRAPH-012; FEATURE="MultiGraphIsolation"; ASPECT=QueryExecution; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Extract current graph from session context for graph-isolated query execution
     const current_graph = if (context.session_state) |session| session.graph else null;
     return executeMatchQueryImpl(allocator, q, combined.names, combined.values, &.{}, current_graph);

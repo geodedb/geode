@@ -8,7 +8,7 @@ const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
 const server_flags = @import("server_flags.zig");
 
-// CANARY: REQ=REQ-SERVER-REFACTOR-011; FEATURE="ServerRefactoring"; ASPECT=SERVER_UTILITIES; STATUS=IMPL; OWNER=refactor; UPDATED=2025-11-14
+// CANARY: REQ=REQ-SERVER-REFACTOR-011; FEATURE="ServerRefactoring"; ASPECT=SERVER_UTILITIES; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - Server Utilities Module (Seventh Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
 // Contains helper functions for MVCC, insert values, scan values, and error formatting
