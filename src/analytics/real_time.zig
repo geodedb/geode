@@ -339,7 +339,7 @@ pub const AnomalyDetector = struct {
     }
 
     /// Extract relevant numeric value from event for anomaly detection
-    /// CANARY: REQ=REQ-ANALYTICS-METRIC-001; FEATURE="Metric Extraction"; STATUS=IMPL; OWNER=analytics; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-ANALYTICS-METRIC-001; FEATURE="Metric Extraction"; ASPECT=Core; STATUS=IMPL; OWNER=analytics; UPDATED=2026-01-10
     /// GAP-0051: Implements actual metric extraction based on event type and properties
     fn extractMetricValue(self: *AnomalyDetector, event: *const AnalyticsEvent) !f64 {
         _ = self;

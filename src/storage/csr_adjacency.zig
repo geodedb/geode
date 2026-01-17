@@ -165,7 +165,7 @@ pub const CSRAdjacency = struct {
     }
 
     // GAP-0123/GAP-0136: Edge input structure with property offset support
-    // CANARY: REQ=REQ-CSR-PROP-001; FEATURE="CSR Property Storage"; ASPECT=DataIntegrity; STATUS=IMPL; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-CSR-PROP-001; FEATURE="CSR Property Storage"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-13
     pub const EdgeInput = struct {
         from: u64,
         to: u64,
@@ -210,7 +210,7 @@ pub const CSRAdjacency = struct {
         for (edges) |edge| {
             const pos = temp_offsets[edge.from];
             // GAP-0123/GAP-0136: Store actual property offset from input
-            // CANARY: REQ=REQ-CSR-PROP-002; FEATURE="CSR Property Offset"; ASPECT=DataIntegrity; STATUS=IMPL; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-CSR-PROP-002; FEATURE="CSR Property Offset"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-13
             self.neighbors.items[pos] = EdgeEntry{
                 .target_node = edge.to,
                 .edge_id = edge.edge_id,
@@ -250,7 +250,7 @@ pub const CSRAdjacency = struct {
         // In a production system, you'd want incremental updates
 
         // Collect existing edges - preserving their properties_offset
-        // CANARY: REQ=REQ-CSR-PROP-003; FEATURE="CSR Property Preservation"; ASPECT=DataIntegrity; STATUS=IMPL; UPDATED=2026-01-13
+        // CANARY: REQ=REQ-CSR-PROP-003; FEATURE="CSR Property Preservation"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-13
         var edges = std.ArrayList(EdgeInput).init(self.allocator);
         defer edges.deinit();
 

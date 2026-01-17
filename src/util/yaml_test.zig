@@ -3,8 +3,7 @@ const yaml = @import("yaml.zig");
 const testing = std.testing;
 
 // Comprehensive test suite for YAML parser
-// CANARY: REQ=REQ-TEST-YAML-002; FEATURE="YAML Parser Tests"; ASPECT=Testing;
-// STATUS=IMPLEMENTED; TEST=yaml_comprehensive_tests; OWNER=test-team; UPDATED=2025-10-28
+// CANARY: REQ=REQ-TEST-YAML-002; FEATURE="YAML Parser Tests"; ASPECT=Testing; STATUS=TESTED; TEST=yaml_comprehensive_tests; OWNER=test; UPDATED=2026-01-17
 
 test "yaml: parse null value" {
     const allocator = testing.allocator;

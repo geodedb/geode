@@ -39,7 +39,7 @@ pub const CDCConfiguration = struct {
 
 /// Transaction context for CDC event correlation
 /// GAP-0073: Provides transaction ID for CDC event tracking
-/// CANARY: REQ=REQ-GQL-CDC-TXID-001; FEATURE="CDCTransactionTracking"; ASPECT=Consistency; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GQL-CDC-TXID-001; FEATURE="CDCTransactionTracking"; ASPECT=Consistency; STATUS=IMPL; OWNER=streaming; UPDATED=2026-01-10
 pub const TransactionContext = struct {
     /// Current transaction ID (0 = no active transaction)
     transaction_id: u64 = 0,

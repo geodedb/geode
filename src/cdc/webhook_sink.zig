@@ -55,9 +55,7 @@ pub const DeliveryGuarantee = enum {
 };
 
 /// Webhook sink for CDC events
-/// CANARY: REQ=REQ-GQL-CDC-001; FEATURE="CDC Webhook Hardening"; ASPECT=Reliability;
-/// STATUS=IMPLEMENTED; TEST=e2e_cdc_webhook_reliability; BENCH=benchmark_cdc_webhook_throughput;
-/// OWNER=streaming-team; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-CDC-001; FEATURE="CDC Webhook Hardening"; ASPECT=Reliability; STATUS=TESTED; TEST=e2e_cdc_webhook_reliability; BENCH=benchmark_cdc_webhook_throughput; OWNER=streaming; UPDATED=2026-01-17
 pub const WebhookSink = struct {
     allocator: std.mem.Allocator,
     config: WebhookConfig,

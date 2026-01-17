@@ -13,7 +13,7 @@ import tempfile
 import shutil
 
 class QuickTestRunner:
-    def __init__(self, specs_dir="geodetestlab/specs", binary="/home/benji/src/geode/geode/zig-out/bin/geode", log_dir="test_logs"):
+    def __init__(self, specs_dir="geodetestlab/specs", binary="/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode", log_dir="test_logs"):
         self.specs_dir = Path(specs_dir)
         self.binary = Path(binary)
         self.log_dir = Path(log_dir)

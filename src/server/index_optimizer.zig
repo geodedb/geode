@@ -1994,7 +1994,7 @@ pub const FullTextOptimizer = struct {
 
     /// Distributed query planning cost estimation for federation-aware optimization
     /// GAP-0114 FIX: Added per-shard cost breakdown for EXPLAIN output
-    /// CANARY: REQ=REQ-DISTRIBUTED-COST-BREAKDOWN-001; FEATURE="PerShardCostBreakdown"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-12
+    // CANARY: REQ=REQ-DISTRIBUTED-COST-BREAKDOWN-001; FEATURE="PerShardCostBreakdown"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-12
     pub fn estimateDistributedQueryCost(
         self: *IndexOptimizer,
         labels: []const []const u8,
@@ -2157,7 +2157,7 @@ pub const FullTextOptimizer = struct {
 
     /// Get federation-aware index recommendations
     /// GAP-0114 FIX: Implement federation-aware index recommendations
-    /// CANARY: REQ=REQ-FEDERATION-INDEX-REC-001; FEATURE="FederationIndexRecommendations"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-12
+    // CANARY: REQ=REQ-FEDERATION-INDEX-REC-001; FEATURE="FederationIndexRecommendations"; ASPECT=Index; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-12
     pub fn getFederationIndexRecommendations(
         self: *IndexOptimizer,
         query_patterns: []const QueryPattern,

@@ -26,7 +26,7 @@ pub const EvalError = value_types.EvalError;
 /// Handles both upscaling (multiplying by powers of 10) and downscaling (dividing)
 /// Returns Unsupported error if upscaling would overflow
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-002; FEATURE="Decimal Scale Conversion"; STATUS=IMPL
+/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-002; FEATURE="Decimal Scale Conversion"; ASPECT=Core; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-17
 pub fn scaleTo(coeff: i128, from: u8, to: u8) EvalError!i128 {
     if (from == to) return coeff;
     if (from > to) {
@@ -53,7 +53,7 @@ pub fn scaleTo(coeff: i128, from: u8, to: u8) EvalError!i128 {
 
 /// Expect a string value, return TypeMismatch error if not a string
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-003; FEATURE="Type Validators"; STATUS=IMPL
+/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-003; FEATURE="Type Validators"; ASPECT=Types; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-17
 pub fn expectString(v: Value) EvalError![]const u8 {
     return switch (v) {
         .Str => |s| s,
@@ -64,7 +64,7 @@ pub fn expectString(v: Value) EvalError![]const u8 {
 
 /// Expect an integer value, return TypeMismatch error if not an integer
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-004; FEATURE="Type Validators"; STATUS=IMPL
+/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-004; FEATURE="Type Validators"; ASPECT=Types; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-17
 pub fn expectInt(v: Value) EvalError!i64 {
     return switch (v) {
         .Int => |n| n,
@@ -80,7 +80,7 @@ pub fn expectInt(v: Value) EvalError!i64 {
 /// Handles recursive conversion for lists
 /// Graph types (Node, Edge, Map, Path) convert to Null as ExtValue doesn't support them
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-005; FEATURE="Value Converters"; STATUS=IMPL
+/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-005; FEATURE="Value Converters"; ASPECT=Core; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-17
 pub fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("../eval_extended.zig").ExtValue {
     return switch (value) {
         .Null => .{ .Null = {} },
@@ -138,7 +138,7 @@ pub fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("../
 /// Convert eval_extended.ExtValue to eval.Value
 /// Wraps advanced types in Value.ExtValue to preserve type information
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-006; FEATURE="Value Converters"; STATUS=IMPL
+/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-006; FEATURE="Value Converters"; ASPECT=Core; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-17
 pub fn extValueToValue(ext_value: @import("../eval_extended.zig").ExtValue) Value {
     return switch (ext_value) {
         .Null => .{ .Null = {} },
@@ -173,7 +173,7 @@ pub fn extValueToValue(ext_value: @import("../eval_extended.zig").ExtValue) Valu
 /// Note: Graph types (Node, Edge, Path) are graph-specific and don't have direct heap.Value equivalents.
 /// They should be handled in the graph execution layer, not converted to storage types.
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-007; FEATURE="Value Converters"; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-007; FEATURE="Value Converters"; ASPECT=Core; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-10
 pub fn evalValueToHeapValue(value: Value) heap.Value {
     return switch (value) {
         .Null => .{ .Null = {} },
@@ -224,7 +224,7 @@ pub fn evalValueToHeapValue(value: Value) heap.Value {
 /// Handles Real/Double to Decimal conversion with overflow protection
 /// Temporal types (Date, Time, TimestampTZ) wrapped in ExtValue
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-008; FEATURE="Value Converters"; STATUS=IMPL
+/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-008; FEATURE="Value Converters"; ASPECT=Core; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-17
 pub fn heapValueToEvalValue(value: heap.Value) Value {
     // eval_ext removed
 
@@ -290,7 +290,7 @@ pub fn heapValueToEvalValue(value: heap.Value) Value {
 // ============================================================================
 
 /// Convert ExtValue to heap.Value for storage operations
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-012; FEATURE="ExtValueHeapConversion"; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-012; FEATURE="ExtValueHeapConversion"; ASPECT=Core; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-10
 fn extValueToHeapValue(ext: @import("../eval_extended.zig").ExtValue) heap.Value {
     return switch (ext) {
         .Null => .{ .Null = {} },
@@ -324,7 +324,7 @@ fn extValueToHeapValue(ext: @import("../eval_extended.zig").ExtValue) heap.Value
 /// Compare two i128 values and return comparison result as i2
 /// Returns: -1 (less than), 0 (equal), 1 (greater than)
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-009; FEATURE="Comparison Helpers"; STATUS=IMPL
+/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-009; FEATURE="Comparison Helpers"; ASPECT=Core; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-17
 pub fn cmpI128(a: i128, b: i128) i2 {
     if (a < b) return -1;
     if (a > b) return 1;
@@ -334,7 +334,7 @@ pub fn cmpI128(a: i128, b: i128) i2 {
 /// Convert comparison result to boolean based on binary operator
 /// Supports: Eq, Ne, Lt, Le, Gt, Ge
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-010; FEATURE="Comparison Helpers"; STATUS=IMPL
+/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-010; FEATURE="Comparison Helpers"; ASPECT=Core; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-17
 pub fn cmpToBool(op: ast.BinOp, ord: i2) bool {
     return switch (op) {
         .Eq => ord == 0,
@@ -350,7 +350,7 @@ pub fn cmpToBool(op: ast.BinOp, ord: i2) bool {
 /// Compare two integers with a binary operator and return boolean Value
 /// Handles: Eq, Ne, Lt, Le, Gt, Ge
 ///
-/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-011; FEATURE="Comparison Helpers"; STATUS=IMPL
+/// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-011; FEATURE="Comparison Helpers"; ASPECT=Core; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-17
 pub fn cmpIntsOp(op: ast.BinOp, a: i64, b: i64) Value {
     return .{ .Bool = switch (op) {
         .Eq => a == b,

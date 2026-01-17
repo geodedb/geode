@@ -6,7 +6,7 @@ import yaml
 from pathlib import Path
 from collections import defaultdict
 
-def run_test(test_case, binary="/home/benji/src/geode/geode/zig-out/bin/geode"):
+def run_test(test_case, binary="/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"):
     """Run a single test case."""
     if test_case.get("skip", False):
         return None, "skipped"
@@ -76,7 +76,7 @@ def test_spec(spec_path):
 
 
 def main():
-    specs_dir = Path("/home/benji/src/geode/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs")
 
     # Focus on specs mentioned in user's context
     priority_specs = [

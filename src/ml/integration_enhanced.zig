@@ -442,7 +442,7 @@ pub const MLEngine = struct {
     }
 
     /// Calculate modularity gain for moving a node to a different community
-    /// CANARY: REQ=REQ-ML-MODULARITY-001; FEATURE="Louvain Modularity Gain"; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-ML-MODULARITY-001; FEATURE="Louvain Modularity Gain"; ASPECT=Core; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
     /// GAP-0050: Implements actual modularity gain calculation using standard formula
     /// ΔQ = [k_i,in / m - (Σ_tot * k_i) / (2m²)] where:
     ///   k_i,in = sum of edge weights from node i to nodes in target community
@@ -523,7 +523,7 @@ pub const MLEngine = struct {
     }
 
     /// Calculate overall modularity of current community assignment
-    /// CANARY: REQ=REQ-ML-MODULARITY-002; FEATURE="Graph Modularity Calculation"; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-ML-MODULARITY-002; FEATURE="Graph Modularity Calculation"; ASPECT=Graph; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
     /// GAP-0050: Implements actual modularity calculation using standard formula
     /// Q = (1/2m) * Σ_ij [A_ij - (k_i * k_j) / (2m)] * δ(c_i, c_j)
     fn calculateModularity(self: *Self, communities: *std.AutoHashMap(NodeId, u32)) !f32 {

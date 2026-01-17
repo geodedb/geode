@@ -5,7 +5,7 @@ import subprocess
 import os
 
 # Test the binary directly
-binary = "/home/benji/src/geode/geode/zig-out/bin/geode"
+binary = "/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"
 
 if not os.path.exists(binary):
     print(f"Binary not found: {binary}")

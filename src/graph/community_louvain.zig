@@ -1,7 +1,7 @@
 const std = @import("std");
 
 /// GAP-0078: Louvain community detection algorithm with modularity optimization
-/// CANARY: REQ=REQ-GRAPH-LOUVAIN-001; FEATURE="LouvainCommunityDetection"; ASPECT=GraphAnalytics; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GRAPH-LOUVAIN-001; FEATURE="LouvainCommunityDetection"; ASPECT=GraphAnalytics; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-10
 ///
 /// The Louvain algorithm optimizes modularity in two alternating phases:
 /// 1. Local optimization: Each node moves to neighboring community that maximizes modularity gain
@@ -121,7 +121,7 @@ pub fn detect(allocator: std.mem.Allocator, graph: [][]u32, resolution: f64, tol
 }
 
 /// GAP-0078: Calculate modularity score for a given community assignment
-/// CANARY: REQ=REQ-GRAPH-LOUVAIN-002; FEATURE="ModularityScore"; ASPECT=GraphAnalytics; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GRAPH-LOUVAIN-002; FEATURE="ModularityScore"; ASPECT=GraphAnalytics; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-10
 pub fn modularity(graph: [][]u32, communities: []u32, resolution: f64) f64 {
     const n = graph.len;
     if (n == 0 or communities.len != n) return 0;

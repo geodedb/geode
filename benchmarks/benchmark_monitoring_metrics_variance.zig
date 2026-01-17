@@ -55,7 +55,7 @@ const registry_mod = struct {
 // Benchmark monitoring metrics registry variance envelope.
 // Measures stability of snapshot collection time across repeated samples.
 // Thresholds (General class): CV <= 0.22, p95/mean <= 2.55
-// CANARY: REQ=REQ-GQL-081; FEATURE="MonitoringVariance"; ASPECT=LegacyVarianceEnvelope; STATUS=REMOVED; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope; OWNER=ops-team; UPDATED=2025-09-27 // superseded by unified benchmark (UnifiedVarianceEnvelope)
+// CANARY: REQ=REQ-GQL-081; FEATURE="MonitoringVariance"; ASPECT=LegacyVarianceEnvelope; STATUS=EXEMPT; BENCH=BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceEnvelope; OWNER=ops-team; UPDATED=2025-09-27
 
 fn takeSnapshot(reg: *registry_mod.Registry) u64 {
     // Simulate workload: observe some query latency histogram buckets.

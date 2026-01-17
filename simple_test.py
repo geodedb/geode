@@ -11,7 +11,7 @@ def test_geode_stdio():
         print(f"Using temporary directory: {temp_dir}")
         
         # Test server in stdio mode 
-        geode_binary = "/home/benji/src/geode/geode/zig-out/bin/geode"
+        geode_binary = "/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"
         
         try:
             # First, test that the binary runs at all

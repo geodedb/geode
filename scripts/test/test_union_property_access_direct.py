@@ -8,7 +8,7 @@ import time
 
 class UnionPropertyAccessTester:
     def __init__(self):
-        self.binary = "/home/benji/src/geode/geode/zig-out/bin/geodec"
+        self.binary = "/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geodec"
         self.passed = 0
         self.failed = 0
         self.results = []

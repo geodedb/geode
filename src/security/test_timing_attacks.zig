@@ -1,5 +1,5 @@
 // Test suite for timing attack resistance
-// CANARY: REQ=REQ-SECURITY-TIMING-001; FEATURE="TimingAttackResistance";
+// CANARY: REQ=REQ-SECURITY-TIMING-001; FEATURE="TimingAttackResistance"; ASPECT=Core; STATUS=IMPL; OWNER=security; UPDATED=2026-01-17
 //         ASPECT=TESTING; STATUS=IMPL; OWNER=security; UPDATED=2025-10-16
 
 const std = @import("std");

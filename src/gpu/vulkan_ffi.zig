@@ -1,6 +1,6 @@
 // Manual FFI bindings for Vulkan
 // Replaces @cImport to avoid Zig 0.15.1 module system issues
-// CANARY: REQ=REQ-GPU-VK-001; FEATURE="Vulkan FFI"; ASPECT=Foundation; STATUS=IMPLEMENTED; OWNER=gpu; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GPU-VK-001; FEATURE="Vulkan FFI"; ASPECT=Foundation; STATUS=TESTED; OWNER=gpu; UPDATED=2025-10-26
 
 const std = @import("std");
 

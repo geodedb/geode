@@ -31,7 +31,7 @@ variables:
 
 # =============================================================================
 # Governance Stage - Status and Feature Flag Checks
-# CANARY: REQ=REQ-CI-GOV-001; FEATURE="CI Governance Checks"; STATUS=TESTED; TEST=GAP-0219-CI-Tests-Block-Merge; OWNER=ci; UPDATED=2026-01-16
+# CANARY: REQ=REQ-CI-GOV-001; FEATURE="CI Governance Checks"; ASPECT=Core; STATUS=TESTED; TEST=GAP-0219-CI-Tests-Block-Merge; OWNER=ci; UPDATED=2026-01-16
 # GAP-0160: Adds CI enforcement for status-generate and no-feature-flags
 # =============================================================================
 
@@ -105,6 +105,60 @@ governance-canary-drift:
   allow_failure: true
 
 # =============================================================================
+# Governance Stage - CANARY Lint Check
+# CANARY: REQ=REQ-CI-CANARY-LINT-001; FEATURE="CI CANARY Linting"; ASPECT=Governance; STATUS=TESTED; TEST=governance-canary-lint; OWNER=ci; UPDATED=2026-01-17
+# GAP-0225/GAP-0226: Enforces CANARY marker schema compliance (ASPECT, OWNER, valid STATUS)
+# =============================================================================
+
+governance-canary-lint:
+  stage: governance
+  image: python:3.12-slim
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Running CANARY Marker Lint ==="
+      # Run the CANARY linter to check for malformed markers
+      python3 tools/canary_lint.py --repo . --fail-on-issues || {
+        echo "✗ CANARY markers have schema violations"
+        echo "Run 'python3 tools/canary_normalize.py --repo .' to fix"
+        exit 1
+      }
+      echo "✓ All CANARY markers conform to required schema"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: true  # Set to false after initial adoption
+
+# =============================================================================
+# Governance Stage - Conformance Sync Scanner
+# CANARY: REQ=REQ-CI-CONFORMANCE-SYNC-001; FEATURE="CI Conformance Sync"; ASPECT=Governance; STATUS=TESTED; TEST=governance-conformance-sync; OWNER=ci; UPDATED=2026-01-17
+# GAP-0228: Enforces REQ-GQL ID consistency (no gaps or duplicates)
+# =============================================================================
+
+governance-conformance-sync:
+  stage: governance
+  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Running Conformance Sync Scanner ==="
+      # Run the conformance sync scanner to check for REQ-GQL ID gaps/duplicates
+      zig run scripts/conformance_sync.zig -- --json --fail-on-issues > /tmp/conformance_report.json && {
+        echo "✓ No REQ-GQL ID gaps or duplicates found"
+        cat /tmp/conformance_report.json
+      } || {
+        echo "✗ Conformance issues detected"
+        cat /tmp/conformance_report.json
+        exit 1
+      }
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: true  # Set to false after initial adoption
+
+# =============================================================================
 # Test Stage - Unit Tests
 # =============================================================================
 
@@ -152,7 +206,7 @@ test-zig-release-safe:
 
 # =============================================================================
 # Test Stage - GQL Compliance Suite (geodetestlab)
-# CANARY: REQ=REQ-CI-COMPLIANCE-001; FEATURE="GQL Compliance CI"; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=ci; UPDATED=2026-01-14
+# CANARY: REQ=REQ-CI-COMPLIANCE-001; FEATURE="GQL Compliance CI"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=ci; UPDATED=2026-01-14
 # GAP-0167: Execute geodetestlab GQL compliance specs in CI
 # =============================================================================
 

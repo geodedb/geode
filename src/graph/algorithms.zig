@@ -57,7 +57,7 @@ const community_louvain = @import("community_louvain.zig");
 // Louvain community detection - now uses actual modularity optimization
 /// P2-3: Now accepts allocator parameter for labels allocation
 /// GAP-0078: Updated to use actual Louvain algorithm with real modularity calculation
-/// CANARY: REQ=REQ-GRAPH-LOUVAIN-003; FEATURE="LouvainIntegration"; ASPECT=GraphAnalytics; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GRAPH-LOUVAIN-003; FEATURE="LouvainIntegration"; ASPECT=GraphAnalytics; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-10
 pub fn communityDetect(allocator: std.mem.Allocator, g: *GraphHandle, method: enum { Louvain }, max_iter: u32, gamma: f64) !CommunityResult {
     _ = method;
     _ = max_iter;

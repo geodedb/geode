@@ -187,7 +187,7 @@ pub const Env = struct {
     }
 
     // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Environment; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-10-17
-    // CANARY: REQ=REQ-C4-001; FEATURE="MemoryLeakFix"; ASPECT=Environment; STATUS=IMPLEMENTED; OWNER=core; UPDATED=2025-10-17;
+    // CANARY: REQ=REQ-C4-001; FEATURE="MemoryLeakFix"; ASPECT=Environment; STATUS=TESTED; OWNER=core; UPDATED=2025-10-17
     //         EVIDENCE="Free old arrays in withBinding() to prevent memory leaks"
     /// Create a new environment with an additional binding (for list comprehension variable scopes)
     ///

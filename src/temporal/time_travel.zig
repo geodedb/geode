@@ -204,7 +204,7 @@ pub const TemporalStorage = struct {
         }
 
         // GAP-0119 FIX: Filter properties to show only values valid at the specified time
-        // CANARY: REQ=REQ-TEMPORAL-PROP-001; FEATURE="TemporalPropertyFiltering"; STATUS=IMPL; OWNER=temporal; UPDATED=2026-01-12
+        // CANARY: REQ=REQ-TEMPORAL-PROP-001; FEATURE="TemporalPropertyFiltering"; ASPECT=Temporal; STATUS=IMPL; OWNER=temporal; UPDATED=2026-01-12
         const filtered_node = self.filterNodePropertiesAsOf(node, as_of) catch return null;
         return filtered_node;
     }

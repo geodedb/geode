@@ -10,7 +10,7 @@ const cbo = @import("../planner/cbo.zig");
 /// Distributed query coordinator
 /// Handles scatter-gather pattern for federated queries
 /// GAP-0077: Now uses statistics registry for row estimates
-/// CANARY: REQ=REQ-DIST-STATS-001; FEATURE="DistributedStatsIntegration"; ASPECT=QueryPlanning; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-DIST-STATS-001; FEATURE="DistributedStatsIntegration"; ASPECT=QueryPlanning; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
 pub const QueryCoordinator = struct {
     allocator: std.mem.Allocator,
     config: federation.FederationConfig,
@@ -38,9 +38,7 @@ pub const QueryCoordinator = struct {
     }
 
     /// Execute a distributed query with global ORDER BY and LIMIT
-    /// CANARY: REQ=REQ-GQL-FED-001; FEATURE="Distributed Query Federation"; ASPECT=Core;
-    /// STATUS=IMPLEMENTED; TEST=e2e_federation_global_order; BENCH=benchmark_federation_merge;
-    /// OWNER=dist-team; UPDATED=2025-09-25
+    // CANARY: REQ=REQ-GQL-FED-001; FEATURE="Distributed Query Federation"; ASPECT=Core; STATUS=TESTED; TEST=e2e_federation_global_order; BENCH=benchmark_federation_merge; OWNER=distributed; UPDATED=2026-01-17
     pub fn executeDistributedQuery(
         self: *Self,
         query: []const u8,
@@ -86,7 +84,7 @@ pub const QueryCoordinator = struct {
         // Generate shard-specific query fragments
         for (participating_shards) |shard_id| {
             // GAP-0077: Use statistics for row estimate if available
-            // CANARY: REQ=REQ-DIST-STATS-002; FEATURE="ShardRowEstimate"; ASPECT=QueryPlanning; STATUS=IMPL; UPDATED=2026-01-10
+            // CANARY: REQ=REQ-DIST-STATS-002; FEATURE="ShardRowEstimate"; ASPECT=QueryPlanning; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
             const estimated_rows = self.estimateRowsForShard(table_name, shard_id, participating_shards.len);
 
             const fragment = QueryFragment{
@@ -219,7 +217,7 @@ pub const QueryCoordinator = struct {
         return results;
     }
 
-    // CANARY: REQ=REQ-DIST-LOCAL-001; FEATURE="DistributedLocalExecution"; STATUS=IMPL; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DIST-LOCAL-001; FEATURE="DistributedLocalExecution"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     /// Execute query fragment on local shard using the actual query executor
     fn executeLocalFragment(self: *Self, query_text: []const u8, params: []const protocol.Value) !federation.QueryResults {
         const start_time = std.time.milliTimestamp();
@@ -438,7 +436,7 @@ pub const QueryCoordinator = struct {
     }
 
     /// GAP-0077: Extract table name from query for statistics lookup
-    /// CANARY: REQ=REQ-DIST-STATS-003; FEATURE="TableNameExtraction"; ASPECT=QueryParsing; STATUS=IMPL; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DIST-STATS-003; FEATURE="TableNameExtraction"; ASPECT=QueryParsing; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     fn extractTableFromQuery(self: *Self, query: []const u8) ?[]const u8 {
         _ = self;
         // Simple heuristic: look for MATCH (x:TableName) or FROM TableName patterns
@@ -463,7 +461,7 @@ pub const QueryCoordinator = struct {
     }
 
     /// GAP-0077: Estimate rows for a shard using statistics
-    /// CANARY: REQ=REQ-DIST-STATS-004; FEATURE="ShardRowEstimation"; ASPECT=Statistics; STATUS=IMPL; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DIST-STATS-004; FEATURE="ShardRowEstimation"; ASPECT=Statistics; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     fn estimateRowsForShard(self: *Self, table_name: ?[]const u8, shard_id: u64, total_shards: usize) u64 {
         _ = shard_id;
 
@@ -682,7 +680,7 @@ const TopKHeap = struct {
     }
 
     /// Compare rows based on order keys for distributed query sorting
-    /// CANARY: REQ=REQ-DIST-ROW-CMP-002; FEATURE="Distributed Row Comparison"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DIST-ROW-CMP-002; FEATURE="Distributed Row Comparison"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     /// GAP-0053: Implements proper ORDER BY key comparison
     fn compareRows(order_keys: []const federation.OrderKey, a: protocol.BindingRow, b: protocol.BindingRow) bool {
         if (order_keys.len == 0) {

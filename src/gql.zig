@@ -208,7 +208,7 @@ test "diagnostics acceptance: codes presence" {
     try std.testing.expectEqualStrings("TypeMismatch", d.codeName(.TypeMismatch));
 }
 
-// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-14
+// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=Core; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-14
 // GAP-0161: Pagination orderedness legality is now implemented as a planner/runtime check.
 // See planner.zig:222-225 (OffsetPushdownRequiresOrder), query_executor.zig:471-494 (diagnostics)
 
@@ -463,7 +463,7 @@ test "parameters in GROUP BY, ORDER BY, and RETURN print" {
 }
 
 // GAP-0121 FIX: Added proper test case for STARTS WITH with various quote scenarios
-// CANARY: REQ=REQ-GQL-STARTS-WITH-001; FEATURE="StartsWithQuotes"; STATUS=TESTED; OWNER=parser; UPDATED=2026-01-12
+// CANARY: REQ=REQ-GQL-STARTS-WITH-001; FEATURE="StartsWithQuotes"; ASPECT=Core; STATUS=TESTED; OWNER=parser; UPDATED=2026-01-12
 test "STARTS WITH with various quote scenarios" {
     // Single-quoted string
     const src1 = "MATCH (n) WHERE n.name STARTS WITH 'Al' RETURN n";

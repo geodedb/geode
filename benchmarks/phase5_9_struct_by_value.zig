@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // CANARY: BENCHMARK_PHASE5_9 - Struct passing optimization assessment
-// CANARY: REQ=REQ-PERF-PHASE5-P2-001; FEATURE="StructOptimization"; ASPECT=TESTING; STATUS=ASSESSMENT; OWNER=performance; UPDATED=2025-11-16
+// CANARY: REQ=REQ-PERF-PHASE5-P2-001; FEATURE="StructOptimization"; ASPECT=TESTING; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
 
 // Simulate CostEstimate struct (40 bytes)
 const CostEstimate = struct {

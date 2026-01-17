@@ -4,7 +4,7 @@ const Parser = @import("gql/parser.zig").Parser;
 pub const ast = @import("gql/ast.zig");
 
 /// GAP-0115 DOCUMENTATION: Memory Allocation Error Handling
-/// CANARY: REQ=REQ-MEMORY-SAFETY-001; FEATURE="MemorySafetyDocumentation"; STATUS=DOCUMENTED; OWNER=core; UPDATED=2026-01-12
+// CANARY: REQ=REQ-MEMORY-SAFETY-001; FEATURE="MemorySafetyDocumentation"; ASPECT=Core; STATUS=TESTED; OWNER=core; UPDATED=2026-01-12
 ///
 /// ## Memory Allocation Patterns
 ///
@@ -346,7 +346,7 @@ pub fn makeEnv(id_names: []const []const u8, id_values: []const eval.Value, para
 
 /// Server functionality for library mode embedding
 /// GAP-0122 FIX: Added clear documentation and recommended patterns for embedding use cases
-/// CANARY: REQ=REQ-LIBRARY-EMBEDDING-001; FEATURE="LibraryModeEmbedding"; STATUS=DOCUMENTED; OWNER=library; UPDATED=2026-01-12
+// CANARY: REQ=REQ-LIBRARY-EMBEDDING-001; FEATURE="LibraryModeEmbedding"; ASPECT=ML; STATUS=TESTED; OWNER=library; UPDATED=2026-01-12
 ///
 /// ## Library Mode Embedding Guide
 ///

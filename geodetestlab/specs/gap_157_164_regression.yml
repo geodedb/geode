@@ -1,4 +1,4 @@
-# CANARY: REQ=REQ-GAP-REGRESSION-003; FEATURE="GAP-0157 to GAP-0164 Regression Tests"; STATUS=IMPL; OWNER=qa; UPDATED=2026-01-14
+# CANARY: REQ=REQ-GAP-REGRESSION-003; FEATURE="GAP-0157 to GAP-0164 Regression Tests"; ASPECT=Testing; STATUS=IMPL; OWNER=qa; UPDATED=2026-01-14
 # Regression tests for January 14, 2026 gap resolutions
 
 name: "gap-157-164-regression"

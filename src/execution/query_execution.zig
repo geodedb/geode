@@ -1326,8 +1326,7 @@ fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
 }
 
 pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
-    // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Execution;
-    //         STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=execution; UPDATED=2025-10-10
+    // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Execution; STATUS=TESTED; TEST=graph_algorithms; OWNER=execution; UPDATED=2026-01-17
 
     // Check for query chaining: if next_query exists, execute chain
     if (q.next_query) |next_query_ptr| {

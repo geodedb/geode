@@ -8,7 +8,7 @@ const graph_storage_manager = @import("../server/graph_storage_manager.zig");
 // M2 Fix: Refactored from global mutable state to dependency injection pattern
 
 // IndexInfo stores metadata about an index
-// CANARY: REQ=REQ-INDEX-001; FEATURE="IndexManagement"; ASPECT=Catalog; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
+// CANARY: REQ=REQ-INDEX-001; FEATURE="IndexManagement"; ASPECT=Catalog; STATUS=TESTED; OWNER=storage; UPDATED=2025-10-14
 pub const IndexInfo = struct {
     name: []const u8, // Index name (user-provided)
     index_type: []const u8, // btree, hash, fulltext, etc.
@@ -620,7 +620,7 @@ pub const Catalog = struct {
 };
 
 // GAP-0131: Global catalog state maintained for backward compatibility
-// CANARY: REQ=REQ-CATALOG-DEPRECATION-001; FEATURE="Legacy Global Catalog"; ASPECT=BackwardCompatibility; STATUS=DEPRECATED; UPDATED=2026-01-13
+// CANARY: REQ=REQ-CATALOG-DEPRECATION-001; FEATURE="Legacy Global Catalog"; ASPECT=BackwardCompatibility; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-13
 // WARNING: These globals are DEPRECATED. New code should use Catalog instance methods.
 // Migration path: Replace initCatalog() with Catalog.init(allocator) and use instance methods
 // Callers to migrate: execution.zig (5 call sites)

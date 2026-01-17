@@ -208,7 +208,7 @@ pub fn planQueryRealTimed(q: planner_root.ast.Query, opts: planner_root.PlannerO
     pt.end();
     pt.begin(.cost_eval);
     // GAP-0080: Actual cost evaluation using cost model
-    // CANARY: REQ=REQ-GQL-COST-001; FEATURE="CostEvaluationPhase"; ASPECT=PlanCost; STATUS=IMPL; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GQL-COST-001; FEATURE="CostEvaluationPhase"; ASPECT=PlanCost; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
     const cost_estimate = evaluatePlanCost(q, opts);
     pt.end();
     return .{ .plan = plan, .timings = pt.snapshot(), .cost_estimate = cost_estimate };

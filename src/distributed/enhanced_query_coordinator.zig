@@ -419,7 +419,7 @@ pub const EnhancedQueryCoordinator = struct {
 
     /// Top-K results with distributed optimization using heap-based selection
     /// GAP-0129: Uses O(n log k) heap selection instead of O(n log n) full sort
-    /// CANARY: REQ=REQ-DIST-TOPK-001; FEATURE="Heap-based Top-K Selection"; ASPECT=Performance; STATUS=IMPL; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-DIST-TOPK-001; FEATURE="Heap-based Top-K Selection"; ASPECT=Performance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
     fn topKResults(
         self: *EnhancedQueryCoordinator,
         shard_results: []federation.QueryResults,
@@ -465,7 +465,7 @@ pub const EnhancedQueryCoordinator = struct {
         }
 
         // GAP-0129: Use max-heap for O(n log k) top-K selection
-        // CANARY: REQ=REQ-DIST-TOPK-002; FEATURE="Max-Heap Top-K"; ASPECT=Performance; STATUS=IMPL; UPDATED=2026-01-13
+        // CANARY: REQ=REQ-DIST-TOPK-002; FEATURE="Max-Heap Top-K"; ASPECT=Performance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
         // We maintain a max-heap of size k containing the smallest k elements seen so far
         // For ascending order: keep smallest k elements using a max-heap (pop largest when full)
         // For descending order: keep largest k elements using a min-heap (pop smallest when full)
@@ -557,7 +557,7 @@ pub const EnhancedQueryCoordinator = struct {
         }
 
         // Sort the k results for correct order
-        // CANARY: REQ=REQ-DIST-ORDERBY-002; FEATURE="Distributed ORDER BY Sort"; ASPECT=QueryCorrectness; STATUS=IMPL; UPDATED=2026-01-13
+        // CANARY: REQ=REQ-DIST-ORDERBY-002; FEATURE="Distributed ORDER BY Sort"; ASPECT=QueryCorrectness; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
         if (options.order_by.len > 0) {
             const sort_context = OrderBySortContext{ .order_by = options.order_by };
             std.sort.heap(protocol.BindingRow, result_rows.items, sort_context, orderByCompare);
@@ -580,7 +580,7 @@ pub const EnhancedQueryCoordinator = struct {
     }
 
     /// Row comparison for distributed query result sorting
-    /// CANARY: REQ=REQ-DIST-ROW-SORT-001; FEATURE="Distributed Row Sorting"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DIST-ROW-SORT-001; FEATURE="Distributed Row Sorting"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     /// GAP-0053: Implements actual field-by-field comparison using ORDER BY semantics
     fn simpleRowCompare(context: void, a: protocol.BindingRow, b: protocol.BindingRow) bool {
         _ = context;
@@ -607,7 +607,7 @@ pub const EnhancedQueryCoordinator = struct {
     }
 
     // GAP-0130: Context for ORDER BY-aware sorting
-    // CANARY: REQ=REQ-DIST-ORDERBY-003; FEATURE="ORDER BY Sort Context"; ASPECT=QueryCorrectness; STATUS=IMPL; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-DIST-ORDERBY-003; FEATURE="ORDER BY Sort Context"; ASPECT=QueryCorrectness; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
     const OrderBySortContext = struct {
         order_by: []const OrderByKey,
     };
@@ -672,7 +672,7 @@ pub const EnhancedQueryCoordinator = struct {
 // Supporting types and structures
 
 // GAP-0130: ORDER BY key for distributed query sorting
-// CANARY: REQ=REQ-DIST-ORDERBY-001; FEATURE="Distributed ORDER BY"; ASPECT=QueryCorrectness; STATUS=IMPL; UPDATED=2026-01-13
+// CANARY: REQ=REQ-DIST-ORDERBY-001; FEATURE="Distributed ORDER BY"; ASPECT=QueryCorrectness; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
 const OrderByKey = struct {
     column_index: usize,
     ascending: bool = true,

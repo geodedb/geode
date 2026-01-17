@@ -57,7 +57,7 @@ pub const EnhancedQueryTransport = struct {
     message_handlers: MessageHandlers,
     statistics: TransportStatistics,
     config: TransportConfig,
-    // CANARY: REQ=REQ-DIST-TRACKER-001; FEATURE="Query Tracker Storage"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DIST-TRACKER-001; FEATURE="Query Tracker Storage"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     // GAP-0054: Added active_trackers map for query tracking
     active_trackers: std.AutoHashMap(u64, *QueryTracker),
 
@@ -457,7 +457,7 @@ pub const EnhancedQueryTransport = struct {
 
     // Helper functions for message handling and type conversion
     /// Serialize a QueryFragment to JSON for distributed transport
-    /// CANARY: REQ=REQ-DIST-FRAG-001; FEATURE="Fragment Serialization"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-DIST-FRAG-001; FEATURE="Fragment Serialization"; ASPECT=Core; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
     /// GAP-0162: Implements actual fragment serialization using JSON encoding
     fn serializeFragment(self: *EnhancedQueryTransport, fragment: QueryFragment) ![]u8 {
         // Build a serializable representation that handles slices properly
@@ -483,7 +483,7 @@ pub const EnhancedQueryTransport = struct {
     }
 
     /// Deserialize a QueryFragment from JSON for distributed transport
-    /// CANARY: REQ=REQ-DIST-FRAG-002; FEATURE="Fragment Deserialization"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-DIST-FRAG-002; FEATURE="Fragment Deserialization"; ASPECT=Core; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
     /// GAP-0162: Implements actual fragment deserialization from JSON
     fn deserializeFragment(self: *EnhancedQueryTransport, data: []const u8) !QueryFragment {
         const ParsedFragment = struct {
@@ -526,7 +526,7 @@ pub const EnhancedQueryTransport = struct {
     }
 
     /// Track an active query for coordination and cancellation support
-    /// CANARY: REQ=REQ-DIST-TRACKER-002; FEATURE="Query Tracking"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DIST-TRACKER-002; FEATURE="Query Tracking"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     /// GAP-0054: Implements actual query tracking using HashMap storage
     fn trackActiveQuery(self: *EnhancedQueryTransport, query_id: u64, plan: *const ExecutionPlan, callback: QueryCompletionCallback) !void {
         // Allocate and initialize tracker
@@ -551,14 +551,14 @@ pub const EnhancedQueryTransport = struct {
     }
 
     /// Get the tracker for an active query
-    /// CANARY: REQ=REQ-DIST-TRACKER-003; FEATURE="Query Tracker Lookup"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DIST-TRACKER-003; FEATURE="Query Tracker Lookup"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     /// GAP-0054: Implements actual tracker retrieval from HashMap
     fn getQueryTracker(self: *EnhancedQueryTransport, query_id: u64) ?*QueryTracker {
         return self.active_trackers.get(query_id);
     }
 
     /// Remove and clean up a query tracker after completion or cancellation
-    /// CANARY: REQ=REQ-DIST-TRACKER-004; FEATURE="Query Tracker Cleanup"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DIST-TRACKER-004; FEATURE="Query Tracker Cleanup"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
     /// GAP-0054: Implements actual tracker cleanup with proper memory deallocation
     fn removeQueryTracker(self: *EnhancedQueryTransport, query_id: u64) void {
         if (self.active_trackers.fetchRemove(query_id)) |entry| {
@@ -933,7 +933,7 @@ fn handleCoordinatorMerge(transport: *EnhancedQueryTransport, message: *const Qu
 }
 
 // Unit tests for fragment serialization
-// CANARY: REQ=REQ-DIST-FRAG-003; FEATURE="Fragment Serialization Tests"; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
+// CANARY: REQ=REQ-DIST-FRAG-003; FEATURE="Fragment Serialization Tests"; ASPECT=Testing; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
 // GAP-0162: Tests for fragment serialization/deserialization
 
 test "serializeFragment produces valid JSON" {

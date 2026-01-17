@@ -1,5 +1,5 @@
 // Regression test for CALL procedure functionality
-// CANARY: REQ=REQ-TEST-CALL-REGRESSION; FEATURE="CallProcedureRegression"; ASPECT=Testing; STATUS=ACTIVE; OWNER=test; UPDATED=2025-10-18
+// CANARY: REQ=REQ-TEST-CALL-REGRESSION; FEATURE="CallProcedureRegression"; ASPECT=Testing; STATUS=TESTED; OWNER=test; UPDATED=2025-10-18
 
 const std = @import("std");
 const testing = std.testing;

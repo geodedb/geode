@@ -6,7 +6,7 @@ const MemoryManager = @import("memory_manager.zig").MemoryManager;
 const kernel_sources = @import("kernel_sources.zig");
 const telemetry = @import("telemetry.zig");
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase1Traversal; STATUS=REMOVED; TEST=TestCANARY_REQ_GQL_051_CPUBfsFrontier; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Phase1Traversal; STATUS=EXEMPT; TEST=TestCANARY_REQ_GQL_051_CPUBfsFrontier; OWNER=engine; UPDATED=2025-10-26
 // Note: GPU BFS removed - CPU is 100-1000x faster due to per-level synchronization overhead
 
 // Simplified CSR representation for tests

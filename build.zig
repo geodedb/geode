@@ -226,7 +226,7 @@ pub fn build(b: *std.Build) void {
     }
     b.installArtifact(geode_exe);
 
-    // CANARY: REQ=REQ-CLI-COMPAT-001; FEATURE="Legacy Binary Symlinks"; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-CLI-COMPAT-001; FEATURE="Legacy Binary Symlinks"; ASPECT=ML; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
     // GAP-0163: Add geoded and geodec symlinks for backward compatibility with tests/docs
     // This allows existing tests and documentation referencing geoded/geodec to continue working
     // Create symlinks on Unix-like systems; on Windows, copy the executable

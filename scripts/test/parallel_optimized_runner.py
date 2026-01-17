@@ -156,7 +156,7 @@ def process_spec_file(spec_file_path):
     except:
         return []
 
-    binary = "/home/benji/src/geode/geode/zig-out/bin/geode"
+    binary = "/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"
     results = []
 
     for test in spec.get("tests", []):
@@ -173,7 +173,7 @@ def process_spec_file(spec_file_path):
     return results
 
 def main():
-    specs_dir = Path("/home/benji/src/geode/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs")
 
     # Get all spec files
     spec_files = sorted(specs_dir.glob("*.yml"))

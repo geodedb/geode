@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-TEST-001; FEATURE="RegressionTests"; ASPECT=ExitCodeHandling; STATUS=EXEMPTEMENTED; OWNER=test; UPDATED=2025-10-18
+// CANARY: REQ=REQ-TEST-001; FEATURE="RegressionTests"; ASPECT=ExitCodeHandling; STATUS=EXEMPT; OWNER=test; UPDATED=2025-10-18
 // Unit-level regression tests for issues fixed during refactoring
 
 test "PageRank procedure should be registered" {
@@ -116,7 +116,7 @@ test "No data status should return exit code 0" {
     try testing.expect(is_success); // No data should be success
 }
 
-// CANARY: REQ=REQ-TEST-002; FEATURE="RegressionTests"; ASPECT=ProcedureRegistry; STATUS=EXEMPTEMENTED; OWNER=test; UPDATED=2025-10-18
+// CANARY: REQ=REQ-TEST-002; FEATURE="RegressionTests"; ASPECT=ProcedureRegistry; STATUS=EXEMPT; OWNER=test; UPDATED=2025-10-18
 test "All graph algorithms should be registered" {
     // Ensure all expected procedures are available
     const expected_procedures = [_][]const u8{

@@ -843,7 +843,7 @@ pub fn processMessage(
                         },
                         .Show => |sh| {
                             // GAP-0127: Handle all SHOW statement types with explicit messages
-                            // CANARY: REQ=REQ-SHOW-STMT-001; FEATURE="SHOW Statement Types"; ASPECT=GQLCompliance; STATUS=IMPL; UPDATED=2026-01-13
+                            // CANARY: REQ=REQ-SHOW-STMT-001; FEATURE="SHOW Statement Types"; ASPECT=GQLCompliance; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
                             switch (sh.show_type) {
                                 .graphs => {
                                     std.debug.print("[QUIC] SHOW GRAPHS handler\n", .{});

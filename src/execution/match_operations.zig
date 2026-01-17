@@ -357,7 +357,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, curre
 // Execute MATCH + CALL pattern with node binding
 // CANARY: REQ=REQ-MULTI-GRAPH-010; FEATURE="MultiGraphIsolation"; ASPECT=MatchCallFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
-    // CANARY: REQ=REQ-GQL-MATCH-CALL-BINDING; FEATURE="MatchCallBinding"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-13
+    // CANARY: REQ=REQ-GQL-MATCH-CALL-BINDING; FEATURE="MatchCallBinding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-13
     // Fix: Handle multiple comma-separated MATCH patterns and bind all matched nodes
 
     const store = graph_store.getGlobalStore(allocator);
@@ -589,7 +589,7 @@ pub fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionR
     return executeMatchQueryImpl(allocator, q, &.{}, &.{}, &.{}, null);
 }
 
-// CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSeparatedMatches"; ASPECT=CartesianProduct; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
+// CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSeparatedMatches"; ASPECT=CartesianProduct; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
 // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="MultiGraphIsolation"; ASPECT=MultiNodeMatch; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Handle comma-separated node patterns by creating Cartesian product with graph isolation
 pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
@@ -2998,7 +2998,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         }
     }
 
-    // CANARY: REQ=REQ-GQL-PATH-ASSIGNMENT; FEATURE="PathVariableAssignment"; ASPECT=ShortestPathBinding; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
+    // CANARY: REQ=REQ-GQL-PATH-ASSIGNMENT; FEATURE="PathVariableAssignment"; ASPECT=ShortestPathBinding; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
     // Handle path variable assignment: MATCH p = shortestPath((a)-[*]-(c))
     // Only trigger for actual shortestPath/allShortestPaths function calls, not regular path assignments
     if (q.path_variable) |path_var| {
@@ -3059,7 +3059,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         }
     }
 
-    // CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSepar atedMatches"; ASPECT=MultipleChains; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
+    // CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSepar atedMatches"; ASPECT=MultipleChains; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
     // Handle comma-separated node patterns: MATCH (a:Node), (b:Node)
     // Check if all chains are simple node patterns (no relationships)
     var all_simple_nodes = true;
@@ -3815,7 +3815,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // CANARY: PERF_PHASE5_ENV_ALLOC_GROUPBY - Pre-allocate environment arrays for GROUP BY loop
-            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE=\"ExecutionOptimization\"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-17
             // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
             var env_names_buf: [][]const u8 = &.{};
             var env_values_buf: []Value = &.{};
@@ -4011,7 +4011,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             return result;
         } else {
             // No GROUP BY - aggregate all matching rows into single result
-            // CANARY: REQ=REQ-GQL-AGGREGATE-WHERE; FEATURE="AggregateWithWHERE"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-13
+            // CANARY: REQ=REQ-GQL-AGGREGATE-WHERE; FEATURE="AggregateWithWHERE"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-13
             // Fix: Collect matched nodes that pass WHERE clause before aggregating
 
             // GAP-0220 FIX: Use try for proper error propagation
@@ -4372,7 +4372,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // CANARY: PERF_PHASE5_ENV_ALLOC_AGGREGATE - Pre-allocate environment arrays for aggregation loop
-            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE=\"ExecutionOptimization\"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-17
             // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
             var env_names_buf: [][]const u8 = &.{};
             var env_values_buf: []Value = &.{};
@@ -4727,7 +4727,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         }
     } else {
         // Non-aggregation query - return one row per matching pattern
-        // CANARY: REQ=REQ-GQL-WITH-RETURN; FEATURE="WithReturnExpressions"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-12
+        // CANARY: REQ=REQ-GQL-WITH-RETURN; FEATURE="WithReturnExpressions"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-12
 
         // GAP-0220 FIX: Use try for proper error propagation
         var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);

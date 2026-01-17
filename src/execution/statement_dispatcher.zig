@@ -340,7 +340,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .CreateIndex => |ci| {
             // CREATE INDEX implementation with validation
-            // CANARY: REQ=REQ-INDEX-002; FEATURE="IndexManagement"; ASPECT=ScopedCreation; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
+            // CANARY: REQ=REQ-INDEX-002; FEATURE="IndexManagement"; ASPECT=ScopedCreation; STATUS=TESTED; OWNER=storage; UPDATED=2025-10-14
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
             const cat = getCatalog(allocator, context);
@@ -510,7 +510,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .DropIndex => |di| {
             // DROP INDEX implementation
-            // CANARY: REQ=REQ-INDEX-003; FEATURE="IndexManagement"; ASPECT=ScopedDeletion; STATUS=IMPLEMENTED; OWNER=storage; UPDATED=2025-10-14
+            // CANARY: REQ=REQ-INDEX-003; FEATURE="IndexManagement"; ASPECT=ScopedDeletion; STATUS=TESTED; OWNER=storage; UPDATED=2025-10-14
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
             const cat = getCatalog(allocator, context);

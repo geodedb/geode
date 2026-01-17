@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-MULTI-GRAPH-SECURITY-TEST; FEATURE="MultiGraphSecurityTests"; STATUS=IMPL; OWNER=testing; UPDATED=2025-12-20
+// CANARY: REQ=REQ-MULTI-GRAPH-SECURITY-TEST; FEATURE="MultiGraphSecurityTests"; ASPECT=Security; STATUS=IMPL; OWNER=testing; UPDATED=2025-12-20
 // End-to-end tests for multi-graph security features
 // Tests graph-scoped RBAC, FLE, and audit logging
 

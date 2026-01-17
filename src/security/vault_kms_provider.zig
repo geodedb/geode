@@ -130,7 +130,7 @@ pub const VaultKMSProvider = struct {
     }
 
     /// List available keys in Vault
-    /// CANARY: REQ=REQ-VAULT-KMS-LIST-001; FEATURE="Vault Key Listing"; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-VAULT-KMS-LIST-001; FEATURE="Vault Key Listing"; ASPECT=Core; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
     /// GAP-0052: Implements actual Vault key listing using `vault kv list` command
     pub fn listKeys(self: *Self) ![][]u8 {
         // Execute vault kv list command to get actual keys

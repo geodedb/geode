@@ -1108,7 +1108,7 @@ pub const Parser = struct {
                     self.advance();
 
                     // GAP-0125: Parse imported variables if WITH clause appears at start of CALL block
-                    // CANARY: REQ=REQ-SUBQUERY-IMPORT-001; FEATURE="Subquery Imported Variables"; ASPECT=GQLCompliance; STATUS=IMPL; UPDATED=2026-01-13
+                    // CANARY: REQ=REQ-SUBQUERY-IMPORT-001; FEATURE="Subquery Imported Variables"; ASPECT=GQLCompliance; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-13
                     var imported_vars: ?[][]const u8 = null;
                     if (self.cur.kind == .WITH) {
                         // Check if this is a WITH for imported variables (single variable references)
@@ -1428,7 +1428,7 @@ pub const Parser = struct {
 
     fn handleQueryResult(self: *Parser, first: ast.Query) ParserError!ast.Statement {
         if (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
-            // CANARY: REQ=REQ-GQL-100; FEATURE="UNION Query Operations"; ASPECT=Parser; STATUS=FIXED; TEST=gql_conformance.T1; OWNER=parser; UPDATED=2025-10-14
+            // CANARY: REQ=REQ-GQL-100; FEATURE="UNION Query Operations"; ASPECT=Parser; STATUS=TESTED; TEST=gql_conformance.T1; OWNER=parser; UPDATED=2025-10-14
             // When we have set operations, individual queries should not have their own ORDER BY/LIMIT/OFFSET
             // Those clauses apply to the entire set operation result
             // If the first query has these, they should be moved to the UNION level
@@ -2068,7 +2068,7 @@ pub const Parser = struct {
         }
 
         // Optional WITH projection forwarding (works for both MATCH and CREATE)
-        // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=TESTEDEMENTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
+        // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=TESTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
         var next_query_ptr: ?*ast.Query = null;
         if (self.cur.kind == .WITH) {
             self.advance();
@@ -2225,7 +2225,7 @@ pub const Parser = struct {
         }
 
         // Parse DELETE clause if present (for CREATE ... WITH ... DELETE ... pattern)
-        // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=Parser; STATUS=TESTEDEMENTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=Parser; STATUS=TESTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
         var delete_items: []ast.DeleteItem = &.{};
         if (self.cur.kind == .DELETE) {
             self.advance();
@@ -2512,7 +2512,7 @@ pub const Parser = struct {
             // parse a chain with one-or-more hops
             var hops = std.ArrayList(ast.Hop).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
             // Optional path alias: ident '=' before a node pattern or shortestPath function
-            // CANARY: REQ=REQ-GQL-091; FEATURE="PathAssignmentAfterWITH"; ASPECT=Parser; STATUS=TESTEDEMENTED; TEST=subgraph-isomorphism; OWNER=parser; UPDATED=2025-10-14
+            // CANARY: REQ=REQ-GQL-091; FEATURE="PathAssignmentAfterWITH"; ASPECT=Parser; STATUS=TESTED; TEST=subgraph-isomorphism; OWNER=parser; UPDATED=2025-10-14
             var chain_name: ?[]const u8 = null;
             if ((self.cur.kind == .identifier or self.cur.kind == .PATH or self.isKeyword(self.cur.kind)) and self.peekKind() == .eq) {
                 chain_name = self.cur.lexeme;
@@ -3085,7 +3085,7 @@ pub const Parser = struct {
         self.advance();
         var right = try self.parseAddExpr();
 
-        // CANARY: REQ=REQ-GQL-090; FEATURE="ChainedComparisons"; ASPECT=Parser; STATUS=IMPLEMENTED; OWNER=parser; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-GQL-090; FEATURE="ChainedComparisons"; ASPECT=Parser; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-14
         // Handle chained comparisons: a < b < c becomes (a < b) AND (b < c)
         var result = try self.makeBinary(op_kind, left, right);
 
@@ -4167,8 +4167,7 @@ pub const Parser = struct {
                     .offset = with_offset,
                 };
 
-                // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=ParserCREATE;
-                //         STATUS=IMPLEMENTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
+                // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=TESTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2026-01-17
                 // Check for query chaining: WITH ... MATCH/CREATE ...
                 // If we see MATCH or CREATE after WITH, parse it as a chained query
                 if (self.cur.kind == .MATCH or self.cur.kind == .CREATE) {
@@ -4215,7 +4214,7 @@ pub const Parser = struct {
             }
 
             // Parse DELETE clause if present (for CREATE ... WITH ... DELETE ... pattern)
-            // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=ParserCreateStatement; STATUS=TESTEDEMENTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
+            // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=ParserCreateStatement; STATUS=TESTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
             var delete_items: []ast.DeleteItem = &.{};
             if (self.cur.kind == .DELETE) {
                 self.advance();

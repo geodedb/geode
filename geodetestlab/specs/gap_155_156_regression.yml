@@ -1,5 +1,5 @@
 # GAP-0155 and GAP-0156 Regression Tests
-# CANARY: REQ=REQ-GAP-155-156-REGRESSION; FEATURE="SecurityRegressionTests"; ASPECT=Testing; STATUS=ACTIVE; OWNER=security; UPDATED=2026-01-14
+# CANARY: REQ=REQ-GAP-155-156-REGRESSION; FEATURE="SecurityRegressionTests"; ASPECT=Testing; STATUS=TESTED; OWNER=security; UPDATED=2026-01-14
 #
 # GAP-0155: WAL Encryption Key Hex Parsing Uses Silent catch 0
 # - Unit tests verify parseWalHexKey function in src/wal/wal.zig

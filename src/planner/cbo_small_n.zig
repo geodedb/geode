@@ -4,9 +4,7 @@ const enumerator = @import("enumerator.zig");
 const optimizer = @import("optimizer.zig");
 
 /// CBO calibration specifically for small-N datasets
-/// CANARY: REQ=REQ-GQL-CBO-002; FEATURE="CBO Small-N Calibration"; ASPECT=Optimization;
-/// STATUS=IMPLEMENTED; TEST=e2e_cbo_small_n; BENCH=benchmark_cbo_small_n_variance;
-/// OWNER=optimizer-team; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-CBO-002; FEATURE="CBO Small-N Calibration"; ASPECT=Optimization; STATUS=TESTED; TEST=e2e_cbo_small_n; BENCH=benchmark_cbo_small_n_variance; OWNER=planner; UPDATED=2026-01-17
 pub const SmallNCalibration = struct {
     allocator: std.mem.Allocator,
 

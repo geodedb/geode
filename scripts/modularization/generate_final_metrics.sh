@@ -4,7 +4,7 @@
 # This script generates comprehensive metrics for the modularization effort,
 # comparing current state to baseline and documenting improvements.
 #
-# CANARY: REQ=REQ-M8.3-METRICS-001; FEATURE="Modularization Metrics"; STATUS=IMPL; OWNER=testing; UPDATED=2025-11-14
+# CANARY: REQ=REQ-M8.3-METRICS-001; FEATURE="Modularization Metrics"; ASPECT=Core; STATUS=IMPL; OWNER=testing; UPDATED=2025-11-14
 
 set -e
 

@@ -6,7 +6,7 @@ const geode = @import("geode");
 const log = std.log.scoped(.cli);
 
 // GAP-0075: Syslog audit logging integration
-// CANARY: REQ=REQ-AUDIT-SYSLOG-001; FEATURE="SyslogAuditIntegration"; ASPECT=AuditLogging; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-AUDIT-SYSLOG-001; FEATURE="SyslogAuditIntegration"; ASPECT=AuditLogging; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
 
 // CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-001; FEATURE="CLI Modularization"; ASPECT=CommandDispatch; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.4: CLI Dispatcher module - central command routing, flag parsing, and audit configuration
@@ -443,7 +443,7 @@ pub fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditC
     }
 
     // GAP-0075: Initialize syslog logging if enabled
-    // CANARY: REQ=REQ-AUDIT-SYSLOG-002; FEATURE="SyslogSenderInit"; ASPECT=AuditLogging; STATUS=IMPL; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-AUDIT-SYSLOG-002; FEATURE="SyslogSenderInit"; ASPECT=AuditLogging; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
     if (cli_config.syslog_enabled) {
         global_syslog_host = cli_config.syslog_host orelse "127.0.0.1";
         global_syslog_port = cli_config.syslog_port;
@@ -492,7 +492,7 @@ pub fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const 
     }
 
     // GAP-0075: Log to syslog if enabled
-    // CANARY: REQ=REQ-AUDIT-SYSLOG-003; FEATURE="SyslogEventSend"; ASPECT=AuditLogging; STATUS=IMPL; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-AUDIT-SYSLOG-003; FEATURE="SyslogEventSend"; ASPECT=AuditLogging; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
     if (global_syslog_host) |host| {
         sendSyslogMessage(host, global_syslog_port, category, action, outcome);
     }
@@ -506,7 +506,7 @@ pub fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const 
 }
 
 // GAP-0075: Send audit event to syslog server via UDP (RFC 5424)
-// CANARY: REQ=REQ-AUDIT-SYSLOG-004; FEATURE="SyslogUdpSend"; ASPECT=AuditLogging; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-AUDIT-SYSLOG-004; FEATURE="SyslogUdpSend"; ASPECT=AuditLogging; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
 fn sendSyslogMessage(host: []const u8, port: u16, category: []const u8, action: []const u8, outcome: []const u8) void {
     // Skip if host contains placeholder (test mode)
     if (std.mem.indexOf(u8, host, "{{") != null) return;

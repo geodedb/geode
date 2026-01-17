@@ -122,7 +122,7 @@ var current_provider: KeyProvider = .StaticEnv;
 
 /// Loads encryption key from GEODE_TDE_KEY (32 bytes hex) with secure key ID derivation.
 /// GAP-0085: Key ID derived using HKDF to prevent collision and avoid key material exposure
-/// CANARY: REQ=REQ-GQL-TDE-KEYID-001; FEATURE="SecureKeyIdDerivation"; ASPECT=Security; STATUS=IMPL; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GQL-TDE-KEYID-001; FEATURE="SecureKeyIdDerivation"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
 pub fn loadKey(allocator: std.mem.Allocator, enabled: bool) !KeyStatus {
     if (!enabled) return error.FeatureDisabled;
     const key_opt = std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch |e| switch (e) {

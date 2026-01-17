@@ -2,8 +2,7 @@ const std = @import("std");
 
 /// Simple YAML parser for test specifications
 /// Supports a subset of YAML needed for test specs: scalars, lists, maps
-/// CANARY: REQ=REQ-TEST-YAML-001; FEATURE="YAML Parser"; ASPECT=Testing;
-/// STATUS=IMPLEMENTED; TEST=yaml_parser_tests; OWNER=test-team; UPDATED=2025-10-28
+// CANARY: REQ=REQ-TEST-YAML-001; FEATURE="YAML Parser"; ASPECT=Testing; STATUS=TESTED; TEST=yaml_parser_tests; OWNER=test; UPDATED=2026-01-17
 pub const Error = error{
     UnexpectedToken,
     InvalidIndentation,

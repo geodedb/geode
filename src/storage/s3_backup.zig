@@ -19,9 +19,7 @@ pub const S3Config = struct {
 };
 
 /// S3 backup manager for cloud backups
-/// CANARY: REQ=REQ-GQL-S3-001; FEATURE="S3 Cloud Backups"; ASPECT=Storage;
-/// STATUS=IMPLEMENTED; TEST=e2e_s3_backup_restore; BENCH=benchmark_s3_throughput;
-/// OWNER=storage-team; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-S3-001; FEATURE="S3 Cloud Backups"; ASPECT=Storage; STATUS=TESTED; TEST=e2e_s3_backup_restore; BENCH=benchmark_s3_throughput; OWNER=storage; UPDATED=2026-01-17
 pub const S3BackupManager = struct {
     allocator: std.mem.Allocator,
     config: S3Config,

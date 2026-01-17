@@ -92,7 +92,7 @@ pub const CostBasedOptimizer = struct {
 
     /// Enumerate join orders for multi-way joins using Dynamic Programming
     /// GAP-0072: Implements proper DP enumeration for optimal join ordering
-    /// CANARY: REQ=REQ-GQL-CBO-JOIN-001; FEATURE="DPJoinEnumeration"; ASPECT=JoinOrdering; STATUS=IMPL; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GQL-CBO-JOIN-001; FEATURE="DPJoinEnumeration"; ASPECT=JoinOrdering; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
     pub fn enumerateJoinOrders(self: *CostBasedOptimizer, ctx: *planner.PlannerContext, relations: []const *planner.PlanNode) ![]const *planner.PlanNode {
         if (!self.enabled) {
             // Return original order
@@ -526,7 +526,7 @@ pub const StatsRegistry = struct {
 
     /// Storage statistics provider interface for CBO integration
     /// GAP-0065: Enables statistics collection without direct storage module coupling
-    /// CANARY: REQ=REQ-GQL-CBO-STATS-001; FEATURE="CBOStorageProvider"; ASPECT=Statistics; STATUS=IMPL; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GQL-CBO-STATS-001; FEATURE="CBOStorageProvider"; ASPECT=Statistics; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
     pub const StorageStatsProvider = struct {
         ctx: *anyopaque,
         vtable: *const VTable,
