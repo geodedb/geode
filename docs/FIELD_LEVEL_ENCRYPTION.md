@@ -1,7 +1,7 @@
 # Field-Level Encryption (FLE) for Geode
 
 <!-- CANARY: FLE_DOCUMENTATION - Field-Level Encryption Design & Implementation -->
-<!-- CANARY: REQ=REQ-FLE-DOC-001; FEATURE="FieldLevelEncryption"; ASPECT=DOCUMENTATION; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15 -->
+<!-- CANARY: REQ=REQ-FLE-DOC-001; FEATURE="FieldLevelEncryption"; ASPECT=DOCUMENTATION; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15 -->
 
 ## Overview
 

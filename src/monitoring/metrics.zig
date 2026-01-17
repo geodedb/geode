@@ -100,7 +100,7 @@ pub const MetricsCollector = struct {
     };
 
     // CANARY: PERF_PHASE5_METRICS_ATOMIC - Lock-free metrics collection
-    // CANARY: REQ=REQ-PERF-PHASE5-P1-002; FEATURE="MetricsOptimization"; ASPECT=LOCK_FREE_HISTOGRAM; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+    // CANARY: REQ=REQ-PERF-PHASE5-P1-002; FEATURE="MetricsOptimization"; ASPECT=LOCK_FREE_HISTOGRAM; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-11-16
     // Phase 5.2.2 (P1-2): Use atomics for hot path metrics (10-20% faster)
     pub const Histogram = struct {
         allocator: Allocator,

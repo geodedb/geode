@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // CANARY: BENCHMARK_PHASE1 - Performance validation for Phase 1 optimizations
-// CANARY: REQ=REQ-PERF-PHASE1-001; FEATURE="PerformanceOptimization"; ASPECT=TESTING; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE1-001; FEATURE="PerformanceOptimization"; ASPECT=TESTING; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
 
 // =============================================================================
 // Benchmark 1: Stack Buffers vs allocPrint

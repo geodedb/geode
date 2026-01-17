@@ -31,7 +31,7 @@ The benchmark measures two key metrics:
 
 **Benchmark File:** `benchmarks/benchmark_audit_latency.zig`
 
-<!-- CANARY: REQ=REQ-BENCHMARK-AUDIT-002; FEATURE="Audit Latency Benchmark"; ASPECT=Documentation; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14 -->
+<!-- CANARY: REQ=REQ-BENCHMARK-AUDIT-002; FEATURE="Audit Latency Benchmark"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=monitoring; UPDATED=2026-01-14 -->
 
 ### Methodology
 
@@ -85,7 +85,7 @@ zig build-exe benchmarks/benchmark_audit_latency.zig && ./benchmark_audit_latenc
 
 **Benchmark File:** `benchmarks/benchmark_tde_overhead.zig`
 
-<!-- CANARY: REQ=REQ-BENCHMARK-TDE-001; FEATURE="TDE Overhead Benchmark"; ASPECT=Documentation; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14 -->
+<!-- CANARY: REQ=REQ-BENCHMARK-TDE-001; FEATURE="TDE Overhead Benchmark"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-14 -->
 
 ### Performance Targets
 
@@ -109,7 +109,7 @@ TDE_SIM_OVERHEAD: overhead_pct=0.00 (simulated)
 
 **Benchmark File:** `benchmarks/benchmark_rls_abac_variance.zig`
 
-<!-- CANARY: REQ=REQ-BENCHMARK-ABAC-001; FEATURE="ABAC Benchmark"; ASPECT=Documentation; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14 -->
+<!-- CANARY: REQ=REQ-BENCHMARK-ABAC-001; FEATURE="ABAC Benchmark"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-14 -->
 
 ### Performance Targets
 
@@ -140,4 +140,4 @@ Benchmarks emit JSON results compatible with CI artifact collection.
 ---
 
 *Last Updated: 2026-01-14*
-*CANARY: REQ=REQ-BENCHMARK-EVIDENCE-001; FEATURE="Performance Evidence"; ASPECT=Documentation; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14*
+*CANARY: REQ=REQ-BENCHMARK-EVIDENCE-001; FEATURE="Performance Evidence"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=monitoring; UPDATED=2026-01-14*

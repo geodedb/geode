@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const time = std.time;
 
-// CANARY: REQ=REQ-PERF-JSON-001; FEATURE="JSONPerformanceImprovement"; ASPECT=Benchmarking; STATUS=IMPL; TEST=TestCANARY_JSONImprovement; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-JSON-001; FEATURE="JSONPerformanceImprovement"; ASPECT=Benchmarking; STATUS=EXEMPT; TEST=TestCANARY_JSONImprovement; OWNER=performance; UPDATED=2025-10-04
 
 /// Benchmark comparison between baseline JSON and optimized approaches
 /// Validates the 630μs JSON parsing bottleneck can be improved

@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // CANARY: BENCHMARK_PHASE5_6 - Concurrency validation for Phase 5.1.6 (P0-6)
-// CANARY: REQ=REQ-PERF-PHASE5-006; FEATURE="ConcurrencyOptimization"; ASPECT=TESTING; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+// CANARY: REQ=REQ-PERF-PHASE5-006; FEATURE="ConcurrencyOptimization"; ASPECT=TESTING; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-11-16
 
 // =============================================================================
 // Test Structures - Simulating catalog access patterns

@@ -89,7 +89,7 @@ pub const SyslogRfc5424Config = struct {
     facility: SyslogFacility,
 };
 
-// CANARY: REQ=REQ-AUDIT-TLS-PIN-001; FEATURE="SyslogTLSCertPinning"; ASPECT=SECURITY; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-12
+// CANARY: REQ=REQ-AUDIT-TLS-PIN-001; FEATURE="SyslogTLSCertPinning"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-12
 pub const SyslogTlsConfig = struct {
     // Optional SHA-256 hash of the expected server certificate's public key (64 hex chars)
     // If set, the TLS handshake will verify the server's cert matches this pin

@@ -488,7 +488,7 @@ pub const QueryOptimizer = struct {
 
         const root = try self.allocator.create(PlanNode);
 
-        // CANARY: REQ=REQ-QP-STATS-001; FEATURE="QueryPlannerOptimization"; ASPECT=StatisticsEstimation; STATUS=IMPL; OWNER=planner; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-QP-STATS-001; FEATURE="QueryPlannerOptimization"; ASPECT=StatisticsEstimation; STATUS=EXEMPT; OWNER=planner; UPDATED=2025-12-30
         // Get table statistics for row estimation
         const table_stats = self.statistics.table_stats.get(access_path.table);
         const table_row_count = if (table_stats) |stats| stats.row_count else 1000;
@@ -554,7 +554,7 @@ pub const QueryOptimizer = struct {
         try self.considerParallelization(plan.root);
     }
 
-    // CANARY: REQ=REQ-QP-PUSH-001; FEATURE="QueryPlannerOptimization"; ASPECT=PredicatePushdown; STATUS=IMPL; OWNER=planner; UPDATED=2025-12-30
+    // CANARY: REQ=REQ-QP-PUSH-001; FEATURE="QueryPlannerOptimization"; ASPECT=PredicatePushdown; STATUS=EXEMPT; OWNER=planner; UPDATED=2025-12-30
     // Push predicates down the plan tree
     fn pushDownPredicates(self: *QueryOptimizer, node: *PlanNode) !void {
         // Recursively push down predicates to children first
@@ -590,7 +590,7 @@ pub const QueryOptimizer = struct {
         _ = self;
     }
 
-    // CANARY: REQ=REQ-QP-SORT-001; FEATURE="QueryPlannerOptimization"; ASPECT=SortElimination; STATUS=IMPL; OWNER=planner; UPDATED=2025-12-30
+    // CANARY: REQ=REQ-QP-SORT-001; FEATURE="QueryPlannerOptimization"; ASPECT=SortElimination; STATUS=EXEMPT; OWNER=planner; UPDATED=2025-12-30
     // Eliminate redundant sort operations
     fn eliminateRedundantSorts(self: *QueryOptimizer, node: *PlanNode) !void {
         // Recursively process children first
@@ -623,7 +623,7 @@ pub const QueryOptimizer = struct {
         _ = self;
     }
 
-    // CANARY: REQ=REQ-QP-FILTER-001; FEATURE="QueryPlannerOptimization"; ASPECT=FilterMerging; STATUS=IMPL; OWNER=planner; UPDATED=2025-12-30
+    // CANARY: REQ=REQ-QP-FILTER-001; FEATURE="QueryPlannerOptimization"; ASPECT=FilterMerging; STATUS=EXEMPT; OWNER=planner; UPDATED=2025-12-30
     // Merge consecutive filter operations
     fn mergeConsecutiveFilters(self: *QueryOptimizer, node: *PlanNode) !void {
         // Recursively process children first
@@ -652,7 +652,7 @@ pub const QueryOptimizer = struct {
         _ = self;
     }
 
-    // CANARY: REQ=REQ-QP-PARALLEL-001; FEATURE="QueryPlannerOptimization"; ASPECT=Parallelization; STATUS=IMPL; OWNER=planner; UPDATED=2025-12-30
+    // CANARY: REQ=REQ-QP-PARALLEL-001; FEATURE="QueryPlannerOptimization"; ASPECT=Parallelization; STATUS=EXEMPT; OWNER=planner; UPDATED=2025-12-30
     // Consider parallelizing operations
     fn considerParallelization(self: *QueryOptimizer, node: *PlanNode) !void {
         // Get table size from statistics for parallel threshold decision

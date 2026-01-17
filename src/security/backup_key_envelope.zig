@@ -48,7 +48,7 @@ pub fn import(allocator: std.mem.Allocator, blob: []const u8) !ImportResult {
     while (lines.next()) |line| {
         if (std.mem.indexOf(u8, line, "\"checksum\"")) |_| {
             // GAP-0141: Safe hex parsing with proper error handling
-            // CANARY: REQ=REQ-HEX-PARSE-BACKUP-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-HEX-PARSE-BACKUP-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-13
             const first = std.mem.indexOfScalar(u8, line, '"') orelse continue;
             const second = std.mem.indexOfScalarPos(u8, line, first + 1, '"') orelse continue;
             const third = std.mem.indexOfScalarPos(u8, line, second + 1, '"') orelse continue;

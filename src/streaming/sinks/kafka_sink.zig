@@ -56,7 +56,7 @@ pub const KafkaSink = struct {
         // Cleanup Kafka producer resources
     }
 
-    // CANARY: REQ=REQ-STREAMING-KAFKA-001; FEATURE="Kafka Sink Implementation"; ASPECT=ProducerSending; STATUS=IMPL; OWNER=streaming; UPDATED=2025-12-30
+    // CANARY: REQ=REQ-STREAMING-KAFKA-001; FEATURE="Kafka Sink Implementation"; ASPECT=ProducerSending; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=streaming; UPDATED=2025-12-30
     /// Send events to Kafka topic using native Kafka protocol
     pub fn send(self: *KafkaSink, events: []const ChangeEvent) !void {
         if (events.len == 0) return;

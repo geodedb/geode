@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-META-VALIDATE-001; FEATURE="MetadataValidation"; ASPECT=CI; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-META-VALIDATE-001; FEATURE="MetadataValidation"; ASPECT=CI; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=tooling; UPDATED=2026-01-03
 //! # Metadata Sync Validation
 //!
 //! Validates that all generated files (VSCode syntax, Vim syntax, API docs)

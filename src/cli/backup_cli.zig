@@ -12,7 +12,7 @@ const migration = @import("migration");
 // Phase 4 M4.3: Extract backup/restore/migrate commands from cli/main.zig
 
 // GAP-0137 SECURITY FIX: Add TLS certificate verification support for backup/migrate CLI
-// CANARY: REQ=REQ-BACKUP-TLS-001; FEATURE="BackupTLSCertVerification"; ASPECT=Security; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-13
+// CANARY: REQ=REQ-BACKUP-TLS-001; FEATURE="BackupTLSCertVerification"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_137_backup_tls.yml; OWNER=cli; UPDATED=2026-01-13
 
 // GAP-0221 SECURITY FIX: Replace silent catch 0 with logged error handling
 // CANARY: REQ=REQ-BACKUP-ERROR-HANDLING-001; FEATURE="BackupErrorHandling"; ASPECT=Security; STATUS=TESTED; TEST=test_gap_0221_backup_error_handling; OWNER=cli; UPDATED=2026-01-16
@@ -277,7 +277,7 @@ fn formatSize(bytes: u64) []const u8 {
     }
 }
 
-// CANARY: REQ=REQ-CLI-BACKUP-LIST-001; FEATURE="CLIBackupList"; ASPECT=DirectoryScan; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
+// CANARY: REQ=REQ-CLI-BACKUP-LIST-001; FEATURE="CLIBackupList"; ASPECT=DirectoryScan; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-11
 fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var custom_dir: ?[]const u8 = null;
 
@@ -415,7 +415,7 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-// CANARY: REQ=REQ-CLI-BACKUP-INFO-001; FEATURE="CLIBackupInfo"; ASPECT=FileMetadata; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
+// CANARY: REQ=REQ-CLI-BACKUP-INFO-001; FEATURE="CLIBackupInfo"; ASPECT=FileMetadata; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-11
 fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = allocator;
     var backup_file: ?[]const u8 = null;
@@ -1033,7 +1033,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
     if (std.mem.indexOf(u8, result_line, "\"type\":\"ERROR\"") != null) return error.ApplyFailed;
 }
 
-// CANARY: REQ=REQ-CLI-MIGRATE-STATUS-001; FEATURE="CLIMigrateStatus"; ASPECT=MigrationModule; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
+// CANARY: REQ=REQ-CLI-MIGRATE-STATUS-001; FEATURE="CLIMigrateStatus"; ASPECT=MigrationModule; STATUS=TESTED; TEST=geodetestlab/specs/geode_migrations.yml; OWNER=cli; UPDATED=2026-01-11
 fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var migrations_dir: []const u8 = "migrations";
 
@@ -1090,7 +1090,7 @@ fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-// CANARY: REQ=REQ-CLI-MIGRATE-RUN-001; FEATURE="CLIMigrateRun"; ASPECT=MigrationModule; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
+// CANARY: REQ=REQ-CLI-MIGRATE-RUN-001; FEATURE="CLIMigrateRun"; ASPECT=MigrationModule; STATUS=TESTED; TEST=geodetestlab/specs/geode_migrations.yml; OWNER=cli; UPDATED=2026-01-11
 // GAP-0137: Updated to support TLS certificate verification
 fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Parse arguments to find migration directory (default: ./migrations)
@@ -1258,7 +1258,7 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-// CANARY: REQ=REQ-CLI-MIGRATE-CREATE-001; FEATURE="CLIMigrateCreate"; ASPECT=FileCreation; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-11
+// CANARY: REQ=REQ-CLI-MIGRATE-CREATE-001; FEATURE="CLIMigrateCreate"; ASPECT=FileCreation; STATUS=TESTED; TEST=geodetestlab/specs/geode_migrations.yml; OWNER=cli; UPDATED=2026-01-11
 fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var migration_name: ?[]const u8 = null;
     var migrations_dir: []const u8 = "migrations";
@@ -1366,7 +1366,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 // Helper Functions for Backup/Restore Execution
 // ============================================================================
 
-// CANARY: REQ=REQ-BACKUP-REMOTE-001; FEATURE="RemoteBackup"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// CANARY: REQ=REQ-BACKUP-REMOTE-001; FEATURE="RemoteBackup"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/backup_operations_basic.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Remote server backup execution function using QUIC protocol
 fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
@@ -1527,7 +1527,7 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
 fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
 
-    // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=ServerConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=ServerConnection; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-10
     // Always try to connect to server via QUIC first - this ensures we get real data
     executeRemoteBackup(allocator, dest, mode, parent_id, server, compress, tls_config) catch |err| {
         std.debug.print("Warning: Could not connect to server {s}: {}\n", .{ server, err });
@@ -1542,7 +1542,7 @@ fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u
     };
 }
 
-// CANARY: REQ=REQ-BACKUP-LOCAL-001; FEATURE="Local Directory Backup"; ASPECT=DataExport; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
+// CANARY: REQ=REQ-BACKUP-LOCAL-001; FEATURE="Local Directory Backup"; ASPECT=DataExport; STATUS=TESTED; TEST=geodetestlab/specs/backup_operations_basic.yml; OWNER=cli; UPDATED=2026-01-10
 // Local directory backup - reads from Geode data directory when server not available
 fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, compress: bool) !void {
     _ = parent_id;
@@ -1726,7 +1726,7 @@ fn executeFallbackBackup(allocator: std.mem.Allocator, dest: []const u8, mode: [
     std.debug.print("}}\n", .{});
 }
 
-// CANARY: REQ=REQ-BACKUP-REAL-DATA-001; FEATURE="BackupRealData"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-10
+// CANARY: REQ=REQ-BACKUP-REAL-DATA-001; FEATURE="BackupRealData"; ASPECT=DataIntegrity; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
 // GAP-0087 RESOLVED: Now reads actual data from data directory instead of placeholder data
 // Simplified backup manager for CLI usage without full server dependencies
 const SimplifiedBackupManager = struct {
@@ -1982,7 +1982,7 @@ fn generateBackupId() u128 {
     return (timestamp << 64) | random;
 }
 
-// CANARY: REQ=REQ-BACKUP-RESTORE-001; FEATURE="Backup Restore"; ASPECT=RemoteRestore; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// CANARY: REQ=REQ-BACKUP-RESTORE-001; FEATURE="Backup Restore"; ASPECT=RemoteRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Remote server restore execution function - sends restore request via QUIC
 fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8, tls_config: TlsConfig) !void {
@@ -2083,7 +2083,7 @@ fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target
     }
 }
 
-// CANARY: REQ=REQ-BACKUP-RESTORE-002; FEATURE="Backup Restore"; ASPECT=LocalRestore; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// CANARY: REQ=REQ-BACKUP-RESTORE-002; FEATURE="Backup Restore"; ASPECT=LocalRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Local restore execution - handles local file restoration
 fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8, tls_config: TlsConfig) !void {
@@ -2172,7 +2172,7 @@ fn parseTimestampToEpoch(ts: []const u8) ?i64 {
     return seconds * 1000; // Return milliseconds
 }
 
-// CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore Manager"; ASPECT=LocalRestoreImpl; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore Manager"; ASPECT=LocalRestoreImpl; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
 const SimplifiedRestoreManager = struct {
     allocator: std.mem.Allocator,
     backup_dir: []const u8,
@@ -2289,7 +2289,7 @@ const SimplifiedRestoreManager = struct {
         };
     }
 
-    // CANARY: REQ=REQ-PITR-WAL-001; FEATURE="Point-in-Time Recovery"; ASPECT=WALReplay; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-PITR-WAL-001; FEATURE="Point-in-Time Recovery"; ASPECT=WALReplay; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-09
     /// Restore to a specific point in time by replaying WAL records
     fn restoreToPointInTime(self: SimplifiedRestoreManager, backup_path: []const u8, target_time: i64) !RestoreMetadata {
         std.debug.print("RESTORE: Point-in-time restore to timestamp {d}\n", .{target_time});

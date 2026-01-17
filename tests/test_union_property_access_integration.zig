@@ -5,7 +5,7 @@ const exec = geode.server.graph.exec;
 const ast = geode.gql.ast;
 const graph_common = geode.types.graph_common;
 
-// CANARY: REQ=REQ-GQL-UNION-INTEGRATION-001; FEATURE="UNION Property Access Integration"; ASPECT=Integration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNION_INTEGRATION_001_PropertyAccessIntegration; OWNER=claude; UPDATED=2025-01-04
+// CANARY: REQ=REQ-GQL-UNION-INTEGRATION-001; FEATURE="UNION Property Access Integration"; ASPECT=Integration; STATUS=TESTED; TEST=geodetestlab/specs/gql_set_operations_comprehensive.yml; TEST=TestCANARY_REQ_GQL_UNION_INTEGRATION_001_PropertyAccessIntegration; OWNER=claude; UPDATED=2025-01-04
 
 // Integration tests for UNION property access functionality
 // Tests the complete pipeline from graph storage through query execution to JSON serialization

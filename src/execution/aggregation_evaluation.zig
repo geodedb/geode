@@ -26,7 +26,7 @@ pub fn getExpressionNameFromAst(expr: ast.Expr) []const u8 {
 }
 
 // E32 Fix: Extract node variable name from expression tree (e.g., "e" from "e.active")
-// CANARY: REQ=REQ-GQL-AGG-CASE-001; FEATURE="CaseInAggregation"; ASPECT=VariableExtraction; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+// CANARY: REQ=REQ-GQL-AGG-CASE-001; FEATURE="CaseInAggregation"; ASPECT=VariableExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 fn extractNodeVariableFromExpr(expr: ast.Expr) ?[]const u8 {
     switch (expr) {
         .Member => |member| {
@@ -116,7 +116,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     }
                     return Value{ .Int = @intCast(nodes.len) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-                    // CANARY: REQ=REQ-COUNT-DISTINCT-FIX-001; FEATURE="CountDistinctStrings"; ASPECT=StringSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+                    // CANARY: REQ=REQ-COUNT-DISTINCT-FIX-001; FEATURE="CountDistinctStrings"; ASPECT=StringSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-26
                     // COUNT(DISTINCT expr) - count distinct non-null values
                     if (call.args.len == 1) {
                         var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
@@ -178,7 +178,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation over group
-                    // CANARY: REQ=REQ-AGGREGATION-SUM-001; FEATURE="SumAggregation"; ASPECT=DecimalSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // CANARY: REQ=REQ-AGGREGATION-SUM-001; FEATURE="SumAggregation"; ASPECT=DecimalSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -232,7 +232,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             return Value{ .Int = sum_int };
                         } else {
                             // E32 Fix: Handle complex expressions like CASE in SUM aggregation
-                            // CANARY: REQ=REQ-GQL-AGG-CASE-002; FEATURE="CaseInAggregation"; ASPECT=SumEvaluation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                            // CANARY: REQ=REQ-GQL-AGG-CASE-002; FEATURE="CaseInAggregation"; ASPECT=SumEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                             // For complex expressions, evaluate for each node and sum results
                             if (extractNodeVariableFromExpr(call.args[0].*)) |var_name| {
                                 var sum_int: i64 = 0;
@@ -286,7 +286,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
                     // AVG aggregation over group
-                    // CANARY: REQ=REQ-AGGREGATION-AVG-002; FEATURE="AvgAggregation"; ASPECT=FloatSupport; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+                    // CANARY: REQ=REQ-AGGREGATION-AVG-002; FEATURE="AvgAggregation"; ASPECT=FloatSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -318,7 +318,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-                    // CANARY: REQ=REQ-STRING-MINMAX-001; FEATURE="StringMinMax"; ASPECT=MinAggregation; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-STRING-MINMAX-001; FEATURE="StringMinMax"; ASPECT=MinAggregation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
                     // MIN aggregation over group - supports both integers and strings
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -355,7 +355,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-                    // CANARY: REQ=REQ-STRING-MINMAX-002; FEATURE="StringMinMax"; ASPECT=MaxAggregation; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-STRING-MINMAX-002; FEATURE="StringMinMax"; ASPECT=MaxAggregation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
                     // MAX aggregation over group - supports both integers and strings
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -392,7 +392,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
-                    // CANARY: REQ=REQ-AGG-COLLECT-001; FEATURE="AggregationFunctions"; ASPECT=COLLECT; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-22
+                    // CANARY: REQ=REQ-AGG-COLLECT-001; FEATURE="AggregationFunctions"; ASPECT=COLLECT; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-22
                     // COLLECT aggregation - collect values into a list
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -431,7 +431,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     }
                     return Value{ .List = &.{} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "stddev")) {
-                    // CANARY: REQ=REQ-MATH-STATS-001; FEATURE="StatisticalFunctions"; ASPECT=STDDEV; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+                    // CANARY: REQ=REQ-MATH-STATS-001; FEATURE="StatisticalFunctions"; ASPECT=STDDEV; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
                     // STDDEV aggregation - population standard deviation
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -489,7 +489,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "variance")) {
-                    // CANARY: REQ=REQ-MATH-STATS-002; FEATURE="StatisticalFunctions"; ASPECT=VARIANCE; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+                    // CANARY: REQ=REQ-MATH-STATS-002; FEATURE="StatisticalFunctions"; ASPECT=VARIANCE; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
                     // VARIANCE aggregation - population variance
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -549,7 +549,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
             }
         },
         // E36 Fix: Handle constant expressions (string literals, numbers, etc.) in aggregation context
-        // CANARY: REQ=REQ-GQL-AGG-CONST-001; FEATURE="AggregationConstants"; ASPECT=StringLiterals; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // CANARY: REQ=REQ-GQL-AGG-CONST-001; FEATURE="AggregationConstants"; ASPECT=StringLiterals; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
         .String => |s| {
             return Value{ .Str = s };
         },
@@ -688,7 +688,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                         const is_distinct = std.mem.eql(u8, func_name, "countDistinct");
 
                         if (is_distinct) {
-                            // CANARY: REQ=REQ-COUNT-DISTINCT-FIX-002; FEATURE="CountDistinctStrings"; ASPECT=StringSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+                            // CANARY: REQ=REQ-COUNT-DISTINCT-FIX-002; FEATURE="CountDistinctStrings"; ASPECT=StringSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-26
                             // COUNT(DISTINCT expr) - count unique non-null values
                             var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
                             defer unique_int_values.deinit();
@@ -774,7 +774,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation
-                    // CANARY: REQ=REQ-AGGREGATION-SUM-002; FEATURE="SumAggregation"; ASPECT=DecimalSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // CANARY: REQ=REQ-AGGREGATION-SUM-002; FEATURE="SumAggregation"; ASPECT=DecimalSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -833,7 +833,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
                     // AVG aggregation
-                    // CANARY: REQ=REQ-AGGREGATION-AVG-001; FEATURE="AvgAggregation"; ASPECT=DecimalSupport; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // CANARY: REQ=REQ-AGGREGATION-AVG-001; FEATURE="AvgAggregation"; ASPECT=DecimalSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
                             call.args[0].PropertyAccess.property
@@ -879,7 +879,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-                    // CANARY: REQ=REQ-STRING-MINMAX-003; FEATURE="StringMinMax"; ASPECT=MinStore; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-STRING-MINMAX-003; FEATURE="StringMinMax"; ASPECT=MinStore; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
                     // MIN aggregation - supports both integers and strings
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -918,7 +918,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-                    // CANARY: REQ=REQ-STRING-MINMAX-004; FEATURE="StringMinMax"; ASPECT=MaxStore; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-STRING-MINMAX-004; FEATURE="StringMinMax"; ASPECT=MaxStore; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
                     // MAX aggregation - supports both integers and strings
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -957,7 +957,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
-                    // CANARY: REQ=REQ-AGG-COLLECT-002; FEATURE="AggregationFunctions"; ASPECT=COLLECT_STORE; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-22
+                    // CANARY: REQ=REQ-AGG-COLLECT-002; FEATURE="AggregationFunctions"; ASPECT=COLLECT_STORE; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-22
                     // COLLECT aggregation - collect values into a list
                     if (call.args.len == 1) {
                         const field_name = if (call.args[0].* == .PropertyAccess)
@@ -1023,7 +1023,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
     return Value{ .Null = {} };
 }
 
-// CANARY: REQ=REQ-GQL-GROUPBY-REL-002; FEATURE="GroupByRelationshipPattern"; ASPECT=BindingAggregation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
+// CANARY: REQ=REQ-GQL-GROUPBY-REL-002; FEATURE="GroupByRelationshipPattern"; ASPECT=BindingAggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-23
 /// Compute aggregation over a group of binding rows (for relationship pattern GROUP BY)
 pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, bindings: anytype) !Value {
     // bindings should be a slice of BindingRow structs with env_names and env_values
@@ -1058,7 +1058,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                     }
                     return Value{ .Int = @intCast(bindings.len) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-                    // CANARY: REQ=REQ-COUNT-DISTINCT-BINDING-001; FEATURE="CountDistinctBindings"; ASPECT=BindingAggregation; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-28
+                    // CANARY: REQ=REQ-COUNT-DISTINCT-BINDING-001; FEATURE="CountDistinctBindings"; ASPECT=BindingAggregation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-28
                     // C05 Fix: COUNT(DISTINCT expr) - count unique non-null values across bindings
                     if (call.args.len == 1) {
                         var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
@@ -1107,7 +1107,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                             const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
                             switch (val) {
                                 .Int => |i| {
-                                    // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-005; FEATURE="OverflowSafeSum"; ASPECT=IntOverflow; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                                    // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-005; FEATURE="OverflowSafeSum"; ASPECT=IntOverflow; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
                                     // Use overflow-safe addition to prevent integer overflow panic
                                     const result = @addWithOverflow(sum_int, i);
                                     if (result[1] != 0) {
@@ -1129,7 +1129,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                         const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
                                         sum_float += decimal_float;
                                     } else if (ext == .Int) {
-                                        // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-006; FEATURE="OverflowSafeSum"; ASPECT=ExtIntOverflow; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                                        // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-006; FEATURE="OverflowSafeSum"; ASPECT=ExtIntOverflow; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
                                         // Use overflow-safe addition to prevent integer overflow panic
                                         const result = @addWithOverflow(sum_int, ext.Int);
                                         if (result[1] != 0) {
@@ -1183,7 +1183,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-                    // CANARY: REQ=REQ-STRING-MINMAX-005; FEATURE="StringMinMax"; ASPECT=MinBindings; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-STRING-MINMAX-005; FEATURE="StringMinMax"; ASPECT=MinBindings; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
                     // MIN aggregation over bindings - supports both integers and strings
                     if (call.args.len == 1) {
                         var min_int: ?i64 = null;
@@ -1215,7 +1215,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-                    // CANARY: REQ=REQ-STRING-MINMAX-006; FEATURE="StringMinMax"; ASPECT=MaxBindings; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-STRING-MINMAX-006; FEATURE="StringMinMax"; ASPECT=MaxBindings; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
                     // MAX aggregation over bindings - supports both integers and strings
                     if (call.args.len == 1) {
                         var max_int: ?i64 = null;
@@ -1247,7 +1247,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
-                    // CANARY: REQ=REQ-AGG-COLLECT-003; FEATURE="AggregationFunctions"; ASPECT=COLLECT_NULL_SKIP; STATUS=IMPL; OWNER=aggregation; UPDATED=2025-12-28
+                    // CANARY: REQ=REQ-AGG-COLLECT-003; FEATURE="AggregationFunctions"; ASPECT=COLLECT_NULL_SKIP; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-28
                     // B02 Fix: COLLECT should skip NULL values and return [] when all values are NULL
                     // COLLECT aggregation - collect non-NULL values into a list
                     if (call.args.len == 1) {

@@ -191,7 +191,7 @@ pub const MaterializedViewManager = struct {
 
     // Private implementation methods
 
-    // CANARY: REQ=REQ-MATVIEW-PARSE-001; FEATURE="Materialized View Query Parsing"; ASPECT=QueryParsing; STATUS=IMPL; OWNER=query; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-MATVIEW-PARSE-001; FEATURE="Materialized View Query Parsing"; ASPECT=QueryParsing; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
     fn parseAndValidateQuery(self: *MaterializedViewManager, query: []const u8) !*ast.Query {
         // Create arena allocator for parser
         var arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -266,7 +266,7 @@ pub const MaterializedViewManager = struct {
         return parsed;
     }
 
-    // CANARY: REQ=REQ-MATVIEW-DEPS-001; FEATURE="Materialized View Dependency Extraction"; ASPECT=DependencyTracking; STATUS=IMPL; OWNER=query; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-MATVIEW-DEPS-001; FEATURE="Materialized View Dependency Extraction"; ASPECT=DependencyTracking; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
     fn extractDependencies(self: *MaterializedViewManager, query: *ast.Query) ![]Dependency {
         var dependencies = std.ArrayList(Dependency).init(self.allocator);
         errdefer {
@@ -365,7 +365,7 @@ pub const MaterializedViewManager = struct {
         return cloned;
     }
 
-    // CANARY: REQ=REQ-MATVIEW-STORAGE-001; FEATURE="Materialized View Storage Creation"; ASPECT=Storage; STATUS=IMPL; OWNER=query; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-MATVIEW-STORAGE-001; FEATURE="Materialized View Storage Creation"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
     fn createViewStorage(self: *MaterializedViewManager, view: *MaterializedView) !void {
         // Generate unique storage identifier with timestamp for uniqueness
         const timestamp = std.time.milliTimestamp();
@@ -791,7 +791,7 @@ pub const QueryResult = struct {
     }
 };
 
-// CANARY: REQ=REQ-MATVIEW-STORAGE-002; FEATURE="Materialized View Storage Entry"; ASPECT=Storage; STATUS=IMPL; OWNER=query; UPDATED=2026-01-08
+// CANARY: REQ=REQ-MATVIEW-STORAGE-002; FEATURE="Materialized View Storage Entry"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
 /// Storage entry for materialized view data
 pub const ViewStorageEntry = struct {
     view_id: u64,
@@ -1046,7 +1046,7 @@ const RefreshScheduler = struct {
         });
     }
 
-    // CANARY: REQ=REQ-MV-CANCEL-001; FEATURE="MVRefreshCancellation"; ASPECT=Cancel; STATUS=IMPL; OWNER=mv; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-MV-CANCEL-001; FEATURE="MVRefreshCancellation"; ASPECT=Cancel; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=mv; UPDATED=2026-01-09
     fn cancelRefresh(self: *RefreshScheduler, view_id: u64) !void {
         // Rebuild the queue without entries for the target view_id
         // This is the standard approach for priority queues without direct removal support
@@ -1074,7 +1074,7 @@ const RefreshScheduler = struct {
 };
 
 // Query rewriting for optimization
-// CANARY: REQ=REQ-MATVIEW-REWRITE-001; FEATURE="Query Rewriting for Materialized Views"; ASPECT=QueryRewrite; STATUS=IMPL; OWNER=query; UPDATED=2026-01-08
+// CANARY: REQ=REQ-MATVIEW-REWRITE-001; FEATURE="Query Rewriting for Materialized Views"; ASPECT=QueryRewrite; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
 const QueryRewriter = struct {
     allocator: Allocator,
 

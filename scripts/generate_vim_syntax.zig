@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-SYNTAX-VIM-001; FEATURE="VimSyntaxGeneration"; ASPECT=MetadataDerived; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-SYNTAX-VIM-001; FEATURE="VimSyntaxGeneration"; ASPECT=MetadataDerived; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! # Vim/Neovim Syntax Generator
 //!
 //! Generates Vim syntax highlighting (gql.vim) from the unified language_metadata.zig.

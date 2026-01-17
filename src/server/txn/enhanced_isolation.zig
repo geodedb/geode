@@ -416,7 +416,7 @@ pub const EnhancedIsolationManager = struct {
         // Perform base MVCC read
         const result = try self.mvcc_manager.read(txn, resource_id);
 
-        // CANARY: REQ=REQ-TXN-ISOLATION-005; FEATURE="SSI RW Dependency Tracking"; ASPECT=ReadDependencies; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-TXN-ISOLATION-005; FEATURE="SSI RW Dependency Tracking"; ASPECT=ReadDependencies; STATUS=TESTED; TEST=geodetestlab/specs/gql_transaction_management_comprehensive.yml; OWNER=txn; UPDATED=2025-12-30
         // Track dependencies for SSI
         if (isolation == .SerializableSnapshot) {
             // Identify writing transactions and add RW dependencies
@@ -454,7 +454,7 @@ pub const EnhancedIsolationManager = struct {
     ) !void {
         const start_time = std.time.milliTimestamp();
 
-        // CANARY: REQ=REQ-TXN-ISOLATION-006; FEATURE="SSI Predicate Lock Checking"; ASPECT=PredicateLocks; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-TXN-ISOLATION-006; FEATURE="SSI Predicate Lock Checking"; ASPECT=PredicateLocks; STATUS=TESTED; TEST=geodetestlab/specs/gql_transaction_management_comprehensive.yml; OWNER=txn; UPDATED=2025-12-30
         // Check for phantom read conflicts if required
         if (isolation.preventsPhantomReads()) {
             // Check predicate locks - look for conflicting range/predicate locks held by other transactions
@@ -469,7 +469,7 @@ pub const EnhancedIsolationManager = struct {
         // Perform base MVCC write
         try self.mvcc_manager.write(txn, resource_id, data);
 
-        // CANARY: REQ=REQ-TXN-ISOLATION-007; FEATURE="SSI WR Dependency Tracking"; ASPECT=WriteDependencies; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-TXN-ISOLATION-007; FEATURE="SSI WR Dependency Tracking"; ASPECT=WriteDependencies; STATUS=TESTED; TEST=geodetestlab/specs/gql_transaction_management_comprehensive.yml; OWNER=txn; UPDATED=2025-12-30
         // Track dependencies for SSI
         if (isolation == .SerializableSnapshot) {
             // Identify reading transactions and add WR dependencies
@@ -512,7 +512,7 @@ pub const EnhancedIsolationManager = struct {
     ) !void {
         const start_time = std.time.milliTimestamp();
 
-        // CANARY: REQ=REQ-TXN-ISOLATION-008; FEATURE="SSI Read Set Validation"; ASPECT=CommitValidation; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-TXN-ISOLATION-008; FEATURE="SSI Read Set Validation"; ASPECT=CommitValidation; STATUS=TESTED; TEST=geodetestlab/specs/gql_transaction_management_comprehensive.yml; OWNER=txn; UPDATED=2025-12-30
         // Final phantom read validation for serializable transactions
         if (isolation.preventsPhantomReads()) {
             // Validate read set against concurrent writes

@@ -1,7 +1,7 @@
 # GAP-0183, GAP-0184, GAP-0185: CI Enforcement, Distributed Shard Execution, Traceability Tests
-# CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=GeodeTestlab; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
-# CANARY: REQ=REQ-0008; FEATURE="Platform Build Requirements"; ASPECT=GeodeTestlab; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
-# CANARY: REQ=REQ-DOC-GOVERNANCE; FEATURE="Requirement Traceability"; ASPECT=GeodeTestlab; STATUS=IMPL; OWNER=compliance; UPDATED=2026-01-14
+# CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=GeodeTestlab; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
+# CANARY: REQ=REQ-0008; FEATURE="Platform Build Requirements"; ASPECT=GeodeTestlab; STATUS=EXEMPT; OWNER=ci; UPDATED=2026-01-14
+# CANARY: REQ=REQ-DOC-GOVERNANCE; FEATURE="Requirement Traceability"; ASPECT=GeodeTestlab; STATUS=EXEMPT; OWNER=compliance; UPDATED=2026-01-14
 
 version: "1.0"
 name: "GAP-0183/0184/0185 Resolution Tests"

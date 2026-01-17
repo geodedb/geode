@@ -152,7 +152,7 @@ test-zig-release-safe:
 
 # =============================================================================
 # Test Stage - GQL Compliance Suite (geodetestlab)
-# CANARY: REQ=REQ-CI-COMPLIANCE-001; FEATURE="GQL Compliance CI"; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
+# CANARY: REQ=REQ-CI-COMPLIANCE-001; FEATURE="GQL Compliance CI"; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=ci; UPDATED=2026-01-14
 # GAP-0167: Execute geodetestlab GQL compliance specs in CI
 # =============================================================================
 
@@ -175,7 +175,7 @@ test-gql-compliance:
       source /opt/venv/bin/activate
       cd geodetestlab
 
-      # CANARY: REQ=REQ-GQL-CI-001; FEATURE="GQL Compliance CI"; ASPECT=TestEnforcement; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
+      # CANARY: REQ=REQ-GQL-CI-001; FEATURE="GQL Compliance CI"; ASPECT=TestEnforcement; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=ci; UPDATED=2026-01-14
       # GAP-0167: GQL compliance CI must fail on test failures - removed || true
       # Run GQL compliance spec specifically (exit code propagates for CI failure)
       python3 ../scripts/test/extended_test_runner.py \
@@ -216,7 +216,7 @@ test-geodetestlab-comprehensive:
       echo "=== Running Comprehensive geodetestlab Tests ==="
       source /opt/venv/bin/activate
 
-      # CANARY: REQ=REQ-GQL-CI-002; FEATURE="GQL Comprehensive CI"; ASPECT=TestReporting; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
+      # CANARY: REQ=REQ-GQL-CI-002; FEATURE="GQL Comprehensive CI"; ASPECT=TestReporting; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=ci; UPDATED=2026-01-14
       # GAP-0167: Comprehensive tests report actual status (allow_failure: true permits pipeline to continue)
       python3 scripts/test/extended_test_runner.py \
         --binary zig-out/bin/geode \

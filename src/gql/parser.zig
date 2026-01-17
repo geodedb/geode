@@ -294,7 +294,7 @@ pub const Parser = struct {
         var list = std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
 
         // GAP-0082: Parse CTEs if WITH keyword present at program start
-        // CANARY: REQ=REQ-GQL-CTE-002; FEATURE="CTEParsing"; ASPECT=ParserProgram; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-10
+        // CANARY: REQ=REQ-GQL-CTE-002; FEATURE="CTEParsing"; ASPECT=ParserProgram; STATUS=TESTED; TEST=geodetestlab/specs/recursive_and_cte.yml; OWNER=parser; UPDATED=2026-01-10
         var cte_list: ?ast.CTEList = null;
         if (self.cur.kind == .WITH) {
             // Check if this is a CTE (WITH name AS (...)) vs projection (WITH expr AS alias)
@@ -378,7 +378,7 @@ pub const Parser = struct {
     }
 
     /// GAP-0082: Parse WITH [RECURSIVE] cte_name [(col1, col2)] AS (query) [, cte_name2 AS (query2)]
-    /// CANARY: REQ=REQ-GQL-CTE-003; FEATURE="CTEListParsing"; ASPECT=Parser; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-10
+    /// CANARY: REQ=REQ-GQL-CTE-003; FEATURE="CTEListParsing"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/recursive_and_cte.yml; OWNER=parser; UPDATED=2026-01-10
     fn parseCTEList(self: *Parser) ParserError!ast.CTEList {
         _ = self.expect(.WITH) catch return error.UnexpectedToken;
 
@@ -1641,7 +1641,7 @@ pub const Parser = struct {
                 .offset = with_offset,
             };
 
-            // CANARY: REQ=REQ-GQL-WITH-WHERE-003; FEATURE="InitialWithWhere"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-GQL-WITH-WHERE-003; FEATURE="InitialWithWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
             // Allow optional WHERE after initial WITH to filter the projected bindings
             // This is for queries like: WITH 5 AS x WHERE x > 0 RETURN x
             // Or chained: MATCH (n) WITH n.name AS name WITH name WHERE name = 'Alice' RETURN name
@@ -1677,7 +1677,7 @@ pub const Parser = struct {
                 };
             }
 
-            // CANARY: REQ=REQ-GQL-WITH-CHAIN-003; FEATURE="ConsecutiveWithClauses"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-GQL-WITH-CHAIN-003; FEATURE="ConsecutiveWithClauses"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
             // Check for another WITH after initial WITH (chained WITH clauses without MATCH)
             // e.g., WITH 'Alice' AS n WITH n AS n2 RETURN n2
             if (self.cur.kind == .WITH) {
@@ -1780,7 +1780,7 @@ pub const Parser = struct {
 
         // Check for CREATE at the beginning - support multiple consecutive CREATE clauses
         // e.g., CREATE (a:Node) CREATE (b:Node) WITH 1 AS x ...
-        // CANARY: REQ=REQ-GQL-MULTI-CREATE-001; FEATURE="MultipleConsecutiveCreate"; ASPECT=Parser; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+        // CANARY: REQ=REQ-GQL-MULTI-CREATE-001; FEATURE="MultipleConsecutiveCreate"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
         if (self.cur.kind == .CREATE) {
             have_create = true;
             var create_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
@@ -1873,7 +1873,7 @@ pub const Parser = struct {
             }
 
             // Check for additional MATCH or OPTIONAL MATCH clauses and combine their chains
-            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-002; FEATURE="OptionalMatchParsing"; ASPECT=ChainMarking; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-22
+            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-002; FEATURE="OptionalMatchParsing"; ASPECT=ChainMarking; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-22
             while (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
                 // Track whether current chains are optional (for OPTIONAL MATCH)
                 var is_currently_optional = false;
@@ -1943,7 +1943,7 @@ pub const Parser = struct {
                 where_expr = try self.parseOrExpr();
             }
 
-            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
             // Check for OPTIONAL MATCH after WHERE clause
             // e.g., MATCH (e) WHERE e.x = 1 OPTIONAL MATCH (e)-[:R]->(m) RETURN ...
             if (self.cur.kind == .OPTIONAL) {
@@ -1970,7 +1970,7 @@ pub const Parser = struct {
                 combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
             }
 
-            // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-26
+            // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-26
             // Check for required MATCH after WHERE clause
             // e.g., MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN ...
             if (self.cur.kind == .MATCH) {
@@ -2144,7 +2144,7 @@ pub const Parser = struct {
                 }
             }
 
-            // CANARY: REQ=REQ-GQL-WITH-CHAIN-001; FEATURE="ChainedWithClauses"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-GQL-WITH-CHAIN-001; FEATURE="ChainedWithClauses"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
             // Check for query chaining: WITH ... WITH/MATCH/CREATE/FOR ...
             // If we see WITH, MATCH, CREATE, or FOR after WITH, parse it as a chained query or statement
             if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR) {
@@ -2491,7 +2491,7 @@ pub const Parser = struct {
     fn parseGraphPattern(self: *Parser) ParserError!ast.GraphPattern {
         var chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
 
-        // CANARY: REQ=REQ-GQL-PATH-MODES-003; FEATURE="GQL Path Mode Parsing"; ASPECT=Parser; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-08
+        // CANARY: REQ=REQ-GQL-PATH-MODES-003; FEATURE="GQL Path Mode Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-01-08
         // Check for path mode specifier (WALK, TRAIL, ACYCLIC, SIMPLE) before the pattern
         var path_mode: ast.PathMode = .walk;
         if (self.cur.kind == .WALK) {
@@ -2861,7 +2861,7 @@ pub const Parser = struct {
                 self.advance(); // consume NOT
                 self.advance(); // consume (
 
-                // CANARY: REQ=REQ-GQL-NOT-PAREN-EXPR-001; FEATURE="NotParenExpr"; ASPECT=ParserFix; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-28
+                // CANARY: REQ=REQ-GQL-NOT-PAREN-EXPR-001; FEATURE="NotParenExpr"; ASPECT=ParserFix; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-28
                 // B10 Fix: Distinguish between NOT (n:Label...) graph pattern and NOT (n.value > 0) expression
                 // If we see an identifier followed by a dot, it's a property access expression, not a node pattern
                 // Node pattern indicators after identifier: :, ), {, -, <, [
@@ -2959,7 +2959,7 @@ pub const Parser = struct {
                 if (self.cur.kind == .IN) {
                     self.advance();
 
-                    // CANARY: REQ=REQ-GQL-IN-EXPR-001; FEATURE="InOperator"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-GQL-IN-EXPR-001; FEATURE="InOperator"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
                     // Check if this is IN (subquery), IN [list], or IN <expression>
                     if (self.cur.kind == .l_paren) {
                         // IN (subquery) - parse as subquery
@@ -2993,7 +2993,7 @@ pub const Parser = struct {
                         vp.* = left;
                         return .{ .In = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
                     } else {
-                        // CANARY: REQ=REQ-GQL-IN-LISTEXPR-001; FEATURE="InListExpr"; ASPECT=FunctionCall; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-GQL-IN-LISTEXPR-001; FEATURE="InListExpr"; ASPECT=FunctionCall; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
                         // IN <expression> - expression that evaluates to a list (e.g., labels(n))
                         // Use parsePostfixExpr to handle function calls like labels(n), not just identifiers
                         const list_expr = try self.parsePostfixExpr();
@@ -3010,7 +3010,7 @@ pub const Parser = struct {
                     self.advance();
                     _ = try self.expect(.IN);
 
-                    // CANARY: REQ=REQ-GQL-IN-EXPR-002; FEATURE="NotInOperator"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-GQL-IN-EXPR-002; FEATURE="NotInOperator"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
                     // Check if this is NOT IN (subquery), NOT IN [list], or NOT IN <expression>
                     if (self.cur.kind == .l_paren) {
                         // NOT IN (subquery)
@@ -3044,7 +3044,7 @@ pub const Parser = struct {
                         vp.* = left;
                         return .{ .NotIn = .{ .value = vp, .set = try elems.toOwnedSlice(self.arena.allocator()) } };
                     } else {
-                        // CANARY: REQ=REQ-GQL-IN-LISTEXPR-002; FEATURE="NotInListExpr"; ASPECT=FunctionCall; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-GQL-IN-LISTEXPR-002; FEATURE="NotInListExpr"; ASPECT=FunctionCall; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
                         // NOT IN <expression> - expression that evaluates to a list (e.g., labels(n))
                         // Use parsePostfixExpr to handle function calls like labels(n), not just identifiers
                         const list_expr = try self.parsePostfixExpr();
@@ -3149,7 +3149,7 @@ pub const Parser = struct {
         return left;
     }
 
-    // CANARY: REQ=REQ-GQL-POWER-002; FEATURE="PowerOperator"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+    // CANARY: REQ=REQ-GQL-POWER-002; FEATURE="PowerOperator"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=parser; UPDATED=2025-12-27
     // Power operator has higher precedence than multiplication
     fn parsePowerExpr(self: *Parser) ParserError!ast.Expr {
         var left = try self.parseUnaryExpr();
@@ -3165,8 +3165,8 @@ pub const Parser = struct {
     fn parseUnaryExpr(self: *Parser) ParserError!ast.Expr {
         // NOT is now handled in parseNotExpr at correct precedence level
         if (self.cur.kind == .EXISTS and self.peekToken() == .l_brace) {
-            // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
-            // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="ExistsSubquery"; ASPECT=WhereClause; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="ExistsSubquery"; ASPECT=WhereClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
             // This is EXISTS { ... } - EXISTS predicate
             // Supports: EXISTS { pattern }, EXISTS { MATCH pattern }, EXISTS { MATCH pattern WHERE condition }
             self.advance(); // consume EXISTS
@@ -3231,7 +3231,7 @@ pub const Parser = struct {
                 base = .{ .Member = .{ .target = bp, .field = field.lexeme } };
                 continue;
             }
-            // CANARY: REQ=REQ-GQL-COUNT-001; FEATURE="CountSubquery"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-28
+            // CANARY: REQ=REQ-GQL-COUNT-001; FEATURE="CountSubquery"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-28
             // C02 Fix: Check for COUNT { MATCH pattern WHERE expr } subquery syntax
             if (self.cur.kind == .l_brace and base == .Ident and std.ascii.eqlIgnoreCase(base.Ident.orig, "count")) {
                 self.advance(); // consume '{'
@@ -3294,7 +3294,7 @@ pub const Parser = struct {
                 // function call: base(args)
                 self.advance();
 
-                // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Parser; STATUS=IMPLEMENTED; OWNER=parser; UPDATED=2025-10-14
+                // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=parser; UPDATED=2025-10-14
                 // Special handling: all(x IN list WHERE condition) or any(x IN list WHERE condition)
                 if (base == .Ident and (std.ascii.eqlIgnoreCase(base.Ident.orig, "all") or std.ascii.eqlIgnoreCase(base.Ident.orig, "any")) and self.cur.kind == .identifier) {
                     // Check if this is a list comprehension: identifier IN ...
@@ -3434,7 +3434,7 @@ pub const Parser = struct {
                 continue;
             }
             if (self.cur.kind == .l_bracket) {
-                // CANARY: REQ=REQ-GQL-SLICE-002; FEATURE="ListSlicing"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+                // CANARY: REQ=REQ-GQL-SLICE-002; FEATURE="ListSlicing"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
                 // array index: base[index] or slice: base[start..end]
                 self.advance();
                 const a = self.arena.allocator();
@@ -3597,7 +3597,7 @@ pub const Parser = struct {
             .string_lit => blk: {
                 const tkn = self.cur;
                 self.advance();
-                // CANARY: REQ=REQ-GQL-STRING-ESCAPE-001; FEATURE="StringEscaping"; ASPECT=Unescaping; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-09
+                // CANARY: REQ=REQ-GQL-STRING-ESCAPE-001; FEATURE="StringEscaping"; ASPECT=Unescaping; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2026-01-09
                 // Unescape the string literal to handle \' -> ' and other escape sequences
                 break :blk .{ .String = try self.unescapeString(tkn.lexeme) };
             },
@@ -4074,7 +4074,7 @@ pub const Parser = struct {
 
         // Otherwise, parse the pattern to create - support multiple consecutive CREATE clauses
         // e.g., CREATE (a:Node) CREATE (b:Node) WITH 1 AS x ...
-        // CANARY: REQ=REQ-GQL-MULTI-CREATE-002; FEATURE="MultipleConsecutiveCreate"; ASPECT=ParserCreateStatement; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+        // CANARY: REQ=REQ-GQL-MULTI-CREATE-002; FEATURE="MultipleConsecutiveCreate"; ASPECT=ParserCreateStatement; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
         var pattern: ast.GraphPattern = undefined;
         {
             var create_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");

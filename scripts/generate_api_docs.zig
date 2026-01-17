@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-API-DOCS-001; FEATURE="APIDocumentation"; ASPECT=MetadataDerived; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-API-DOCS-001; FEATURE="APIDocumentation"; ASPECT=MetadataDerived; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! # API Documentation Generator
 //!
 //! Generates comprehensive API documentation (Markdown) from the unified

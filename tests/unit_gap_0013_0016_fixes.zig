@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-GAP-0013-0016-TESTS-001; FEATURE="GapAnalysisJan2026Fixes"; ASPECT=UnitTests; STATUS=IMPL; OWNER=testing; UPDATED=2026-01-09
+// CANARY: REQ=REQ-GAP-0013-0016-TESTS-001; FEATURE="GapAnalysisJan2026Fixes"; ASPECT=UnitTests; STATUS=EXEMPT; OWNER=testing; UPDATED=2026-01-09
 // Comprehensive unit tests for GAP-0013 through GAP-0016 fixes (January 9, 2026)
 //
 // GAP-0013: 2PC Network Transport - QUIC-based message transport

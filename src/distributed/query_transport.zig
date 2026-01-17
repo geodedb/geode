@@ -241,7 +241,7 @@ const ConnectionPool = struct {
     }
 };
 
-// CANARY: REQ=REQ-DIST-CONN-001; FEATURE="Distributed Query Connection"; ASPECT=ConnectionInit; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+// CANARY: REQ=REQ-DIST-CONN-001; FEATURE="Distributed Query Connection"; ASPECT=ConnectionInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-10
 /// Individual connection to a remote node
 const Connection = struct {
     allocator: std.mem.Allocator,
@@ -318,7 +318,7 @@ const Connection = struct {
     }
 
     // GAP-0144: Secure TLS connections for distributed queries
-    // CANARY: REQ=REQ-DIST-TLS-001; FEATURE="Distributed TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-DIST-TLS-001; FEATURE="Distributed TLS"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-13
     fn connect(self: *Connection) !void {
         // Get node address from registry if available, otherwise use default pattern
         const node_info = self.getNodeAddress();
@@ -372,7 +372,7 @@ const Connection = struct {
 };
 
 /// Node registry for distributed cluster - tracks node addresses
-// CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
+// CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
 pub const NodeRegistry = struct {
     allocator: std.mem.Allocator,
     nodes: std.AutoHashMap(u32, NodeInfo),

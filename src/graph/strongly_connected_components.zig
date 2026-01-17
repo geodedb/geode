@@ -2,7 +2,7 @@ const std = @import("std");
 const builders = @import("builders.zig");
 const tarjan = @import("connectivity_tarjan_scc.zig");
 
-// CANARY: REQ=REQ-GQL-064; FEATURE="Connectivity"; ASPECT=SCC_WRAPPER; STATUS=IMPL; OWNER=graph; UPDATED=2025-12-30
+// CANARY: REQ=REQ-GQL-064; FEATURE="Connectivity"; ASPECT=SCC_WRAPPER; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2025-12-30
 
 /// Compute strongly connected components using Tarjan's algorithm.
 /// Takes adjacency list format (graph[i] = array of neighbors of node i).

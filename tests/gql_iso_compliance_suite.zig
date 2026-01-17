@@ -24,7 +24,7 @@ pub const TestSuite = struct {
     cases: []const TestCase,
 };
 
-// CANARY: REQ=REQ-GQL-001; FEATURE="ISO GQL Compliance"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_001_ISO_Compliance; OWNER=parser; UPDATED=2025-01-02
+// CANARY: REQ=REQ-GQL-001; FEATURE="ISO GQL Compliance"; ASPECT=Testing; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; TEST=TestCANARY_REQ_GQL_001_ISO_Compliance; OWNER=parser; UPDATED=2025-01-02
 test "TestCANARY_REQ_GQL_001_ISO_Compliance" {
     // Entry point for compliance testing
     try runComplianceTestSuites();

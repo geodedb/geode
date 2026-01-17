@@ -3,7 +3,7 @@ const testing = std.testing;
 const time = std.time;
 const collection_opt = @import("collection_optimized_test.zig");
 
-// CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="CollectionOptimization"; ASPECT=Benchmarking; STATUS=IMPL; TEST=TestCANARY_CollectionOptimization; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="CollectionOptimization"; ASPECT=Benchmarking; STATUS=EXEMPT; TEST=TestCANARY_CollectionOptimization; OWNER=performance; UPDATED=2025-10-04
 
 const BenchmarkResult = struct {
     operation: []const u8,

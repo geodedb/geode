@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // CANARY: BENCHMARK_PHASE5_3 - Performance validation for Phase 5.1.3 optimization
-// CANARY: REQ=REQ-PERF-PHASE5-003; FEATURE="VectorOptimization"; ASPECT=TESTING; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+// CANARY: REQ=REQ-PERF-PHASE5-003; FEATURE="VectorOptimization"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/vector_operations_basic.yml; OWNER=performance; UPDATED=2025-11-16
 
 // =============================================================================
 // Test Structures - Baseline vs SIMD implementations

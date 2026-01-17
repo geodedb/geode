@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-BENCHMARK-AUDIT-001; FEATURE="Audit Latency Benchmark"; ASPECT=Performance; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14
+// CANARY: REQ=REQ-BENCHMARK-AUDIT-001; FEATURE="Audit Latency Benchmark"; ASPECT=Performance; STATUS=EXEMPT; OWNER=monitoring; UPDATED=2026-01-14
 // GAP-0168: Benchmark for audit latency to provide performance target evidence
 
 /// Audit latency benchmark results

@@ -3,7 +3,7 @@ const graph_exec = @import("graph/exec.zig");
 const audit = @import("../security/audit.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-005; FEATURE="ServerRefactoring"; ASPECT=GRAPH_STORAGE; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
-// CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=PerGraphStorage; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+// CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=PerGraphStorage; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
 // Phase 3 M3.1 - Graph Storage Management Module (Incremental Extraction)
 // Extended to support multiple named graphs with per-graph storage
 
@@ -425,7 +425,7 @@ pub fn listGraphNames(allocator: std.mem.Allocator) ![][]const u8 {
 }
 
 // GAP-0139: SHOW TABLES implementation helper
-// CANARY: REQ=REQ-SHOW-TABLES-002; FEATURE="SHOW TABLES"; ASPECT=GraphStorageList; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-13
+// CANARY: REQ=REQ-SHOW-TABLES-002; FEATURE="SHOW TABLES"; ASPECT=GraphStorageList; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=engine; UPDATED=2026-01-13
 /// List all unique node labels from all graphs
 /// In graph databases, node labels serve as the equivalent of "tables"
 pub fn listNodeLabels(allocator: std.mem.Allocator) ![][]const u8 {

@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Topology; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Topology; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! Network Topology Generator
 //! Generates hierarchical network structures with realistic ASN and prefix distributions
 

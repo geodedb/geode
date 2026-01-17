@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const time = std.time;
 
-// CANARY: REQ=REQ-PERF-ANALYSIS-001; FEATURE="PerformanceAnalysis"; ASPECT=Benchmarking; STATUS=IMPL; TEST=TestCANARY_PerformanceBenchmark; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-ANALYSIS-001; FEATURE="PerformanceAnalysis"; ASPECT=Benchmarking; STATUS=EXEMPT; TEST=TestCANARY_PerformanceBenchmark; OWNER=performance; UPDATED=2025-10-04
 
 /// Performance benchmark suite for identifying bottlenecks
 /// This suite provides comprehensive timing analysis of key operations

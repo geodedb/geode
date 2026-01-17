@@ -4,8 +4,8 @@ const BackupConfig = backup.BackupConfig;
 const BackupMetadata = backup.BackupMetadata;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-002; FEATURE="ServerRefactoring"; ASPECT=BACKUP_MANAGER; STATUS=EXEMPT; OWNER=refactor; UPDATED=2026-01-10
-// CANARY: REQ=REQ-BACKUP-REAL-DATA-001; FEATURE="BackupRealData"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-10
-// CANARY: REQ=REQ-BACKUP-LSN-TRACKING-001; FEATURE="BackupLSNTracking"; ASPECT=IncrementalChain; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+// CANARY: REQ=REQ-BACKUP-REAL-DATA-001; FEATURE="BackupRealData"; ASPECT=DataIntegrity; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
+// CANARY: REQ=REQ-BACKUP-LSN-TRACKING-001; FEATURE="BackupLSNTracking"; ASPECT=IncrementalChain; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
 // Phase 3 M3.1 - Backup Manager Module (Incremental Extraction)
 // Extracted SimplifiedBackupManager from server/main.zig for better modularity
 // GAP-0087 RESOLVED: Now reads actual data from data directory instead of placeholder data
@@ -28,7 +28,7 @@ pub const SimplifiedBackupManager = struct {
     const BACKUP_VERSION: u16 = 3;
 
     /// GAP-0181: Extended backup header with LSN tracking
-    /// CANARY: REQ=REQ-BACKUP-HEADER-LSN-001; FEATURE="BackupHeaderLSN"; ASPECT=MetadataStorage; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+    /// CANARY: REQ=REQ-BACKUP-HEADER-LSN-001; FEATURE="BackupHeaderLSN"; ASPECT=MetadataStorage; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
     const BackupHeader = extern struct {
         magic: u32,
         version: u16,
@@ -76,7 +76,7 @@ pub const SimplifiedBackupManager = struct {
     /// Create a full backup and return metadata
     /// GAP-0087: Now reads actual data from data directory
     /// GAP-0181: Now tracks real LSN from WAL for backup chain continuity
-    /// CANARY: REQ=REQ-BACKUP-FULL-LSN-001; FEATURE="FullBackupLSN"; ASPECT=LSNTracking; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+    /// CANARY: REQ=REQ-BACKUP-FULL-LSN-001; FEATURE="FullBackupLSN"; ASPECT=LSNTracking; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
     pub fn createFullBackup(self: *SimplifiedBackupManager) !BackupMetadata {
         self.last_backup_id += 1;
         const backup_id = self.last_backup_id;
@@ -214,7 +214,7 @@ pub const SimplifiedBackupManager = struct {
     /// Create an incremental backup and return metadata
     /// GAP-0087: Now reads actual changed data since parent backup
     /// GAP-0181: Now uses parent_lsn for accurate incremental chain tracking
-    /// CANARY: REQ=REQ-BACKUP-INCR-LSN-002; FEATURE="IncrementalBackupLSN"; ASPECT=ChainContinuity; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+    /// CANARY: REQ=REQ-BACKUP-INCR-LSN-002; FEATURE="IncrementalBackupLSN"; ASPECT=ChainContinuity; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
     pub fn createIncrementalBackup(self: *SimplifiedBackupManager, parent_lsn: u64) !BackupMetadata {
         self.last_backup_id += 1;
         const backup_id = self.last_backup_id;
@@ -301,7 +301,7 @@ pub const SimplifiedBackupManager = struct {
     }
 
     /// GAP-0181: Read the end_lsn from a backup file header
-    /// CANARY: REQ=REQ-BACKUP-READ-LSN-001; FEATURE="BackupReadLSN"; ASPECT=MetadataRetrieval; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+    /// CANARY: REQ=REQ-BACKUP-READ-LSN-001; FEATURE="BackupReadLSN"; ASPECT=MetadataRetrieval; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
     pub fn readBackupEndLsn(self: *SimplifiedBackupManager, backup_id: u128) !u64 {
         // Try full backup first
         const full_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
@@ -338,7 +338,7 @@ pub const SimplifiedBackupManager = struct {
     }
 
     /// GAP-0181: Get current WAL LSN by reading WAL file header or estimating from file size
-    /// CANARY: REQ=REQ-BACKUP-WAL-LSN-001; FEATURE="WalLSNTracking"; ASPECT=CurrentPosition; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+    /// CANARY: REQ=REQ-BACKUP-WAL-LSN-001; FEATURE="WalLSNTracking"; ASPECT=CurrentPosition; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
     fn getCurrentWalLsn(self: *SimplifiedBackupManager) !u64 {
         const wal_path = try std.fmt.allocPrint(self.allocator, "{s}/wal.log", .{self.data_dir});
         defer self.allocator.free(wal_path);
@@ -559,7 +559,7 @@ test "SimplifiedBackupManager restore works" {
 
 // =============================================================================
 // GAP-0181: Unit Tests for LSN Tracking
-// CANARY: REQ=REQ-BACKUP-LSN-TEST-001; FEATURE="BackupLSNTests"; ASPECT=UnitTests; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+// CANARY: REQ=REQ-BACKUP-LSN-TEST-001; FEATURE="BackupLSNTests"; ASPECT=UnitTests; STATUS=EXEMPT; OWNER=backup; UPDATED=2026-01-14
 // =============================================================================
 
 test "GAP-0181: Full backup stores non-zero end_lsn" {

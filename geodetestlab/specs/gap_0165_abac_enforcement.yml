@@ -1,4 +1,4 @@
-# CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement Testing"; ASPECT=Integration; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+# CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement Testing"; ASPECT=Integration; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-14
 # GAP-0165: ABAC enforcement wired into server execution paths
 # This spec tests that ABAC policies are enforced in query execution
 

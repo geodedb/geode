@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=Core; STATUS=IMPL; OWNER=migration; UPDATED=2026-01-11
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_migrations.yml; OWNER=migration; UPDATED=2026-01-11
 // Fully functional migration engine with durable ledger, checksum validation, up/down
 // application, drift detection, and pluggable query executor (QUIC-backed in CLI).
 

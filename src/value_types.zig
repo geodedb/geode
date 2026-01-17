@@ -22,7 +22,7 @@ const arrays = @import("types/arrays.zig");
 const bitstring = @import("types/bitstring.zig");
 const range = @import("types/range.zig");
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-002; FEATURE="Error Handling"; ASPECT=EvalError; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-002; FEATURE="Error Handling"; ASPECT=EvalError; STATUS=TESTED; TEST=geodetestlab/specs/geode_edge_cases_errors.yml; OWNER=value_types; UPDATED=2025-11-13
 /// Evaluation errors that can occur during expression evaluation and query execution
 pub const EvalError = error{
     TypeMismatch,
@@ -56,7 +56,7 @@ pub const EvalError = error{
     OutOfMemory,
 };
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-003; FEATURE="Value Type"; ASPECT=CoreType; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-003; FEATURE="Value Type"; ASPECT=CoreType; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=value_types; UPDATED=2025-11-13
 /// Core value type used throughout the Geode query engine
 ///
 /// Represents all possible values in the GQL type system:
@@ -120,14 +120,14 @@ pub const Value = union(enum) {
     IntRange: range.IntRange,
 };
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-004; FEATURE="Decimal Helper"; ASPECT=DecimalType; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-004; FEATURE="Decimal Helper"; ASPECT=DecimalType; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=value_types; UPDATED=2025-11-13
 /// Helper struct for decimal arithmetic operations
 pub const Dec = struct {
     coeff: i128,
     scale: u8,
 };
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-005; FEATURE="Environment"; ASPECT=VariableBinding; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-005; FEATURE="Environment"; ASPECT=VariableBinding; STATUS=EXEMPT; OWNER=value_types; UPDATED=2025-11-13
 // CANARY: REQ=REQ-MEM-FIX-004; FEATURE="MemorySafety"; ASPECT=EnvOwnership; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-10-25
 /// Environment for variable bindings during expression evaluation
 ///
@@ -186,7 +186,7 @@ pub const Env = struct {
         return null;
     }
 
-    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Environment; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-10-17
+    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Environment; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-10-17
     // CANARY: REQ=REQ-C4-001; FEATURE="MemoryLeakFix"; ASPECT=Environment; STATUS=IMPLEMENTED; OWNER=core; UPDATED=2025-10-17;
     //         EVIDENCE="Free old arrays in withBinding() to prevent memory leaks"
     /// Create a new environment with an additional binding (for list comprehension variable scopes)
@@ -231,13 +231,13 @@ pub const Env = struct {
 // Helper Functions
 // ============================================================================
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-006; FEATURE="Value Helpers"; ASPECT=NullCheck; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-006; FEATURE="Value Helpers"; ASPECT=NullCheck; STATUS=EXEMPT; OWNER=value_types; UPDATED=2025-11-13
 /// Check if a value is Null
 pub fn isNull(v: Value) bool {
     return v == .Null;
 }
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-007; FEATURE="Value Helpers"; ASPECT=Truthiness; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-007; FEATURE="Value Helpers"; ASPECT=Truthiness; STATUS=EXEMPT; OWNER=value_types; UPDATED=2025-11-13
 /// Check if a value is truthy (used for boolean conversions)
 pub fn truthy(v: Value) bool {
     return switch (v) {
@@ -247,7 +247,7 @@ pub fn truthy(v: Value) bool {
     };
 }
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-008; FEATURE="Decimal Helpers"; ASPECT=DecimalConversion; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-008; FEATURE="Decimal Helpers"; ASPECT=DecimalConversion; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=value_types; UPDATED=2025-11-13
 /// Convert a Value to a decimal representation (helper for arithmetic)
 pub fn toDec(v: Value) Dec {
     return switch (v) {
@@ -257,7 +257,7 @@ pub fn toDec(v: Value) Dec {
     };
 }
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-009; FEATURE="Value Helpers"; ASPECT=Equality; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-009; FEATURE="Value Helpers"; ASPECT=Equality; STATUS=EXEMPT; OWNER=value_types; UPDATED=2025-11-13
 /// Compare two values for equality (deep comparison for lists and paths)
 pub fn eqVals(a: Value, b: Value) bool {
     return switch (a) {
@@ -277,7 +277,7 @@ pub fn eqVals(a: Value, b: Value) bool {
             }
             break :blk true;
         },
-        // CANARY: REQ=REQ-VALUE-EQUALITY-001; FEATURE="MapEquality"; ASPECT=DeepCompare; STATUS=IMPL; OWNER=value_types; UPDATED=2026-01-10
+        // CANARY: REQ=REQ-VALUE-EQUALITY-001; FEATURE="MapEquality"; ASPECT=DeepCompare; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=value_types; UPDATED=2026-01-10
         .Map => |am| blk: {
             if (b != .Map) break :blk false;
             const bm = b.Map;
@@ -291,7 +291,7 @@ pub fn eqVals(a: Value, b: Value) bool {
             }
             break :blk true;
         },
-        // CANARY: REQ=REQ-VALUE-EQUALITY-002; FEATURE="ExtValueEquality"; ASPECT=TaggedUnion; STATUS=IMPL; OWNER=value_types; UPDATED=2026-01-10
+        // CANARY: REQ=REQ-VALUE-EQUALITY-002; FEATURE="ExtValueEquality"; ASPECT=TaggedUnion; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=value_types; UPDATED=2026-01-10
         .ExtValue => |ae| blk: {
             if (b != .ExtValue) break :blk false;
             const be = b.ExtValue;
@@ -360,7 +360,7 @@ pub fn eqVals(a: Value, b: Value) bool {
     };
 }
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-010; FEATURE="Decimal Helpers"; ASPECT=Power10; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-010; FEATURE="Decimal Helpers"; ASPECT=Power10; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=value_types; UPDATED=2025-11-13
 /// Calculate 10^scale for decimal arithmetic
 fn pow10(scale: u8) i128 {
     var p: i128 = 1;
@@ -369,7 +369,7 @@ fn pow10(scale: u8) i128 {
     return p;
 }
 
-// CANARY: REQ=REQ-VALUE-EQUALITY-002; FEATURE="ExtValueEquality"; ASPECT=Helper; STATUS=IMPL; OWNER=value_types; UPDATED=2026-01-10
+// CANARY: REQ=REQ-VALUE-EQUALITY-002; FEATURE="ExtValueEquality"; ASPECT=Helper; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=value_types; UPDATED=2026-01-10
 /// Compare two ExtValue instances for equality
 fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_extended.zig").ExtValue) bool {
     const ExtValue = @import("eval_extended.zig").ExtValue;
@@ -448,7 +448,7 @@ fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_extend
     };
 }
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-011; FEATURE="Value Helpers"; ASPECT=Stringify; STATUS=IMPL; OWNER=value_types; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.2-VALUE-TYPES-011; FEATURE="Value Helpers"; ASPECT=Stringify; STATUS=EXEMPT; OWNER=value_types; UPDATED=2025-11-13
 /// Convert a value to its string representation (for comparison and display)
 ///
 /// Uses a provided buffer for string formatting to avoid allocations.

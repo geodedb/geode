@@ -3,7 +3,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 // Performance optimization integration test for FTS
-// CANARY: REQ=REQ-GQL-FTS-004; FEATURE="FTS Performance Optimization"; ASPECT=INTEGRATION; STATUS=IMPL; TEST=TestCANARY_FTS_Performance_Optimization; OWNER=search; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-FTS-004; FEATURE="FTS Performance Optimization"; ASPECT=INTEGRATION; STATUS=TESTED; TEST=geodetestlab/specs/fulltext_search_basic.yml; TEST=TestCANARY_FTS_Performance_Optimization; OWNER=search; UPDATED=2025-10-04
 
 // Mock structures representing the performance optimizations from earlier work
 const PerformanceMetrics = struct {

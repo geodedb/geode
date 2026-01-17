@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-REPL-QUIC-005; FEATURE="REPL E2E Tests"; ASPECT=EndToEndIntegration; STATUS=IMPL; TEST=test_repl_server_handshake; OWNER=repl; UPDATED=2025-10-05
+// CANARY: REQ=REQ-REPL-QUIC-005; FEATURE="REPL E2E Tests"; ASPECT=EndToEndIntegration; STATUS=EXEMPT; TEST=test_repl_server_handshake; OWNER=repl; UPDATED=2025-10-05
 
 const repl_dispatch = geode.repl.repl_dispatch;
 const repl_loop = geode.repl.repl_loop;

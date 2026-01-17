@@ -235,7 +235,7 @@ pub fn processMessage(
                 log.info("Authenticated user: {s} with role: {s}", .{ username, role.toString() });
             }
 
-            // CANARY: REQ=REQ-MULTI-TENANT-005; FEATURE="Multi-Tenancy Session"; ASPECT=HelloHandler; STATUS=IMPL; OWNER=session; UPDATED=2026-01-09
+            // CANARY: REQ=REQ-MULTI-TENANT-005; FEATURE="Multi-Tenancy Session"; ASPECT=HelloHandler; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=session; UPDATED=2026-01-09
             // Store tenant_id in session if provided
             if (hello.tenant_id) |tenant| {
                 if (state.session_config) |*config| {
@@ -347,7 +347,7 @@ pub fn processMessage(
                     if (ok.program.statements.len == 0) {
                         if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| return line else |_| return try gpa.dupe(u8, "");
                     }
-                    // CANARY: REQ=REQ-MULTI-GRAPH-025; FEATURE="MultiStatementExecution"; ASPECT=SessionPersistence; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-22
+                    // CANARY: REQ=REQ-MULTI-GRAPH-025; FEATURE="MultiStatementExecution"; ASPECT=SessionPersistence; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=engine; UPDATED=2025-12-22
                     // Execute ALL statements in sequence, maintaining session state between them
                     // Return only the result from the last statement
                     // First, execute all non-final statements for their side effects (like USE GRAPH)
@@ -372,7 +372,7 @@ pub fn processMessage(
                                     graph_storage_mgr.dropGraphStorage(gpa, dg.name, dg.if_exists) catch {};
                                 },
                                 .Query => |q| {
-                                    // CANARY: REQ=REQ-QUIC-CATALOG-001; FEATURE="QUICCatalogSingleton"; ASPECT=SideEffectQuery; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-14
+                                    // CANARY: REQ=REQ-QUIC-CATALOG-001; FEATURE="QUICCatalogSingleton"; ASPECT=SideEffectQuery; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=engine; UPDATED=2026-01-14
                                     // GAP-0180 FIX: Use shared global catalog singleton instead of local stub
                                     // Execute query for side effects (CREATE/INSERT within query)
                                     const catalog_instance = execution.ensureCatalogInstance(gpa) catch continue;
@@ -441,7 +441,7 @@ pub fn processMessage(
                             var timings: StageTimings = .{};
                             const need_timings = profile_mode or explain_calibrated;
                             // GAP-0079: Timing support for new execution path
-                            // CANARY: REQ=REQ-PERF-TIMING-001; FEATURE="ExecutionTiming"; ASPECT=QueryProfiling; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-10
+                            // CANARY: REQ=REQ-PERF-TIMING-001; FEATURE="ExecutionTiming"; ASPECT=QueryProfiling; STATUS=TESTED; TEST=geodetestlab/specs/explain_profile_unit_tests.yml; OWNER=engine; UPDATED=2026-01-10
                             const exec_start = if (need_timings) std.time.nanoTimestamp() else 0;
 
                             // Query plan optimization with caching
@@ -470,7 +470,7 @@ pub fn processMessage(
                                 }
                             }
 
-                            // CANARY: REQ=REQ-QUIC-CATALOG-002; FEATURE="QUICCatalogSingleton"; ASPECT=MainQueryExec; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-14
+                            // CANARY: REQ=REQ-QUIC-CATALOG-002; FEATURE="QUICCatalogSingleton"; ASPECT=MainQueryExec; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=engine; UPDATED=2026-01-14
                             // GAP-0180 FIX: Use shared global catalog singleton for all QUIC query execution
                             // Use new modular execution path for ALL queries (with parameter support)
                             const rows = blk: {
@@ -693,7 +693,7 @@ pub fn processMessage(
                             }
                             return schema_line;
                         },
-                        // CANARY: REQ=REQ-QUIC-MUTATIONS-001; FEATURE="QUIC Mutation Execution"; ASPECT=ServerHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+                        // CANARY: REQ=REQ-QUIC-MUTATIONS-001; FEATURE="QUIC Mutation Execution"; ASPECT=ServerHandler; STATUS=TESTED; TEST=geodetestlab/specs/quic_mutations_january_2026.yml; OWNER=engine; UPDATED=2026-01-09
                         .Create => |create_stmt| {
                             // Execute CREATE mutation using execution engine
                             const current_graph = state.current_graph orelse "default";
@@ -770,7 +770,7 @@ pub fn processMessage(
 
                             return protocol.buildSchemaLine(gpa, exec_result.columns, &.{}, computeBaseFlags(false, false)) catch try gpa.dupe(u8, "");
                         },
-                        // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphSupport"; ASPECT=ServerHandler; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+                        // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphSupport"; ASPECT=ServerHandler; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
                         .UseGraph => |ug| {
                             // Update ServerState.current_graph for session
                             if (state.current_graph) |old| {
@@ -867,7 +867,7 @@ pub fn processMessage(
                                 },
                                 .indexes => {
                                     // GAP-0140: SHOW INDEXES implementation
-                                    // CANARY: REQ=REQ-SHOW-INDEXES-QUIC-001; FEATURE="SHOW INDEXES"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    // CANARY: REQ=REQ-SHOW-INDEXES-QUIC-001; FEATURE="SHOW INDEXES"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
                                     std.debug.print("[QUIC] SHOW INDEXES handler\n", .{});
                                     const catalog_instance = execution.ensureCatalogInstance(gpa) catch {
                                         return protocol.buildErrorLine(gpa, "CatalogError", "Failed to access catalog", "") catch try gpa.dupe(u8, "");
@@ -904,7 +904,7 @@ pub fn processMessage(
                                 },
                                 .constraints => {
                                     // GAP-0140: SHOW CONSTRAINTS implementation
-                                    // CANARY: REQ=REQ-SHOW-CONSTRAINTS-QUIC-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    // CANARY: REQ=REQ-SHOW-CONSTRAINTS-QUIC-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
                                     std.debug.print("[QUIC] SHOW CONSTRAINTS handler\n", .{});
                                     const catalog_instance = execution.ensureCatalogInstance(gpa) catch {
                                         return protocol.buildErrorLine(gpa, "CatalogError", "Failed to access catalog", "") catch try gpa.dupe(u8, "");
@@ -947,7 +947,7 @@ pub fn processMessage(
                                 },
                                 .tables => {
                                     // GAP-0140: SHOW TABLES implementation
-                                    // CANARY: REQ=REQ-SHOW-TABLES-QUIC-001; FEATURE="SHOW TABLES"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    // CANARY: REQ=REQ-SHOW-TABLES-QUIC-001; FEATURE="SHOW TABLES"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
                                     // In graph databases, node labels serve as the equivalent of "tables"
                                     std.debug.print("[QUIC] SHOW TABLES handler\n", .{});
                                     const labels = graph_storage_mgr.listNodeLabels(gpa) catch &.{};
@@ -975,7 +975,7 @@ pub fn processMessage(
                                 },
                                 .procedures => {
                                     // GAP-0140: SHOW PROCEDURES implementation
-                                    // CANARY: REQ=REQ-SHOW-PROCEDURES-QUIC-001; FEATURE="SHOW PROCEDURES"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    // CANARY: REQ=REQ-SHOW-PROCEDURES-QUIC-001; FEATURE="SHOW PROCEDURES"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
                                     // Geode currently has no user-defined stored procedures - returns empty result
                                     std.debug.print("[QUIC] SHOW PROCEDURES handler\n", .{});
                                     const cols: []const protocol.SchemaCol = &.{
@@ -993,7 +993,7 @@ pub fn processMessage(
                                 },
                                 .functions => {
                                     // GAP-0140: SHOW FUNCTIONS implementation
-                                    // CANARY: REQ=REQ-SHOW-FUNCTIONS-QUIC-001; FEATURE="SHOW FUNCTIONS"; ASPECT=QUICProtocol; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                                    // CANARY: REQ=REQ-SHOW-FUNCTIONS-QUIC-001; FEATURE="SHOW FUNCTIONS"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
                                     std.debug.print("[QUIC] SHOW FUNCTIONS handler\n", .{});
                                     // Built-in functions list
                                     const builtin_functions = [_]struct { name: []const u8, signature: []const u8, return_type: []const u8 }{

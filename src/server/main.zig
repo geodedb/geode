@@ -23,7 +23,7 @@ const cert_gen = @import("../tools/cert_gen.zig");
 // Import real logger for proper log level handling
 const logger = @import("../log/logger.zig");
 const audit = @import("../security/audit.zig");
-// CANARY: REQ=REQ-PROMETHEUS-WIRE-003; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerImport; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14
+// CANARY: REQ=REQ-PROMETHEUS-WIRE-003; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerImport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
 // GAP-0166: Import metrics server for Prometheus endpoint
 const metrics_server = @import("../monitoring/metrics_server.zig");
 // Import server state management (M3.1 Phase 3 modularization)
@@ -346,7 +346,7 @@ pub fn main() !void {
     const env_storage_checksum_error = init_ctx.env_config.storage_checksum_error;
     const env_wal_compact_interval = init_ctx.env_config.wal_compact_interval;
 
-    // CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerInit; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
     // GAP-0166: Initialize Prometheus metrics server if enabled via environment
     // Default port is 9090 for Prometheus metrics endpoint
     const metrics_port_env = std.process.getEnvVarOwned(gpa, "GEODE_METRICS_PORT") catch null;

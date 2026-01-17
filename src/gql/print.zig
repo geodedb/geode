@@ -756,7 +756,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             }
             try w.print("}}", .{});
         },
-        // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Printing; STATUS=IMPLEMENTED; OWNER=print; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Printing; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=print; UPDATED=2025-10-14
         .ListComprehension => |lc| {
             try w.print("{s} IN ", .{lc.variable});
             try printExprWith(w, lc.source.*, 0, opts);

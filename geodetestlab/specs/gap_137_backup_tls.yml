@@ -1,6 +1,6 @@
 ---
 # GAP-0137: TLS Certificate Verification for Backup/Migrate CLI
-# CANARY: REQ=REQ-TLS-BACKUP-TEST-001; FEATURE="Backup TLS"; ASPECT=TestCoverage; STATUS=IMPL; OWNER=testing; UPDATED=2026-01-13
+# CANARY: REQ=REQ-TLS-BACKUP-TEST-001; FEATURE="Backup TLS"; ASPECT=TestCoverage; STATUS=TESTED; TEST=geodetestlab/specs/gap_137_backup_tls.yml; OWNER=testing; UPDATED=2026-01-13
 version: "1.0"
 name: "GAP-0137 Backup/Migrate TLS Tests"
 description: "Tests for TLS certificate verification in backup and migrate CLI commands"

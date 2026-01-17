@@ -3,7 +3,7 @@ const testing = std.testing;
 const time = std.time;
 const io_opt = @import("io_optimized_test.zig");
 
-// CANARY: REQ=REQ-PERF-IO-001; FEATURE="IOOptimization"; ASPECT=Benchmarking; STATUS=IMPL; TEST=TestCANARY_IOOptimization; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-IO-001; FEATURE="IOOptimization"; ASPECT=Benchmarking; STATUS=EXEMPT; TEST=TestCANARY_IOOptimization; OWNER=performance; UPDATED=2025-10-04
 
 const BenchmarkResult = struct {
     operation: []const u8,

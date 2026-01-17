@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-MULTI-GRAPH-SECURITY-001; FEATURE="MultiGraphSecurity"; ASPECT=RBACGraphScope; STATUS=IMPL; OWNER=security; UPDATED=2025-12-20
+// CANARY: REQ=REQ-MULTI-GRAPH-SECURITY-001; FEATURE="MultiGraphSecurity"; ASPECT=RBACGraphScope; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=security; UPDATED=2025-12-20
 // Multi-Graph Security Extensions
 // Extends RBAC, FLE, and Audit with graph-scoped access control
 

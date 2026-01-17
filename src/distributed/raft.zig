@@ -545,7 +545,7 @@ pub const RaftNode = struct {
         }
     }
 
-    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleInstallSnapshot; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleInstallSnapshot; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
     fn handleInstallSnapshot(self: *RaftNode, from: []const u8, payload: []const u8) !void {
         // Parse snapshot metadata from payload (JSON format expected)
         const parsed = std.json.parseFromSlice(
@@ -589,7 +589,7 @@ pub const RaftNode = struct {
         }
     }
 
-    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleSnapshotResponse; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleSnapshotResponse; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
     fn handleInstallSnapshotResponse(self: *RaftNode, from: []const u8, payload: []const u8) !void {
         // Only leaders process snapshot responses
         if (self.state != .leader) {

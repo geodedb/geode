@@ -1,5 +1,5 @@
 # CANARY: FLE_GEODETESTLAB_SPECS - Key Rotation Tests
-# CANARY: REQ=REQ-FLE-TEST-003; FEATURE="FieldLevelEncryption"; ASPECT=TESTING; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+# CANARY: REQ=REQ-FLE-TEST-003; FEATURE="FieldLevelEncryption"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15
 
 suite: encryption_rotation
 description: Online FEK re-encrypt; mixed-version reads OK.

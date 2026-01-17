@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-PLANNER-CARD-001; FEATURE="Cardinality Estimator"; ASPECT=RealImplementation; STATUS=IMPL; TEST=test_cardinality_scan_estimation; OWNER=planner; UPDATED=2025-10-05
+// CANARY: REQ=REQ-PLANNER-CARD-001; FEATURE="Cardinality Estimator"; ASPECT=RealImplementation; STATUS=TESTED; TEST=geodetestlab/specs/explain_profile_unit_tests.yml; TEST=test_cardinality_scan_estimation; OWNER=planner; UPDATED=2025-10-05
 
 // Mock structures for testing cardinality estimator
 const MockLogicalPlan = struct {

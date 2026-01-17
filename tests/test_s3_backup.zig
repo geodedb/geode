@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-S3-BACKUP-001; FEATURE="S3 Cloud Backup"; ASPECT=Unit; STATUS=IMPL; TEST=test_s3_backup_mock; OWNER=storage; UPDATED=2025-10-05
+// CANARY: REQ=REQ-S3-BACKUP-001; FEATURE="S3 Cloud Backup"; ASPECT=Unit; STATUS=TESTED; TEST=geodetestlab/specs/backup_operations_basic.yml; TEST=test_s3_backup_mock; OWNER=storage; UPDATED=2025-10-05
 
 // Mock S3 configuration for testing
 const MockS3Config = struct {

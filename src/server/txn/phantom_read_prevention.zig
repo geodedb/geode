@@ -320,7 +320,7 @@ pub const PhantomReadPrevention = struct {
         try self.query_tracker.recordQuery(query);
     }
 
-    /// CANARY: REQ=REQ-TXN-PHANTOM-004; FEATURE="Phantom Read Prevention"; ASPECT=PredicateConflictCheck; STATUS=IMPL; OWNER=txn; UPDATED=2025-12-30
+    /// CANARY: REQ=REQ-TXN-PHANTOM-004; FEATURE="Phantom Read Prevention"; ASPECT=PredicateConflictCheck; STATUS=TESTED; TEST=geodetestlab/specs/gql_transaction_management_comprehensive.yml; OWNER=txn; UPDATED=2025-12-30
     /// Check if a write to a resource would conflict with existing predicate locks
     pub fn checkPredicateConflicts(self: *PhantomReadPrevention, txn_id: mvcc.TxnId, resource_id: u64) bool {
         // Check if any existing predicate lock from another transaction

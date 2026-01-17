@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-GQL-CATALOG-003; FEATURE="End-to-End Catalog Operations"; ASPECT=IntegrationTesting; STATUS=IMPL; TEST=TestCatalogE2E; OWNER=server; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-CATALOG-003; FEATURE="End-to-End Catalog Operations"; ASPECT=IntegrationTesting; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; TEST=TestCatalogE2E; OWNER=server; UPDATED=2025-10-04
 
 test "catalog operations end-to-end integration" {
     // This test validates that the enhanced catalog operations work end-to-end
@@ -102,7 +102,7 @@ test "catalog operations end-to-end integration" {
     }
 }
 
-// CANARY: REQ=REQ-GQL-CATALOG-004; FEATURE="Error Handling Regression"; ASPECT=ErrorTesting; STATUS=IMPL; TEST=TestCatalogErrorHandling; OWNER=server; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-CATALOG-004; FEATURE="Error Handling Regression"; ASPECT=ErrorTesting; STATUS=TESTED; TEST=geodetestlab/specs/geode_edge_cases_errors.yml; TEST=TestCatalogErrorHandling; OWNER=server; UPDATED=2025-10-04
 
 test "catalog operations error handling regression" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

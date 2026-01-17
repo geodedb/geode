@@ -91,7 +91,7 @@ fn getGlobalBlindIndex(allocator: std.mem.Allocator) !*blind_index_mod.BlindInde
 }
 
 // GAP-0083: Key rotation support
-// CANARY: REQ=REQ-FLE-ROTATION-002; FEATURE="FLEKeyRotation"; ASPECT=KeyManagement; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+// CANARY: REQ=REQ-FLE-ROTATION-002; FEATURE="FLEKeyRotation"; ASPECT=KeyManagement; STATUS=TESTED; TEST=geodetestlab/specs/fle_rotation.yml; OWNER=security; UPDATED=2026-01-10
 
 /// Get the current key version for a field
 /// Returns 1 if no rotation has occurred, otherwise returns the current version
@@ -193,7 +193,7 @@ pub fn encryptFieldIfNeeded(
 
     // 4. Get FEK from key manager using current version
     // GAP-0083: Support key rotation - use getCurrentKeyVersion to get latest
-    // CANARY: REQ=REQ-FLE-ROTATION-001; FEATURE="FLEKeyRotation"; ASPECT=Encryption; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-FLE-ROTATION-001; FEATURE="FLEKeyRotation"; ASPECT=Encryption; STATUS=TESTED; TEST=geodetestlab/specs/fle_rotation.yml; OWNER=security; UPDATED=2026-01-10
     const key_manager = try getGlobalKeyManager(ctx.allocator);
     const current_version = try getCurrentKeyVersion(ctx, field_name);
     const key_ids = key_types.KeyIds{
@@ -489,7 +489,7 @@ pub fn checkPropertyAccess(
     );
 }
 
-// CANARY: REQ=REQ-FLE-PREDICATE-HELPERS-001; FEATURE="FLE Predicate Rewriting"; ASPECT=Helpers; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+// CANARY: REQ=REQ-FLE-PREDICATE-HELPERS-001; FEATURE="FLE Predicate Rewriting"; ASPECT=Helpers; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2026-01-09
 /// Check if a field is encrypted according to the FLE catalog
 pub fn isFieldEncrypted(ctx: EncryptionContext, type_name: []const u8, field_name: []const u8) bool {
     const catalog = fle_catalog.globalCatalog(ctx.allocator) catch return false;

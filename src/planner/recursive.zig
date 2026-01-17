@@ -483,7 +483,7 @@ pub const RecursiveQueryProcessor = struct {
         }
     }
 
-    // CANARY: REQ=REQ-RECURSIVE-CTE-001; FEATURE="RecursiveCTE"; ASPECT=PathFinding; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-RECURSIVE-CTE-001; FEATURE="RecursiveCTE"; ASPECT=PathFinding; STATUS=TESTED; TEST=geodetestlab/specs/recursive_and_cte.yml; OWNER=planner; UPDATED=2026-01-09
     /// Build a CTE for path finding between two nodes using BFS/iterative expansion
     fn buildPathFindingCTE(
         self: *RecursiveQueryProcessor,
@@ -550,7 +550,7 @@ pub const RecursiveQueryProcessor = struct {
         };
     }
 
-    // CANARY: REQ=REQ-RECURSIVE-CTE-002; FEATURE="RecursiveCTE"; ASPECT=TransitiveClosure; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-RECURSIVE-CTE-002; FEATURE="RecursiveCTE"; ASPECT=TransitiveClosure; STATUS=TESTED; TEST=geodetestlab/specs/recursive_and_cte.yml; OWNER=planner; UPDATED=2026-01-09
     /// Build a CTE for computing transitive closure of a relation
     fn buildTransitiveClosureCTE(
         self: *RecursiveQueryProcessor,
@@ -607,7 +607,7 @@ pub const RecursiveQueryProcessor = struct {
     }
 
     // GAP-0058: CTE Disk Spilling Implementation
-    // CANARY: REQ=REQ-CTE-SPILL-001; FEATURE="CTEDiskSpilling"; ASPECT=MemoryManagement; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-CTE-SPILL-001; FEATURE="CTEDiskSpilling"; ASPECT=MemoryManagement; STATUS=EXEMPT; OWNER=planner; UPDATED=2026-01-10
     fn spillToDisk(self: *RecursiveQueryProcessor, execution: *RecursiveExecution) !void {
         _ = self;
 
@@ -827,7 +827,7 @@ pub const RecursiveQueryProcessor = struct {
         return result;
     }
 
-    // CANARY: REQ=REQ-RECURSIVE-CTE-001; FEATURE="Recursive CTE Core Functions"; ASPECT=QueryAnalysis; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RECURSIVE-CTE-001; FEATURE="Recursive CTE Core Functions"; ASPECT=QueryAnalysis; STATUS=TESTED; TEST=geodetestlab/specs/recursive_and_cte.yml; OWNER=planner; UPDATED=2026-01-10
     // Helper functions
 
     /// Analyze query to determine output schema by examining SELECT items
@@ -933,7 +933,7 @@ pub const RecursiveQueryProcessor = struct {
         }
     }
 
-    // CANARY: REQ=REQ-RECURSIVE-CTE-002; FEATURE="Distinct Union Processing"; ASPECT=SetOperations; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RECURSIVE-CTE-002; FEATURE="Distinct Union Processing"; ASPECT=SetOperations; STATUS=TESTED; TEST=geodetestlab/specs/gql_set_operations_comprehensive.yml; OWNER=planner; UPDATED=2026-01-10
     /// Process UNION (distinct) by deduplicating rows using hash-based comparison
     fn processDistinctUnion(self: *RecursiveQueryProcessor, execution: *RecursiveExecution, result: exec.QueryResult) !void {
         _ = self;
@@ -965,7 +965,7 @@ pub const RecursiveQueryProcessor = struct {
         try execution.result_accumulator.rows.appendSlice(result.rows);
     }
 
-    // CANARY: REQ=REQ-RECURSIVE-CTE-003; FEATURE="Path Building"; ASPECT=PathTracking; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RECURSIVE-CTE-003; FEATURE="Path Building"; ASPECT=PathTracking; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=planner; UPDATED=2026-01-10
     /// Build paths for path tracking in recursive queries
     fn buildPaths(self: *RecursiveQueryProcessor, execution: *RecursiveExecution) !void {
         if (!self.path_tracking.track_path) return;
@@ -1014,7 +1014,7 @@ pub const RecursiveQueryProcessor = struct {
         }
     }
 
-    // CANARY: REQ=REQ-RECURSIVE-CTE-004; FEATURE="DFS Cycle Detection"; ASPECT=CycleDetection; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RECURSIVE-CTE-004; FEATURE="DFS Cycle Detection"; ASPECT=CycleDetection; STATUS=EXEMPT; OWNER=planner; UPDATED=2026-01-10
     /// Detect cycles using depth-first search
     fn detectCyclesDFS(self: *RecursiveQueryProcessor, detector: *RecursiveExecution.CycleDetector, execution: *RecursiveExecution) !void {
         _ = self;
@@ -1053,7 +1053,7 @@ pub const RecursiveQueryProcessor = struct {
         }
     }
 
-    // CANARY: REQ=REQ-RECURSIVE-CTE-005; FEATURE="Union-Find Cycle Detection"; ASPECT=CycleDetection; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RECURSIVE-CTE-005; FEATURE="Union-Find Cycle Detection"; ASPECT=CycleDetection; STATUS=EXEMPT; OWNER=planner; UPDATED=2026-01-10
     /// Detect cycles using union-find (disjoint set) algorithm
     fn detectCyclesUnionFind(self: *RecursiveQueryProcessor, detector: *RecursiveExecution.CycleDetector, execution: *RecursiveExecution) !void {
         _ = self;
@@ -1104,7 +1104,7 @@ pub const RecursiveQueryProcessor = struct {
         }
     }
 
-    // CANARY: REQ=REQ-RECURSIVE-CTE-006; FEATURE="Topological Sort Cycle Detection"; ASPECT=CycleDetection; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RECURSIVE-CTE-006; FEATURE="Topological Sort Cycle Detection"; ASPECT=CycleDetection; STATUS=EXEMPT; OWNER=planner; UPDATED=2026-01-10
     /// Detect cycles using topological sort (Kahn's algorithm)
     fn detectCyclesTopological(self: *RecursiveQueryProcessor, detector: *RecursiveExecution.CycleDetector, execution: *RecursiveExecution) !void {
         _ = self;

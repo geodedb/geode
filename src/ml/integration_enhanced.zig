@@ -735,7 +735,7 @@ const GraphData = struct {
         weight: f32 = 1.0,
     };
 
-    // CANARY: REQ=REQ-ML-NEIGHBORS-001; FEATURE="GraphData.getNeighbors"; ASPECT=NeighborLookup; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-11
+    // CANARY: REQ=REQ-ML-NEIGHBORS-001; FEATURE="GraphData.getNeighbors"; ASPECT=NeighborLookup; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=ml; UPDATED=2026-01-11
     pub fn getNeighbors(self: *GraphData, node: NodeId) []NodeId {
         // Return neighbor nodes from outgoing edges
         if (self.outgoing_edges.get(node)) |edges| {
@@ -756,7 +756,7 @@ const GraphData = struct {
         return 0;
     }
 
-    // CANARY: REQ=REQ-ML-HASEDGE-001; FEATURE="GraphData.hasEdge"; ASPECT=EdgeLookup; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-ML-HASEDGE-001; FEATURE="GraphData.hasEdge"; ASPECT=EdgeLookup; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=ml; UPDATED=2026-01-10
     pub fn hasEdge(self: *GraphData, source: NodeId, target: NodeId) bool {
         // Look up the source node in the outgoing_edges map
         if (self.outgoing_edges.get(source)) |edges| {

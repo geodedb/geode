@@ -56,9 +56,9 @@ The engine enforces protective upper bounds during MATCH evaluation to prevent e
 
 Rationale: Provides predictable resource ceilings and governance evidence (CANARY) for controlled execution of bounded quantifiers and high fan-out graphs.
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuardsPolicy"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchFrontierGuard"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchResultGuard"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuardsPolicy"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchFrontierGuard"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchResultGuard"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
 
 ## Flagger
 
@@ -74,7 +74,7 @@ Rationale: Provides predictable resource ceilings and governance evidence (CANAR
 
 ## Wire Mapping: ExecutionGuardTrip Additional Status
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMapping; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMapping; OWNER=engine; UPDATED=2025-09-24
 When a safety guard trips during MATCH evaluation (result/frontier/hops), the server emits primary success frames with `status_class` `00000` and includes `"ExecutionGuardTrip"` inside the `additional_statuses` array of the `SCHEMA` frame and (for redundancy) the first `BINDINGS` frame. This indicates a partial result truncation event without elevating to an error-class status. Clients SHOULD surface a warning and MAY retry with adjusted guard thresholds. No change to exit codes (remain 0). This mirrors policy rationale in Safety Guards section and provides transport-level observability without failing successful partial computation.
 
 ### Environment Overrides (Test / Diagnostics)

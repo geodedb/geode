@@ -2,7 +2,7 @@ const std = @import("std");
 const iface = @import("interface");
 
 // CANARY: PERF_PHASE5_NEIGHBORS_LAZY_SORT - Lazy sorting for neighbors() to avoid O(n²) repeated sorts
-// CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="GraphOptimization"; ASPECT=LAZY_SORT; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+// CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="GraphOptimization"; ASPECT=LAZY_SORT; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-11-16
 
 pub const InMemory = struct {
     allocator: std.mem.Allocator,

@@ -94,7 +94,7 @@ test "Property access environment construction" {
     std.log.info("Property access environment test completed successfully", .{});
 }
 
-// CANARY: REQ=REQ-GQL-UNION-001; FEATURE="UnionPropertyAccess"; ASPECT=PropertyEvaluation; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNION_001_PropertyAccess; OWNER=engine; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-UNION-001; FEATURE="UnionPropertyAccess"; ASPECT=PropertyEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_set_operations_comprehensive.yml; TEST=TestCANARY_REQ_GQL_UNION_001_PropertyAccess; OWNER=engine; UPDATED=2025-10-04
 test "TestCANARY_REQ_GQL_UNION_001_PropertyAccess" {
 
     // Comprehensive test for property access in UNION operations

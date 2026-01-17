@@ -364,7 +364,7 @@ const HttpClient = struct {
         _ = self;
     }
 
-    // CANARY: REQ=REQ-CDC-HTTP-001; FEATURE="CDCWebhookHTTP"; ASPECT=Request; STATUS=IMPL; OWNER=cdc; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-CDC-HTTP-001; FEATURE="CDCWebhookHTTP"; ASPECT=Request; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-09
     fn request(
         self: *HttpClient,
         method: HttpMethod,

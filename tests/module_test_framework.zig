@@ -5,7 +5,7 @@
 //
 // IMPORTANT: Mock only I/O operations, NEVER business logic
 //
-// CANARY: REQ=REQ-M8.1-TEST-FRAMEWORK-001; FEATURE="Module Testing"; ASPECT=TestFramework; STATUS=IMPL; OWNER=testing; UPDATED=2025-11-14
+// CANARY: REQ=REQ-M8.1-TEST-FRAMEWORK-001; FEATURE="Module Testing"; ASPECT=TestFramework; STATUS=EXEMPT; OWNER=testing; UPDATED=2025-11-14
 
 const std = @import("std");
 

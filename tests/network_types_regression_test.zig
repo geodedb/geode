@@ -7,7 +7,7 @@ const IpAddr = types.network.IpAddr;
 const Subnet = types.network.Subnet;
 const Mac = types.network.Mac;
 
-// CANARY: REQ=REQ-GQL-NET-TYPES-REGRESSION; FEATURE="Network Types Regression Tests"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_NET_TYPES_REGRESSION_All; OWNER=testing; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-NET-TYPES-REGRESSION; FEATURE="Network Types Regression Tests"; ASPECT=Testing; STATUS=EXEMPT; TEST=TestCANARY_REQ_GQL_NET_TYPES_REGRESSION_All; OWNER=testing; UPDATED=2025-01-03
 
 test "TestCANARY_REQ_GQL_NET_TYPES_001_IpAddr comprehensive functionality" {
     const allocator = testing.allocator;

@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-GQL-LIKE-001; FEATURE="LIKE Clause Parsing Fix"; ASPECT=RegressionTesting; STATUS=IMPL; TEST=TestLikeClauseRegression; OWNER=parser; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-LIKE-001; FEATURE="LIKE Clause Parsing Fix"; ASPECT=RegressionTesting; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; TEST=TestLikeClauseRegression; OWNER=parser; UPDATED=2025-10-04
 
 test "LIKE clause regression tests" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-FUZZ-DICT-001; FEATURE="FuzzDictionaries"; ASPECT=MetadataDerived; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-FUZZ-DICT-001; FEATURE="FuzzDictionaries"; ASPECT=MetadataDerived; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! # Fuzz Dictionary Generator
 //!
 //! Generates fuzzing dictionaries from the unified language_metadata.zig.

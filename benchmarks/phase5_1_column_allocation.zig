@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // CANARY: BENCHMARK_PHASE5_1 - Performance validation for Phase 5.1.1 optimization
-// CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=TESTING; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=TESTING; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
 
 // =============================================================================
 // Benchmark 1: Batch Column Allocation vs Individual Allocations

@@ -372,7 +372,7 @@ pub fn isValidLongitude(lon: f64) bool {
     return lon >= -180.0 and lon <= 180.0;
 }
 
-// CANARY: REQ=REQ-GQL-GEO-FUNC-001; FEATURE="GeographicFunctions"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=types; UPDATED=2025-10-19
+// CANARY: REQ=REQ-GQL-GEO-FUNC-001; FEATURE="GeographicFunctions"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=types; UPDATED=2025-10-19
 // GQL-style geographic functions for query integration
 
 /// Calculate distance between two LatLon points using Haversine formula (returns meters)
@@ -494,7 +494,7 @@ pub fn geo_along_track_distance(point: LatLon, path_start: LatLon, path_end: Lat
     return dat * earth_radius_m;
 }
 
-// CANARY: REQ=REQ-GQL-SPATIAL-FUNC-001; FEATURE="SpatialFunctions"; ASPECT=PostGISStyle; STATUS=IMPL; OWNER=types; UPDATED=2025-10-19
+// CANARY: REQ=REQ-GQL-SPATIAL-FUNC-001; FEATURE="SpatialFunctions"; ASPECT=PostGISStyle; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=types; UPDATED=2025-10-19
 // PostGIS-style spatial functions (st_* prefix) for GQL compatibility
 
 /// Polygon type for area calculations

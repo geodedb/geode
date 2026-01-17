@@ -180,7 +180,7 @@ pub const GraphEmbeddingsManager = struct {
     statistics: EmbeddingStatistics,
     training_context: ?TrainingContext,
     // GAP-0081: Store graph reference for inductive learning
-    // CANARY: REQ=REQ-GRAPHSAGE-INDUCTIVE-001; FEATURE="GraphSAGE Inductive Learning"; ASPECT=GraphStorage; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GRAPHSAGE-INDUCTIVE-001; FEATURE="GraphSAGE Inductive Learning"; ASPECT=GraphStorage; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=ml; UPDATED=2026-01-10
     trained_graph: ?*const geode.graph_common.GraphStorage = null,
     // Learned aggregation weights for GraphSAGE (per layer)
     aggregation_weights: ?[][]f32 = null,
@@ -654,7 +654,7 @@ fn predictNode2Vec(manager: *GraphEmbeddingsManager, node_id: u64) ![]f32 {
 }
 
 // GAP-0081: Full GraphSAGE inductive learning for unseen nodes
-// CANARY: REQ=REQ-GRAPHSAGE-INDUCTIVE-002; FEATURE="GraphSAGE Inductive Learning"; ASPECT=Prediction; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GRAPHSAGE-INDUCTIVE-002; FEATURE="GraphSAGE Inductive Learning"; ASPECT=Prediction; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=ml; UPDATED=2026-01-10
 fn predictGraphSAGE(manager: *GraphEmbeddingsManager, node_id: u64) ![]f32 {
     // If the node already has an embedding, return it directly
     if (manager.embeddings.get(node_id)) |existing| {

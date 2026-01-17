@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// CANARY: REQ=REQ-AUTH-STATE-DEFAULTS-001; FEATURE="Production Password Guard"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-14
+// CANARY: REQ=REQ-AUTH-STATE-DEFAULTS-001; FEATURE="Production Password Guard"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=security; UPDATED=2026-01-14
 // GAP-0153 FIX: Production builds must not use hardcoded default passwords
 
 /// Check if running in production build mode

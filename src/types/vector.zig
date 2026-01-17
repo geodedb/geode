@@ -116,7 +116,7 @@ pub const VectorF32 = struct {
         if (self.dim != other.dim) return error.DimensionMismatch;
 
         // CANARY: PERF_PHASE5_SIMD_COSINE - SIMD optimization for cosine similarity
-        // CANARY: REQ=REQ-PERF-PHASE5-003; FEATURE="VectorOptimization"; ASPECT=SIMD_COSINE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+        // CANARY: REQ=REQ-PERF-PHASE5-003; FEATURE="VectorOptimization"; ASPECT=SIMD_COSINE; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-11-16
 
         // Use SIMD for faster computation when available
         if (self.dim >= 8) {

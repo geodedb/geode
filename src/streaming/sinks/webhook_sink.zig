@@ -46,7 +46,7 @@ pub const WebhookSink = struct {
         _ = self;
     }
 
-    // CANARY: REQ=REQ-STREAMING-WEBHOOK-001; FEATURE="Webhook Sink Implementation"; ASPECT=HTTPSending; STATUS=IMPL; OWNER=streaming; UPDATED=2025-12-30
+    // CANARY: REQ=REQ-STREAMING-WEBHOOK-001; FEATURE="Webhook Sink Implementation"; ASPECT=HTTPSending; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=streaming; UPDATED=2025-12-30
     /// Send events to webhook endpoint via HTTP POST with retry logic
     pub fn send(self: *WebhookSink, events: []const ChangeEvent) !void {
         if (events.len == 0) return;

@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-SYNTAX-GEN-001; FEATURE="VSCodeSyntaxGeneration"; ASPECT=MetadataDerived; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-SYNTAX-GEN-001; FEATURE="VSCodeSyntaxGeneration"; ASPECT=MetadataDerived; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! # VSCode Syntax Generator
 //!
 //! Generates VSCode TextMate syntax highlighting (gql.tmLanguage.json) from

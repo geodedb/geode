@@ -15,7 +15,7 @@ pub const ServerState = struct {
     // Add only fields actually used by protocol handlers
 };
 
-// CANARY: REQ=REQ-BACKUP-PROTOCOL-001; FEATURE="BackupProtocolHandler"; ASPECT=RealLSN; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+// CANARY: REQ=REQ-BACKUP-PROTOCOL-001; FEATURE="BackupProtocolHandler"; ASPECT=RealLSN; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-14
 // GAP-0181 FIX: Use real backup metadata for incremental LSN selection
 
 /// GAP-0181: Extended backup header structure for LSN reading
@@ -36,7 +36,7 @@ const BackupHeader = extern struct {
 const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
 
 /// GAP-0181: Parse parent backup ID from hex string and read actual end_lsn from backup file
-/// CANARY: REQ=REQ-BACKUP-READ-PARENT-LSN-001; FEATURE="BackupReadParentLSN"; ASPECT=RealMetadata; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+/// CANARY: REQ=REQ-BACKUP-READ-PARENT-LSN-001; FEATURE="BackupReadParentLSN"; ASPECT=RealMetadata; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
 fn getParentBackupLsn(gpa: std.mem.Allocator, backup_dir: []const u8, parent_id_hex: []const u8) !u64 {
     // Parse the parent backup ID from hex
     const parent_id = std.fmt.parseUnsigned(u128, parent_id_hex, 16) catch {
@@ -107,7 +107,7 @@ pub fn handleBackupRequest(gpa: std.mem.Allocator, state: *ServerState, backup_r
     };
     defer simplified_backup_manager.deinit();
 
-    // CANARY: REQ=REQ-BACKUP-INCR-LSN-001; FEATURE="IncrementalBackupLSN"; ASPECT=RealParentLSN; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-BACKUP-INCR-LSN-001; FEATURE="IncrementalBackupLSN"; ASPECT=RealParentLSN; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
     // GAP-0181 FIX: Execute backup based on type with real LSN for incremental
     const backup_metadata = if (std.mem.eql(u8, backup_req.backup_type, "full"))
         simplified_backup_manager.createFullBackup()
@@ -155,7 +155,7 @@ pub fn handleBackupRequest(gpa: std.mem.Allocator, state: *ServerState, backup_r
     , .{ metadata.backup_id, backup_req.backup_type, file_size, @tagName(metadata.compression), metadata.checksum, metadata.start_lsn, metadata.end_lsn });
 }
 
-// CANARY: REQ=REQ-RESTORE-PROTOCOL-001; FEATURE="RestoreProtocolHandler"; ASPECT=RealRestore; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+// CANARY: REQ=REQ-RESTORE-PROTOCOL-001; FEATURE="RestoreProtocolHandler"; ASPECT=RealRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-14
 // GAP-0181 FIX: Perform actual restore operation instead of simulation
 
 /// Handle RESTORE protocol request from client
@@ -167,7 +167,7 @@ pub fn handleRestoreRequest(gpa: std.mem.Allocator, state: *ServerState, restore
         return std.fmt.allocPrint(gpa, "RESTORE_ERROR: Restore requires confirmation\n", .{});
     }
 
-    // CANARY: REQ=REQ-RESTORE-REAL-001; FEATURE="RealRestoreOperation"; ASPECT=DataRestore; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-RESTORE-REAL-001; FEATURE="RealRestoreOperation"; ASPECT=DataRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-14
     // GAP-0181 FIX: Actually perform the restore operation using SimplifiedBackupManager
     const backup_config = BackupConfig{
         .compression = .zstd,

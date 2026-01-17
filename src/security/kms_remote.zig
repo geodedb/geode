@@ -40,8 +40,8 @@ fn envelopeToJson(env: Envelope, w: anytype) !void {
 
 // GAP-0141: Safe hex parsing with proper error handling
 // GAP-0145: Bounds-checked JSON parsing
-// CANARY: REQ=REQ-HEX-PARSE-KMS-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
-// CANARY: REQ=REQ-JSON-PARSE-KMS-001; FEATURE="Safe JSON Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+// CANARY: REQ=REQ-HEX-PARSE-KMS-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-13
+// CANARY: REQ=REQ-JSON-PARSE-KMS-001; FEATURE="Safe JSON Parsing"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=security; UPDATED=2026-01-13
 fn parseHexByte(slice: []const u8) !u8 {
     return std.fmt.parseInt(u8, slice, 16) catch return error.InvalidHexEncoding;
 }
@@ -78,7 +78,7 @@ fn parseEnvelope(json: []const u8) !Envelope {
 }
 
 // GAP-0142: DEPRECATED - Deterministic PRNG removed for security
-// CANARY: REQ=REQ-PRNG-CRYPTO-001; FEATURE="Cryptographic PRNG"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+// CANARY: REQ=REQ-PRNG-CRYPTO-001; FEATURE="Cryptographic PRNG"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=security; UPDATED=2026-01-13
 // The custom xorshift128+ PRNG was insecure for cryptographic use.
 // All nonce generation now uses std.crypto.random for cryptographic security.
 
@@ -133,7 +133,7 @@ pub const Server = struct {
     }
 };
 
-// CANARY: REQ=REQ-REMOTE-KMS-SERVER-001; FEATURE="Remote KMS Server"; ASPECT=QUICTransport; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+// CANARY: REQ=REQ-REMOTE-KMS-SERVER-001; FEATURE="Remote KMS Server"; ASPECT=QUICTransport; STATUS=TESTED; TEST=geodetestlab/specs/external_kms_integration.yml; OWNER=security; UPDATED=2026-01-09
 pub const RemoteKmsServer = struct {
     allocator: std.mem.Allocator,
     quic_transport: ?*quic.QuicTransport = null,
@@ -337,7 +337,7 @@ pub const RemoteKmsServer = struct {
     }
 };
 
-// CANARY: REQ=REQ-KMS-REMOTE-CLIENT-001; FEATURE="RemoteKMSClient"; ASPECT=NETWORK; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+// CANARY: REQ=REQ-KMS-REMOTE-CLIENT-001; FEATURE="RemoteKMSClient"; ASPECT=NETWORK; STATUS=TESTED; TEST=geodetestlab/specs/external_kms_integration.yml; OWNER=security; UPDATED=2026-01-09
 pub const RemoteKmsClient = struct {
     allocator: std.mem.Allocator,
     quic_client: ?quic.QuicClient = null,

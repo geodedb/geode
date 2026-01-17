@@ -90,7 +90,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         },
         .constraints => {
             // GAP-0139: SHOW CONSTRAINTS implementation
-            // CANARY: REQ=REQ-SHOW-CONSTRAINTS-002; FEATURE="SHOW CONSTRAINTS"; ASPECT=StatementHandler; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-SHOW-CONSTRAINTS-002; FEATURE="SHOW CONSTRAINTS"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
             // Return constraint data from catalog
             var iter = cat.constraints.iterator();
             while (iter.next()) |entry| {
@@ -121,7 +121,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         },
         .tables => {
             // GAP-0139: SHOW TABLES implementation
-            // CANARY: REQ=REQ-SHOW-TABLES-001; FEATURE="SHOW TABLES"; ASPECT=StatementHandler; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-SHOW-TABLES-001; FEATURE="SHOW TABLES"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
             // In a graph database, node labels act as "tables"
             // Return unique node labels from the graph storage
             const labels = graph_storage_manager.listNodeLabels(allocator) catch &.{};
@@ -140,13 +140,13 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         },
         .procedures => {
             // GAP-0139: SHOW PROCEDURES implementation
-            // CANARY: REQ=REQ-SHOW-PROCEDURES-001; FEATURE="SHOW PROCEDURES"; ASPECT=StatementHandler; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-SHOW-PROCEDURES-001; FEATURE="SHOW PROCEDURES"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
             // Geode currently has no user-defined stored procedures
             // Return empty result set (procedures might be added in future)
         },
         .functions => {
             // GAP-0139: SHOW FUNCTIONS implementation
-            // CANARY: REQ=REQ-SHOW-FUNCTIONS-001; FEATURE="SHOW FUNCTIONS"; ASPECT=StatementHandler; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-SHOW-FUNCTIONS-001; FEATURE="SHOW FUNCTIONS"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
             // Return built-in functions list
             const builtin_functions = [_]struct { name: []const u8, signature: []const u8, return_type: []const u8 }{
                 // String functions
@@ -350,7 +350,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
 }
 
 // CANARY: PERF_PHASE5_COLUMN_BATCH_ALLOC - Helper function for batch column allocation
-// CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=HELPER_FN; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=HELPER_FN; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
 /// Phase 5.1.1 optimization: Allocate all column strings in a single buffer
 /// Reduces N allocations to 1 allocation for N columns (20-30% performance gain)
 ///

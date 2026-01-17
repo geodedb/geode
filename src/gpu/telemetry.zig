@@ -105,7 +105,7 @@ pub const EventTimer = struct {
 };
 
 // GAP-0061: GPU Telemetry Metrics Implementation
-// CANARY: REQ=REQ-GPU-TELEMETRY-001; FEATURE="GPUTelemetryMetrics"; ASPECT=OccupancyBandwidth; STATUS=IMPL; OWNER=gpu; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GPU-TELEMETRY-001; FEATURE="GPUTelemetryMetrics"; ASPECT=OccupancyBandwidth; STATUS=EXEMPT; OWNER=gpu; UPDATED=2026-01-10
 
 /// GPU kernel configuration for occupancy calculation
 pub const KernelConfig = struct {

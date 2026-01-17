@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // CANARY: BENCHMARK_PHASE3 - Performance validation for Phase 3 concurrency and memory optimizations
-// CANARY: REQ=REQ-PERF-PHASE3-BENCH-001; FEATURE="ConcurrencyOptimization"; ASPECT=TESTING; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE3-BENCH-001; FEATURE="ConcurrencyOptimization"; ASPECT=TESTING; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
 
 // =============================================================================
 // Benchmark 1: RwLock vs Mutex for Concurrent Reads

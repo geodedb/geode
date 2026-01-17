@@ -20,7 +20,7 @@ pub const executeCallProcedure = procedure_registry.executeCallProcedure;
 /// Executes the subquery statement (Query, Call, Create, etc.) with context
 /// and optionally applies RETURN clause transformation
 pub fn executeCallSubquery(allocator: std.mem.Allocator, call_subq: ast.CallSubquery, context: ExecutionContext) !ExecutionResult {
-    // CANARY: REQ=REQ-GQL-CALL-SUBQUERY; FEATURE="CallSubquery"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2025-10-11
+    // CANARY: REQ=REQ-GQL-CALL-SUBQUERY; FEATURE="CallSubquery"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-10-11
     // Execute the statement (can be Query, Call, Create, etc.) with context
     // Handle statements directly to avoid circular error set inference
     const subquery_result = switch (call_subq.statement.*) {

@@ -166,7 +166,7 @@ pub const pagerank_kernel_cuda_c =
 ;
 
 // GAP-0071: Full PTX implementation for PageRank (fallback when nvcc unavailable)
-// CANARY: REQ=REQ-GPU-PAGERANK-001; FEATURE="GPUPageRank"; ASPECT=PTXKernel; STATUS=IMPL; OWNER=gpu; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GPU-PAGERANK-001; FEATURE="GPUPageRank"; ASPECT=PTXKernel; STATUS=EXEMPT; OWNER=gpu; UPDATED=2026-01-10
 pub const pagerank_kernel_ptx_simple =
     \\  .version 6.0
     \\  .target sm_30
@@ -373,7 +373,7 @@ pub const setops_kernel_cuda_c =
 ;
 
 // GAP-0071: Full PTX implementation for bitonic sort kernel (fallback when nvcc unavailable)
-// CANARY: REQ=REQ-GPU-SORT-001; FEATURE="GPUSort"; ASPECT=PTXKernel; STATUS=IMPL; OWNER=gpu; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GPU-SORT-001; FEATURE="GPUSort"; ASPECT=PTXKernel; STATUS=EXEMPT; OWNER=gpu; UPDATED=2026-01-10
 pub const setops_kernel_ptx_simple =
     \\  .version 6.0
     \\  .target sm_30

@@ -638,7 +638,7 @@ fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
     }
 
     // GAP-0076: MULTIPOINT parser: MULTIPOINT((x1 y1), (x2 y2), ...) or MULTIPOINT(x1 y1, x2 y2, ...)
-    // CANARY: REQ=REQ-GEO-MULTI-001; FEATURE="MultiGeometry"; ASPECT=SpatialTypes; STATUS=IMPL; OWNER=types; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GEO-MULTI-001; FEATURE="MultiGeometry"; ASPECT=SpatialTypes; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=types; UPDATED=2026-01-10
     if (std.mem.startsWith(u8, wkt, "MULTIPOINT")) {
         const Point = struct { x: f64, y: f64 };
         var points = try std.ArrayList(Point).initCapacity(allocator, 0);
@@ -705,7 +705,7 @@ fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
     }
 
     // GAP-0076: MULTILINESTRING parser: MULTILINESTRING((x1 y1, x2 y2), (x3 y3, x4 y4))
-    // CANARY: REQ=REQ-GEO-MULTI-002; FEATURE="MultiGeometry"; ASPECT=SpatialTypes; STATUS=IMPL; OWNER=types; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GEO-MULTI-002; FEATURE="MultiGeometry"; ASPECT=SpatialTypes; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=types; UPDATED=2026-01-10
     if (std.mem.startsWith(u8, wkt, "MULTILINESTRING")) {
         const Point = struct { x: f64, y: f64 };
         // Parse as single linestring for simplicity - handle first linestring in multi
@@ -760,7 +760,7 @@ fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
     }
 
     // GAP-0076: MULTIPOLYGON parser: MULTIPOLYGON(((x1 y1, ...)), ((x2 y2, ...)))
-    // CANARY: REQ=REQ-GEO-MULTI-003; FEATURE="MultiGeometry"; ASPECT=SpatialTypes; STATUS=IMPL; OWNER=types; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GEO-MULTI-003; FEATURE="MultiGeometry"; ASPECT=SpatialTypes; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=types; UPDATED=2026-01-10
     if (std.mem.startsWith(u8, wkt, "MULTIPOLYGON")) {
         const Point = struct { x: f64, y: f64 };
         // Parse first polygon for simplicity
@@ -976,7 +976,7 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     return .{ .VectorF32 = result.VectorF32 };
 }
 
-// CANARY: REQ=REQ-VECTOR-I32-002; FEATURE="VectorI32"; ASPECT=ConstructorFunction; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-23
+// CANARY: REQ=REQ-VECTOR-I32-002; FEATURE="VectorI32"; ASPECT=ConstructorFunction; STATUS=TESTED; TEST=geodetestlab/specs/vector_operations_basic.yml; OWNER=eval; UPDATED=2025-12-23
 fn constructVectorI32(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 1) return error.InvalidArgs;
 
@@ -1217,7 +1217,7 @@ fn subnetPrefixLength(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     return .{ .Int = @intCast(subnet.prefix_len) };
 }
 
-// CANARY: REQ=REQ-GQL-NET-FUNC-EVAL-001; FEATURE="NetworkFunctionsEvaluation"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-19
+// CANARY: REQ=REQ-GQL-NET-FUNC-EVAL-001; FEATURE="NetworkFunctionsEvaluation"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/network_types_basic.yml; OWNER=eval; UPDATED=2025-10-19
 fn ipNetwork(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
     if (args.len != 1) return error.InvalidArgs;
@@ -1547,7 +1547,7 @@ fn getAltRef(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     }
 }
 
-// CANARY: REQ=REQ-GQL-GEO-FUNC-EVAL-001; FEATURE="GeographicFunctionsEvaluation"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-19
+// CANARY: REQ=REQ-GQL-GEO-FUNC-EVAL-001; FEATURE="GeographicFunctionsEvaluation"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=eval; UPDATED=2025-10-19
 fn geoBearing(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
     if (args.len != 2) return error.InvalidArgs;
@@ -1772,7 +1772,7 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
     return error.UnsupportedGeometry;
 }
 
-// CANARY: REQ=REQ-SPATIAL-CONTAINS-001; FEATURE="SpatialContains"; ASPECT=GeometryRelation; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-CONTAINS-001; FEATURE="SpatialContains"; ASPECT=GeometryRelation; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // GAP-0089 RESOLVED: Proper point-in-polygon test using ray casting algorithm
 fn stContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 2) return error.InvalidArgs;
@@ -1807,7 +1807,7 @@ fn stContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     return .{ .Bool = false };
 }
 
-// CANARY: REQ=REQ-SPATIAL-INTERSECTS-001; FEATURE="SpatialIntersects"; ASPECT=GeometryRelation; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-INTERSECTS-001; FEATURE="SpatialIntersects"; ASPECT=GeometryRelation; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // GAP-0089 RESOLVED: Proper geometry intersection test
 fn stIntersects(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 2) return error.InvalidArgs;
@@ -1868,7 +1868,7 @@ fn stIntersects(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue 
     return .{ .Bool = false };
 }
 
-// CANARY: REQ=REQ-SPATIAL-WITHIN-001; FEATURE="SpatialWithin"; ASPECT=GeometryRelation; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-WITHIN-001; FEATURE="SpatialWithin"; ASPECT=GeometryRelation; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // GAP-0089 RESOLVED: stWithin(a, b) is the inverse of stContains(b, a)
 fn stWithin(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 2) return error.InvalidArgs;
@@ -1955,7 +1955,7 @@ fn pointInPolygon(point: [2]f64, polygon: [][2]f64) bool {
     return inside;
 }
 
-// CANARY: REQ=REQ-SPATIAL-POINT-001; FEATURE="SpatialPoint"; ASPECT=PointCreation; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-POINT-001; FEATURE="SpatialPoint"; ASPECT=PointCreation; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Point(x, y) - Creates a Point geometry from coordinates
 fn stPoint(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 2) return error.InvalidArgs;
@@ -1984,7 +1984,7 @@ fn stPoint(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     return .{ .Geometry = .{ .wkb = wkb } };
 }
 
-// CANARY: REQ=REQ-SPATIAL-X-001; FEATURE="SpatialX"; ASPECT=CoordinateExtraction; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-X-001; FEATURE="SpatialX"; ASPECT=CoordinateExtraction; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_X(point) - Extracts X coordinate from a Point geometry
 fn stX(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 1) return error.InvalidArgs;
@@ -1998,7 +1998,7 @@ fn stX(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     return .{ .Decimal = .{ .coeff = x_scaled, .scale = 6 } };
 }
 
-// CANARY: REQ=REQ-SPATIAL-Y-001; FEATURE="SpatialY"; ASPECT=CoordinateExtraction; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-Y-001; FEATURE="SpatialY"; ASPECT=CoordinateExtraction; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Y(point) - Extracts Y coordinate from a Point geometry
 fn stY(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 1) return error.InvalidArgs;
@@ -2012,7 +2012,7 @@ fn stY(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     return .{ .Decimal = .{ .coeff = y_scaled, .scale = 6 } };
 }
 
-// CANARY: REQ=REQ-SPATIAL-DISTANCE-001; FEATURE="SpatialDistance"; ASPECT=GeometryMeasure; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-DISTANCE-001; FEATURE="SpatialDistance"; ASPECT=GeometryMeasure; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Distance(geom1, geom2) - Calculates Euclidean distance between two geometries
 fn stDistance(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 2) return error.InvalidArgs;
@@ -2041,7 +2041,7 @@ fn stDistance(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     return error.UnsupportedGeometry;
 }
 
-// CANARY: REQ=REQ-SPATIAL-AREA-001; FEATURE="SpatialArea"; ASPECT=GeometryMeasure; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-AREA-001; FEATURE="SpatialArea"; ASPECT=GeometryMeasure; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Area(polygon) - Calculates area of a Polygon using Shoelace formula
 fn stArea(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 1) return error.InvalidArgs;
@@ -2079,7 +2079,7 @@ fn stArea(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     return .{ .Decimal = .{ .coeff = area_scaled, .scale = 6 } };
 }
 
-// CANARY: REQ=REQ-SPATIAL-CENTROID-001; FEATURE="SpatialCentroid"; ASPECT=GeometryMeasure; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-CENTROID-001; FEATURE="SpatialCentroid"; ASPECT=GeometryMeasure; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Centroid(polygon) - Calculates centroid of a Polygon
 fn stCentroid(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 1) return error.InvalidArgs;
@@ -2132,7 +2132,7 @@ fn stCentroid(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     return .{ .Geometry = .{ .wkb = wkb } };
 }
 
-// CANARY: REQ=REQ-SPATIAL-BUFFER-001; FEATURE="SpatialBuffer"; ASPECT=GeometryTransform; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-BUFFER-001; FEATURE="SpatialBuffer"; ASPECT=GeometryTransform; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Buffer(geometry, distance) - Creates a buffer around a geometry
 // For Point: creates a square polygon at distance (approximation of circle)
 fn stBuffer(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -2340,7 +2340,7 @@ fn decimalDiv(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 // ============================================================================
 // Unit Tests for WKB Big Endian Support
-// CANARY: REQ=REQ-SPATIAL-WKB-ENDIAN-001; FEATURE="WKBByteOrderParsing"; ASPECT=UnitTest; STATUS=IMPL; OWNER=spatial; UPDATED=2026-01-10
+// CANARY: REQ=REQ-SPATIAL-WKB-ENDIAN-001; FEATURE="WKBByteOrderParsing"; ASPECT=UnitTest; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ============================================================================
 
 const testing = std.testing;

@@ -72,7 +72,7 @@ pub const GraphStatistics = struct {
     last_updated: i64 = 0,
 };
 
-// CANARY: REQ=REQ-MULTI-TENANT-002; FEATURE="MultiTenancy"; ASPECT=MultiGraph; STATUS=IMPL; OWNER=enterprise; UPDATED=2026-01-09
+// CANARY: REQ=REQ-MULTI-TENANT-002; FEATURE="MultiTenancy"; ASPECT=MultiGraph; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=enterprise; UPDATED=2026-01-09
 pub const MultiGraphManager = struct {
     allocator: Allocator,
     graphs: std.AutoHashMap(GraphId, *GraphNamespace),
@@ -246,7 +246,7 @@ pub const MultiGraphManager = struct {
         return list.toOwnedSlice();
     }
 
-    // CANARY: REQ=REQ-GRAPH-META-004; FEATURE="GraphMetadataPersistence"; ASPECT=Persist; STATUS=IMPL; OWNER=multi_graph; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-GRAPH-META-004; FEATURE="GraphMetadataPersistence"; ASPECT=Persist; STATUS=EXEMPT; OWNER=multi_graph; UPDATED=2026-01-09
     fn persistGraphMetadata(self: *Self, id: GraphId, name: []const u8, options: CreateGraphOptions) !void {
         _ = id;
         _ = options;
@@ -259,7 +259,7 @@ pub const MultiGraphManager = struct {
         };
     }
 
-    // CANARY: REQ=REQ-GRAPH-META-005; FEATURE="GraphMetadataPersistence"; ASPECT=Remove; STATUS=IMPL; OWNER=multi_graph; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-GRAPH-META-005; FEATURE="GraphMetadataPersistence"; ASPECT=Remove; STATUS=EXEMPT; OWNER=multi_graph; UPDATED=2026-01-09
     fn removeGraphMetadata(self: *Self, name: []const u8) !void {
         // Remove graph from catalog (which handles file storage)
         self.metadata_storage.removeGraph(name) catch |err| {

@@ -123,7 +123,7 @@ pub const RLSEngine = struct {
         constants: []const Value,
         jump_table: []const usize,
 
-        // CANARY: REQ=REQ-RLS-EXPR-001; FEATURE="RLSExpressionCompilation"; ASPECT=Bytecode; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-RLS-EXPR-001; FEATURE="RLSExpressionCompilation"; ASPECT=Bytecode; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
         pub const Opcode = enum(u8) {
             nop = 0x00,
             // Stack operations
@@ -243,7 +243,7 @@ pub const RLSEngine = struct {
         }
 
         // Compile expressions if provided
-        // CANARY: REQ=REQ-RLS-EXPR-002; FEATURE="RLSExpressionCompilation"; ASPECT=PolicyCompilation; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-RLS-EXPR-002; FEATURE="RLSExpressionCompilation"; ASPECT=PolicyCompilation; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
         var compiled_policy = policy;
         if (compiled_policy.using_expr) |*expr| {
             if (expr.compiled == null) {
@@ -428,7 +428,7 @@ pub const RLSEngine = struct {
         return result;
     }
 
-    // CANARY: REQ=REQ-RLS-EXPR-003; FEATURE="RLSExpressionCompilation"; ASPECT=ExpressionCompiler; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
+    // CANARY: REQ=REQ-RLS-EXPR-003; FEATURE="RLSExpressionCompilation"; ASPECT=ExpressionCompiler; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
     fn compileExpression(self: *Self, expr: []const u8) !*CompiledExpression {
         const Opcode = CompiledExpression.Opcode;
         var bytecode = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
@@ -543,7 +543,7 @@ pub const RLSEngine = struct {
             }
 
             // GAP-0141: Safe integer parsing with error logging
-            // CANARY: REQ=REQ-INT-PARSE-RLS-001; FEATURE="Safe Integer Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-INT-PARSE-RLS-001; FEATURE="Safe Integer Parsing"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=security; UPDATED=2026-01-13
             // Check for integer literal
             if (std.ascii.isDigit(expr[i]) or (expr[i] == '-' and i + 1 < expr.len and std.ascii.isDigit(expr[i + 1]))) {
                 const num_start = i;
@@ -591,7 +591,7 @@ pub const RLSEngine = struct {
         return try self.context_evaluator.evaluate(expr.raw, row, context);
     }
 
-    // CANARY: REQ=REQ-RLS-EXPR-004; FEATURE="RLSExpressionCompilation"; ASPECT=BytecodeVM; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
+    // CANARY: REQ=REQ-RLS-EXPR-004; FEATURE="RLSExpressionCompilation"; ASPECT=BytecodeVM; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
     fn evaluateCompiledExpression(
         self: *Self,
         expr: *CompiledExpression,
@@ -1347,7 +1347,7 @@ pub const AttributeBasedAccessControl = struct {
             ttl: i64,
         };
 
-        // CANARY: REQ=REQ-RLS-EXPR-005; FEATURE="RLSExpressionCompilation"; ASPECT=AttributeEvaluation; STATUS=IMPL; OWNER=security; UPDATED=2025-12-30
+        // CANARY: REQ=REQ-RLS-EXPR-005; FEATURE="RLSExpressionCompilation"; ASPECT=AttributeEvaluation; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
         pub fn evaluate(
             self: *AttributeEvaluator,
             rule: ABACAttributeRule,

@@ -620,7 +620,7 @@ test "Performance benchmark basic functionality" {
 
 // ============================================================================
 // Unit Tests for Cache Hit/Miss Ratio Tracking
-// CANARY: REQ=REQ-PERF-CACHE-RATIO-001; FEATURE="CacheHitRatioTracking"; ASPECT=UnitTest; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-10
+// CANARY: REQ=REQ-PERF-CACHE-RATIO-001; FEATURE="CacheHitRatioTracking"; ASPECT=UnitTest; STATUS=TESTED; TEST=geodetestlab/specs/geode_performance_stress.yml; OWNER=performance; UPDATED=2026-01-10
 // ============================================================================
 
 test "ChunkedMemoryMap cache hit tracking" {

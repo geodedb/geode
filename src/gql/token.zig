@@ -1,7 +1,7 @@
 const std = @import("std");
 const language_metadata = @import("language_metadata.zig");
 
-// CANARY: REQ=REQ-LEXER-METADATA-001; FEATURE="MetadataIntegration"; ASPECT=KeywordLookup; STATUS=IMPL; OWNER=lexer; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LEXER-METADATA-001; FEATURE="MetadataIntegration"; ASPECT=KeywordLookup; STATUS=EXEMPT; OWNER=lexer; UPDATED=2026-01-03
 // Minimal ISO/IEC 39075:2024 GQL token set (subset; expandable).
 pub const TokenKind = enum {
     // delimiters/operators
@@ -234,7 +234,7 @@ pub fn digitToAscii(cp: u21) ?u8 {
     return unicode.digitToAscii(cp);
 }
 
-// CANARY: REQ=REQ-LEXER-METADATA-002; FEATURE="MetadataIntegration"; ASPECT=ComptimeKeywordMap; STATUS=IMPL; OWNER=lexer; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LEXER-METADATA-002; FEATURE="MetadataIntegration"; ASPECT=ComptimeKeywordMap; STATUS=EXEMPT; OWNER=lexer; UPDATED=2026-01-03
 // Comptime-generated keyword map using StaticStringMap for O(1) lookup
 // Keywords are sourced from language_metadata.zig for single source of truth
 const KeywordMap = std.StaticStringMap(TokenKind).initComptime(.{
@@ -402,7 +402,7 @@ const KeywordMap = std.StaticStringMap(TokenKind).initComptime(.{
 });
 
 // Export keyword checking to lexer using comptime-generated map
-// CANARY: REQ=REQ-GQL-KEYWORDS-001; FEATURE="GQL Reserved Words"; ASPECT=ISO39075Compliance; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-KEYWORDS-001; FEATURE="GQL Reserved Words"; ASPECT=ISO39075Compliance; STATUS=TESTED; TEST=geodetestlab/specs/geode_keyword_fixes.yml; OWNER=parser; UPDATED=2026-01-03
 pub fn keywordKind(word: []const u8) TokenKind {
     // Convert to uppercase for case-insensitive lookup
     var upper_buf: [64]u8 = undefined;

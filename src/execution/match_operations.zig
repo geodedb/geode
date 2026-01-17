@@ -32,7 +32,7 @@ const expandVariableLengthPaths = execution.expandVariableLengthPaths;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
-// CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-002; FEATURE="PropertyPatternVariableReference"; ASPECT=Detection; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+// CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-002; FEATURE="PropertyPatternVariableReference"; ASPECT=Detection; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-12-26
 /// Check if an expression contains a variable reference (e.g., Member like d.name)
 /// This is used to detect property patterns like {department: d.name} that can't be
 /// evaluated until we have the environment from previous chains.
@@ -76,7 +76,7 @@ fn containsVariableReference(expr: ast.Expr) bool {
     };
 }
 
-// CANARY: REQ=REQ-GQL-COLNAME-001; FEATURE="UniqueColumnNames"; ASPECT=DEDUP; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+// CANARY: REQ=REQ-GQL-COLNAME-001; FEATURE="UniqueColumnNames"; ASPECT=DEDUP; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 /// Generate unique column names for RETURN items, using qualified names for duplicates
 /// For example, if both p.name and c.name exist, they become "p.name" and "c.name"
 pub fn generateUniqueColumnNames(allocator: std.mem.Allocator, items: []const ast.ReturnItem) ![][]const u8 {
@@ -168,7 +168,7 @@ pub fn generateUniqueColumnNames(allocator: std.mem.Allocator, items: []const as
     return columns;
 }
 
-// CANARY: REQ=REQ-GQL-DISTINCT-001; FEATURE="DISTINCT"; ASPECT=DEDUPLICATION; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+// CANARY: REQ=REQ-GQL-DISTINCT-001; FEATURE="DISTINCT"; ASPECT=DEDUPLICATION; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 /// Apply DISTINCT deduplication to result rows
 fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
     if (result.rows.len <= 1) return;
@@ -639,7 +639,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
             }
 
-            // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-001; FEATURE="PropertyPatternVariableReference"; ASPECT=MultiMatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+            // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-001; FEATURE="PropertyPatternVariableReference"; ASPECT=MultiMatch; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-12-26
             // Check inline properties - but only for literal values in the first chain.
             // Property patterns with variable references (e.g., {department: d.name}) need
             // to be checked later during Cartesian product generation when we have the
@@ -750,7 +750,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .allocator = self.allocator,
                 };
 
-                // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-003; FEATURE="PropertyPatternVariableReference"; ASPECT=Verification; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+                // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-003; FEATURE="PropertyPatternVariableReference"; ASPECT=Verification; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-12-26
                 // Check property patterns with variable references now that we have the full environment
                 for (self.q.match.chains, current_combo.items) |chain, node| {
                     if (chain.head) |node_pattern| {
@@ -837,7 +837,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
     try context.generateCombinations(&current_combo, 0);
 
-    // CANARY: REQ=REQ-GQL-MULTINODE-GROUPBY-001; FEATURE="MultiNodeGroupBy"; ASPECT=Execution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-MULTINODE-GROUPBY-001; FEATURE="MultiNodeGroupBy"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2025-12-26
     // Handle GROUP BY with aggregation for multiple node patterns
     if (q.group_by) |group_by| {
         // Check if RETURN contains aggregation
@@ -919,7 +919,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                             }
                         }
 
-                        // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-004; FEATURE="PropertyPatternVariableReference"; ASPECT=GroupByVerification; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+                        // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-004; FEATURE="PropertyPatternVariableReference"; ASPECT=GroupByVerification; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-12-26
                         // Check property patterns with variable references for GROUP BY path
                         for (self.q.match.chains, combo_list.items) |chain, node| {
                             if (chain.head) |node_pattern| {
@@ -1038,7 +1038,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         }
     }
 
-    // CANARY: REQ=REQ-GQL-ORDER-MULTINODE-001; FEATURE="OrderByMultiNode"; ASPECT=FinalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-ORDER-MULTINODE-001; FEATURE="OrderByMultiNode"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // Apply ORDER BY AFTER GROUP BY aggregation to sort final projected results
     var result = ExecutionResult{
         .columns = columns,
@@ -1057,7 +1057,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     return result;
 }
 
-// CANARY: REQ=REQ-GQL-MULTINODE-AGG-001; FEATURE="MultiNodeAggregation"; ASPECT=Computation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+// CANARY: REQ=REQ-GQL-MULTINODE-AGG-001; FEATURE="MultiNodeAggregation"; ASPECT=Computation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2025-12-26
 fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_envs: []const Env) !Value {
     switch (expr) {
         .Call => |call| {
@@ -1077,7 +1077,7 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                     return Value{ .Int = count };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
                     // E26 Fix: COUNT(DISTINCT expr) - count distinct non-null values
-                    // CANARY: REQ=REQ-GQL-MULTINODE-COUNTDISTINCT-001; FEATURE="MultiNodeCountDistinct"; ASPECT=Aggregation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-26
+                    // CANARY: REQ=REQ-GQL-MULTINODE-COUNTDISTINCT-001; FEATURE="MultiNodeCountDistinct"; ASPECT=Aggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2025-12-26
                     var unique_node_ids = std.AutoHashMap(u64, void).init(allocator);
                     defer unique_node_ids.deinit();
                     var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
@@ -1170,7 +1170,7 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
     return Value{ .Null = {} };
 }
 
-// CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-001; FEATURE="MultiChainRelationshipMatch"; ASPECT=Execution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-001; FEATURE="MultiChainRelationshipMatch"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
 // Handle multiple chains with relationships that share variables
 // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
 // This function joins chains on shared variables
@@ -1310,7 +1310,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                 }
             } else {
-                // CANARY: REQ=REQ-GQL-CARTESIAN-PRODUCT-001; FEATURE="CartesianProductMatch"; ASPECT=IndependentChains; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+                // CANARY: REQ=REQ-GQL-CARTESIAN-PRODUCT-001; FEATURE="CartesianProductMatch"; ASPECT=IndependentChains; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
                 // No shared variable - this is a Cartesian product case
                 // Find all matching relationships for this chain and combine with existing binding
                 const left_labels = hop.left.labels;
@@ -1398,7 +1398,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         try rows.append(allocator, row);
     }
 
-    // CANARY: REQ=REQ-GQL-ORDER-MULTICHAIN-001; FEATURE="OrderByMultiChain"; ASPECT=FinalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-ORDER-MULTICHAIN-001; FEATURE="OrderByMultiChain"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // Apply ORDER BY AFTER collecting relationship match results to sort final projected results
     var result = ExecutionResult{
         .columns = columns,
@@ -1448,7 +1448,7 @@ fn getWithExpressionName(allocator: std.mem.Allocator, expr: ast.Expr) []const u
     };
 }
 
-// CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-WITH-002; FEATURE="OptionalMatchWithAggregation"; ASPECT=AggregationComputation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-WITH-002; FEATURE="OptionalMatchWithAggregation"; ASPECT=AggregationComputation; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
 // Compute aggregation for a group of rows
 fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []Value, columns: []const []const u8, param_names: []const []const u8, param_values: []const Value) !Value {
     if (expr != .Call) return Value{ .Null = {} };
@@ -1480,7 +1480,7 @@ fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, grou
         return Value{ .Int = count };
     }
 
-    // CANARY: REQ=REQ-COUNT-DISTINCT-GROUP-001; FEATURE="CountDistinctGroupAggregation"; ASPECT=GroupAggregation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-COUNT-DISTINCT-GROUP-001; FEATURE="CountDistinctGroupAggregation"; ASPECT=GroupAggregation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
     // C05 Fix: Handle countDistinct(expr) - COUNT(DISTINCT expr) for groups
     if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
         if (arg_ptr == null) return Value{ .Int = 0 };
@@ -1583,7 +1583,7 @@ fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, grou
         return if (max) |m| Value{ .Int = m } else Value{ .Null = {} };
     }
 
-    // CANARY: REQ=REQ-AGG-COLLECT-004; FEATURE="AggregationFunctions"; ASPECT=COLLECT_GROUP; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-AGG-COLLECT-004; FEATURE="AggregationFunctions"; ASPECT=COLLECT_GROUP; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
     // B02 Fix: Handle collect(expr) - collect non-NULL values into a list
     if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
         if (arg_ptr == null) return Value{ .List = &.{} };
@@ -1609,7 +1609,7 @@ fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, grou
 }
 
 // E30/E31 Fix: Helper to check if an expression references a specific variable
-// CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-VAR-001; FEATURE="OptionalMatchWhereVar"; ASPECT=VarReference; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+// CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-VAR-001; FEATURE="OptionalMatchWhereVar"; ASPECT=VarReference; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 fn whereExprReferencesVar(expr: ast.Expr, var_name: []const u8) bool {
     return switch (expr) {
         .Ident => |ident| std.mem.eql(u8, ident.orig, var_name),
@@ -1643,7 +1643,7 @@ fn whereExprReferencesVar(expr: ast.Expr, var_name: []const u8) bool {
     };
 }
 
-// CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-004; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoinImpl; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+// CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-004; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoinImpl; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 // CANARY: REQ=REQ-MULTI-GRAPH-009; FEATURE="MultiGraphIsolation"; ASPECT=OptionalMatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH + OPTIONAL MATCH patterns as left outer join with graph isolation
 // e.g., MATCH (p:Person) OPTIONAL MATCH (p)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name
@@ -1689,7 +1689,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             if (!has_all_labels) continue;
         }
 
-        // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-PROPS-001; FEATURE="OptionalMatchRequiredProps"; ASPECT=RequiredNodePropertyFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-PROPS-001; FEATURE="OptionalMatchRequiredProps"; ASPECT=RequiredNodePropertyFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
         // Filter by property pattern on required chain (e.g., MATCH (d:Department {name: 'NewDept'}))
         if (required_pattern.props) |req_props| {
             var matches_props = true;
@@ -1724,7 +1724,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             if (!matches_props) continue;
         }
 
-        // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-001; FEATURE="OptionalMatchWhereFilter"; ASPECT=RequiredNodeFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-001; FEATURE="OptionalMatchWhereFilter"; ASPECT=RequiredNodeFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
         // Apply WHERE clause to filter base nodes before optional matching
         // BUT ONLY if WHERE doesn't reference optional variables
         // E30/E31 Fix: Skip pre-filter when WHERE uses optional variables like "m IS NULL"
@@ -1802,14 +1802,14 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 if (hop.rel.name) |v| try all_vars.append(allocator, v);
                 if (hop.right.name) |v| try all_vars.append(allocator, v);
             } else if (chain.head != null) {
-                // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-001; FEATURE="OptionalMatchNodeOnly"; ASPECT=VariableCollection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-001; FEATURE="OptionalMatchNodeOnly"; ASPECT=VariableCollection; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                 // OPTIONAL MATCH (e:Employee) - node-only pattern
                 if (chain.head.?.name) |v| try all_vars.append(allocator, v);
             }
         }
     }
 
-    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-001; FEATURE="RequiredChainAfterOptional"; ASPECT=VariableCollection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-001; FEATURE="RequiredChainAfterOptional"; ASPECT=VariableCollection; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
     // E27 Fix: Also collect required chains that come AFTER optional chains
     // e.g., MATCH (e:Employee) OPTIONAL MATCH ... MATCH (m:Employee {name: e.manager})
     // The third MATCH is required but comes after optional chains - we need to handle it
@@ -1839,7 +1839,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
     }
 
-    // CANARY: REQ=REQ-GQL-MULTI-OPTIONAL-MATCH-001; FEATURE="MultipleOptionalMatch"; ASPECT=CumulativeMatching; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-MULTI-OPTIONAL-MATCH-001; FEATURE="MultipleOptionalMatch"; ASPECT=CumulativeMatching; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
     // B09 Fix: Multiple OPTIONAL MATCHes must be processed CUMULATIVELY (like LEFT OUTER JOINs)
     // not as alternatives. Each OPTIONAL MATCH extends the current rows with its matches.
 
@@ -2040,7 +2040,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                             if (!has_all_labels) continue;
                         }
 
-                        // CANARY: REQ=REQ-GQL-OPTIONAL-TARGET-PROPS-001; FEATURE="OptionalMatchTargetNodeProps"; ASPECT=PropertyFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                        // CANARY: REQ=REQ-GQL-OPTIONAL-TARGET-PROPS-001; FEATURE="OptionalMatchTargetNodeProps"; ASPECT=PropertyFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
                         // D03 Fix: Filter by property pattern on target node (e.g., {level: 999})
                         if (right_props) |properties| {
                             var matches_props = true;
@@ -2115,7 +2115,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                             if (!has_all_labels) continue;
                         }
 
-                        // CANARY: REQ=REQ-GQL-OPTIONAL-TARGET-PROPS-002; FEATURE="OptionalMatchTargetNodeProps"; ASPECT=IncomingEdgeFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                        // CANARY: REQ=REQ-GQL-OPTIONAL-TARGET-PROPS-002; FEATURE="OptionalMatchTargetNodeProps"; ASPECT=IncomingEdgeFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
                         // D03 Fix: Filter by property pattern on target node (incoming edge case)
                         if (right_props) |properties| {
                             var matches_props = true;
@@ -2196,7 +2196,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         current_rows.clearRetainingCapacity();
     }
 
-    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-002; FEATURE="RequiredChainAfterOptional"; ASPECT=PropertyPatternMatch; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-CHAIN-002; FEATURE="RequiredChainAfterOptional"; ASPECT=PropertyPatternMatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
     // E27 Fix: Process required chains after optional chains
     // Section 14.4 Fix: Also handle chains with hops (relationship patterns)
     // For each row, look up nodes matching required chains with property patterns that reference other variables
@@ -2222,7 +2222,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             for (required_chains_after_optional.items) |chain_idx| {
                 const chain = q.match.chains[chain_idx];
 
-                // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-EXPAND-001; FEATURE="RequiredChainExpansion"; ASPECT=MultiTargetExpand; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-EXPAND-001; FEATURE="RequiredChainExpansion"; ASPECT=MultiTargetExpand; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
                 // Section 14.4 Fix (C04): Handle chains with hops (relationship patterns)
                 // Must expand to ALL matching targets, not just the first one
                 if (chain.hops.len > 0) {
@@ -2471,7 +2471,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     };
 
     // E30/E31 Fix: Apply WHERE clause AFTER optional matching when it references optional variables
-    // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-POST-001; FEATURE="OptionalMatchWherePost"; ASPECT=PostOptionalFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-POST-001; FEATURE="OptionalMatchWherePost"; ASPECT=PostOptionalFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // For queries like: MATCH (w) OPTIONAL MATCH (w)-[:R]->(m) WHERE m IS NULL RETURN w.name
     // The WHERE clause must be evaluated after optional matching so m is in scope
     if (q.where_clause) |where_expr| {
@@ -2515,7 +2515,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
     }
 
-    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-WITH-001; FEATURE="OptionalMatchWithAggregation"; ASPECT=WithClauseHandling; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-WITH-001; FEATURE="OptionalMatchWithAggregation"; ASPECT=WithClauseHandling; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
     // Process WITH clause if present (needed for aggregations like count(r))
     if (q.with_clause) |with_clause| {
         var with_columns = try allocator.alloc([]const u8, with_clause.items.len);
@@ -2645,7 +2645,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         intermediate_result.rows = try with_rows.toOwnedSlice(allocator);
     }
 
-    // CANARY: REQ=REQ-GQL-WITH-CHAIN-004; FEATURE="ChainedWithClauseResult"; ASPECT=ReturnOptimization; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-24
+    // CANARY: REQ=REQ-GQL-WITH-CHAIN-004; FEATURE="ChainedWithClauseResult"; ASPECT=ReturnOptimization; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2025-12-24
     // Check if ret.items is the same as with_clause.items (pointer equality - happens with query chaining)
     // In this case, WITH has already evaluated the expressions, so skip re-evaluation and use intermediate_result directly
     if (q.with_clause) |with_clause| {
@@ -2656,7 +2656,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
     }
 
-    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-GROUPBY-001; FEATURE="OptionalMatchGroupBy"; ASPECT=GroupByHandling; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-GROUPBY-001; FEATURE="OptionalMatchGroupBy"; ASPECT=GroupByHandling; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // E23 Fix: Handle GROUP BY clause for OPTIONAL MATCH queries
     // When GROUP BY is present, we need to group the intermediate results and compute aggregations
     if (q.group_by) |group_by| {
@@ -2794,7 +2794,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         };
     }
 
-    // CANARY: REQ=REQ-GQL-AGG-NO-GROUPBY-001; FEATURE="AggregationWithoutGroupBy"; ASPECT=OptionalMatchAgg; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-AGG-NO-GROUPBY-001; FEATURE="AggregationWithoutGroupBy"; ASPECT=OptionalMatchAgg; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
     // B01-B04 Fix: Check if RETURN has aggregation functions - if so, aggregate ALL rows into single result
     // This is the GQL standard behavior: aggregation without GROUP BY should produce a single row
     var has_return_aggregation = false;
@@ -2809,7 +2809,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     var return_rows: [][]Value = undefined;
 
     if (has_return_aggregation) {
-        // CANARY: REQ=REQ-GQL-AGG-NO-GROUPBY-002; FEATURE="AggregationWithoutGroupBy"; ASPECT=SingleRowResult; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+        // CANARY: REQ=REQ-GQL-AGG-NO-GROUPBY-002; FEATURE="AggregationWithoutGroupBy"; ASPECT=SingleRowResult; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
         // Aggregation present without GROUP BY - produce single aggregated row
         var return_row = try allocator.alloc(Value, q.ret.items.len);
 
@@ -2879,20 +2879,20 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         },
     };
 
-    // CANARY: REQ=REQ-GQL-DISTINCT-OPTIONAL-001; FEATURE="DistinctOptionalMatch"; ASPECT=NullDedup; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-DISTINCT-OPTIONAL-001; FEATURE="DistinctOptionalMatch"; ASPECT=NullDedup; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
     // B03 Fix: Apply DISTINCT deduplication if requested - this properly deduplicates NULL values
     if (q.ret.distinct) {
         try applyDistinct(allocator, &final_result);
     }
 
-    // CANARY: REQ=REQ-GQL-ORDER-BY-OPTIONAL-001; FEATURE="OrderByOptionalMatch"; ASPECT=Sorting; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-ORDER-BY-OPTIONAL-001; FEATURE="OrderByOptionalMatch"; ASPECT=Sorting; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
     // D04 Fix: Apply ORDER BY for optional match results - was missing, causing unsorted output
     // D05 Fix: Use sortRowsEx with RETURN items to enable expression matching for aliased columns
     if (q.order_by) |order| {
         try sortRowsEx(allocator, &final_result, order, q.ret.items);
     }
 
-    // CANARY: REQ=REQ-GQL-OFFSET-OPTIONAL-001; FEATURE="OffsetOptionalMatch"; ASPECT=Pagination; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-OFFSET-OPTIONAL-001; FEATURE="OffsetOptionalMatch"; ASPECT=Pagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
     // D04 Fix: Apply OFFSET for optional match results - was missing
     if (q.offset) |skip_count| {
         if (skip_count < final_result.rows.len) {
@@ -2908,7 +2908,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
     }
 
-    // CANARY: REQ=REQ-GQL-LIMIT-OPTIONAL-001; FEATURE="LimitOptionalMatch"; ASPECT=Pagination; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-LIMIT-OPTIONAL-001; FEATURE="LimitOptionalMatch"; ASPECT=Pagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
     // D04 Fix: Apply LIMIT for optional match results - was missing
     if (q.limit) |limit_count| {
         if (limit_count < final_result.rows.len) {
@@ -2944,7 +2944,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     var right_props: ?[]ast.Property = null; // Properties required on right/target node
 
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PatternExtraction; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-    // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-002; FEATURE="VariableLengthPaths"; ASPECT=DirectionExtraction; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-002; FEATURE="VariableLengthPaths"; ASPECT=DirectionExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
     // Variable-length path pattern support
     var var_len_min: ?u32 = null;
     var var_len_max: ?u32 = null;
@@ -3071,7 +3071,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     }
 
     if (all_simple_nodes and q.match.chains.len > 1) {
-        // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-003; FEATURE="OptionalMatchNodeOnlyDispatch"; ASPECT=QueryDispatch; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-003; FEATURE="OptionalMatchNodeOnlyDispatch"; ASPECT=QueryDispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
         // Check if any chain is optional - if so, use executeMatchWithOptionalPatterns
         var has_any_optional_node = false;
         for (q.match.chains) |chain| {
@@ -3088,7 +3088,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     }
 
-    // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
     // Handle multiple chains with relationships that share variables
     // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
     if (q.match.chains.len > 1 and !all_simple_nodes) {
@@ -3105,7 +3105,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         }
     }
 
-    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoin; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoin; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
     // Handle MATCH + OPTIONAL MATCH patterns (left outer join)
     // e.g., MATCH (p:Person) OPTIONAL MATCH (p)-[:WORKS_FOR]->(c:Company)
     if (q.match.chains.len >= 2) {
@@ -3151,10 +3151,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     if (has_aggregation) {
         // Check if we have GROUP BY
         if (q.group_by) |group_by| {
-            // CANARY: REQ=REQ-GQL-GROUPBY-REL-001; FEATURE="GroupByRelationshipPattern"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
+            // CANARY: REQ=REQ-GQL-GROUPBY-REL-001; FEATURE="GroupByRelationshipPattern"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-23
             // GROUP BY with relationship patterns - need to collect bindings first, then group them
             if (has_relationship) {
-                // CANARY: REQ=REQ-GQL-MULTIHOP-GROUPBY-001; FEATURE="MultiHopGroupBy"; ASPECT=Execution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                // CANARY: REQ=REQ-GQL-MULTIHOP-GROUPBY-001; FEATURE="MultiHopGroupBy"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                 // Check for multi-hop patterns with GROUP BY (e.g., products ordered together)
                 const chain = q.match.chains[0];
                 if (chain.hops.len > 1) {
@@ -3340,7 +3340,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     if (!has_all_labels) continue;
                                 }
 
-                                // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-002; FEATURE="MultiHopAnonymous"; ASPECT=GroupByPatterns; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                                // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-002; FEATURE="MultiHopAnonymous"; ASPECT=GroupByPatterns; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                                 // Count new variables - ALWAYS include right node even if anonymous
                                 var new_var_count: usize = 1; // Always include right node
                                 if (hop.rel.name != null) new_var_count += 1;
@@ -3878,7 +3878,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 // Evaluate WHERE clause if present
-                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-002; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-002; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                 // When there's a WITH clause, skip pre-MATCH WHERE and defer to post-WITH filtering
                 if (q.where_clause) |where_expr| {
                     const passes_where = if (has_with) true else blk: {
@@ -4018,7 +4018,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var matched_nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
             defer matched_nodes.deinit(allocator);
 
-            // CANARY: REQ=REQ-GQL-REL-AGG-NO-GROUPBY-001; FEATURE="RelationshipAggregationNoGroupBy"; ASPECT=EdgeCollection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+            // CANARY: REQ=REQ-GQL-REL-AGG-NO-GROUPBY-001; FEATURE="RelationshipAggregationNoGroupBy"; ASPECT=EdgeCollection; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
             // B08 Fix: Handle single-hop relationship patterns with aggregation but no GROUP BY
             // For queries like: MATCH ()-[r:TEST_REL]->() RETURN sum(r.weight), count(*)
             // We need to collect matching EDGES (not nodes) and aggregate over them
@@ -4197,7 +4197,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
             }
 
-            // CANARY: REQ=REQ-GQL-VARLEN-AGG; FEATURE="VariableLengthPathAggregation"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-01
+            // CANARY: REQ=REQ-GQL-VARLEN-AGG; FEATURE="VariableLengthPathAggregation"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-01
             // Handle aggregation with variable-length paths: collect target nodes from paths instead of all nodes
             if (has_relationship and (var_len_min != null or var_len_max != null)) {
                 const min_len = var_len_min orelse 0;
@@ -4274,8 +4274,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Collect all target nodes from paths (deduplicated by node ID)
-                    // CANARY: REQ=REQ-GQL-VARLEN-ENDNODE-001; FEATURE="VariableLengthPathEndNodeFilter"; ASPECT=AggregationFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
-                    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-002; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+                    // CANARY: REQ=REQ-GQL-VARLEN-ENDNODE-001; FEATURE="VariableLengthPathEndNodeFilter"; ASPECT=AggregationFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
+                    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-002; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
                     // B07 Fix: Allow single-node paths when min_len=0 (self-match / 0-length path)
                     // A path with N nodes has N-1 edges. min_len specifies minimum edges.
                     for (paths.items) |path| {
@@ -4414,7 +4414,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     if (!has_all_labels) continue;
                 }
 
-                // CANARY: REQ=REQ-GQL-AGG-PROP-FILTER-001; FEATURE="AggregationPropertyFilter"; ASPECT=PropertyConstraints; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // CANARY: REQ=REQ-GQL-AGG-PROP-FILTER-001; FEATURE="AggregationPropertyFilter"; ASPECT=PropertyConstraints; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                 // E21 Fix: Check property constraints from MATCH pattern (e.g., {department: 'Support', active: true})
                 if (match_props) |props| {
                     var passes_props = true;
@@ -4468,7 +4468,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 // Evaluate WHERE clause if present
-                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-001; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-001; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                 // When there's a WITH clause, skip pre-MATCH WHERE and defer to post-WITH filtering
                 // This handles cases like "WITH e.salary AS salary WHERE salary > 80000" where
                 // "salary" isn't defined until after WITH transformation
@@ -4545,7 +4545,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 try matched_nodes.append(allocator, node);
             }
 
-            // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-FIX-001; FEATURE="ImplicitGroupByInMatchAgg"; ASPECT=NonAggExprCheck; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+            // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-FIX-001; FEATURE="ImplicitGroupByInMatchAgg"; ASPECT=NonAggExprCheck; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
             // Check if there are non-aggregated expressions that need grouping
             // If so, we should NOT pre-aggregate - let executeWithClauseWithGroupBy handle it
             var has_non_agg_expr = false;
@@ -4560,7 +4560,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var result_columns: [][]const u8 = undefined;
 
             if (has_non_agg_expr and has_with) {
-                // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-FIX-002; FEATURE="ImplicitGroupByInMatchAgg"; ASPECT=PerNodeRows; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-FIX-002; FEATURE="ImplicitGroupByInMatchAgg"; ASPECT=PerNodeRows; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                 // Create a row for each matched node with the node binding
                 // The WITH clause will handle grouping and aggregation
                 rows_slice = try allocator.alloc([]Value, matched_nodes.items.len);
@@ -4616,7 +4616,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Apply WITH clause for query pipelining if present
             if (q.with_clause) |with_clause| {
                 // Apply WITH clause to transform matched variables
-                // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+                // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
                 var with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, q.having);
 
                 // Clean up original result since it's been transformed by WITH
@@ -4629,7 +4629,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
                 allocator.free(result.rows);
 
-                // CANARY: REQ=REQ-GQL-WITH-WHERE-POST-001; FEATURE="WithWherePostFilter"; ASPECT=AliasFiltering; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // CANARY: REQ=REQ-GQL-WITH-WHERE-POST-001; FEATURE="WithWherePostFilter"; ASPECT=AliasFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                 // Apply WHERE clause filtering AFTER WITH transformation
                 // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
                 if (q.where_clause) |where_expr| {
@@ -4662,7 +4662,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     with_result.rows = try filtered_rows.toOwnedSlice(allocator);
                 }
 
-                // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+                // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
                 // If there's no RETURN clause, or if ret.items shares pointer with with_clause.items (query chaining),
                 // return WITH result directly to preserve bindings for the next query in the chain
                 const same_items = q.ret.items.ptr == with_clause.items.ptr and q.ret.items.len == with_clause.items.len;
@@ -4712,7 +4712,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
             }
 
-            // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-002; FEATURE="OrderByPostWithAgg"; ASPECT=FinalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+            // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-002; FEATURE="OrderByPostWithAgg"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
             // Apply ORDER BY AFTER WITH clause transformation to sort final projected results (aggregation path)
             if (q.order_by) |order| {
                 try sortRows(allocator, &result, order);
@@ -4733,7 +4733,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
         if (has_relationship) {
-            // CANARY: REQ=REQ-GQL-MULTIHOP-001; FEATURE="MultiHopPatterns"; ASPECT=Execution; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+            // CANARY: REQ=REQ-GQL-MULTIHOP-001; FEATURE="MultiHopPatterns"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
             // Check for multi-hop patterns (e.g., (a)-[:R1]->(b)-[:R2]->(c))
             const chain = q.match.chains[0];
             if (chain.hops.len > 1) {
@@ -4941,7 +4941,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 if (!passes_props) continue;
                             }
 
-                            // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-001; FEATURE="MultiHopAnonymousNodes"; ASPECT=BindingCreation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                            // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-001; FEATURE="MultiHopAnonymousNodes"; ASPECT=BindingCreation; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                             // Count new variables needed - ALWAYS add right node (even anonymous)
                             // This is needed so subsequent hops can traverse from anonymous intermediate nodes
                             var new_var_count: usize = 1; // Always include right node
@@ -5069,7 +5069,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
                         allocator.free(intermediate_result.rows);
 
-                        // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+                        // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
                         // If there's no RETURN clause, or if ret.items shares pointer with with_clause.items (query chaining),
                         // return WITH result directly to preserve bindings for the next query in the chain
                         var result: ExecutionResult = undefined;
@@ -5193,7 +5193,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Single-hop relationship patterns (existing code continues below)
             // Handle relationship patterns
 
-            // CANARY: REQ=REQ-GQL-CHAIN-LEFTNODE-001; FEATURE="QueryChainLeftNodeBinding"; ASPECT=BoundVariableConstraint; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+            // CANARY: REQ=REQ-GQL-CHAIN-LEFTNODE-001; FEATURE="QueryChainLeftNodeBinding"; ASPECT=BoundVariableConstraint; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
             // Check if left node variable is already bound from a previous query in the chain
             // This is critical for WITH + LIMIT chains like: WITH p LIMIT 3 MATCH (p)-[:R]->(c)
             var bound_left_node: ?*graph_store.Node = null;
@@ -5251,7 +5251,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     if (!has_all_labels) continue;
                 }
 
-                // CANARY: REQ=REQ-GQL-VARLEN-PROPS; FEATURE="VariableLengthPathPropertyFilter"; ASPECT=LeftNodeFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-01
+                // CANARY: REQ=REQ-GQL-VARLEN-PROPS; FEATURE="VariableLengthPathPropertyFilter"; ASPECT=LeftNodeFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-01
                 // Filter left node by inline properties if specified (e.g., {id: 1} in MATCH (a:P {id: 1})-[:R*]->(b))
                 if (match_props) |props| {
                     var passes_props = true;
@@ -5304,7 +5304,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Process each path found
-                    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-003; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+                    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-003; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
                     // B07 Fix: Allow single-node paths when min_len=0 (self-match / 0-length path)
                     for (paths.items) |path| {
                         if (path.nodes.items.len == 0) continue; // Empty path is never valid
@@ -5313,7 +5313,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         const right_node_id = path.nodes.items[path.nodes.items.len - 1];
                         const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
 
-                        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=LabelFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-18
+                        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
                         // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[*]->(b:Product))
                         if (right_labels.len > 0) {
                             var has_all_labels = true;
@@ -5333,7 +5333,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             if (!has_all_labels) continue;
                         }
 
-                        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-18
+                        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
                         // Filter right node by inline properties if specified
                         if (right_props) |props| {
                             var passes_props = true;
@@ -5369,7 +5369,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // CANARY: REQ=REQ-GQL-167; FEATURE="Variable-Length Path Binding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
-                        // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-004; FEATURE="ZeroLengthPaths"; ASPECT=EdgeBinding; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+                        // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-004; FEATURE="ZeroLengthPaths"; ASPECT=EdgeBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
                         // B07 Fix: For 0-length paths (single node, no edges), edge list is empty but path is still valid
 
                         // Create environment with all matched elements (including path variable if present)
@@ -5395,7 +5395,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
                         if (rel_var) |var_name| {
                             env_names[env_idx] = var_name;
-                            // CANARY: REQ=REQ-GQL-VARLEN-RELVAR-LIST; FEATURE="VariableLengthPathRelList"; ASPECT=EdgeListBinding; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-15
+                            // CANARY: REQ=REQ-GQL-VARLEN-RELVAR-LIST; FEATURE="VariableLengthPathRelList"; ASPECT=EdgeListBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-15
                             // For variable-length paths, bind rel_var to the list of all edges
                             // This enables all(rel IN r WHERE ...) to iterate over all relationships in the path
                             var edge_values = try allocator.alloc(Value, path.edges.items.len);
@@ -5479,7 +5479,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             }
                         }
 
-                        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-005; FEATURE="WithGroupByAggregation"; ASPECT=VarLenRowBuilding; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+                        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-005; FEATURE="WithGroupByAggregation"; ASPECT=VarLenRowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
                         // When WITH clause is present, build rows containing matched node values
                         var row: []Value = undefined;
                         if (has_with) {
@@ -5501,7 +5501,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 } else {
                     // Standard single-hop edge traversal
-                    // CANARY: REQ=REQ-GQL-REL-DIRECTION-001; FEATURE="RelationshipDirection"; ASPECT=NonAggregation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // CANARY: REQ=REQ-GQL-REL-DIRECTION-001; FEATURE="RelationshipDirection"; ASPECT=NonAggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                     // Get edges based on direction - use getEdgesTo for incoming edges (<-), getEdgesFrom for outgoing (->)
                     const edges = if (rel_direction == 'l')
                         store.getEdgesTo(left_node.id)
@@ -5519,7 +5519,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         const right_node_id = if (rel_direction == 'l') edge.from_id else edge.to_id;
                         const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
 
-                        // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-18
+                        // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
                         // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[:REL]->(b:Product))
                         if (right_labels.len > 0) {
                             var has_all_labels = true;
@@ -5539,7 +5539,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             if (!has_all_labels) continue;
                         }
 
-                        // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-18
+                        // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
                         // Filter right node by inline properties if specified
                         if (right_props) |props| {
                             var passes_props = true;
@@ -5742,7 +5742,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             }
                         }
 
-                        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-004; FEATURE="WithGroupByAggregation"; ASPECT=RowBuilding; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+                        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-004; FEATURE="WithGroupByAggregation"; ASPECT=RowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
                         // When WITH clause is present, build rows containing matched node values
                         // These rows will be transformed by executeWithClauseWithGroupBy later
                         // When no WITH clause, evaluate RETURN expressions directly
@@ -5857,7 +5857,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 // Evaluate WHERE clause if present
-                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-003; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-003; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                 // When there's a WITH clause, skip pre-MATCH WHERE entirely and defer to post-WITH filtering
                 // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
                 // where "salary" only exists after WITH transformation
@@ -6058,7 +6058,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         row[i] = val;
                     }
                 } else if (items.len == 0) {
-                    // CANARY: REQ=REQ-SET-RETURN-FIX-001; FEATURE="SetReturnFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+                    // CANARY: REQ=REQ-SET-RETURN-FIX-001; FEATURE="SetReturnFix"; ASPECT=NoReturnClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_set_operations_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                     // No RETURN clause - build row from matched variables for MATCH...SET queries
                     row = try allocator.alloc(Value, extended_env.values.len);
                     for (extended_env.values, 0..) |val, i| {
@@ -6152,7 +6152,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // Apply WITH clause for query pipelining if present
         if (q.with_clause) |with_clause| {
             // Apply WITH clause to transform matched variables
-            // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+            // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
             var with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, q.having);
 
             // Clean up original result since it's been transformed by WITH
@@ -6165,7 +6165,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
             allocator.free(result.rows);
 
-            // CANARY: REQ=REQ-GQL-WITH-WHERE-POST-002; FEATURE="WithWherePostFilter"; ASPECT=NonAggPath; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+            // CANARY: REQ=REQ-GQL-WITH-WHERE-POST-002; FEATURE="WithWherePostFilter"; ASPECT=NonAggPath; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
             // Apply WHERE clause filtering AFTER WITH transformation (non-aggregation path)
             // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
             if (q.where_clause) |where_expr| {
@@ -6196,7 +6196,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 with_result.rows = try filtered_rows.toOwnedSlice(allocator);
             }
 
-            // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
             // If there's no RETURN clause, or if ret.items shares pointer with with_clause.items (query chaining),
             // return WITH result directly to preserve bindings for the next query in the chain
             const same_items_varlen = q.ret.items.ptr == with_clause.items.ptr and q.ret.items.len == with_clause.items.len;
@@ -6246,8 +6246,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
         }
 
-        // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-001; FEATURE="OrderByPostWith"; ASPECT=FinalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
-        // CANARY: REQ=REQ-GQL-ORDERBY-ALIAS-002; FEATURE="OrderByAliasedColumn"; ASPECT=SimpleMatchPath; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+        // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-001; FEATURE="OrderByPostWith"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
+        // CANARY: REQ=REQ-GQL-ORDERBY-ALIAS-002; FEATURE="OrderByAliasedColumn"; ASPECT=SimpleMatchPath; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
         // D05 Fix: Apply ORDER BY with RETURN items to enable expression matching for aliased columns
         // This allows ORDER BY n.name to work when RETURN clause uses n.name AS alias
         if (q.order_by) |order| {

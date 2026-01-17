@@ -30,7 +30,7 @@ pub const KMSProviderType = enum {
     azure_kv, // Azure Key Vault (future)
 
     /// Check if this provider type is safe for production use
-    /// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-001; FEATURE="Production KMS Safety Check"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-001; FEATURE="Production KMS Safety Check"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/external_kms_integration.yml; OWNER=security; UPDATED=2026-01-12
     pub fn isProductionSafe(self: KMSProviderType) bool {
         return switch (self) {
             .local_dev => false, // Development only - deterministic key derivation
@@ -66,7 +66,7 @@ pub const KMSProvider = struct {
     remote_client: ?kms_remote.RemoteKmsClient = null,
 
     /// Initialize KMS provider with production safety check
-    /// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-002; FEATURE="KMS Provider Init Safety"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-002; FEATURE="KMS Provider Init Safety"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/external_kms_integration.yml; OWNER=security; UPDATED=2026-01-12
     pub fn init(allocator: std.mem.Allocator, config: KMSConfig) KMSProvider {
         // Production safety warning
         if (is_production_build and !config.provider_type.isProductionSafe()) {
@@ -153,7 +153,7 @@ pub const KMSProvider = struct {
 
     /// Local development provider using AES-256-GCM (secure but with static key derived from key_id)
     /// WARNING: For development/testing only - uses deterministic key derivation from key_id
-    /// CANARY: REQ=REQ-GQL-KMS-LOCALDEV-001; FEATURE="AES-GCM Local KMS"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-KMS-LOCALDEV-001; FEATURE="AES-GCM Local KMS"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=security; UPDATED=2026-01-12
     fn wrapLocalDev(self: *KMSProvider, key_id: MasterKeyId, plaintext: []const u8) !WrappedKey {
         // Derive AES-256 key from key_id using HKDF (extract-then-expand)
         var wrap_key: [32]u8 = undefined;
@@ -181,7 +181,7 @@ pub const KMSProvider = struct {
     }
 
     /// Local development unwrap using AES-256-GCM
-    /// CANARY: REQ=REQ-GQL-KMS-LOCALDEV-002; FEATURE="AES-GCM Local KMS Unwrap"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-KMS-LOCALDEV-002; FEATURE="AES-GCM Local KMS Unwrap"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=security; UPDATED=2026-01-12
     fn unwrapLocalDev(self: *KMSProvider, wrapped: WrappedKey) ![]u8 {
         // Minimum size: 16 bytes for tag
         if (wrapped.ciphertext.len < 16) return error.InvalidCiphertext;

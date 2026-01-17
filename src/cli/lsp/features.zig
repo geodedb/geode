@@ -1,5 +1,5 @@
 // CANARY: LSP_LANGUAGE_FEATURES
-// CANARY: REQ=REQ-LSP-METADATA-001; FEATURE="MetadataIntegration"; ASPECT=Completions; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LSP-METADATA-001; FEATURE="MetadataIntegration"; ASPECT=Completions; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-03
 // Language features implementation for GQL/Geode LSP
 
 const std = @import("std");
@@ -22,7 +22,7 @@ pub const FormattingOptions = struct {
     min_properties_to_fold: u32 = 2,
 };
 
-// CANARY: REQ=REQ-LSP-METADATA-002; FEATURE="MetadataIntegration"; ASPECT=ComptimeLists; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LSP-METADATA-002; FEATURE="MetadataIntegration"; ASPECT=ComptimeLists; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-03
 // GQL Keywords, Functions, and Types derived from unified language_metadata.zig
 // This ensures the LSP completions stay in sync with the lexer and documentation
 const GQL_KEYWORDS = language_metadata.getKeywordNames();
@@ -141,7 +141,7 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
     return diagnostics.toOwnedSlice(allocator);
 }
 
-// CANARY: REQ=REQ-LSP-METADATA-003; FEATURE="MetadataIntegration"; ASPECT=Hover; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LSP-METADATA-003; FEATURE="MetadataIntegration"; ASPECT=Hover; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-03
 pub fn provideHover(allocator: Allocator, doc: *const Document, line: u32, character: u32) !?protocol.Hover {
     const offset = doc.getOffset(line, character) orelse return null;
     const word = doc.getWordAt(offset) orelse return null;
@@ -317,7 +317,7 @@ fn formatProcedureHover(allocator: Allocator, info: language_metadata.ProcedureI
     , .{ info.name, yields_buf.items, category, info.doc });
 }
 
-// CANARY: REQ=REQ-LSP-METADATA-004; FEATURE="MetadataIntegration"; ASPECT=Completions; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LSP-METADATA-004; FEATURE="MetadataIntegration"; ASPECT=Completions; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-03
 pub fn provideCompletion(allocator: Allocator, doc: *const Document, line: u32, character: u32) ![]protocol.CompletionItem {
     _ = doc;
     _ = line;
@@ -384,7 +384,7 @@ pub fn provideCompletion(allocator: Allocator, doc: *const Document, line: u32, 
 }
 
 // GAP-0056: LSP Go-To-Definition Implementation
-// CANARY: REQ=REQ-LSP-GOTODEF-001; FEATURE="GoToDefinition"; ASPECT=VariableLookup; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-10
+// CANARY: REQ=REQ-LSP-GOTODEF-001; FEATURE="GoToDefinition"; ASPECT=VariableLookup; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-10
 pub fn provideDefinition(allocator: Allocator, doc: *const Document, line: u32, character: u32) !?protocol.Location {
     const offset = doc.getOffset(line, character) orelse return null;
     const word = doc.getWordAt(offset) orelse return null;

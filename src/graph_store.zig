@@ -104,7 +104,7 @@ pub const PropertyValue = union(enum) {
     ExtValue: @import("eval_extended.zig").ExtValue,
 };
 
-// CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=IMPL; OWNER=enterprise; UPDATED=2026-01-09
+// CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=enterprise; UPDATED=2026-01-09
 pub const GraphStore = struct {
     allocator: std.mem.Allocator,
     nodes: std.AutoHashMap(u64, Node),
@@ -830,7 +830,7 @@ pub const GraphStore = struct {
                                     _ = try file.write(&i_buf);
                                 }
                             },
-                            // CANARY: REQ=REQ-TYPE-SERIAL-001; FEATURE="TypeSerialization"; ASPECT=ExtendedTypes; STATUS=IMPL; OWNER=storage; UPDATED=2025-12-30
+                            // CANARY: REQ=REQ-TYPE-SERIAL-001; FEATURE="TypeSerialization"; ASPECT=ExtendedTypes; STATUS=EXEMPT; OWNER=storage; UPDATED=2025-12-30
                             .Hash => |hash| {
                                 // Write algorithm (u8)
                                 _ = try file.write(&[1]u8{@intFromEnum(hash.alg)});
@@ -977,7 +977,7 @@ pub const GraphStore = struct {
                     .Null => {
                         // Nothing to write for null
                     },
-                    // CANARY: REQ=REQ-TYPE-SERIAL-002; FEATURE="TypeSerialization"; ASPECT=EdgeExtValue; STATUS=IMPL; OWNER=storage; UPDATED=2025-12-30
+                    // CANARY: REQ=REQ-TYPE-SERIAL-002; FEATURE="TypeSerialization"; ASPECT=EdgeExtValue; STATUS=EXEMPT; OWNER=storage; UPDATED=2025-12-30
                     .ExtValue => |ext| {
                         // Write ExtValue sub-type tag and data (same as node serialization)
                         const ext_type: u8 = switch (ext) {

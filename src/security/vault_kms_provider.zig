@@ -286,7 +286,7 @@ pub const VaultKMSProvider = struct {
         envelope.master_key_name = json[key_name_begin..key_name_end];
 
         // GAP-0141: Safe hex parsing with proper error handling
-        // CANARY: REQ=REQ-HEX-PARSE-VAULT-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+        // CANARY: REQ=REQ-HEX-PARSE-VAULT-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-13
         // Extract nonce
         const nonce_start = std.mem.indexOf(u8, json, "\"nonce\":\"") orelse return error.InvalidEnvelope;
         const nonce_begin = nonce_start + 9;

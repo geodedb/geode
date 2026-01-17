@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const auth_state = geode.auth_state;
 
-// CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+// CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=cli; UPDATED=2026-01-14
 // GAP-0154 FIX: Production builds require explicit passwords or generate random ones
 // CANARY: REQ=REQ-MFA-OUTPUT-001; FEATURE="MFASecureOutput"; ASPECT=Security; STATUS=TESTED; TEST=gap_155_156_regression.yml; OWNER=cli; UPDATED=2026-01-14
 // GAP-0156 FIX: MFA toggle command no longer displays hardcoded fake secret
@@ -410,7 +410,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
-    // CANARY: REQ=REQ-MFA-TOGGLE-001; FEATURE="MFAToggleSecure"; ASPECT=Security; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-MFA-TOGGLE-001; FEATURE="MFAToggleSecure"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_security.yml; OWNER=cli; UPDATED=2026-01-14
     // GAP-0156 FIX: Remove hardcoded "Secret: 123456" from MFA toggle output
     if (std.mem.eql(u8, subcommand, "mfa")) {
         // Support: geode user mfa enable <username>

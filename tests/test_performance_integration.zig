@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const print = std.debug.print;
 
-// CANARY: REQ=REQ-PERF-INT-001; FEATURE="PerformanceIntegration"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_PerformanceIntegration; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-INT-001; FEATURE="PerformanceIntegration"; ASPECT=Testing; STATUS=EXEMPT; TEST=TestCANARY_PerformanceIntegration; OWNER=performance; UPDATED=2025-10-04
 
 /// Comprehensive integration tests for Phase 1 and Phase 2 performance optimizations
 /// Tests interaction between buffered I/O, JSON optimization, memory mapping, and async operations

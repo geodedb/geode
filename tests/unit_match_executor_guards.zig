@@ -1,7 +1,7 @@
 const std = @import("std");
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=FrontierAndResultGuardTrips; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=FrontierAndResultGuardTrips; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-24
 
 fn buildSmallGraph(allocator: std.mem.Allocator, fanout: usize) geode.graph_common.GraphStorage {
     var g = geode.graph_common.GraphStorage.init(allocator);

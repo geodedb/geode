@@ -1,4 +1,4 @@
-# CANARY: REQ=REQ-LOADTEST-METRICS-002; FEATURE="PrometheusConfig"; ASPECT=Config; STATUS=IMPL; OWNER=loadtest; UPDATED=2026-01-03
+# CANARY: REQ=REQ-LOADTEST-METRICS-002; FEATURE="PrometheusConfig"; ASPECT=Config; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=loadtest; UPDATED=2026-01-03
 # Prometheus configuration for Geode load testing
 
 global:

@@ -3,7 +3,7 @@ const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 
 // BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf
 // Runs both baseline (non-adaptive) and adaptive modes to produce a diff ratio output.
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerfThreshold; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerfThreshold; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerfThresholdEnv; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf; OWNER=streaming; UPDATED=2025-09-20
 
 test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf" {

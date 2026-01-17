@@ -36,7 +36,7 @@ pub const FederationConfig = struct {
 
     /// GAP-0184: Enable parallel scatter/gather for distributed queries
     /// When true, query fragments are executed concurrently across shards
-    /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ParallelScatter; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-14
+    /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ParallelScatter; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
     enable_parallel_scatter: bool = true,
 };
 
@@ -130,7 +130,7 @@ pub const ConnectionPool = struct {
 };
 
 /// Connection to a remote node
-/// CANARY: REQ=REQ-FED-QUIC-001; FEATURE="FederationQUICConnection"; ASPECT=Connection; STATUS=IMPL; OWNER=federation; UPDATED=2026-01-10
+/// CANARY: REQ=REQ-FED-QUIC-001; FEATURE="FederationQUICConnection"; ASPECT=Connection; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=federation; UPDATED=2026-01-10
 pub const Connection = struct {
     allocator: std.mem.Allocator,
     client: ?quic.QuicClient = null,
@@ -162,7 +162,7 @@ pub const Connection = struct {
 
     /// GAP-0044: Initialize QUIC client and establish connection to remote federation node
     // GAP-0144: Secure TLS connections for federation
-    // CANARY: REQ=REQ-FED-TLS-001; FEATURE="Federation TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-FED-TLS-001; FEATURE="Federation TLS"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-13
     pub fn connect(self: *Connection, endpoint: []const u8) !void {
         // Parse endpoint like "host:port"
         const colon = std.mem.indexOfScalar(u8, endpoint, ':') orelse return error.InvalidEndpoint;

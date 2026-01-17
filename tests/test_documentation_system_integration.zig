@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-DOCUMENTATION-SYSTEM-INTEGRATION-001; FEATURE="Documentation System Integration Tests"; ASPECT=IntegrationTests; STATUS=IMPL; TEST=TestCANARY_REQ_DOCUMENTATION_SYSTEM_INTEGRATION_001; OWNER=claude; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DOCUMENTATION-SYSTEM-INTEGRATION-001; FEATURE="Documentation System Integration Tests"; ASPECT=IntegrationTests; STATUS=EXEMPT; TEST=TestCANARY_REQ_DOCUMENTATION_SYSTEM_INTEGRATION_001; OWNER=claude; UPDATED=2025-10-05
 // Integration tests for documentation system coherence and navigation
 
 const std = @import("std");

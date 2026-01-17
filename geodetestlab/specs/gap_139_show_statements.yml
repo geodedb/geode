@@ -1,6 +1,6 @@
 ---
 # GAP-0139: SHOW Statement Types Tests
-# CANARY: REQ=REQ-SHOW-STMT-TEST-001; FEATURE="SHOW Statements"; ASPECT=TestCoverage; STATUS=IMPL; OWNER=testing; UPDATED=2026-01-13
+# CANARY: REQ=REQ-SHOW-STMT-TEST-001; FEATURE="SHOW Statements"; ASPECT=TestCoverage; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=testing; UPDATED=2026-01-13
 version: "1.0"
 name: "GAP-0139 SHOW Statement Tests"
 description: "Tests for SHOW INDEXES, SHOW CONSTRAINTS, SHOW TABLES, SHOW PROCEDURES, SHOW FUNCTIONS"

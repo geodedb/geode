@@ -1,4 +1,4 @@
-# CANARY: REQ=REQ-PROMETHEUS-WIRE-005; FEATURE="Prometheus Metrics Endpoint Testing"; ASPECT=Integration; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14
+# CANARY: REQ=REQ-PROMETHEUS-WIRE-005; FEATURE="Prometheus Metrics Endpoint Testing"; ASPECT=Integration; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
 # GAP-0166: Prometheus metrics exporter wired to runtime endpoint
 # This spec tests that the Prometheus metrics endpoint is functional
 

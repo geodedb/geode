@@ -18,7 +18,7 @@ pub const Hello = struct {
     wanted_conformance: []const u8,
     username: ?[]const u8 = null,
     password: ?[]const u8 = null,
-    // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="Multi-Tenancy Protocol"; ASPECT=HelloTenant; STATUS=IMPL; OWNER=protocol; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="Multi-Tenancy Protocol"; ASPECT=HelloTenant; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=protocol; UPDATED=2026-01-09
     tenant_id: ?[]const u8 = null, // Optional tenant identifier for multi-tenant deployments
 };
 
@@ -610,7 +610,7 @@ pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !Clien
                 password = try allocator.dupe(u8, pwv.string);
             }
         }
-        // CANARY: REQ=REQ-MULTI-TENANT-004; FEATURE="Multi-Tenancy Protocol"; ASPECT=HelloParsing; STATUS=IMPL; OWNER=protocol; UPDATED=2026-01-09
+        // CANARY: REQ=REQ-MULTI-TENANT-004; FEATURE="Multi-Tenancy Protocol"; ASPECT=HelloParsing; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=protocol; UPDATED=2026-01-09
         if (obj.get("tenant_id")) |tid| {
             if (tid == .string) {
                 tenant_id = try allocator.dupe(u8, tid.string);

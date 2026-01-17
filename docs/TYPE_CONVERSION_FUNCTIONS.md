@@ -140,7 +140,7 @@ The `type()` function has dual semantics in GQL:
 
 ### CANARY Markers
 ```zig
-// CANARY: REQ=REQ-GQL-TYPE-CONV-001; FEATURE="TypeConversionFunctions"; ASPECT=Functionality; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_TYPE_CONV_001_TypeConversionFunctions; OWNER=eval; UPDATED=2025-01-05
+// CANARY: REQ=REQ-GQL-TYPE-CONV-001; FEATURE="TypeConversionFunctions"; ASPECT=Functionality; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; TEST=TestCANARY_REQ_GQL_TYPE_CONV_001_TypeConversionFunctions; OWNER=eval; UPDATED=2025-01-05
 ```
 
 This implementation provides a solid foundation for GQL type conversion operations and significantly improves the system's standards compliance.

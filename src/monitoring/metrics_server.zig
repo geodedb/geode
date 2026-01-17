@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const prometheus = @import("prometheus.zig");
 
-// CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=HTTPServer; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14
+// CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=HTTPServer; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
 // GAP-0166: Wire Prometheus metrics exporter to runtime endpoint
 // Simple HTTP server for serving Prometheus metrics at /metrics endpoint
 
@@ -134,7 +134,7 @@ pub const MetricsServer = struct {
     }
 };
 
-// CANARY: REQ=REQ-PROMETHEUS-WIRE-002; FEATURE="Prometheus Metrics Endpoint"; ASPECT=GlobalCollector; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-01-14
+// CANARY: REQ=REQ-PROMETHEUS-WIRE-002; FEATURE="Prometheus Metrics Endpoint"; ASPECT=GlobalCollector; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
 // Global metrics collector for the server
 var g_metrics_collector: ?*prometheus.MetricsCollector = null;
 var g_metrics_server: ?*MetricsServer = null;

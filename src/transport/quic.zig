@@ -303,7 +303,7 @@ pub const QuicConnection = struct {
     }
 
     /// Remove a stream from tracking and destroy it
-    /// CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-001; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=IMPL; OWNER=transport; UPDATED=2025-12-27
+    /// CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-001; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
     pub fn destroyStream(self: *QuicConnection, stream: *QuicStream) void {
         // Remove stream from the tracked list to prevent double-free
         var idx: usize = 0;

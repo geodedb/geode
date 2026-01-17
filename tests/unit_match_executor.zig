@@ -2,7 +2,7 @@ const std = @import("std");
 const geode = @import("geode");
 const graph_exec = @import("server/graph/exec.zig");
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MATCHExecutorBasic"; ASPECT=Unit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchSingleHop; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="MATCHExecutorBasic"; ASPECT=Unit; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchSingleHop; OWNER=engine; UPDATED=2025-09-24
 
 test "TestCANARY_REQ_GQL_017_MatchSingleHop" {
     const allocator = std.testing.allocator;
@@ -32,7 +32,7 @@ test "TestCANARY_REQ_GQL_017_MatchSingleHop" {
     try std.testing.expect(bindings.len > 0);
 }
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=Unit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_InvalidHopBounds; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=Unit; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_InvalidHopBounds; OWNER=engine; UPDATED=2025-09-24
 
 test "TestCANARY_REQ_GQL_017_InvalidHopBounds" {
     const allocator = std.testing.allocator;
@@ -49,7 +49,7 @@ test "TestCANARY_REQ_GQL_017_InvalidHopBounds" {
     try std.testing.expect(diag == .ExecutionGuardTrip);
 }
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchEmptyGraph"; ASPECT=Unit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_EmptyGraph; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchEmptyGraph"; ASPECT=Unit; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_EmptyGraph; OWNER=engine; UPDATED=2025-09-24
 
 test "TestCANARY_REQ_GQL_017_EmptyGraph" {
     const allocator = std.testing.allocator;
@@ -68,7 +68,7 @@ test "TestCANARY_REQ_GQL_017_EmptyGraph" {
     try std.testing.expectEqual(@as(usize, 0), bindings.len);
 }
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="PathExpandBounded"; ASPECT=Unit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_BoundedVarLen; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="PathExpandBounded"; ASPECT=Unit; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_BoundedVarLen; OWNER=engine; UPDATED=2025-09-24
 
 test "TestCANARY_REQ_GQL_017_BoundedVarLen" {
     const allocator = std.testing.allocator;

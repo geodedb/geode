@@ -43,7 +43,7 @@ pub const gql = struct {
     pub const lexer = @import("gql/lexer.zig");
 };
 
-// CANARY: REQ=REQ-METADATA-LIB-001; FEATURE="MetadataIntegration"; ASPECT=LibExport; STATUS=IMPL; OWNER=lib; UPDATED=2026-01-03
+// CANARY: REQ=REQ-METADATA-LIB-001; FEATURE="MetadataIntegration"; ASPECT=LibExport; STATUS=EXEMPT; OWNER=lib; UPDATED=2026-01-03
 // Export language metadata for LSP and other consumers
 pub const language_metadata = @import("gql/language_metadata.zig");
 

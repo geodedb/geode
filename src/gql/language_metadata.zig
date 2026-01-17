@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-METADATA-001; FEATURE="UnifiedLanguageMetadata"; ASPECT=SingleSourceOfTruth; STATUS=IMPL; OWNER=api; UPDATED=2026-01-03
+// CANARY: REQ=REQ-METADATA-001; FEATURE="UnifiedLanguageMetadata"; ASPECT=SingleSourceOfTruth; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=api; UPDATED=2026-01-03
 //! # Unified GQL Language Metadata
 //!
 //! This module serves as the single source of truth for all GQL language elements.

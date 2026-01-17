@@ -5,7 +5,7 @@ const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
 // CANARY: REQ=REQ-TXN-UNDO-008; FEATURE="TransactionUndoLog"; ASPECT=CrudImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
-// CANARY: REQ=REQ-CONSTRAINT-ENFORCE-001; FEATURE="ConstraintEnforcement"; ASPECT=CatalogImport; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+// CANARY: REQ=REQ-CONSTRAINT-ENFORCE-001; FEATURE="ConstraintEnforcement"; ASPECT=CatalogImport; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
 const catalog_mod = @import("../schema/catalog.zig");
 
 // Import from parent execution module
@@ -24,7 +24,7 @@ const Value = value_types.Value;
 const Env = value_types.Env;
 const ExtValue = @import("../eval_extended.zig").ExtValue;
 
-// CANARY: REQ=REQ-LIST-PROP-002; FEATURE="ListProperties"; ASPECT=Conversion; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+// CANARY: REQ=REQ-LIST-PROP-002; FEATURE="ListProperties"; ASPECT=Conversion; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
 /// Convert a Value.List ([]Value) to an ExtValue.List ([]ExtValue)
 fn valueListToExtValueList(allocator: std.mem.Allocator, values: []Value) ![]ExtValue {
     var result = try allocator.alloc(ExtValue, values.len);
@@ -47,7 +47,7 @@ fn valueListToExtValueList(allocator: std.mem.Allocator, values: []Value) ![]Ext
     return result;
 }
 
-// CANARY: REQ=REQ-MAP-PROP-002; FEATURE="MapProperties"; ASPECT=JsonSerialization; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+// CANARY: REQ=REQ-MAP-PROP-002; FEATURE="MapProperties"; ASPECT=JsonSerialization; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
 /// Convert a Value.Map (std.StringHashMap(Value)) to a JSON string for storage
 fn valueMapToJson(allocator: std.mem.Allocator, map: std.StringHashMap(Value)) ![]const u8 {
     var json_parts = try std.ArrayList(u8).initCapacity(allocator, 256);
@@ -136,7 +136,7 @@ fn valueToJsonAppend(allocator: std.mem.Allocator, value: Value, output: *std.Ar
     }
 }
 
-// CANARY: REQ=REQ-CONSTRAINT-ENFORCE-002; FEATURE="ConstraintEnforcement"; ASPECT=Validation; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+// CANARY: REQ=REQ-CONSTRAINT-ENFORCE-002; FEATURE="ConstraintEnforcement"; ASPECT=Validation; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
 /// Constraint violation error
 pub const ConstraintViolationError = error{
     UniqueConstraintViolation,
@@ -402,13 +402,13 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
                         // Handle list properties by converting to ExtValue.List
                         .List => |list| blk: {
                             const ext_list = try valueListToExtValueList(allocator, list);
                             break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
                         },
-                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
                         // Handle map properties by converting to ExtValue.Json for storage
                         .Map => |map| blk: {
                             const json_str = valueMapToJson(allocator, map) catch {
@@ -587,13 +587,13 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
                         // Handle list properties by converting to ExtValue.List
                         .List => |list| blk: {
                             const ext_list = try valueListToExtValueList(allocator, list);
                             break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
                         },
-                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
                         // Handle map properties by converting to ExtValue.Json for storage
                         .Map => |map| blk: {
                             const json_str = valueMapToJson(allocator, map) catch {
@@ -1334,13 +1334,13 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
                         // Handle list properties by converting to ExtValue.List
                         .List => |list| blk: {
                             const ext_list = try valueListToExtValueList(allocator, list);
                             break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
                         },
-                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
                         // Handle map properties by converting to ExtValue.Json for storage
                         .Map => |map| blk: {
                             const json_str = valueMapToJson(allocator, map) catch {
@@ -1611,13 +1611,13 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                         .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
                         // Handle list properties by converting to ExtValue.List
                         .List => |list| blk: {
                             const ext_list = try valueListToExtValueList(allocator, list);
                             break :blk graph_store.PropertyValue{ .ExtValue = .{ .List = ext_list } };
                         },
-                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+                        // CANARY: REQ=REQ-MAP-PROP-001; FEATURE="MapProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
                         // Handle map properties by converting to ExtValue.Json for storage
                         .Map => |map| blk: {
                             const json_str = valueMapToJson(allocator, map) catch {
@@ -2220,7 +2220,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                 if (!has_all_labels) should_delete = false;
             }
 
-            // CANARY: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; ASPECT=WhereClause; STATUS=IMPL; OWNER=crud_operations; UPDATED=2026-01-09
+            // CANARY: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; ASPECT=WhereClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
             // Apply WHERE clause if present - evaluate with node bound to variable
             if (d.where_clause) |where_expr| {
                 if (should_delete) {

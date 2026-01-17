@@ -530,7 +530,7 @@ pub const ClusterCoordinator = struct {
         });
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-001; FEATURE="DistributedCluster"; ASPECT=ReplicationLag; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-001; FEATURE="DistributedCluster"; ASPECT=ReplicationLag; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
     fn getReplicationLag(self: *ClusterCoordinator, node_id: u64, shard_id: u64) !u64 {
         // Calculate replication lag based on node health check latency
         // In a real implementation, this would compare WAL positions between primary and replica
@@ -581,7 +581,7 @@ pub const ClusterCoordinator = struct {
         return available.toOwnedSlice();
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="DistributedCluster"; ASPECT=Replication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="DistributedCluster"; ASPECT=Replication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
     fn startReplication(self: *ClusterCoordinator, shard_id: u64, node_id: u64) !void {
         std.log.info("Starting replication of shard {} to node {}", .{ shard_id, node_id });
 
@@ -615,7 +615,7 @@ pub const ClusterCoordinator = struct {
         std.log.warn("Shard {} not found for replication", .{shard_id});
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-003; FEATURE="DistributedCluster"; ASPECT=Rebalance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-003; FEATURE="DistributedCluster"; ASPECT=Rebalance; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
     fn rebalanceShards(self: *ClusterCoordinator) !void {
         const node_count = self.cluster_state.nodes.items.len;
         if (node_count == 0) {
@@ -653,7 +653,7 @@ pub const ClusterCoordinator = struct {
         std.log.info("Rebalance analysis: {} shards, {} nodes, target {} per node, {} moves needed", .{ shard_count, node_count, target_per_node, moves_needed });
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
     fn serializeClusterTopology(self: *ClusterCoordinator) ![]const u8 {
         // Serialize cluster topology to JSON
         var buffer = std.ArrayList(u8).init(self.allocator);

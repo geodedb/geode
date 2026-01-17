@@ -136,7 +136,7 @@ pub const RelPattern = struct {
 
 pub const Hop = struct { left: NodePattern, rel: RelPattern, right: NodePattern };
 
-// CANARY: REQ=REQ-GQL-PATH-MODES-001; FEATURE="GQL Path Mode Execution"; ASPECT=AST; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-08
+// CANARY: REQ=REQ-GQL-PATH-MODES-001; FEATURE="GQL Path Mode Execution"; ASPECT=AST; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-01-08
 /// Path mode specifiers per ISO/IEC 39075:2024
 /// Controls path traversal semantics for variable-length paths
 pub const PathMode = enum {
@@ -160,11 +160,11 @@ pub const Chain = struct {
     // Flag to indicate this is a shortestPath/allShortestPaths pattern
     // Set by parser when parsing shortestPath((pattern)) syntax
     is_shortest: bool = false,
-    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-001; FEATURE="OptionalMatchChain"; ASPECT=AST; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-001; FEATURE="OptionalMatchChain"; ASPECT=AST; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-22
     // Flag to indicate this chain is from an OPTIONAL MATCH clause
     // Optional chains should be treated as left outer joins during execution
     is_optional: bool = false,
-    // CANARY: REQ=REQ-GQL-PATH-MODES-002; FEATURE="GQL Path Mode AST"; ASPECT=Chain; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-GQL-PATH-MODES-002; FEATURE="GQL Path Mode AST"; ASPECT=Chain; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-01-08
     // Path mode specifier for variable-length path traversal semantics
     path_mode: PathMode = .walk,
 };
@@ -183,7 +183,7 @@ pub const WithClause = struct {
 };
 
 /// GAP-0082: Common Table Expression (CTE) for WITH [RECURSIVE] clauses
-/// CANARY: REQ=REQ-GQL-CTE-001; FEATURE="CommonTableExpression"; ASPECT=AST; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-10
+/// CANARY: REQ=REQ-GQL-CTE-001; FEATURE="CommonTableExpression"; ASPECT=AST; STATUS=TESTED; TEST=geodetestlab/specs/recursive_and_cte.yml; OWNER=parser; UPDATED=2026-01-10
 pub const CommonTableExpression = struct {
     name: []const u8,
     is_recursive: bool,
@@ -264,14 +264,14 @@ pub const Expr = union(enum) {
     Member: struct { target: *Expr, field: []const u8 },
     PropertyAccess: struct { object: []const u8, property: []const u8 }, // n.name syntax
     Index: struct { target: *Expr, index: *Expr },
-    // CANARY: REQ=REQ-GQL-SLICE-001; FEATURE="ListSlicing"; ASPECT=ASTNode; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-24
+    // CANARY: REQ=REQ-GQL-SLICE-001; FEATURE="ListSlicing"; ASPECT=ASTNode; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
     Slice: struct { target: *Expr, start: ?*Expr, end: ?*Expr },
     Call: struct { callee: *Expr, args: []*Expr },
     Unary: struct { op: UnaryOp, expr: *Expr },
     Binary: struct { op: BinOp, left: *Expr, right: *Expr },
     In: struct { value: *Expr, set: []*Expr },
     InSubquery: struct { value: *Expr, subquery: *Query },
-    // CANARY: REQ=REQ-GQL-IN-EXPR-001; FEATURE="InOperator"; ASPECT=ListExpression; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+    // CANARY: REQ=REQ-GQL-IN-EXPR-001; FEATURE="InOperator"; ASPECT=ListExpression; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
     // IN with list expression (e.g., 'Person' IN labels(n))
     InListExpr: struct { value: *Expr, list_expr: *Expr },
     IsNull: struct { target: *Expr, negated: bool },
@@ -282,7 +282,7 @@ pub const Expr = union(enum) {
     Contains: struct { value: *Expr, needle: *Expr },
     NotIn: struct { value: *Expr, set: []*Expr },
     NotInSubquery: struct { value: *Expr, subquery: *Query },
-    // CANARY: REQ=REQ-GQL-IN-EXPR-002; FEATURE="NotInOperator"; ASPECT=ListExpression; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+    // CANARY: REQ=REQ-GQL-IN-EXPR-002; FEATURE="NotInOperator"; ASPECT=ListExpression; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
     // NOT IN with list expression
     NotInListExpr: struct { value: *Expr, list_expr: *Expr },
     // CASE expression
@@ -292,24 +292,24 @@ pub const Expr = union(enum) {
     Map: []Property,
     PatternComp: struct { pattern: *GraphPattern, where: ?*Expr, map: *Expr, alias: ?[]const u8 = null },
     // EXISTS predicate with subquery pattern
-    // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="ExistsSubquery"; ASPECT=WhereClause; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-27
+    // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="ExistsSubquery"; ASPECT=WhereClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
     Exists: struct { pattern: *GraphPattern, where: ?*Expr = null },
     // Label test: n:Label (checks if node has label)
     HasLabel: struct { node: []const u8, label: []const u8 },
     // Path finding functions and pattern comprehensions
     ShortestPath: struct { pattern: *GraphPattern, all: bool },
-    // CANARY: REQ=REQ-GQL-COUNT-SUBQUERY-001; FEATURE="CountSubquery"; ASPECT=WhereClause; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-COUNT-SUBQUERY-001; FEATURE="CountSubquery"; ASPECT=WhereClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-28
     PatternCount: struct { pattern: *GraphPattern, where: ?*Expr = null },
     // Map projection: n {.name, .age} - projects specified properties from an object
     MapProjection: struct { source: *Expr, fields: [][]const u8 },
-    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=AST; STATUS=IMPLEMENTED; OWNER=parser; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=AST; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=parser; UPDATED=2025-12-23
     // List comprehension with optional filter and map: [x IN list WHERE cond | x.name]
     // or all(x IN list WHERE condition)
     ListComprehension: struct {
         variable: []const u8,
         source: *Expr,
         filter: ?*Expr,
-        // CANARY: REQ=REQ-LIST-COMP-MAP-001; FEATURE="ListComprehension"; ASPECT=MapExpression; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-23
+        // CANARY: REQ=REQ-LIST-COMP-MAP-001; FEATURE="ListComprehension"; ASPECT=MapExpression; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-23
         // Map expression after |, e.g., [x IN list | x.name] - if null, returns the variable itself
         map: ?*Expr = null,
     },

@@ -5,7 +5,7 @@
 const std = @import("std");
 const iface = @import("interface.zig");
 
-// CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 Disk Encryption"; ASPECT=Security; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-10
+// CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 Disk Encryption"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-10
 const aes = struct {
     /// AES-256 ECB encryption using Zig's standard crypto library
     /// Uses std.crypto.core.aes.Aes256 for real cryptographic security
@@ -73,7 +73,7 @@ pub const Disk = struct {
         return (@as(u128, page_id) << 64) | @as(u128, sector);
     }
 
-    // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 XTS Page Encryption"; ASPECT=Security; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 XTS Page Encryption"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-10
     fn encryptPage(self: *Disk, page_id: iface.PageId, buf: []u8) void {
         if (!self.enc_enabled) return;
         const tweak_u128 = tweakFor(page_id, 0);
@@ -98,7 +98,7 @@ pub const Disk = struct {
         }
     }
 
-    // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 XTS Page Decryption"; ASPECT=Security; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 XTS Page Decryption"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-10
     fn decryptPage(self: *Disk, page_id: iface.PageId, buf: []u8) void {
         if (!self.enc_enabled) return;
         const tweak_u128 = tweakFor(page_id, 0);

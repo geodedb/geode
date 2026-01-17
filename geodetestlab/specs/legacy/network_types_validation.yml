@@ -1,6 +1,6 @@
 # Network Types Validation Test Suite
 # Tests the Network Types implementation (IpAddr, Subnet, Mac) with GQL integration
-# CANARY: REQ=REQ-GQL-NET-TYPES-GEODETESTLAB; FEATURE="Network Types Geodetestlab Tests"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_NET_TYPES_GEODETESTLAB_All; OWNER=testing; UPDATED=2025-01-03
+# CANARY: REQ=REQ-GQL-NET-TYPES-GEODETESTLAB; FEATURE="Network Types Geodetestlab Tests"; ASPECT=Testing; STATUS=EXEMPT; TEST=TestCANARY_REQ_GQL_NET_TYPES_GEODETESTLAB_All; OWNER=testing; UPDATED=2025-01-03
 
 name: "Network Types Validation"
 description: "Comprehensive validation of network types (IpAddr, Subnet, Mac) integration with GQL"

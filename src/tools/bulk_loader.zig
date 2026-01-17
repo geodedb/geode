@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-LOADTEST-BULK-001; FEATURE="HighThroughputBulkLoader"; ASPECT=DataIngestion; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LOADTEST-BULK-001; FEATURE="HighThroughputBulkLoader"; ASPECT=DataIngestion; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! High-Throughput Bulk Loader
 //! Ingests billions of nodes and edges at 1M+ operations per second
 

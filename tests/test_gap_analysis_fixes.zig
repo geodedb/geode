@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-GAP-ANALYSIS-TESTS-001; FEATURE="GapAnalysisFixes"; ASPECT=UnitTests; STATUS=IMPL; OWNER=testing; UPDATED=2026-01-09
+// CANARY: REQ=REQ-GAP-ANALYSIS-TESTS-001; FEATURE="GapAnalysisFixes"; ASPECT=UnitTests; STATUS=EXEMPT; OWNER=testing; UPDATED=2026-01-09
 // Comprehensive unit tests for all closed gaps from the January 2026 gap analysis
 
 // Module imports

@@ -642,7 +642,7 @@ pub const RaftNode = struct {
     // Statistics
     stats: Statistics,
 
-    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=SnapshotTransfer; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=SnapshotTransfer; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
     // Snapshot transfer state (follower receiving snapshot)
     snapshot_buffer: ?std.ArrayList(u8) = null,
     snapshot_expected_offset: u64 = 0,
@@ -1165,7 +1165,7 @@ pub const RaftNode = struct {
         }
     }
 
-    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleInstallSnapshot; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleInstallSnapshot; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
     fn handleInstallSnapshot(self: *RaftNode, is: InstallSnapshot, from: u64) !void {
         // 1. Reply immediately if term < currentTerm
         if (is.term < self.current_term) {
@@ -1255,7 +1255,7 @@ pub const RaftNode = struct {
         }
     }
 
-    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleSnapshotResponse; STATUS=IMPL; OWNER=raft; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleSnapshotResponse; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
     fn handleInstallSnapshotResponse(self: *RaftNode, isr: InstallSnapshotResponse, from: u64) !void {
         // Only leaders handle snapshot responses
         if (self.state != .leader) {

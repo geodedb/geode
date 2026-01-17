@@ -19,7 +19,7 @@ const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
-// CANARY: REQ=REQ-GQL-ORDERBY-EXPR-001; FEATURE="OrderByExpressionEval"; ASPECT=MemberResolution; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+// CANARY: REQ=REQ-GQL-ORDERBY-EXPR-001; FEATURE="OrderByExpressionEval"; ASPECT=MemberResolution; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 // Evaluates ORDER BY expressions with special handling for member expressions like `i.price`.
 // When evaluating `i.price`, this function first tries to look up "price" as a column name,
 // falling back to normal evaluation only if not found.
@@ -83,7 +83,7 @@ fn evalOrderByExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env) !Valu
     }
 }
 
-// CANARY: REQ=REQ-GQL-ORDERBY-EXPR-MATCH-001; FEATURE="OrderByExpressionMatch"; ASPECT=ExpressionEquality; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+// CANARY: REQ=REQ-GQL-ORDERBY-EXPR-MATCH-001; FEATURE="OrderByExpressionMatch"; ASPECT=ExpressionEquality; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
 // D05 Fix: Compare two AST expressions for semantic equivalence
 // Used to match ORDER BY expressions against RETURN expressions when columns are aliased
 fn exprsEqual(a: ast.Expr, b: ast.Expr) bool {
@@ -127,7 +127,7 @@ fn exprsEqual(a: ast.Expr, b: ast.Expr) bool {
     }
 }
 
-// CANARY: REQ=REQ-GQL-ORDERBY-RETURN-MATCH-001; FEATURE="OrderByReturnMatch"; ASPECT=ColumnIndexLookup; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+// CANARY: REQ=REQ-GQL-ORDERBY-RETURN-MATCH-001; FEATURE="OrderByReturnMatch"; ASPECT=ColumnIndexLookup; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
 // D05 Fix: Find the column index for an ORDER BY expression by matching against RETURN expressions
 // Returns the column index if the ORDER BY expression matches a RETURN item expression
 fn findColumnIndexByExpression(order_expr: ast.Expr, return_items: []const ast.ReturnItem) ?usize {
@@ -139,7 +139,7 @@ fn findColumnIndexByExpression(order_expr: ast.Expr, return_items: []const ast.R
     return null;
 }
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-009; FEATURE="FileModularization"; ASPECT=ReturnAndSorting; STATUS=IMPL; OWNER=refactoring; UPDATED=2025-10-17
+// CANARY: REQ=REQ-EXEC-REFACTOR-009; FEATURE="FileModularization"; ASPECT=ReturnAndSorting; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
 // D05 Fix: Extended sortRows that accepts optional RETURN items for expression matching
 pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.OrderBy, return_items: ?[]const ast.ReturnItem) !void {
     // Check if we're using ordinals (need to add flag) - do this before early return
@@ -269,7 +269,7 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
     std.sort.heap([]Value, result.rows, ctx, SortContext.compare);
 }
 
-// CANARY: REQ=REQ-GQL-ORDERBY-WRAPPER-001; FEATURE="OrderBySortRowsWrapper"; ASPECT=BackwardsCompatibility; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+// CANARY: REQ=REQ-GQL-ORDERBY-WRAPPER-001; FEATURE="OrderBySortRowsWrapper"; ASPECT=BackwardsCompatibility; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
 // D05 Fix: Wrapper function for backwards compatibility - calls sortRowsEx with null return items
 pub fn sortRows(allocator: std.mem.Allocator, result: *ExecutionResult, order: ast.OrderBy) !void {
     return sortRowsEx(allocator, result, order, null);
@@ -319,7 +319,7 @@ fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.NullsPoli
         return if (a.Bool) 1 else -1;
     }
 
-    // CANARY: REQ=REQ-GQL-ORDERBY-DECIMAL-001; FEATURE="OrderByDecimalComparison"; ASPECT=DecimalSort; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-ORDERBY-DECIMAL-001; FEATURE="OrderByDecimalComparison"; ASPECT=DecimalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // Handle Decimal comparison for ORDER BY on aggregate results like avg()
     if (a == .Decimal and b == .Decimal) {
         // Convert decimals to comparable values (coeff / 10^scale)
@@ -411,7 +411,7 @@ fn getTypeOrder(v: Value) u8 {
     };
 }
 
-// CANARY: REQ=REQ-GQL-AGG-DETECT-001; FEATURE="AggregationDetection"; ASPECT=RecursiveCheck; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+// CANARY: REQ=REQ-GQL-AGG-DETECT-001; FEATURE="AggregationDetection"; ASPECT=RecursiveCheck; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 pub fn isAggregationExpr(expr: ast.Expr) bool {
     switch (expr) {
         .Call => |call| {

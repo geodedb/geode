@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // CANARY: BENCHMARK_PHASE2 - Performance validation for Phase 2 storage optimizations
-// CANARY: REQ=REQ-PERF-PHASE2-BENCH-001; FEATURE="StorageOptimization"; ASPECT=TESTING; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+// CANARY: REQ=REQ-PERF-PHASE2-BENCH-001; FEATURE="StorageOptimization"; ASPECT=TESTING; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
 
 // =============================================================================
 // Benchmark 1: Adler32 Optimization

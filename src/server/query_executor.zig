@@ -23,7 +23,7 @@ const UnionMetrics = server_state.UnionMetrics;
 const getOrCreateGraphStorage = graph_storage_mgr.getOrCreateGraphStorage;
 const getGraphStorageByName = graph_storage_mgr.getGraphStorageByName;
 
-// CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphSupport"; ASPECT=QueryRouting; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+// CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphSupport"; ASPECT=QueryRouting; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
 /// Get graph storage for the current session, falling back to default if no graph selected
 fn getSessionGraphStorage(allocator: std.mem.Allocator, state: *server_state.ServerState) *graph_exec.GraphStorage {
     // Try to get graph by session's current_graph name
@@ -1961,7 +1961,7 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
         index_manager.statistics.total_indexes = 0;
     }
 
-    // CANARY: REQ=REQ-PITR-LOAD-001; FEATURE="PITR Data Loading"; ASPECT=DataRestore; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-PITR-LOAD-001; FEATURE="PITR Data Loading"; ASPECT=DataRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
     // Load restored data from restore_dir into active server state
     loadRestoredDataIntoState(allocator, state, restore_dir) catch |err| {
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Failed to load restored data: {s}\"}}\n", .{@errorName(err)});
@@ -1970,7 +1970,7 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
     return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Point-in-time restore completed successfully to timestamp {}\"}}\n", .{target_timestamp});
 }
 
-// CANARY: REQ=REQ-PITR-LOAD-002; FEATURE="PITR Data Loading"; ASPECT=StateRestore; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-10
+// CANARY: REQ=REQ-PITR-LOAD-002; FEATURE="PITR Data Loading"; ASPECT=StateRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
 /// Load restored data from backup directory into active server state
 fn loadRestoredDataIntoState(allocator: std.mem.Allocator, state: *ServerState, restore_dir: []const u8) !void {
     const restore_file_path = try std.fmt.allocPrint(allocator, "{s}/graph_store.dat", .{restore_dir});
@@ -2385,7 +2385,7 @@ fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, 
     }
 }
 
-// CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=CreateStatement; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=CreateStatement; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-10
 // Execute CREATE GRAPH TYPE statement
 fn executeCreateGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateGraphTypeStatement) ![]const u8 {
     // Check permission first
@@ -2437,7 +2437,7 @@ fn executeCreateGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerS
     return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} {s} successfully\"}}\n", .{ graph_type_str, stmt.name, action });
 }
 
-// CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=DropStatement; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=DropStatement; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-10
 // Execute DROP GRAPH TYPE statement
 fn executeDropGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DropGraphTypeStatement) ![]const u8 {
     // Check permission first

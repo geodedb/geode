@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-GQL-UNION-001; FEATURE="UNION Property Access"; ASPECT=Comprehensive; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNION_001_PropertyAccessComprehensive; OWNER=claude; UPDATED=2025-01-04
+// CANARY: REQ=REQ-GQL-UNION-001; FEATURE="UNION Property Access"; ASPECT=Comprehensive; STATUS=TESTED; TEST=geodetestlab/specs/gql_set_operations_comprehensive.yml; TEST=TestCANARY_REQ_GQL_UNION_001_PropertyAccessComprehensive; OWNER=claude; UPDATED=2025-01-04
 
 // Comprehensive regression test for UNION operations with property access
 // This test verifies the complete implementation of property access in UNION queries

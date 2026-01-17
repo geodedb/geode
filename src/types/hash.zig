@@ -162,7 +162,7 @@ pub fn parseAlg(name: []const u8) Error!HashAlg {
 }
 
 /// Get algorithm name from Hash value (for GQL hash_alg() function)
-/// CANARY: REQ=REQ-GQL-HASH-FUNC-001; FEATURE="HashFunctions"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=types; UPDATED=2025-10-19
+/// CANARY: REQ=REQ-GQL-HASH-FUNC-001; FEATURE="HashFunctions"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=types; UPDATED=2025-10-19
 pub fn hash_alg(h: Hash) []const u8 {
     return algToString(h.alg);
 }

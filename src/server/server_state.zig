@@ -32,7 +32,7 @@ pub const CatalogGraph = struct {
     edge_count: u64 = 0,
 };
 
-// CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=TypeDefinition; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=TypeDefinition; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-10
 /// Graph type definition for CREATE GRAPH TYPE persistence
 pub const GraphTypeDefinition = struct {
     name: []const u8,
@@ -97,7 +97,7 @@ pub const SessionConfiguration = struct {
     current_graph: ?[]const u8 = null,
     property_graph_default: bool = true,
 
-    // CANARY: REQ=REQ-MULTI-TENANT-002; FEATURE="Multi-Tenancy Session"; ASPECT=TenantId; STATUS=IMPL; OWNER=session; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-MULTI-TENANT-002; FEATURE="Multi-Tenancy Session"; ASPECT=TenantId; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=session; UPDATED=2026-01-09
     // Multi-tenancy settings
     tenant_id: ?[]const u8 = null, // Default tenant if not specified in handshake
 
@@ -331,7 +331,7 @@ pub const ServerState = struct {
     catalog_schemas: std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
     catalog_graphs: std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
 
-    // CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=TypeManagement; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=TypeManagement; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-10
     // Graph type registry for CREATE/DROP GRAPH TYPE persistence
     graph_types: std.HashMap([]const u8, GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
 
@@ -344,7 +344,7 @@ pub const ServerState = struct {
     authenticated_user: ?[]const u8 = null,
     authenticated_role: ?geode.user_management.Role = null,
 
-    // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphSupport"; ASPECT=SessionGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+    // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphSupport"; ASPECT=SessionGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
     // Current graph for this session (set by USE GRAPH command)
     current_graph: ?[]const u8 = null,
 

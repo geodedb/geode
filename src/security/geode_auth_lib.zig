@@ -422,7 +422,7 @@ pub const SecurityManager = struct {
                     }
                 }
             } else if (cond == .risk_score_min) {
-                // CANARY: REQ=REQ-AUTH-RISKSCORE-001; FEATURE="FailSecureRiskScore"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+                // CANARY: REQ=REQ-AUTH-RISKSCORE-001; FEATURE="FailSecureRiskScore"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_security.yml; OWNER=security; UPDATED=2026-01-13
                 // GAP-0149 SECURITY FIX: Fail-secure on invalid risk_score - treat as max risk (255)
                 if (risk_score == null) {
                     if (u.attributes.get("risk_score")) |rs| {
@@ -1003,7 +1003,7 @@ pub const SecurityManager = struct {
         }
 
         // GAP-0146: Generate random password in production if env var not set
-        // CANARY: REQ=REQ-DEFAULT-PASSWORD-001; FEATURE="Secure Default Password"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+        // CANARY: REQ=REQ-DEFAULT-PASSWORD-001; FEATURE="Secure Default Password"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=security; UPDATED=2026-01-13
         const default_password_env = std.process.getEnvVarOwned(self.allocator, "GEODE_DEFAULT_PASSWORD") catch null;
         const password_from_env = default_password_env != null;
 

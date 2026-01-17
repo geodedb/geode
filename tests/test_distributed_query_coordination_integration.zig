@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-DIST-QUERY-COORD-INT-001; FEATURE="Distributed Query Coordination Integration Tests"; ASPECT=IntegrationTests; STATUS=IMPL; TEST=TestCANARY_REQ_DIST_QUERY_COORD_INT_001_IntegrationTests; OWNER=dist; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DIST-QUERY-COORD-INT-001; FEATURE="Distributed Query Coordination Integration Tests"; ASPECT=IntegrationTests; STATUS=EXEMPT; TEST=TestCANARY_REQ_DIST_QUERY_COORD_INT_001_IntegrationTests; OWNER=dist; UPDATED=2025-10-05
 
 const std = @import("std");
 const testing = std.testing;

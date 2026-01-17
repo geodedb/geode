@@ -20,7 +20,7 @@ pub const Value = value_types.Value;
 pub const Env = value_types.Env;
 pub const EvalError = value_types.EvalError;
 
-// CANARY: REQ=REQ-M5.3-EXECUTION-CALLBACKS-001; FEATURE="Execution Callbacks"; ASPECT=CallbackInterface; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.3-EXECUTION-CALLBACKS-001; FEATURE="Execution Callbacks"; ASPECT=CallbackInterface; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=adapter; UPDATED=2025-11-13
 /// Execution callbacks that eval.zig needs to call back to execution.zig
 ///
 /// These callbacks provide execution-layer functionality that the evaluator
@@ -54,7 +54,7 @@ pub const ExecutionCallbacks = struct {
     /// Execute a pattern comprehension
     executePatternComprehensionFn: *const fn (allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, map_expr: ast.Expr, env: Env) anyerror!Value,
 
-    // CANARY: REQ=REQ-M5.3-CALLBACK-WRAPPER-001; FEATURE="Callback Wrappers"; ASPECT=ConvenienceMethods; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
+    // CANARY: REQ=REQ-M5.3-CALLBACK-WRAPPER-001; FEATURE="Callback Wrappers"; ASPECT=ConvenienceMethods; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=adapter; UPDATED=2025-11-13
     /// Convenience wrapper: Get default execution context
     pub fn getDefaultContext(self: ExecutionCallbacks, allocator: std.mem.Allocator) !ExecutionContext {
         return self.getDefaultContextFn(allocator);
@@ -81,7 +81,7 @@ pub const ExecutionCallbacks = struct {
     }
 };
 
-// CANARY: REQ=REQ-M5.3-TYPE-FORWARD-001; FEATURE="Type Forwarding"; ASPECT=TypeReexport; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.3-TYPE-FORWARD-001; FEATURE="Type Forwarding"; ASPECT=TypeReexport; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=adapter; UPDATED=2025-11-13
 // Import parent execution module to access ExecutionContext and ExecutionResult types
 //
 // This creates a parent-child import relationship which is acceptable:
@@ -105,7 +105,7 @@ pub const ExecutionContext = parent_execution.ExecutionContext;
 /// This allows eval.zig to use the real ExecutionResult type without importing execution.zig
 pub const ExecutionResult = parent_execution.ExecutionResult;
 
-// CANARY: REQ=REQ-M5.3-EVALUATOR-INTERFACE-001; FEATURE="Evaluator Interface"; ASPECT=EvaluatorAbstraction; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.3-EVALUATOR-INTERFACE-001; FEATURE="Evaluator Interface"; ASPECT=EvaluatorAbstraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=adapter; UPDATED=2025-11-13
 /// Evaluator interface that execution.zig uses to call eval.evalExpr
 ///
 /// This interface allows execution.zig to evaluate expressions without
@@ -133,7 +133,7 @@ pub const EvaluatorInterface = struct {
     }
 };
 
-// CANARY: REQ=REQ-M5.3-ADAPTER-INIT-001; FEATURE="Adapter Initialization"; ASPECT=FactoryFunction; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.3-ADAPTER-INIT-001; FEATURE="Adapter Initialization"; ASPECT=FactoryFunction; STATUS=EXEMPT; OWNER=adapter; UPDATED=2025-11-13
 /// Create an evaluator interface with execution callbacks
 ///
 /// This factory function is called by execution.zig to create an evaluator
@@ -155,7 +155,7 @@ pub fn createEvaluator(
     };
 }
 
-// CANARY: REQ=REQ-M5.3-ADAPTER-DOC-001; FEATURE="Documentation"; ASPECT=UsageExamples; STATUS=IMPL; OWNER=adapter; UPDATED=2025-11-13
+// CANARY: REQ=REQ-M5.3-ADAPTER-DOC-001; FEATURE="Documentation"; ASPECT=UsageExamples; STATUS=EXEMPT; OWNER=adapter; UPDATED=2025-11-13
 // Example usage pattern for the adapter
 //
 // This is a conceptual example showing how the adapter breaks the circular dependency:

@@ -1,5 +1,5 @@
 // CANARY: REQ=REQ-0004; FEATURE="Transactions & Storage Requirements"; ASPECT=Storage; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=storage; UPDATED=2026-01-15
-// CANARY: REQ=REQ-M7.2-TXN-MANAGER-001; FEATURE="Phase 7 Modularization"; ASPECT=TransactionManager; STATUS=IMPL; OWNER=transactions; UPDATED=2025-11-14
+// CANARY: REQ=REQ-M7.2-TXN-MANAGER-001; FEATURE="Phase 7 Modularization"; ASPECT=TransactionManager; STATUS=EXEMPT; OWNER=transactions; UPDATED=2025-11-14
 // Phase 7 M7.2: Unified transaction management interface
 //
 // This module provides a centralized interface for all transaction-related operations,

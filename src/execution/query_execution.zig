@@ -36,7 +36,7 @@ const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=IMPL; OWNER=refactoring; UPDATED=2025-10-17
+// CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
 // CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-01-15
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
     // Execute the current query (without the next_query link to avoid infinite recursion)
@@ -53,7 +53,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         return error.CorruptedExecutionResult;
     }
 
-    // CANARY: REQ=REQ-GQL-CHAIN-AGG-TOPLEVEL-001; FEATURE="ChainedAggregationTopLevel"; ASPECT=DetectFinalAgg; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-CHAIN-AGG-TOPLEVEL-001; FEATURE="ChainedAggregationTopLevel"; ASPECT=DetectFinalAgg; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // E24/E35 Fix: Find the FINAL query in the chain and check if it has aggregation
     // If so, we need to process all rows together, not one at a time
     var chain_final_query: ast.Query = next_query_ptr.*;
@@ -69,7 +69,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         }
     }
 
-    // CANARY: REQ=REQ-GQL-CHAIN-WITH-AGG-001; FEATURE="ChainedWithAggregation"; ASPECT=IntermediateWithAgg; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-CHAIN-WITH-AGG-001; FEATURE="ChainedWithAggregation"; ASPECT=IntermediateWithAgg; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // E25 Fix: Also check if any intermediate WITH clause contains aggregation
     // If so, we need to handle aggregation at that level (grouping by non-aggregated columns)
     var has_intermediate_with_agg = false;
@@ -393,7 +393,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                     env_values = new_values;
                 }
 
-                // CANARY: REQ=REQ-GQL-CHAIN-MATCH-001; FEATURE="ChainMatchExecution"; ASPECT=AggregationPath; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-27
+                // CANARY: REQ=REQ-GQL-CHAIN-MATCH-001; FEATURE="ChainMatchExecution"; ASPECT=AggregationPath; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
                 // If there's a MATCH clause in this query, we need to execute it and collect all matched rows
                 // This is critical for queries like "CREATE ... WITH x MATCH (n:Label) RETURN count(n)"
                 if (q.match.chains.len > 0) {
@@ -674,7 +674,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         .flags = final_flags,
     };
 
-    // CANARY: REQ=REQ-GQL-CHAIN-ORDERBY-001; FEATURE="ChainOrderBy"; ASPECT=FinalSorting; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-CHAIN-ORDERBY-001; FEATURE="ChainOrderBy"; ASPECT=FinalSorting; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // Apply ORDER BY from the final query in the chain to the combined result
     // Walk to the end of the chain to get the final query's ORDER BY
     var final_query = next_query_ptr.*;
@@ -685,7 +685,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         try sortRows(allocator, &result, order);
     }
 
-    // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // Apply SKIP and LIMIT from the final query in the chain after ORDER BY
     if (final_query.offset) |skip_count| {
         if (skip_count < result.rows.len) {
@@ -740,7 +740,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
             return error.CorruptedExecutionResult;
         }
 
-        // CANARY: REQ=REQ-GQL-WITH-CHAIN-AGG-001; FEATURE="ChainedWithAggregation"; ASPECT=AggregateOverAllRows; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+        // CANARY: REQ=REQ-GQL-WITH-CHAIN-AGG-001; FEATURE="ChainedWithAggregation"; ASPECT=AggregateOverAllRows; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
         // E24/E35 Fix: Check if next query's RETURN contains aggregation
         // If so, we need to aggregate over ALL filtered rows, not process one at a time
         var has_aggregation = false;
@@ -961,7 +961,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
 }
 
 // E25 Fix: Format a Value to string for group key building
-// CANARY: REQ=REQ-GQL-WITH-GROUP-KEY-001; FEATURE="WithGroupKey"; ASPECT=FormatValue; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+// CANARY: REQ=REQ-GQL-WITH-GROUP-KEY-001; FEATURE="WithGroupKey"; ASPECT=FormatValue; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 fn formatValue(val: Value, buf: []u8) []const u8 {
     switch (val) {
         .Int => |i| {
@@ -984,7 +984,7 @@ fn formatValue(val: Value, buf: []u8) []const u8 {
 }
 
 // E24/E35 Fix: Compute aggregation over chained WITH clause environments
-// CANARY: REQ=REQ-GQL-WITH-CHAIN-AGG-002; FEATURE="ChainedWithAggregation"; ASPECT=ComputeAggregation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+// CANARY: REQ=REQ-GQL-WITH-CHAIN-AGG-002; FEATURE="ChainedWithAggregation"; ASPECT=ComputeAggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: []const Env) !Value {
     switch (expr) {
         .Call => |call| {
@@ -1131,7 +1131,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     var bound_var_env_values = try std.ArrayList(Value).initCapacity(allocator, 0);
     defer bound_var_env_values.deinit(allocator);
 
-    // CANARY: REQ=REQ-GQL-CHAIN-FIX-002; FEATURE="BoundVariableShortcutFix"; ASPECT=HopsCheck; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+    // CANARY: REQ=REQ-GQL-CHAIN-FIX-002; FEATURE="BoundVariableShortcutFix"; ASPECT=HopsCheck; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
     // Check if all MATCH variables are bound AND there are no relationships to match.
     // If there are relationship hops, we must execute the full match, not the shortcut.
     if (q.match.chains.len > 0) {
@@ -1164,7 +1164,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     }
 
     // If there's no MATCH clause, just evaluate RETURN with bindings
-    // CANARY: REQ=REQ-GQL-WITH-WHERE-001; FEATURE="ChainedWITHWithWHERE"; ASPECT=WhereEvaluation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+    // CANARY: REQ=REQ-GQL-WITH-WHERE-001; FEATURE="ChainedWITHWithWHERE"; ASPECT=WhereEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
     if (q.match.chains.len == 0 and binding_names.len > 0) {
         const combined = try combineBindingParams(allocator, context, binding_names, binding_values);
         defer if (combined.owns) {
@@ -1176,7 +1176,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         var current_names: []const []const u8 = binding_names;
         var current_values: []const Value = binding_values;
 
-        // CANARY: REQ=REQ-GQL-WITH-CHAIN-002; FEATURE="ChainedWithClauseExecution"; ASPECT=BindingTransform; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+        // CANARY: REQ=REQ-GQL-WITH-CHAIN-002; FEATURE="ChainedWithClauseExecution"; ASPECT=BindingTransform; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
         // If there's a WITH clause, first transform bindings by evaluating WITH items
         if (q.with_clause) |with_clause| {
             const env_for_with = Env{
@@ -1255,7 +1255,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     }
 
     // If all MATCH variables are bound, we can skip matching and just evaluate RETURN
-    // CANARY: REQ=REQ-GQL-WITH-WHERE-002; FEATURE="BoundVarsWithWHERE"; ASPECT=WhereEvaluation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+    // CANARY: REQ=REQ-GQL-WITH-WHERE-002; FEATURE="BoundVarsWithWHERE"; ASPECT=WhereEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
     if (all_vars_bound and bound_var_env_names.items.len > 0) {
         const items = q.ret.items;
         const columns = try generateUniqueColumnNames(allocator, items);
@@ -1364,7 +1364,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     }
 
     // Check for GROUP BY validation first
-    // CANARY: REQ=REQ-GQL-CHAIN-FIX-003; FEATURE="QueryChainingGroupByFix"; ASPECT=SkipValidation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-CHAIN-FIX-003; FEATURE="QueryChainingGroupByFix"; ASPECT=SkipValidation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // Skip validateGroupBy when ret.items is the same as with_clause.items (query chaining mode).
     // In this case, the WITH clause handles aggregation, and ret is just an artifact of chaining.
     const is_chaining_return = if (q.with_clause) |wc| q.ret.items.ptr == wc.items.ptr and q.ret.items.len == wc.items.len else false;
@@ -1402,7 +1402,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
         // If there's a WITH clause, apply it to the CALL results
         if (q.with_clause) |with_clause| {
-            // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+            // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
             const with_result = try execution.executeWithClauseWithGroupBy(allocator, call_result, with_clause, q.group_by, q.having);
 
             // Apply WHERE filter if present
@@ -1597,7 +1597,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         initial_result.rows[0] = try allocator.alloc(Value, 0);
 
         // Apply WITH clause to transform the empty row into WITH variables
-        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
         const with_result = try execution.executeWithClauseWithGroupBy(allocator, initial_result, with_clause, q.group_by, q.having);
 
         // Check if there's a FOR statement to execute with WITH bindings

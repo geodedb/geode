@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // CANARY: BENCHMARK_PHASE5_2 - Performance validation for Phase 5.1.2 optimization
-// CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="GraphOptimization"; ASPECT=TESTING; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+// CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="GraphOptimization"; ASPECT=TESTING; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-11-16
 
 // =============================================================================
 // Test Structures - Simplified InMemory-like graph for benchmarking

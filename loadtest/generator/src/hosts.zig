@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Hosts; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Hosts; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! Host Generator
 //! Expands subnets into individual hosts with realistic service profiles
 

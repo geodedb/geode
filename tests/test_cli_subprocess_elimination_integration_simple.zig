@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-CLI-SUBPROCESS-INTEGRATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=IntegrationTesting; STATUS=IMPL; TEST=TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_002; OWNER=claude; UPDATED=2025-10-05
+// CANARY: REQ=REQ-CLI-SUBPROCESS-INTEGRATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=IntegrationTesting; STATUS=EXEMPT; TEST=TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_002; OWNER=claude; UPDATED=2025-10-05
 // Simplified integration tests for CLI subprocess elimination
 
 const std = @import("std");

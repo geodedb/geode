@@ -6,7 +6,7 @@ const loss_recovery = algorithms.loss_recovery;
 const timer_heap = algorithms.timer_heap;
 const sharding = algorithms.sharding;
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=ConnectionManagement; STATUS=IMPL; OWNER=wire; UPDATED=2025-10-31
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=ConnectionManagement; STATUS=EXEMPT; OWNER=wire; UPDATED=2025-10-31
 // Connection manager orchestrating QUIC algorithms: DRR scheduling, NewReno CC, loss recovery, timers, and sharding
 
 /// Connection state tracking for QUIC protocol

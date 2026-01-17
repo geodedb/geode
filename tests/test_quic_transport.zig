@@ -6,7 +6,7 @@ const geode = @import("geode");
 // Since it's in the CLI module, we'll test the interface behavior
 const repl_dispatch = geode.repl.repl_dispatch;
 
-// CANARY: REQ=REQ-REPL-QUIC-003; FEATURE="REPL QUIC Transport Tests"; ASPECT=UnitTests; STATUS=IMPL; TEST=test_transport_interface; OWNER=repl; UPDATED=2025-10-05
+// CANARY: REQ=REQ-REPL-QUIC-003; FEATURE="REPL QUIC Transport Tests"; ASPECT=UnitTests; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; TEST=test_transport_interface; OWNER=repl; UPDATED=2025-10-05
 
 test "transport interface - mock transport connectivity" {
     const allocator = testing.allocator;

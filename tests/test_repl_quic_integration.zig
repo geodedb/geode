@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=UnitTesting; STATUS=IMPL; TEST=test_repl_quic_integration; OWNER=repl; UPDATED=2025-10-05
+// CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=UnitTesting; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; TEST=test_repl_quic_integration; OWNER=repl; UPDATED=2025-10-05
 
 // Unit tests for REPL QUIC integration support
 // These tests validate the ClientSession QUIC functionality

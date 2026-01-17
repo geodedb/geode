@@ -3,7 +3,7 @@ const wal = @import("wal");
 const catalog = @import("storage_catalog");
 const page_manager = @import("storage_page_manager");
 
-// CANARY: REQ=REQ-BACKUP-HEX-001; FEATURE="SecureHexKeyParsing"; ASPECT=SECURITY; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-13
+// CANARY: REQ=REQ-BACKUP-HEX-001; FEATURE="SecureHexKeyParsing"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-13
 // GAP-0148 SECURITY FIX: Proper error handling for hex key parsing instead of silent catch 0
 
 /// Parse a 64-character hex string into a 32-byte key with proper error handling.

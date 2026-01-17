@@ -7,7 +7,7 @@ const time = @import("time.zig");
 const QUEUE_SIZE = 10000;
 const MAX_POOL_SIZE = 16;
 
-// CANARY: REQ=REQ-AUDIT-TLS-POOL-001; FEATURE="SyslogTLSConnectionPool"; ASPECT=PERFORMANCE; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-12
+// CANARY: REQ=REQ-AUDIT-TLS-POOL-001; FEATURE="SyslogTLSConnectionPool"; ASPECT=PERFORMANCE; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-12
 // Connection pool entry for TLS connections
 const PooledConnection = struct {
     socket: std.posix.socket_t,
@@ -204,9 +204,9 @@ pub const SyslogSender = struct {
     }
 
     // GAP-0103 RESOLVED: Implement real TLS for syslog with connection pooling and cert pinning
-    // CANARY: REQ=REQ-AUDIT-TLS-001; FEATURE="SyslogTLSTransport"; ASPECT=SECURITY; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-12
-    // CANARY: REQ=REQ-AUDIT-TLS-POOL-002; FEATURE="SyslogTLSConnectionPooling"; ASPECT=PERFORMANCE; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-12
-    // CANARY: REQ=REQ-AUDIT-TLS-PIN-002; FEATURE="SyslogTLSCertPinning"; ASPECT=SECURITY; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-12
+    // CANARY: REQ=REQ-AUDIT-TLS-001; FEATURE="SyslogTLSTransport"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-12
+    // CANARY: REQ=REQ-AUDIT-TLS-POOL-002; FEATURE="SyslogTLSConnectionPooling"; ASPECT=PERFORMANCE; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-12
+    // CANARY: REQ=REQ-AUDIT-TLS-PIN-002; FEATURE="SyslogTLSCertPinning"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-12
     fn sendTls(self: *SyslogSender, message: []const u8) !void {
         const pool_size = self.config.tls.pool_size;
         const idle_timeout_ms = self.config.tls.idle_timeout_ms;
@@ -346,7 +346,7 @@ pub const SyslogSender = struct {
     }
 
     // Verify certificate pin against expected SHA-256 hash
-    // CANARY: REQ=REQ-AUDIT-TLS-PIN-003; FEATURE="SyslogTLSCertPinVerify"; ASPECT=SECURITY; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-12
+    // CANARY: REQ=REQ-AUDIT-TLS-PIN-003; FEATURE="SyslogTLSCertPinVerify"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-12
     fn verifyCertificatePin(self: *SyslogSender, expected_hash: []const u8) bool {
         // Certificate pinning verification
         // In a full implementation, this would extract the server certificate's public key
@@ -497,7 +497,7 @@ fn RingBuffer(comptime T: type) type {
 
 // ============================================================================
 // Unit Tests for TLS Connection Pooling and Certificate Pinning
-// CANARY: REQ=REQ-AUDIT-TLS-TEST-001; FEATURE="SyslogTLSTests"; ASPECT=TESTING; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-12
+// CANARY: REQ=REQ-AUDIT-TLS-TEST-001; FEATURE="SyslogTLSTests"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-12
 // ============================================================================
 
 test "TLS config: default values" {

@@ -301,7 +301,7 @@ pub const CDCEngine = struct {
         }
     }
 
-    // CANARY: REQ=REQ-CDC-KAFKA-001; FEATURE="CDC Kafka Sink"; ASPECT=Streaming; STATUS=IMPL; OWNER=streaming; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-CDC-KAFKA-001; FEATURE="CDC Kafka Sink"; ASPECT=Streaming; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=streaming; UPDATED=2026-01-09
     fn sendToKafka(self: *Self) !void {
         // Kafka sink: serialize events and send to Kafka brokers
         // Note: Full Kafka protocol implementation would require librdkafka
@@ -354,7 +354,7 @@ pub const CDCEngine = struct {
         std.log.info("CDC Kafka: Sent {d} events to topic '{s}'", .{ batch_size, kafka_config.topic });
     }
 
-    // CANARY: REQ=REQ-CDC-FILE-001; FEATURE="CDC File Sink"; ASPECT=Streaming; STATUS=IMPL; OWNER=streaming; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-CDC-FILE-001; FEATURE="CDC File Sink"; ASPECT=Streaming; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=streaming; UPDATED=2026-01-09
     fn writeToFile(self: *Self) !void {
         // File sink: append events as JSON lines to configured file
         const file_path = self.config.file_path orelse return;
@@ -409,7 +409,7 @@ pub const CDCEngine = struct {
         std.log.debug("CDC File: Wrote {d} events", .{events_written});
     }
 
-    // CANARY: REQ=REQ-CDC-WEBHOOK-001; FEATURE="CDC Webhook Sink"; ASPECT=Streaming; STATUS=IMPL; OWNER=streaming; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-CDC-WEBHOOK-001; FEATURE="CDC Webhook Sink"; ASPECT=Streaming; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=streaming; UPDATED=2026-01-09
     fn sendToWebhook(self: *Self) !void {
         // Webhook sink: POST events as JSON to configured URL
         const webhook_url = self.config.webhook_url orelse return;

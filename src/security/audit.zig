@@ -1696,7 +1696,7 @@ pub const AuditLogger = struct {
         };
     }
 
-    /// CANARY: REQ=REQ-AUDIT-PWSH-001; FEATURE="PowerShell Compatibility"; ASPECT=PlatformDetection; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+    /// CANARY: REQ=REQ-AUDIT-PWSH-001; FEATURE="PowerShell Compatibility"; ASPECT=PlatformDetection; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-13
     /// GAP-0152 RESOLVED: Replaced random simulation with deterministic platform-based behavior
     ///
     /// Test PowerShell compatibility for Windows integration.
@@ -1773,7 +1773,7 @@ pub const AuditLogger = struct {
 };
 
 // Unit tests for audit module
-// CANARY: REQ=REQ-AUDIT-TEST-001; FEATURE="Audit Unit Tests"; ASPECT=UnitTests; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+// CANARY: REQ=REQ-AUDIT-TEST-001; FEATURE="Audit Unit Tests"; ASPECT=UnitTests; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_compliance_v2.yml; OWNER=security; UPDATED=2026-01-13
 
 test "TestCANARY_REQ_AUDIT_PWSH_001_PowerShellDeterminism" {
     // GAP-0152: Verify PowerShell compatibility test is deterministic

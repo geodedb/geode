@@ -62,7 +62,7 @@ const isNull = value_types.isNull;
 // Phase 5 M5.2: Use truthy from value_types module
 const truthy = value_types.truthy;
 
-// CANARY: REQ=REQ-LIST-PROP-005; FEATURE="ListProperties"; ASPECT=Conversion; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+// CANARY: REQ=REQ-LIST-PROP-005; FEATURE="ListProperties"; ASPECT=Conversion; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
 /// Convert ExtValue.List ([]ExtValue) back to Value.List ([]Value)
 /// Strings must be duplicated to avoid dangling pointers
 const ExtValue = @import("eval_extended.zig").ExtValue;
@@ -168,7 +168,7 @@ fn regexMatchClass(ch: u8, pat: []const u8, idx: *usize) bool {
     return if (neg) !hit else hit;
 }
 
-// CANARY: REQ=REQ-GQL-REGEX-FIX-001; FEATURE="RegexMatching"; ASPECT=OverflowPrevention; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+// CANARY: REQ=REQ-GQL-REGEX-FIX-001; FEATURE="RegexMatching"; ASPECT=OverflowPrevention; STATUS=TESTED; TEST=geodetestlab/specs/test_regex.yml; OWNER=eval; UPDATED=2026-01-09
 // Fixed integer overflow in greedy matching loops by using k+1 start and pre-decrement
 // Added support for [class]* quantifier pattern
 fn regexRec(s: []const u8, p: []const u8, si0: usize, pi0: usize, allow_suffix_end: bool) bool {
@@ -277,7 +277,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 @memcpy(result[l.Str.len..], r.Str);
                 break :blk .{ .Str = result };
             }
-            // CANARY: REQ=REQ-GQL-LIST-CONCAT-001; FEATURE="ListOperations"; ASPECT=AddConcatenation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-LIST-CONCAT-001; FEATURE="ListOperations"; ASPECT=AddConcatenation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
             // List concatenation: list + list = combined list
             if (l == .List and r == .List) {
                 const result = try alloc.alloc(Value, l.List.len + r.List.len);
@@ -292,7 +292,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 }
                 break :blk .{ .Int = result_tuple[0] };
             }
-            // CANARY: REQ=REQ-GQL-BOOL-INT-COERCE-001; FEATURE="TypeCoercion"; ASPECT=BoolToInt; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-BOOL-INT-COERCE-001; FEATURE="TypeCoercion"; ASPECT=BoolToInt; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
             // Bool + Int / Int + Bool: Coerce bool to int (true=1, false=0)
             if (l == .Bool and r == .Int) {
                 const bool_val: i64 = if (l.Bool) 1 else 0;
@@ -312,7 +312,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const sum = lc + rc; // overflow ignored for now (would return Unsupported if needed)
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
-            // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+            // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // Date + Interval: Add months and days from interval to date
             if (l == .Date and r == .Interval) {
                 const datetime_module = @import("types/datetime.zig");
@@ -402,7 +402,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const diff = lc - rc;
                 break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
             }
-            // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+            // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // Date - Interval: Subtract months and days from interval
             if (l == .Date and r == .Interval) {
                 const datetime_module = @import("types/datetime.zig");
@@ -505,7 +505,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             return EvalError.TypeMismatch;
         },
         .Power => blk_pow: {
-            // CANARY: REQ=REQ-GQL-POWER-003; FEATURE="PowerOperator"; ASPECT=EvalSupport; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-POWER-003; FEATURE="PowerOperator"; ASPECT=EvalSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-27
             // NULL ^ anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk_pow .{ .Null = {} };
             // Integer exponentiation: x ^ n where n is integer
@@ -644,7 +644,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 }) };
             }
 
-            // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-002; FEATURE="ThreeValuedLogic"; ASPECT=NullComparison; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+            // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-002; FEATURE="ThreeValuedLogic"; ASPECT=NullComparison; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // GQL/SQL three-valued logic: Any comparison with NULL returns NULL
             // null = null => null, null > 5 => null, null < x => null, etc.
             // IMPORTANT: This check must come BEFORE generic equality check to ensure null = null returns null, not true
@@ -663,7 +663,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const eq = l.Bool == r.Bool;
                 return .{ .Bool = if (op == .Eq) eq else !eq };
             }
-            // CANARY: REQ=REQ-GQL-NODE-COMPARE-001; FEATURE="NodeComparison"; ASPECT=EqualityInequality; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+            // CANARY: REQ=REQ-GQL-NODE-COMPARE-001; FEATURE="NodeComparison"; ASPECT=EqualityInequality; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
             // Node comparisons: compare by node ID (two nodes are equal if they have the same ID)
             if (l == .Node and r == .Node) {
                 if (op != .Eq and op != .Ne) return EvalError.TypeMismatch;
@@ -679,7 +679,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             return EvalError.TypeMismatch;
         },
         .Concat => blk6: {
-            // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-003; FEATURE="ThreeValuedLogic"; ASPECT=NullConcat; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-003; FEATURE="ThreeValuedLogic"; ASPECT=NullConcat; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
             // GQL/SQL three-valued logic: null || anything = null
             if (l == .Null or r == .Null) break :blk6 Value{ .Null = {} };
 
@@ -873,7 +873,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const v = try evalExpr(allocator, u.expr.*, env);
             switch (u.op) {
                 .Not => {
-                    // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-001; FEATURE="ThreeValuedLogic"; ASPECT=NotNull; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-001; FEATURE="ThreeValuedLogic"; ASPECT=NotNull; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
                     // GQL/SQL three-valued logic: NOT null = null
                     if (v == .Null) break :blk Value{ .Null = {} };
                     break :blk .{ .Bool = !truthy(v) };
@@ -890,7 +890,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
         },
         .Binary => |b| blk2: {
-            // CANARY: REQ=REQ-GQL-SHORT-CIRCUIT-001; FEATURE="Short-circuit evaluation"; ASPECT=AND_OR; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-SHORT-CIRCUIT-001; FEATURE="Short-circuit evaluation"; ASPECT=AND_OR; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-12-27
             // Implement short-circuit evaluation for AND/OR to avoid evaluating RHS when unnecessary
             // This prevents division-by-zero errors in expressions like: n.value <> 0 AND 100 / n.value > 1
             switch (b.op) {
@@ -1042,7 +1042,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
-            // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-10-14
+            // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-10-14
             // Handle all(x IN list WHERE condition) - returns true if all elements match the condition
             if (std.mem.eql(u8, function_name, "all")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
@@ -1273,7 +1273,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = trimmed };
             }
 
-            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-001; FEATURE="StringFunctions"; ASPECT=LTrim; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-001; FEATURE="StringFunctions"; ASPECT=LTrim; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
             if (std.mem.eql(u8, function_name, "ltrim")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1288,7 +1288,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = trimmed };
             }
 
-            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-002; FEATURE="StringFunctions"; ASPECT=RTrim; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-002; FEATURE="StringFunctions"; ASPECT=RTrim; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
             if (std.mem.eql(u8, function_name, "rtrim")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1303,7 +1303,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = trimmed };
             }
 
-            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-003; FEATURE="StringFunctions"; ASPECT=Left; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-003; FEATURE="StringFunctions"; ASPECT=Left; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
             if (std.mem.eql(u8, function_name, "left")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1324,7 +1324,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = str[0..result_len] };
             }
 
-            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-004; FEATURE="StringFunctions"; ASPECT=Right; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-004; FEATURE="StringFunctions"; ASPECT=Right; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
             if (std.mem.eql(u8, function_name, "right")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1378,7 +1378,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = result };
             }
 
-            // CANARY: REQ=REQ-GQL-KEYS-002; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+            // CANARY: REQ=REQ-GQL-KEYS-002; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
             // B06 Fix: Handle keys() for Map, Node, AND Edge types
             if (std.mem.eql(u8, function_name, "keys")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
@@ -1540,7 +1540,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            // CANARY: REQ=REQ-MATH-TRIG-001; FEATURE="TrigonometricFunctions"; ASPECT=ATAN; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            // CANARY: REQ=REQ-MATH-TRIG-001; FEATURE="TrigonometricFunctions"; ASPECT=ATAN; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
             if (std.mem.eql(u8, function_name, "atan")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1555,7 +1555,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            // CANARY: REQ=REQ-MATH-TRIG-002; FEATURE="TrigonometricFunctions"; ASPECT=ATAN2; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            // CANARY: REQ=REQ-MATH-TRIG-002; FEATURE="TrigonometricFunctions"; ASPECT=ATAN2; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
             if (std.mem.eql(u8, function_name, "atan2")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const arg_y = try evalExpr(allocator, call.args[0].*, env);
@@ -1579,7 +1579,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            // CANARY: REQ=REQ-MATH-TRIG-003; FEATURE="TrigonometricFunctions"; ASPECT=ASIN; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            // CANARY: REQ=REQ-MATH-TRIG-003; FEATURE="TrigonometricFunctions"; ASPECT=ASIN; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
             if (std.mem.eql(u8, function_name, "asin")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1596,7 +1596,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            // CANARY: REQ=REQ-MATH-TRIG-004; FEATURE="TrigonometricFunctions"; ASPECT=ACOS; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            // CANARY: REQ=REQ-MATH-TRIG-004; FEATURE="TrigonometricFunctions"; ASPECT=ACOS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
             if (std.mem.eql(u8, function_name, "acos")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1613,7 +1613,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=IMPL; OWNER=math; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
             if (std.mem.eql(u8, function_name, "degrees")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1629,7 +1629,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(@round(result * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=IMPL; OWNER=math; UPDATED=2025-12-27
+            // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
             if (std.mem.eql(u8, function_name, "radians")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1714,7 +1714,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
-            // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=ROUND; STATUS=IMPL; OWNER=math; UPDATED=2025-12-22
+            // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=ROUND; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-12-22
             if (std.mem.eql(u8, function_name, "round")) {
                 if (call.args.len < 1 or call.args.len > 2) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1795,7 +1795,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
-            // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=MOD; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=MOD; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-10-26
             if (std.mem.eql(u8, function_name, "mod")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const dividend_arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1817,7 +1817,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Int = result };
             }
 
-            // CANARY: REQ=REQ-MATH-ARITH-002; FEATURE="ArithmeticFunctions"; ASPECT=SIGN; STATUS=IMPL; OWNER=math; UPDATED=2025-10-26
+            // CANARY: REQ=REQ-MATH-ARITH-002; FEATURE="ArithmeticFunctions"; ASPECT=SIGN; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-10-26
             if (std.mem.eql(u8, function_name, "sign")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
@@ -1984,7 +1984,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 else => res,
             };
         },
-        // CANARY: REQ=REQ-GQL-IN-EXPR-003; FEATURE="InOperator"; ASPECT=EvalSupport; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+        // CANARY: REQ=REQ-GQL-IN-EXPR-003; FEATURE="InOperator"; ASPECT=EvalSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
         // value IN list_expr where list_expr evaluates to a list (e.g., 'Person' IN labels(n))
         .InListExpr => |ile| {
             const v = try evalExpr(allocator, ile.value.*, env);
@@ -1997,7 +1997,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
             return Value{ .Bool = false };
         },
-        // CANARY: REQ=REQ-GQL-IN-EXPR-004; FEATURE="NotInOperator"; ASPECT=EvalSupport; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+        // CANARY: REQ=REQ-GQL-IN-EXPR-004; FEATURE="NotInOperator"; ASPECT=EvalSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
         // value NOT IN list_expr
         .NotInListExpr => |nile| {
             const v = try evalExpr(allocator, nile.value.*, env);
@@ -2232,7 +2232,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
             break :blk_arr Value{ .List = list };
         },
-        // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=IMPLEMENTED; OWNER=eval; UPDATED=2025-12-23
+        // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-12-23
         // Handle bare list comprehension: [x IN list WHERE condition | x.property]
         .ListComprehension => |comp| blk_lc: {
             const source_val = try evalExpr(allocator, comp.source.*, env);
@@ -2305,7 +2305,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                         .Bool => |b| Value{ .Bool = b },
                         .Null => Value{ .Null = {} },
-                        // CANARY: REQ=REQ-LIST-PROP-006; FEATURE="ListProperties"; ASPECT=MemberAccess; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-LIST-PROP-006; FEATURE="ListProperties"; ASPECT=MemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
                         // Handle ExtValue specially - convert List back to Value.List
                         .ExtValue => |ext| switch (ext) {
                             .List => |list| blk_list: {
@@ -2346,7 +2346,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
                         .Bool => |b| Value{ .Bool = b },
                         .Null => Value{ .Null = {} },
-                        // CANARY: REQ=REQ-LIST-PROP-007; FEATURE="ListProperties"; ASPECT=EdgeMemberAccess; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-LIST-PROP-007; FEATURE="ListProperties"; ASPECT=EdgeMemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
                         // Handle ExtValue specially - convert List back to Value.List
                         .ExtValue => |ext| switch (ext) {
                             .List => |list| blk_list: {
@@ -2455,7 +2455,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             break :blk_member Value{ .Int = @intCast(seconds) };
                         }
                     },
-                    // CANARY: REQ=REQ-MAP-PROP-003; FEATURE="MapProperties"; ASPECT=JsonMemberAccess; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+                    // CANARY: REQ=REQ-MAP-PROP-003; FEATURE="MapProperties"; ASPECT=JsonMemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
                     // Handle member access on JSON strings (map properties stored as JSON)
                     .Json => |json_str| {
                         // Parse JSON and extract the field value
@@ -2493,7 +2493,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             break :blk_index Value{ .Null = {} };
         },
         .Slice => |slice| blk_slice: {
-            // CANARY: REQ=REQ-GQL-SLICE-003; FEATURE="ListSlicing"; ASPECT=Evaluation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-GQL-SLICE-003; FEATURE="ListSlicing"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
             // Handle list slicing like list[2..4]
             const target = try evalExpr(allocator, slice.target.*, env);
 
@@ -2570,7 +2570,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             break :blk_shortest path_value;
         },
         .PatternCount => |pc| blk_count: {
-            // CANARY: REQ=REQ-GQL-COUNT-SUBQUERY-002; FEATURE="CountSubquery"; ASPECT=Evaluation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+            // CANARY: REQ=REQ-GQL-COUNT-SUBQUERY-002; FEATURE="CountSubquery"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
             // C02 Fix: Pattern comprehension count with optional WHERE clause
             // Call the execution layer to count pattern matches (pass env for correlated patterns)
             const count = getExecutionCallbacks().countPatternMatches(allocator, pc.pattern.*, pc.where, env) catch {
@@ -2578,8 +2578,8 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             };
             break :blk_count Value{ .Int = count };
         },
-        // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=Evaluation; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
-        // CANARY: REQ=REQ-GQL-EXISTS-WHERE-002; FEATURE="ExistsWithWhere"; ASPECT=WherePassthrough; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+        // CANARY: REQ=REQ-GQL-EXISTS-001; FEATURE="ExistsSubquery"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
+        // CANARY: REQ=REQ-GQL-EXISTS-WHERE-002; FEATURE="ExistsWithWhere"; ASPECT=WherePassthrough; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
         .Exists => |ex| blk_exists: {
             // EXISTS predicate: return true if pattern matches at least once
             // Call the execution layer to count pattern matches (pass env for correlated subqueries)
@@ -2613,7 +2613,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             .String => |s| Value{ .Str = s },
                             .Int => |i| Value{ .Int = i },
                             .Bool => |b| Value{ .Bool = b },
-                            // CANARY: REQ=REQ-LIST-PROP-003; FEATURE="ListProperties"; ASPECT=Retrieval; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                            // CANARY: REQ=REQ-LIST-PROP-003; FEATURE="ListProperties"; ASPECT=Retrieval; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
                             // Handle ExtValue specially - convert List back to Value.List
                             .ExtValue => |ext| switch (ext) {
                                 .List => |list| blk_list: {
@@ -2634,7 +2634,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             .String => |s| Value{ .Str = s },
                             .Int => |i| Value{ .Int = i },
                             .Bool => |b| Value{ .Bool = b },
-                            // CANARY: REQ=REQ-LIST-PROP-004; FEATURE="ListProperties"; ASPECT=EdgeRetrieval; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+                            // CANARY: REQ=REQ-LIST-PROP-004; FEATURE="ListProperties"; ASPECT=EdgeRetrieval; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
                             // Handle ExtValue specially - convert List back to Value.List
                             .ExtValue => |ext| switch (ext) {
                                 .List => |list| blk_list: {
@@ -2673,7 +2673,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
     };
 }
 
-// CANARY: REQ=REQ-MAP-PROP-004; FEATURE="MapProperties"; ASPECT=JsonFieldExtraction; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+// CANARY: REQ=REQ-MAP-PROP-004; FEATURE="MapProperties"; ASPECT=JsonFieldExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
 /// Extract a field from a JSON string and return it as a Value
 /// Supports nested JSON object access by returning the nested JSON as ExtValue.Json
 fn extractJsonField(allocator: std.mem.Allocator, json_str: []const u8, field: []const u8) ?Value {
@@ -2835,7 +2835,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return Value{ .Null = {} };
     }
 
-    // CANARY: REQ=REQ-GQL-PROPERTIES-001; FEATURE="PropertiesFunction"; ASPECT=NodeProperties; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-PROPERTIES-001; FEATURE="PropertiesFunction"; ASPECT=NodeProperties; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
     // B05 Fix: Handle properties() function - returns property map of a node or edge
     if (std.mem.eql(u8, function_name, "properties")) {
         if (args.len != 1) return null;
@@ -2846,7 +2846,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = node.properties.iterator();
                 while (prop_iter.next()) |entry| {
-                    // CANARY: REQ=REQ-FLOAT-PROP-001; FEATURE="FloatPropertyPreservation"; ASPECT=NodeProperties; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+                    // CANARY: REQ=REQ-FLOAT-PROP-001; FEATURE="FloatPropertyPreservation"; ASPECT=NodeProperties; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
                     const prop_val: Value = switch (entry.value_ptr.*) {
                         .Null => Value{ .Null = {} },
                         .Bool => |b| Value{ .Bool = b },
@@ -2864,7 +2864,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = edge.properties.iterator();
                 while (prop_iter.next()) |entry| {
-                    // CANARY: REQ=REQ-FLOAT-PROP-002; FEATURE="FloatPropertyPreservation"; ASPECT=EdgeProperties; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+                    // CANARY: REQ=REQ-FLOAT-PROP-002; FEATURE="FloatPropertyPreservation"; ASPECT=EdgeProperties; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
                     const prop_val: Value = switch (entry.value_ptr.*) {
                         .Null => Value{ .Null = {} },
                         .Bool => |b| Value{ .Bool = b },
@@ -2882,7 +2882,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-GQL-KEYS-001; FEATURE="KeysFunction"; ASPECT=NodePropertyKeys; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-KEYS-001; FEATURE="KeysFunction"; ASPECT=NodePropertyKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
     // B06 Fix: Handle keys() function for maps AND nodes
     if (std.mem.eql(u8, function_name, "keys")) {
         if (args.len != 1) return null;
@@ -2939,7 +2939,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-GQL-PATH-002; FEATURE="ShortestPath"; ASPECT=GraphTraversal; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GQL-PATH-002; FEATURE="ShortestPath"; ASPECT=GraphTraversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-10
     // GAP-0088 RESOLVED: Proper path finding implementation
     // Handle shortestPath function - returns shortest path between nodes
     if (std.mem.eql(u8, function_name, "shortestpath") or std.mem.eql(u8, function_name, "shortest_path")) {
@@ -3002,7 +3002,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return Value{ .Null = {} };
     }
 
-    // CANARY: REQ=REQ-GQL-PATH-003; FEATURE="AllShortestPaths"; ASPECT=GraphTraversal; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-GQL-PATH-003; FEATURE="AllShortestPaths"; ASPECT=GraphTraversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-10
     // GAP-0088 RESOLVED: Proper all-paths implementation
     // Handle allShortestPaths function
     if (std.mem.eql(u8, function_name, "allshortestpaths") or std.mem.eql(u8, function_name, "all_shortest_paths")) {
@@ -3085,7 +3085,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-GQL-EXISTS-PROP-001; FEATURE="ExistsFunction"; ASPECT=PropertyExistence; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-GQL-EXISTS-PROP-001; FEATURE="ExistsFunction"; ASPECT=PropertyExistence; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
     // Handle exists() function - checks if a property exists on a node/edge (returns true/false)
     // This is different from EXISTS { ... } predicate which checks pattern matches
     if (std.mem.eql(u8, function_name, "exists")) {
@@ -3098,7 +3098,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return Value{ .Bool = arg != .Null };
     }
 
-    // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=IMPL; OWNER=types; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
     // Handle type() function - returns relationship type for edges, type name for other values
     if (std.mem.eql(u8, function_name, "type")) {
         if (args.len != 1) return null;
@@ -3125,7 +3125,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-GQL-INDEGREE-001; FEATURE="IndegreeFunction"; ASPECT=NodeDegree; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-03
+    // CANARY: REQ=REQ-GQL-INDEGREE-001; FEATURE="IndegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
     // Handle indegree() function - returns number of incoming edges to a node
     if (std.mem.eql(u8, function_name, "indegree")) {
         if (args.len != 1) return null;
@@ -3159,7 +3159,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-GQL-OUTDEGREE-001; FEATURE="OutdegreeFunction"; ASPECT=NodeDegree; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-03
+    // CANARY: REQ=REQ-GQL-OUTDEGREE-001; FEATURE="OutdegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
     // Handle outdegree() function - returns number of outgoing edges from a node
     if (std.mem.eql(u8, function_name, "outdegree")) {
         if (args.len != 1) return null;
@@ -3474,7 +3474,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return heapValueToEvalValue(result);
     }
 
-    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=datetime; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=datetime; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2025-12-22
     // Handle datetime() function - returns current datetime or parses ISO datetime string
     if (std.mem.eql(u8, function_name, "datetime")) {
         const datetime_module = @import("types/datetime.zig");
@@ -3502,7 +3502,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=timestamp; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=timestamp; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2025-12-22
     // Handle timestamp() function - returns current timestamp as integer (epoch millis)
     if (std.mem.eql(u8, function_name, "timestamp")) {
         if (args.len != 0) return null;
@@ -3510,7 +3510,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return Value{ .Int = ts };
     }
 
-    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=localdatetime; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=localdatetime; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2025-12-22
     // Handle localdatetime() function - returns current local datetime
     if (std.mem.eql(u8, function_name, "localdatetime")) {
         if (args.len == 0) {
@@ -3585,7 +3585,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration; STATUS=IMPL; OWNER=datetime; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2026-01-09
     // Handle duration() function - parses ISO 8601 duration string and returns Interval
     if (std.mem.eql(u8, function_name, "duration")) {
         if (args.len != 1) return null;
@@ -3602,7 +3602,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return Value{ .Interval = interval };
     }
 
-    // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=IMPL; OWNER=types; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
     // Handle type() function - returns the type name of a value
     if (std.mem.eql(u8, function_name, "type")) {
         if (args.len != 1) return null;
@@ -3650,7 +3650,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle algo.similarity.cosine(vector1, vector2) - Cosine similarity
-    // CANARY: REQ=REQ-ALG-SIM-001; FEATURE="SimilarityAlgorithms"; ASPECT=Cosine; STATUS=IMPL; OWNER=eval; UPDATED=2025-10-16
+    // CANARY: REQ=REQ-ALG-SIM-001; FEATURE="SimilarityAlgorithms"; ASPECT=Cosine; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2025-10-16
     if (std.mem.eql(u8, function_name, "algo.similarity.cosine") or std.mem.eql(u8, function_name, "cosine")) {
         if (args.len != 2) return null;
         const arg1 = try evalExpr(allocator, args[0].*, env);
@@ -3737,7 +3737,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const result = evaluator_functions.floor_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "pow") or std.mem.eql(u8, function_name, "power")) {
-        // CANARY: REQ=REQ-GQL-POWER-001; FEATURE="MathFunctions"; ASPECT=PowerAlias; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+        // CANARY: REQ=REQ-GQL-POWER-001; FEATURE="MathFunctions"; ASPECT=PowerAlias; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
         if (args.len != 2) return null;
         const heap_second_arg = evalValueToHeapValue(try evalExpr(allocator, args[1].*, env));
         const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch return null;
@@ -3779,7 +3779,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         };
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "log10")) {
-        // CANARY: REQ=REQ-GQL-LOG10-001; FEATURE="MathFunctions"; ASPECT=Log10; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+        // CANARY: REQ=REQ-GQL-LOG10-001; FEATURE="MathFunctions"; ASPECT=Log10; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
         // log10(x) = log(x) / log(10)
         switch (first_arg) {
             .Int => |i| {
@@ -3827,7 +3827,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         };
         return heapValueToEvalValue(result);
     } else if (std.mem.eql(u8, function_name, "size") or std.mem.eql(u8, function_name, "length")) {
-        // CANARY: REQ=REQ-GQL-SIZE-001; FEATURE="SizeFunction"; ASPECT=ListPropertySize; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-27
+        // CANARY: REQ=REQ-GQL-SIZE-001; FEATURE="SizeFunction"; ASPECT=ListPropertySize; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
         // Size of a list, string, or map
         switch (first_arg) {
             .List => |l| return Value{ .Int = @intCast(l.len) },
@@ -3841,7 +3841,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             else => return Value{ .Int = 0 },
         }
     } else if (std.mem.eql(u8, function_name, "head")) {
-        // CANARY: REQ=REQ-GQL-HEAD-001; FEATURE="ListFunctions"; ASPECT=HeadElement; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+        // CANARY: REQ=REQ-GQL-HEAD-001; FEATURE="ListFunctions"; ASPECT=HeadElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
         // Return the first element of a list
         switch (first_arg) {
             .List => |l| {
@@ -3851,7 +3851,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             else => return Value{ .Null = {} },
         }
     } else if (std.mem.eql(u8, function_name, "tail")) {
-        // CANARY: REQ=REQ-GQL-TAIL-001; FEATURE="ListFunctions"; ASPECT=TailElements; STATUS=IMPL; OWNER=eval; UPDATED=2026-01-09
+        // CANARY: REQ=REQ-GQL-TAIL-001; FEATURE="ListFunctions"; ASPECT=TailElements; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
         // Return all elements except the first
         switch (first_arg) {
             .List => |l| {
@@ -3865,7 +3865,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             else => return Value{ .List = &[_]Value{} },
         }
     } else if (std.mem.eql(u8, function_name, "last")) {
-        // CANARY: REQ=REQ-GQL-LAST-001; FEATURE="ListFunctions"; ASPECT=LastElement; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+        // CANARY: REQ=REQ-GQL-LAST-001; FEATURE="ListFunctions"; ASPECT=LastElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
         // Return the last element of a list
         switch (first_arg) {
             .List => |l| {
@@ -3913,7 +3913,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             else => return Value{ .Null = {} },
         }
     } else if (std.mem.eql(u8, function_name, "toboolean") or std.mem.eql(u8, function_name, "toBoolean") or std.mem.eql(u8, function_name, "tobool")) {
-        // CANARY: REQ=REQ-GQL-TOBOOLEAN-001; FEATURE="TypeConversionFunctions"; ASPECT=ToBooleanConversion; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-24
+        // CANARY: REQ=REQ-GQL-TOBOOLEAN-001; FEATURE="TypeConversionFunctions"; ASPECT=ToBooleanConversion; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
         // Convert to boolean
         switch (first_arg) {
             .Bool => |b| return Value{ .Bool = b },
@@ -3977,7 +3977,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-GQL-KEYS-003; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=IMPL; OWNER=eval; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-KEYS-003; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
     // B06 Fix: Handle keys() for Map, Node, AND Edge types
     if (std.mem.eql(u8, function_name, "keys")) {
         if (args.len != 1) return null;
@@ -4029,7 +4029,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; FEATURE="range() function"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=eval; UPDATED=2025-11-15
+    // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; FEATURE="range() function"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-11-15
     // Handle range(start, stop[, step]) function - generates integer sequences
     // Used for performance testing: UNWIND range(1, 100) AS x RETURN x
     if (std.mem.eql(u8, function_name, "range")) {
@@ -4101,7 +4101,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     return null;
 }
 
-// CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration_parsing; STATUS=IMPL; OWNER=datetime; UPDATED=2025-12-22
+// CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration_parsing; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2025-12-22
 /// Parse ISO 8601 duration string (e.g., "P1Y2M3D", "PT2H30M", "P1DT12H")
 /// Returns duration in seconds
 fn parseDurationString(str: []const u8) !i64 {
@@ -4160,7 +4160,7 @@ fn parseDurationString(str: []const u8) !i64 {
     return seconds;
 }
 
-// CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type_name; STATUS=IMPL; OWNER=types; UPDATED=2025-12-22
+// CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type_name; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
 /// Get the type name of a Value for the type() function
 fn getTypeName(value: Value) []const u8 {
     return switch (value) {

@@ -257,18 +257,18 @@ pub fn build(b: *std.Build) void {
     });
     // (TDE security module imported indirectly via geode root; dedicated module variable removed)
 
-    // CANARY: REQ=REQ-GQL-UNICODE-006; FEATURE="UnicodeBuildIntegration"; ASPECT=BuildStep; STATUS=IMPL; OWNER=unicode; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-GQL-UNICODE-006; FEATURE="UnicodeBuildIntegration"; ASPECT=BuildStep; STATUS=EXEMPT; OWNER=unicode; UPDATED=2026-01-14
     // GAP-0169: Unicode generator build step enforcement - now properly wired
     // Use plain 'zig' from PATH for generator (0.15 Build struct no longer exposes zig_exe field directly)
     const unicode_gen_cmd = b.addSystemCommand(&.{ "zig", "run", "tools/gen_unicode_tables.zig", "third_party/unicode/ucd/UnicodeData.txt", "src/unicode/generated" });
     unicode_gen_cmd.setName("unicode-gen");
 
-    // CANARY: REQ=REQ-GQL-UNICODE-007; FEATURE="UnicodeBuildEnforcement"; ASPECT=Verification; STATUS=IMPL; OWNER=unicode; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-GQL-UNICODE-007; FEATURE="UnicodeBuildEnforcement"; ASPECT=Verification; STATUS=EXEMPT; OWNER=unicode; UPDATED=2026-01-14
     // GAP-0169: Create explicit build step for unicode generation
     const unicode_step = b.step("unicode-gen", "Generate Unicode lookup tables from UCD data");
     unicode_step.dependOn(&unicode_gen_cmd.step);
 
-    // CANARY: REQ=REQ-GQL-UNICODE-008; FEATURE="UnicodeBuildVerification"; ASPECT=TableCheck; STATUS=IMPL; OWNER=unicode; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-GQL-UNICODE-008; FEATURE="UnicodeBuildVerification"; ASPECT=TableCheck; STATUS=EXEMPT; OWNER=unicode; UPDATED=2026-01-14
     // GAP-0169: Verification step that checks if generated tables exist
     // This warns at build time if tables are missing/stale but doesn't block the build
     // (allows development without UCD files, while CI can enforce generation)
@@ -283,7 +283,7 @@ pub fn build(b: *std.Build) void {
     unicode_verify_cmd.setName("unicode-verify");
 
     // Field-Level Encryption modules
-    // CANARY: REQ=REQ-FLE-BUILD-001; FEATURE="FieldLevelEncryption"; ASPECT=BUILD; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+    // CANARY: REQ=REQ-FLE-BUILD-001; FEATURE="FieldLevelEncryption"; ASPECT=BUILD; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15
     const fle_aead_mod = b.createModule(.{ .root_source_file = b.path("src/crypto/aead.zig"), .target = target, .optimize = optimize });
     const fle_hkdf_mod = b.createModule(.{ .root_source_file = b.path("src/crypto/hkdf.zig"), .target = target, .optimize = optimize });
     const fle_hmac_mod = b.createModule(.{ .root_source_file = b.path("src/crypto/hmac.zig"), .target = target, .optimize = optimize });
@@ -543,7 +543,7 @@ pub fn build(b: *std.Build) void {
     canary_step.dependOn(&run_canary.step);
 
     // Add Phase 1 performance benchmark step
-    // CANARY: REQ=REQ-PERF-PHASE1-BENCH-001; FEATURE="PerformanceBenchmarking"; ASPECT=BUILD; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+    // CANARY: REQ=REQ-PERF-PHASE1-BENCH-001; FEATURE="PerformanceBenchmarking"; ASPECT=BUILD; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
     const phase1_benchmarks = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("benchmarks/phase1_benchmarks.zig"),
@@ -556,7 +556,7 @@ pub fn build(b: *std.Build) void {
     benchmark_step.dependOn(&run_phase1_benchmarks.step);
 
     // Add Phase 2 storage optimization benchmarks
-    // CANARY: REQ=REQ-PERF-PHASE2-BENCH-001; FEATURE="StorageBenchmarking"; ASPECT=BUILD; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+    // CANARY: REQ=REQ-PERF-PHASE2-BENCH-001; FEATURE="StorageBenchmarking"; ASPECT=BUILD; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
     const phase2_benchmarks = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("benchmarks/phase2_benchmarks.zig"),
@@ -568,7 +568,7 @@ pub fn build(b: *std.Build) void {
     benchmark_step.dependOn(&run_phase2_benchmarks.step);
 
     // Add Phase 3 concurrency & memory optimization benchmarks
-    // CANARY: REQ=REQ-PERF-PHASE3-BENCH-001; FEATURE="ConcurrencyBenchmarking"; ASPECT=BUILD; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+    // CANARY: REQ=REQ-PERF-PHASE3-BENCH-001; FEATURE="ConcurrencyBenchmarking"; ASPECT=BUILD; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
     const phase3_benchmarks = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("benchmarks/phase3_benchmarks.zig"),
@@ -1009,7 +1009,7 @@ pub fn build(b: *std.Build) void {
     const gen_fuzz_step = b.step("gen-fuzz", "Generate fuzz target scaffold");
     gen_fuzz_step.dependOn(&gen_fuzz_run.step);
 
-    // CANARY: REQ=REQ-SYNTAX-GEN-002; FEATURE="VSCodeSyntaxGeneration"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // CANARY: REQ=REQ-SYNTAX-GEN-002; FEATURE="VSCodeSyntaxGeneration"; ASPECT=BuildTarget; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
     // Syntax generator - generates gql.tmLanguage.json from language_metadata
     const gen_syntax_exe = b.addExecutable(.{
         .name = "generate_syntax",
@@ -1025,7 +1025,7 @@ pub fn build(b: *std.Build) void {
     const gen_syntax_step = b.step("generate-syntax", "Generate VSCode syntax highlighting from metadata");
     gen_syntax_step.dependOn(&gen_syntax_run.step);
 
-    // CANARY: REQ=REQ-SYNTAX-VIM-002; FEATURE="VimSyntaxGeneration"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // CANARY: REQ=REQ-SYNTAX-VIM-002; FEATURE="VimSyntaxGeneration"; ASPECT=BuildTarget; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
     // Vim syntax generator - generates gql.vim from language_metadata
     const gen_vim_syntax_exe = b.addExecutable(.{
         .name = "generate_vim_syntax",
@@ -1041,7 +1041,7 @@ pub fn build(b: *std.Build) void {
     const gen_vim_syntax_step = b.step("generate-vim-syntax", "Generate Vim/Neovim syntax highlighting from metadata");
     gen_vim_syntax_step.dependOn(&gen_vim_syntax_run.step);
 
-    // CANARY: REQ=REQ-API-DOCS-002; FEATURE="APIDocumentation"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // CANARY: REQ=REQ-API-DOCS-002; FEATURE="APIDocumentation"; ASPECT=BuildTarget; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
     // API documentation generator
     const gen_api_docs_exe = b.addExecutable(.{
         .name = "generate_api_docs",
@@ -1057,7 +1057,7 @@ pub fn build(b: *std.Build) void {
     const gen_api_docs_step = b.step("generate-api-docs", "Generate API documentation from metadata");
     gen_api_docs_step.dependOn(&gen_api_docs_run.step);
 
-    // CANARY: REQ=REQ-META-VALIDATE-002; FEATURE="MetadataValidation"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // CANARY: REQ=REQ-META-VALIDATE-002; FEATURE="MetadataValidation"; ASPECT=BuildTarget; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=tooling; UPDATED=2026-01-03
     // Metadata sync validation
     const validate_meta_exe = b.addExecutable(.{
         .name = "validate_metadata_sync",
@@ -1073,7 +1073,7 @@ pub fn build(b: *std.Build) void {
     const validate_meta_step = b.step("validate-metadata", "Validate generated files are in sync with metadata");
     validate_meta_step.dependOn(&validate_meta_run.step);
 
-    // CANARY: REQ=REQ-FUZZ-DICT-002; FEATURE="FuzzDictionaries"; ASPECT=BuildTarget; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+    // CANARY: REQ=REQ-FUZZ-DICT-002; FEATURE="FuzzDictionaries"; ASPECT=BuildTarget; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
     // Fuzz dictionary generator
     const gen_fuzz_dict_exe = b.addExecutable(.{
         .name = "generate_fuzz_dict",

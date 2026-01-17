@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Output; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Output; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! Output Formatters
 //! Streaming output in GQL, CSV, and binary formats
 

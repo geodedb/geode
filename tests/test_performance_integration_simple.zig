@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const print = std.debug.print;
 
-// CANARY: REQ=REQ-PERF-INT-002; FEATURE="PerformanceIntegrationSimple"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_PerformanceIntegrationSimple; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-INT-002; FEATURE="PerformanceIntegrationSimple"; ASPECT=Testing; STATUS=EXEMPT; TEST=TestCANARY_PerformanceIntegrationSimple; OWNER=performance; UPDATED=2025-10-04
 
 // Simplified performance integration tests that work within module constraints
 // Tests the integration and interaction of performance optimization concepts

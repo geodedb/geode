@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001; FEATURE="Vector Index Population Integration"; ASPECT=IntegrationTesting; STATUS=IMPL; TEST=TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001; OWNER=claude; UPDATED=2025-01-05
+// CANARY: REQ=REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001; FEATURE="Vector Index Population Integration"; ASPECT=IntegrationTesting; STATUS=TESTED; TEST=geodetestlab/specs/vector_operations_basic.yml; TEST=TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001; OWNER=claude; UPDATED=2025-01-05
 // Integration tests for vector index population with CREATE INDEX statement execution
 
 const std = @import("std");

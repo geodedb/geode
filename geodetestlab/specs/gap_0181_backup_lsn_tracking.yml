@@ -1,5 +1,5 @@
 # GAP-0181: Incremental Backup LSN Tracking Tests
-# CANARY: REQ=REQ-BACKUP-LSN-TRACKING-001; FEATURE="BackupLSNTracking"; ASPECT=GeodeTestlab; STATUS=IMPL; OWNER=backup; UPDATED=2026-01-14
+# CANARY: REQ=REQ-BACKUP-LSN-TRACKING-001; FEATURE="BackupLSNTracking"; ASPECT=GeodeTestlab; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
 
 version: "1.0"
 name: "GAP-0181 Backup LSN Tracking Tests"

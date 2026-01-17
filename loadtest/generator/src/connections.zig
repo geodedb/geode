@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Connections; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Connections; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! Connection Generator
 //! Generates realistic network traffic patterns between hosts
 

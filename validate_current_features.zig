@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-NET-TYPES-VALIDATION; FEATURE="Network Types Validation Script"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_NET_TYPES_VALIDATION_Script; OWNER=testing; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-NET-TYPES-VALIDATION; FEATURE="Network Types Validation Script"; ASPECT=Testing; STATUS=EXEMPT; TEST=TestCANARY_REQ_GQL_NET_TYPES_VALIDATION_Script; OWNER=testing; UPDATED=2025-01-03
 
 // Validation script to test current Geode features and Network Types implementation
 // This script validates that our Network Types are properly integrated and working

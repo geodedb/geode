@@ -656,7 +656,7 @@ fn processProtocolMessage(
 
         log.debug("Client: {s} version {s}", .{ client_name, client_ver });
 
-        // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=IMPL; OWNER=2025-10-25
+        // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=2025-10-25
         // Extract and validate authentication credentials (using global geode import to share state)
         const user_mgmt = geode.user_management;
 
@@ -811,7 +811,7 @@ fn processProtocolMessage(
             // Parse error - will be handled by runQueryWithAuth
         }
 
-        // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
+        // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=cli; UPDATED=2025-10-25
         // Execute query with authenticated user context (using global geode import)
         const options = geode.test_harness.QueryOptions{
             .token = null,
@@ -1044,7 +1044,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
     const stream_id = @intFromPtr(stream);
     log.debug("Stream handler started (id={x})", .{stream_id});
 
-    // CANARY: REQ=REQ-AUTH-QUIC-001; FEATURE="QUIC Authentication"; ASPECT=ConnectionAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
+    // CANARY: REQ=REQ-AUTH-QUIC-001; FEATURE="QUIC Authentication"; ASPECT=ConnectionAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=cli; UPDATED=2025-10-25
     // Connection-scoped authentication state
     var authenticated_username: ?[]const u8 = null;
     defer if (authenticated_username) |username| allocator.free(username);
@@ -1132,7 +1132,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
 
             log.debug("Client: {s} version {s}", .{ client_name, client_ver });
 
-            // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=IMPL; OWNER=2025-10-25
+            // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=2025-10-25
             // Extract and validate authentication credentials (using global geode import to share state)
             const user_mgmt = geode.user_management;
 
@@ -1236,7 +1236,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             }
             if (!params_valid) continue;
 
-            // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-25
+            // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=cli; UPDATED=2025-10-25
             // Execute query with authenticated user context (using global geode import)
             const options = geode.test_harness.QueryOptions{
                 .token = null,
@@ -1782,7 +1782,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
                 };
 
                 const stream_id = stream.stream_id;
-                // CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-002; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=IMPL; OWNER=cli; UPDATED=2025-12-27
+                // CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-002; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-12-27
                 // Use destroyStream to properly remove from tracked list before destroying
                 // This prevents double-free when connection closes later
                 conn_state.conn.destroyStream(stream);
@@ -1849,7 +1849,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     }
 }
 // GAP-0138 CODE CLEANUP: Removed dead code runEmbeddedClient function
-// CANARY: REQ=REQ-CODE-QUALITY-001; FEATURE="DeadCodeRemoval"; ASPECT=Maintenance; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-13
+// CANARY: REQ=REQ-CODE-QUALITY-001; FEATURE="DeadCodeRemoval"; ASPECT=Maintenance; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-13
 // This function was defined but never called anywhere in the codebase.
 // It was superseded by executeQuicQuery() which properly implements TLS certificate verification (GAP-0113).
 // The misleading TODO comment "add TLS certificate verification option" has been resolved by this removal.
@@ -2167,7 +2167,7 @@ fn printRevokeUsage() void {
 // Subcommand implementations
 
 // JSON protocol handler for Go client compatibility (process/stdio mode)
-// CANARY: REQ=REQ-LSP-001; FEATURE="Language Server Protocol"; ASPECT=LSPServer; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-28
+// CANARY: REQ=REQ-LSP-001; FEATURE="Language Server Protocol"; ASPECT=LSPServer; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-10-28
 fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check for help flag
     var i: usize = start_idx + 1;

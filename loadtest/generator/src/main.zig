@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Main; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-03
+// CANARY: REQ=REQ-LOADTEST-GENERATOR-001; FEATURE="StreamingDataGenerator"; ASPECT=Main; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
 //! Geode Load Test Data Generator
 //! High-performance streaming data generator for IPv4 network simulation
 

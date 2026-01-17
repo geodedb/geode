@@ -631,7 +631,7 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
 }
 
 // ========== TDE TEST PROCEDURES - REAL IMPLEMENTATIONS ==========
-// CANARY: REQ=REQ-TDE-TEST-IMPL; FEATURE="TDETestImplementations"; ASPECT=RealFunctionality; STATUS=IMPL; OWNER=tde; UPDATED=2025-11-12
+// CANARY: REQ=REQ-TDE-TEST-IMPL; FEATURE="TDETestImplementations"; ASPECT=RealFunctionality; STATUS=EXEMPT; OWNER=tde; UPDATED=2025-11-12
 
 /// Key provider types
 pub const KeyProvider = key_manager.KeyProvider;

@@ -240,7 +240,7 @@ pub const LeidenDetector = struct {
         return moved;
     }
 
-    // CANARY: REQ=REQ-GRAPH-LEIDEN-AGG-001; FEATURE="Leiden Network Aggregation"; ASPECT=Aggregation; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-GRAPH-LEIDEN-AGG-001; FEATURE="Leiden Network Aggregation"; ASPECT=Aggregation; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-08
     fn aggregateNetwork(
         self: *LeidenDetector,
         node_info: *std.AutoHashMap(u64, NodeInfo),

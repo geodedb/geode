@@ -602,7 +602,7 @@ pub const EnhancedQueryTransport = struct {
         return 1000; // Default estimate
     }
 
-    // CANARY: REQ=REQ-DIST-LB-001; FEATURE="Load Balancing"; ASPECT=ShardSelection; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-DIST-LB-001; FEATURE="Load Balancing"; ASPECT=ShardSelection; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-08
     /// Select the best shard for a query using the configured load balancing strategy
     pub fn selectShardForQuery(self: *EnhancedQueryTransport, available_shards: []const u64, query_key: ?[]const u8) !u64 {
         if (available_shards.len == 0) return error.NoShardsAvailable;

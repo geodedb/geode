@@ -677,7 +677,7 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     };
 }
 
-// CANARY: REQ=REQ-GQL-HARMONIC-001; FEATURE="HarmonicCentrality"; ASPECT=Centrality; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-HARMONIC-001; FEATURE="HarmonicCentrality"; ASPECT=Centrality; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Harmonic Centrality - sum of reciprocal distances (handles disconnected graphs better than closeness)
 pub fn executeHarmonicCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -737,7 +737,7 @@ pub fn executeHarmonicCentrality(allocator: std.mem.Allocator, store: *graph_sto
     };
 }
 
-// CANARY: REQ=REQ-GQL-BRIDGE-LEV-001; FEATURE="BridgeLeverageCentrality"; ASPECT=Centrality; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-BRIDGE-LEV-001; FEATURE="BridgeLeverageCentrality"; ASPECT=Centrality; STATUS=EXEMPT; OWNER=graph; UPDATED=2026-01-03
 /// Bridge/Leverage Centrality - measures how much removing a node would disconnect the graph
 pub fn executeBridgeLeverageCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -775,7 +775,7 @@ pub fn executeBridgeLeverageCentrality(allocator: std.mem.Allocator, store: *gra
     };
 }
 
-// CANARY: REQ=REQ-GQL-GREY-CARDINAL-001; FEATURE="GreyCardinalComposite"; ASPECT=Centrality; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-GREY-CARDINAL-001; FEATURE="GreyCardinalComposite"; ASPECT=Centrality; STATUS=EXEMPT; OWNER=graph; UPDATED=2026-01-03
 /// Grey Cardinal Composite - combines multiple centrality metrics
 pub fn executeGreyCardinalComposite(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -866,7 +866,7 @@ pub fn executeGreyCardinalComposite(allocator: std.mem.Allocator, store: *graph_
     };
 }
 
-// CANARY: REQ=REQ-GQL-LEIDEN-001; FEATURE="LeidenCommunityDetection"; ASPECT=Community; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-LEIDEN-001; FEATURE="LeidenCommunityDetection"; ASPECT=Community; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Leiden Algorithm - improved community detection (similar to Louvain but with refinement)
 pub fn executeLeidenCommunities(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -967,7 +967,7 @@ pub fn executeLeidenCommunities(allocator: std.mem.Allocator, store: *graph_stor
     };
 }
 
-// CANARY: REQ=REQ-GQL-ARTICULATION-001; FEATURE="ArticulationPoints"; ASPECT=Connectivity; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-ARTICULATION-001; FEATURE="ArticulationPoints"; ASPECT=Connectivity; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Find Articulation Points (cut vertices) - nodes whose removal disconnects the graph
 pub fn executeArticulationPoints(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -1080,7 +1080,7 @@ pub fn executeArticulationPoints(allocator: std.mem.Allocator, store: *graph_sto
     };
 }
 
-// CANARY: REQ=REQ-GQL-BRIDGES-001; FEATURE="BridgeEdges"; ASPECT=Connectivity; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-BRIDGES-001; FEATURE="BridgeEdges"; ASPECT=Connectivity; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Find Bridge Edges (cut edges) - edges whose removal disconnects the graph
 pub fn executeBridges(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -1174,7 +1174,7 @@ pub fn executeBridges(allocator: std.mem.Allocator, store: *graph_store.GraphSto
     };
 }
 
-// CANARY: REQ=REQ-GQL-BICONNECTED-001; FEATURE="BiconnectedComponents"; ASPECT=Connectivity; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-BICONNECTED-001; FEATURE="BiconnectedComponents"; ASPECT=Connectivity; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Find Biconnected Components - maximal 2-edge-connected subgraphs
 pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -1252,7 +1252,7 @@ pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_
 // GRAPH STATISTICS FUNCTIONS (#67)
 // ============================================================================
 
-// CANARY: REQ=REQ-GQL-GRAPH-DENSITY-001; FEATURE="GraphDensity"; ASPECT=Statistics; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-GRAPH-DENSITY-001; FEATURE="GraphDensity"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Graph Density - ratio of actual edges to maximum possible edges
 /// For undirected: 2E / (N * (N-1)), for directed: E / (N * (N-1))
 pub fn executeGraphDensity(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
@@ -1276,7 +1276,7 @@ pub fn executeGraphDensity(allocator: std.mem.Allocator, store: *graph_store.Gra
     };
 }
 
-// CANARY: REQ=REQ-GQL-GRAPH-DIAMETER-001; FEATURE="GraphDiameter"; ASPECT=Statistics; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-GRAPH-DIAMETER-001; FEATURE="GraphDiameter"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Graph Diameter - the longest shortest path between any two nodes
 pub fn executeGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -1333,7 +1333,7 @@ pub fn executeGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.Gr
     };
 }
 
-// CANARY: REQ=REQ-GQL-MEAN-DISTANCE-001; FEATURE="MeanDistance"; ASPECT=Statistics; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-MEAN-DISTANCE-001; FEATURE="MeanDistance"; ASPECT=Statistics; STATUS=EXEMPT; OWNER=graph; UPDATED=2026-01-03
 /// Mean Distance (Average Path Length) - average shortest path length between all pairs
 pub fn executeMeanDistance(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -1398,7 +1398,7 @@ pub fn executeMeanDistance(allocator: std.mem.Allocator, store: *graph_store.Gra
     };
 }
 
-// CANARY: REQ=REQ-GQL-GLOBAL-CLUSTERING-001; FEATURE="GlobalClusteringCoefficient"; ASPECT=Statistics; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-GLOBAL-CLUSTERING-001; FEATURE="GlobalClusteringCoefficient"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Global Clustering Coefficient - ratio of closed triplets to all triplets
 pub fn executeGlobalClusteringCoefficient(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -1460,7 +1460,7 @@ pub fn executeGlobalClusteringCoefficient(allocator: std.mem.Allocator, store: *
 // KATZ AND HITS CENTRALITY (#69)
 // ============================================================================
 
-// CANARY: REQ=REQ-GQL-KATZ-001; FEATURE="KatzCentrality"; ASPECT=Centrality; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-KATZ-001; FEATURE="KatzCentrality"; ASPECT=Centrality; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Katz Centrality - weighted sum of paths with attenuation factor alpha
 /// Katz(i) = sum_k(alpha^k * A^k * 1) where A is adjacency matrix
 pub fn executeKatzCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, params: ?std.json.Value) !ExecutionResult {
@@ -1558,7 +1558,7 @@ pub fn executeKatzCentrality(allocator: std.mem.Allocator, store: *graph_store.G
     };
 }
 
-// CANARY: REQ=REQ-GQL-HITS-001; FEATURE="HITSAlgorithm"; ASPECT=Centrality; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-HITS-001; FEATURE="HITSAlgorithm"; ASPECT=Centrality; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// HITS (Hyperlink-Induced Topic Search) - Kleinberg's algorithm
 /// Returns hub and authority scores for each node
 pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, params: ?std.json.Value) !ExecutionResult {
@@ -1722,7 +1722,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
 // TRIANGLE COUNTING AND CLUSTERING COEFFICIENT (#70)
 // ============================================================================
 
-// CANARY: REQ=REQ-GQL-TRIANGLE-COUNT-001; FEATURE="TriangleCounting"; ASPECT=Statistics; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-TRIANGLE-COUNT-001; FEATURE="TriangleCounting"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Triangle Counting - count the number of triangles in the graph
 pub fn executeTriangleCounting(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -1773,7 +1773,7 @@ pub fn executeTriangleCounting(allocator: std.mem.Allocator, store: *graph_store
     };
 }
 
-// CANARY: REQ=REQ-GQL-LOCAL-CLUSTERING-001; FEATURE="LocalClusteringCoefficient"; ASPECT=Statistics; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-LOCAL-CLUSTERING-001; FEATURE="LocalClusteringCoefficient"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Local Clustering Coefficient - for each node, ratio of triangles to possible triangles
 pub fn executeLocalClusteringCoefficient(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
@@ -1831,7 +1831,7 @@ pub fn executeLocalClusteringCoefficient(allocator: std.mem.Allocator, store: *g
 // K-CORE AND K-SHELL DECOMPOSITION (#71)
 // ============================================================================
 
-// CANARY: REQ=REQ-GQL-KCORE-001; FEATURE="KCoreDecomposition"; ASPECT=Community; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-KCORE-001; FEATURE="KCoreDecomposition"; ASPECT=Community; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// K-Core Decomposition - finds the maximal subgraph where all nodes have degree >= k
 /// Returns nodes that belong to the k-core for each k value (coreness)
 pub fn executeKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
@@ -1912,7 +1912,7 @@ pub fn executeKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore
     };
 }
 
-// CANARY: REQ=REQ-GQL-KSHELL-001; FEATURE="KShellDecomposition"; ASPECT=Community; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-KSHELL-001; FEATURE="KShellDecomposition"; ASPECT=Community; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// K-Shell Decomposition - nodes are assigned to the shell where they are removed
 /// Shell k contains nodes with coreness exactly k (not in k+1 core but in k-core)
 pub fn executeKShell(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {

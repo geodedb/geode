@@ -2260,7 +2260,7 @@ if (chain.head) |node_pattern| {
 Moved the `chain.hops.len > 0` check BEFORE the head node check to ensure that relationships are always matched:
 
 ```zig
-// CANARY: REQ=REQ-GQL-CHAIN-FIX-002; FEATURE="BoundVariableShortcutFix"; ASPECT=HopsCheck; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+// CANARY: REQ=REQ-GQL-CHAIN-FIX-002; FEATURE="BoundVariableShortcutFix"; ASPECT=HopsCheck; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
 if (q.match.chains.len > 0) {
     for (q.match.chains) |chain| {
         // First check: if there are any hops (relationships), we cannot use the shortcut
@@ -2285,7 +2285,7 @@ if (q.match.chains.len > 0) {
 Added check for `q.ret.items.len == 0` before processing RETURN expressions. When there's no RETURN clause, the code now returns `with_result` directly to preserve bindings for the next query in the chain.
 
 ```zig
-// CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-23
+// CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-23
 if (q.ret.items.len == 0) {
     result = with_result;
 } else {
@@ -2885,7 +2885,7 @@ Frank -[:FRIEND]-> Alice  (creates a cycle)
 Added direction-aware edge traversal that checks the relationship direction pattern:
 
 ```zig
-// CANARY: REQ=REQ-GQL-OPTIONAL-UNDIRECTED-001; FEATURE="UndirectedOptionalMatch"; ASPECT=EdgeDirection; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+// CANARY: REQ=REQ-GQL-OPTIONAL-UNDIRECTED-001; FEATURE="UndirectedOptionalMatch"; ASPECT=EdgeDirection; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
 const rel_direction = hop.rel.dir;
 const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected)
     store.getEdgesFrom(base_node.id) else &[_]graph_store.Edge{};
@@ -3303,7 +3303,7 @@ MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) 
 Added MATCH-after-WHERE handling in `src/gql/parser.zig` lines 1750-1779:
 
 ```zig
-// CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=IMPL; OWNER=parser; UPDATED=2025-12-26
+// CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-26
 // Check for required MATCH after WHERE clause
 // e.g., MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN ...
 if (self.cur.kind == .MATCH) {

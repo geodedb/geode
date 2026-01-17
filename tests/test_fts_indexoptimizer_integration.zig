@@ -187,7 +187,7 @@ const MockIndexOptimizer = struct {
     }
 };
 
-// CANARY: REQ=REQ-GQL-FTS-003; FEATURE="FTS IndexOptimizer Integration"; ASPECT=TESTING; STATUS=IMPL; TEST=TestCANARY_FTS_IndexOptimizer_Integration; OWNER=search; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-FTS-003; FEATURE="FTS IndexOptimizer Integration"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/fulltext_search_basic.yml; TEST=TestCANARY_FTS_IndexOptimizer_Integration; OWNER=search; UPDATED=2025-10-04
 test "FTS IndexOptimizer Integration: Basic query optimization" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

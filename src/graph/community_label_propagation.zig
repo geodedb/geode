@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-065; FEATURE="CommunityDetection"; ASPECT=LabelPropagation; STATUS=IMPL; OWNER=graph; UPDATED=2025-12-30
+// CANARY: REQ=REQ-GQL-065; FEATURE="CommunityDetection"; ASPECT=LabelPropagation; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2025-12-30
 
 /// Label propagation community detection algorithm.
 /// Iteratively assigns each node the most frequent label among its neighbors

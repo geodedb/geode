@@ -304,7 +304,7 @@ fn compareBindings(_: void, a: Binding, b: Binding) bool {
     return a_node_id < b_node_id;
 }
 
-// CANARY: REQ=REQ-WITH-WHERE-001; FEATURE="WITH WHERE Filtering"; ASPECT=QueryExecution; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-10
+// CANARY: REQ=REQ-WITH-WHERE-001; FEATURE="WITH WHERE Filtering"; ASPECT=QueryExecution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2026-01-10
 // Execute WITH clause - processes intermediate results and applies transformations
 pub fn executeWith(
     allocator: std.mem.Allocator,
@@ -351,7 +351,7 @@ pub fn executeWith(
     return results.toOwnedSlice(allocator);
 }
 
-// CANARY: REQ=REQ-WHERE-EVAL-001; FEATURE="WHERE Condition Evaluation"; ASPECT=Filtering; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-10
+// CANARY: REQ=REQ-WHERE-EVAL-001; FEATURE="WHERE Condition Evaluation"; ASPECT=Filtering; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2026-01-10
 /// Evaluate a WHERE condition expression and return true if condition is satisfied
 fn evaluateWhereCondition(allocator: std.mem.Allocator, expr: ast.Expr, binding: *const Binding) !bool {
     return switch (expr) {

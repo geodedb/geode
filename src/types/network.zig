@@ -42,7 +42,7 @@ pub fn mac_is_locally_administered(mac: Mac) bool {
     return mac.isLocallyAdministered();
 }
 
-// CANARY: REQ=REQ-GQL-NET-FUNC-001; FEATURE="NetworkFunctions"; ASPECT=BuiltinFunctions; STATUS=IMPL; OWNER=types; UPDATED=2025-10-19
+// CANARY: REQ=REQ-GQL-NET-FUNC-001; FEATURE="NetworkFunctions"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/network_types_basic.yml; OWNER=types; UPDATED=2025-10-19
 // Additional network utility functions for GQL integration
 
 /// Alias for mac_is_locally_administered to match GQL naming convention

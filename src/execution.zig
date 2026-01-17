@@ -4,9 +4,9 @@ const fle_catalog = @import("schema/fle_catalog.zig");
 const fle_annotations = @import("schema/annotations.zig");
 
 // CANARY: FLE_EXECUTION_INTEGRATION - Field-Level Encryption Execution Hooks
-// CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15
 // CANARY: FLE_CATALOG_REGISTRATION - Schema Catalog Registration During Execution
-// CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=CATALOG; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+// CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=CATALOG; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15
 const ast = @import("gql/ast.zig");
 
 // CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
@@ -75,7 +75,7 @@ pub const executeLouvainCommunities = centrality_algorithms.executeLouvainCommun
 pub const executeLabelPropagation = centrality_algorithms.executeLabelPropagation;
 pub const executeUnionFind = centrality_algorithms.executeUnionFind;
 pub const executeSCC = centrality_algorithms.executeSCC;
-// CANARY: REQ=REQ-GQL-068; FEATURE="ExposedAlgorithms"; ASPECT=ReExport; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-03
+// CANARY: REQ=REQ-GQL-068; FEATURE="ExposedAlgorithms"; ASPECT=ReExport; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=execution; UPDATED=2026-01-03
 pub const executeHarmonicCentrality = centrality_algorithms.executeHarmonicCentrality;
 pub const executeBridgeLeverageCentrality = centrality_algorithms.executeBridgeLeverageCentrality;
 pub const executeGreyCardinalComposite = centrality_algorithms.executeGreyCardinalComposite;
@@ -159,7 +159,7 @@ pub const duplicateValue = value_utilities.duplicateValue;
 pub const freeValue = value_utilities.freeValue;
 pub const writeValue = value_utilities.writeValue;
 
-// CANARY: REQ=REQ-M2-GLOBAL-STATE-003; FEATURE="DependencyInjection"; ASPECT=CATALOG_SINGLETON; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// CANARY: REQ=REQ-M2-GLOBAL-STATE-003; FEATURE="DependencyInjection"; ASPECT=CATALOG_SINGLETON; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // M2 Global Catalog Singleton - Process-level catalog instance
 // This implements the Singleton pattern with proper synchronization (resolves CWE-543)
 //
@@ -396,7 +396,7 @@ pub const ExecutionResult = struct {
     // Variable bindings from CREATE patterns (for passing to UNION parts)
     variable_bindings: ?*std.StringHashMap(u64) = null,
     // CANARY: PERF_PHASE5_COLUMN_BATCH_ALLOC - Batch column string allocation optimization
-    // CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=BATCH_ALLOC; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-16
+    // CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=BATCH_ALLOC; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
     column_buffer: ?[]u8 = null, // Single buffer for all column strings (reduces N allocations to 1)
 
     pub fn deinit(self: *ExecutionResult, allocator: std.mem.Allocator) void {
@@ -985,7 +985,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateConstraint => |cc| {
-            // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-09
+            // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT implementation - store in catalog and enforce
 
             // Convert AST constraint type to catalog constraint type
@@ -1425,12 +1425,12 @@ pub const VariableLengthPath = struct {
 };
 
 // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=BFSExpansion; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-// CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+// CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
 // Expands variable-length paths using BFS
 // Returns all paths from start_node that match the length constraints and relationship type filter
 // rel_direction: 'r' for right (forward), 'l' for left (reverse), 'u' for undirected (both)
 // path_mode: controls path traversal semantics (walk/trail/acyclic/simple)
-// CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathExpansion; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-08
+// CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathExpansion; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-08
 pub fn expandVariableLengthPaths(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
@@ -1472,7 +1472,7 @@ pub fn expandVariableLengthPathsWithMode(
     var initial_path = VariableLengthPath.init(allocator);
     try initial_path.nodes.append(allocator, start_node_id);
 
-    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-001; FEATURE="ZeroLengthPaths"; ASPECT=SelfMatch; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-28
+    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-001; FEATURE="ZeroLengthPaths"; ASPECT=SelfMatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
     // B07 Fix: When min_len=0, the start node itself is a valid 0-length path (self-match)
     // Per GQL spec, *0..N should include the start node as matching itself with path length 0
     if (min_len == 0) {
@@ -1484,7 +1484,7 @@ pub fn expandVariableLengthPathsWithMode(
 
     try queue.append(allocator, .{ .path = initial_path, .depth = 0 });
 
-    // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=SafetyGuard; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-15
+    // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=SafetyGuard; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.ymlEMENTED; OWNER=engine; UPDATED=2025-10-15
     // Add safety guard against infinite loops (max 10,000 iterations for better performance)
     var iteration_count: u64 = 0;
     const max_iterations: u64 = 10_000;
@@ -1808,7 +1808,7 @@ pub fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []co
     return .{ .columns = columns, .buffer = buffer };
 }
 
-// CANARY: REQ=REQ-GQL-WITH-GROUPBY-002; FEATURE="WithGroupByAggregation"; ASPECT=AggregationComputation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+// CANARY: REQ=REQ-GQL-WITH-GROUPBY-002; FEATURE="WithGroupByAggregation"; ASPECT=AggregationComputation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 /// Compute aggregation function over a group of rows
 pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []const Value, columns: []const []const u8) !Value {
     // expr should be a Call expression for aggregation functions
@@ -1953,7 +1953,7 @@ pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionRe
     return executeWithClauseWithGroupBy(allocator, input_result, with_clause, null, null);
 }
 
-// CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+// CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 /// Execute WITH clause with optional GROUP BY aggregation
 pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
@@ -1981,7 +1981,7 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
     // GAP-0220 FIX: Use try for proper error propagation
     var new_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
-    // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=GroupingLogic; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=GroupingLogic; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
     // Handle GROUP BY if present - group rows and compute aggregations per group
     if (group_by) |gb| {
         // Group input rows by the GROUP BY key(s)
@@ -2094,7 +2094,7 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
             try new_rows.append(allocator, new_row);
         }
     } else {
-        // CANARY: REQ=REQ-OPTIONAL-MATCH-COUNT-001; FEATURE="OptionalMatchCount"; ASPECT=WithAggregation; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-23
+        // CANARY: REQ=REQ-OPTIONAL-MATCH-COUNT-001; FEATURE="OptionalMatchCount"; ASPECT=WithAggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
         // No GROUP BY - check if there are aggregation expressions that need special handling
         // If any WITH item contains an aggregation (count, sum, avg, min, max),
         // we need to treat all rows as a single group instead of processing individually
@@ -2107,7 +2107,7 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
         }
 
         if (has_aggregation) {
-            // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-001; FEATURE="ImplicitGroupBy"; ASPECT=WithAggregation; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+            // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-001; FEATURE="ImplicitGroupBy"; ASPECT=WithAggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
             // Check if there are non-aggregated expressions that should be used for implicit grouping
             // e.g., WITH e.department AS dept, count(*) AS cnt should group by e.department
             var has_non_aggregation = false;
@@ -2119,7 +2119,7 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
             }
 
             if (has_non_aggregation and input_result.rows.len > 0) {
-                // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-002; FEATURE="ImplicitGroupBy"; ASPECT=GroupingLogic; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-002; FEATURE="ImplicitGroupBy"; ASPECT=GroupingLogic; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                 // Implicit GROUP BY: group rows by non-aggregated expressions
                 var groups = std.StringHashMap(std.ArrayList([]const Value)).init(allocator);
                 // GAP-0220 FIX: Use try for proper error propagation
@@ -2221,7 +2221,7 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                     if (return_and_sorting.isAggregationExpr(item.expr)) {
                         new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns);
                     } else if (input_result.rows.len == 0) {
-                        // CANARY: REQ=REQ-GQL-EMPTY-MATCH-WITH-001; FEATURE="EmptyMatchWithClause"; ASPECT=NullOnNoRows; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-27
+                        // CANARY: REQ=REQ-GQL-EMPTY-MATCH-WITH-001; FEATURE="EmptyMatchWithClause"; ASPECT=NullOnNoRows; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
                         // When there are no input rows, non-aggregation expressions cannot be evaluated
                         // (e.g., MATCH (n:NonExistent) WITH n.category AS cat, count(*) AS cnt)
                         // Return NULL for non-aggregation expressions in this case

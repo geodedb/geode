@@ -1,5 +1,5 @@
 # CANARY: FLE_GEODETESTLAB_SPECS - RBAC Field-Level Access Control Tests
-# CANARY: REQ=REQ-FLE-TEST-005; FEATURE="FieldLevelEncryption"; ASPECT=TESTING; STATUS=IMPL; OWNER=security; UPDATED=2025-10-15
+# CANARY: REQ=REQ-FLE-TEST-005; FEATURE="FieldLevelEncryption"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15
 
 suite: encryption_rbac
 description: Grant/Revoke READ_PLAINTEXT(field) affects projection & filters.

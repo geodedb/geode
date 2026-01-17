@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-CLI-BACKUP-INTEGRATION-001; FEATURE="Remote Backup/Restore Operations"; ASPECT=IntegrationTesting; STATUS=IMPL; TEST=TestCANARY_REQ_CLI_BACKUP_INTEGRATION_001; OWNER=claude; UPDATED=2025-10-05
+// CANARY: REQ=REQ-CLI-BACKUP-INTEGRATION-001; FEATURE="Remote Backup/Restore Operations"; ASPECT=IntegrationTesting; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; TEST=TestCANARY_REQ_CLI_BACKUP_INTEGRATION_001; OWNER=claude; UPDATED=2025-10-05
 // Integration tests for server-side backup API with QUIC protocol
 
 const std = @import("std");

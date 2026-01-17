@@ -184,7 +184,7 @@ fn walkExprForFLE(
                     else => false,
                 };
 
-                // CANARY: REQ=REQ-FLE-PREDICATE-REWRITE-001; FEATURE="FLE Predicate Rewriting"; ASPECT=BlindIndex; STATUS=IMPL; OWNER=security; UPDATED=2026-01-09
+                // CANARY: REQ=REQ-FLE-PREDICATE-REWRITE-001; FEATURE="FLE Predicate Rewriting"; ASPECT=BlindIndex; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2026-01-09
                 if (is_property_access and is_literal) {
                     // Extract field name and type name from property access
                     var type_name: []const u8 = "Unknown";

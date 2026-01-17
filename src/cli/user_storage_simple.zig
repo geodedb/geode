@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLIUserManagement"; ASPECT=FileStorage; STATUS=IMPL; OWNER=cli; UPDATED=2025-10-26
+// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLIUserManagement"; ASPECT=FileStorage; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth.yml; OWNER=cli; UPDATED=2025-10-26
 // Simple file-based user storage for CLI commands
 // Stores users in a JSON file that the server can also read
 

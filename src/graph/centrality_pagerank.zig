@@ -50,7 +50,7 @@ pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, p: Params) !R
     }
 
     // CANARY: PERF_PHASE5_PAGERANK_EDGE_CACHE - Pre-compute edge indices to avoid repeated HashMap lookups
-    // CANARY: REQ=REQ-PERF-PHASE5-P1-001; FEATURE="PageRankOptimization"; ASPECT=EDGE_INDEX_CACHE; STATUS=IMPL; OWNER=performance; UPDATED=2025-11-16
+    // CANARY: REQ=REQ-PERF-PHASE5-P1-001; FEATURE="PageRankOptimization"; ASPECT=EDGE_INDEX_CACHE; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=performance; UPDATED=2025-11-16
     // Phase 5.2.1 (P1-1): Pre-compute edge index mapping (10-20% faster PageRank)
 
     // Pre-compute edge indices to avoid repeated HashMap lookups in hot loops

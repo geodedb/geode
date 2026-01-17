@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLIUserManagement"; ASPECT=SecureStorage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-09
+// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLIUserManagement"; ASPECT=SecureStorage; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth.yml; OWNER=cli; UPDATED=2026-01-09
 // Secure encrypted user storage for CLI commands
 // Uses AES-256-GCM authenticated encryption with Argon2id password hashing
 

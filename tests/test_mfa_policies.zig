@@ -43,7 +43,7 @@ test "TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval_basic" {
 }
 
 // Additional dynamic MFA policy tests for time window, risk score, reauth interval.
-// CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_security.yml; OWNER=security; UPDATED=2025-09-26
 
 fn makeUser(sm: *auth.SecurityManager, alloc: std.mem.Allocator, name: []const u8) !*auth.User {
     const uid = try sm.createUser(name, "test@example.com", "Password1!", false);

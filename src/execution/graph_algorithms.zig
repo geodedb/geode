@@ -16,7 +16,7 @@ const Env = value_types.Env;
 // Extracted graph algorithm functions from execution.zig for better modularity (M1 Phase 1)
 
 /// Count the number of matches for a given graph pattern
-/// CANARY: REQ=REQ-GQL-PATTERN-COUNT; FEATURE="PatternMatching"; ASPECT=COUNT; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-27
+/// CANARY: REQ=REQ-GQL-PATTERN-COUNT; FEATURE="PatternMatching"; ASPECT=COUNT; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
 /// Now accepts env parameter for correlated subqueries (EXISTS with outer variable references)
 /// Also accepts optional WHERE filter for EXISTS { MATCH ... WHERE ... } patterns
 pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, env: Env) !i64 {
@@ -31,7 +31,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
         const node_pattern_opt: ?ast.NodePattern = if (chain.head) |h| h else if (chain.hops.len > 0) chain.hops[0].left else null;
 
         if (node_pattern_opt) |node_pattern| {
-            // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="CorrelatedExists"; ASPECT=OuterVariableBinding; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-24
+            // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="CorrelatedExists"; ASPECT=OuterVariableBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
             // Check if the node pattern has a variable that's bound in the outer environment
             if (node_pattern.name) |var_name| {
                 // Look up the variable in the environment
@@ -88,7 +88,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                 const hop = chain.hops[0];
                                 const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
 
-                                // CANARY: REQ=REQ-GQL-VAR-LEN-SUBQUERY-001; FEATURE="VariableLengthSubquery"; ASPECT=CountMatches; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                                // CANARY: REQ=REQ-GQL-VAR-LEN-SUBQUERY-001; FEATURE="VariableLengthSubquery"; ASPECT=CountMatches; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
                                 // C01/C02 Fix: Handle variable-length paths (*1..3)
                                 const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
                                 if (is_var_length) {
@@ -213,7 +213,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                 // Original single-hop handling for non-variable-length patterns
                                 // Count edges from this bound node
 
-                                // CANARY: REQ=REQ-GQL-EXISTS-CORRELATED-002; FEATURE="CorrelatedExists"; ASPECT=TargetNodeBinding; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-28
+                                // CANARY: REQ=REQ-GQL-EXISTS-CORRELATED-002; FEATURE="CorrelatedExists"; ASPECT=TargetNodeBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
                                 // F02 Fix: Check if the target node (right side) is also bound in the environment
                                 // This handles patterns like EXISTS { (u1)-[:REL]->(u2) } where BOTH u1 AND u2 are from outer scope
                                 var target_bound_id: ?u64 = null;
@@ -248,7 +248,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                     }
 
                                     // Check target node pattern (right side of the hop)
-                                    // CANARY: REQ=REQ-GQL-EXISTS-PROPS-001; FEATURE="ExistsTargetNodeProps"; ASPECT=PropertyFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-26
+                                    // CANARY: REQ=REQ-GQL-EXISTS-PROPS-001; FEATURE="ExistsTargetNodeProps"; ASPECT=PropertyFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                                     if (store.nodes.get(edge.to_id)) |target_node| {
                                         var target_matches = true;
 
@@ -292,7 +292,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                         }
 
                                         if (target_matches) {
-                                            // CANARY: REQ=REQ-GQL-EXISTS-WHERE-001; FEATURE="ExistsWithWhere"; ASPECT=WhereFilter; STATUS=IMPL; OWNER=execution; UPDATED=2025-12-27
+                                            // CANARY: REQ=REQ-GQL-EXISTS-WHERE-001; FEATURE="ExistsWithWhere"; ASPECT=WhereFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
                                             // Check WHERE filter if present (for nested EXISTS)
                                             if (where_filter) |wf| {
                                                 // Build environment with target node bound (if pattern has a name)
@@ -588,7 +588,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
 }
 
 /// Find shortest path between nodes using BFS
-/// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=IMPLEMENTED; OWNER=engine; UPDATED=2025-10-12
+/// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.ymlEMENTED; OWNER=engine; UPDATED=2025-10-12
 pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern, all: bool, env: Env) !Value {
     const store = graph_store.getGlobalStore(allocator);
 

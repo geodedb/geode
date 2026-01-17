@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-MATVIEW-TEST-001; FEATURE="Materialized View Tests"; ASPECT=UnitTests; STATUS=IMPL; TEST=TestCANARY_REQ_MATVIEW_TEST_001_UnitTests; OWNER=query; UPDATED=2025-10-05
+// CANARY: REQ=REQ-MATVIEW-TEST-001; FEATURE="Materialized View Tests"; ASPECT=UnitTests; STATUS=EXEMPT; TEST=TestCANARY_REQ_MATVIEW_TEST_001_UnitTests; OWNER=query; UPDATED=2025-10-05
 
 const std = @import("std");
 const testing = std.testing;

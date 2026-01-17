@@ -1,6 +1,6 @@
 # MATCH Subset Tutorial (Geode)
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchTutorial"; ASPECT=Docs; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_E2EMatchBasic; OWNER=docs; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchTutorial"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_E2EMatchBasic; OWNER=docs; UPDATED=2025-09-24
 
 This short tutorial demonstrates the currently supported MATCH subset in Geode, with deterministic ordering and pagination policies.
 

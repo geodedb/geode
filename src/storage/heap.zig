@@ -153,7 +153,7 @@ pub const VectorF32 = struct {
     data: []const f32,
 };
 
-// CANARY: REQ=REQ-VECTOR-I32-001; FEATURE="VectorI32"; ASPECT=IntegerVectorType; STATUS=IMPL; OWNER=storage; UPDATED=2025-12-23
+// CANARY: REQ=REQ-VECTOR-I32-001; FEATURE="VectorI32"; ASPECT=IntegerVectorType; STATUS=TESTED; TEST=geodetestlab/specs/vector_operations_basic.yml; OWNER=storage; UPDATED=2025-12-23
 pub const VectorI32 = struct {
     dim: u16,
     data: []const i32,

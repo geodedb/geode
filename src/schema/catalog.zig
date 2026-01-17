@@ -2,8 +2,8 @@ const std = @import("std");
 const graph_storage_manager = @import("../server/graph_storage_manager.zig");
 
 // CANARY: PERF_PHASE3_RWLOCK - RwLock for concurrent catalog access
-// CANARY: REQ=REQ-PERF-PHASE3-001; FEATURE="ConcurrencyOptimization"; ASPECT=CATALOG_LOCK; STATUS=IMPL; OWNER=performance; UPDATED=2025-10-17
-// CANARY: REQ=REQ-ARCH-M2-FIX; FEATURE="DependencyInjection"; ASPECT=CATALOG; STATUS=IMPL; OWNER=core; UPDATED=2025-10-17
+// CANARY: REQ=REQ-PERF-PHASE3-001; FEATURE="ConcurrencyOptimization"; ASPECT=CATALOG_LOCK; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-17
+// CANARY: REQ=REQ-ARCH-M2-FIX; FEATURE="DependencyInjection"; ASPECT=CATALOG; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // Phase 3 optimization: RwLock allows concurrent reads (2-3x concurrent query throughput)
 // M2 Fix: Refactored from global mutable state to dependency injection pattern
 
@@ -16,7 +16,7 @@ pub const IndexInfo = struct {
     columns: [][]const u8, // Property names
 };
 
-// CANARY: REQ=REQ-CONSTRAINT-001; FEATURE="ConstraintManagement"; ASPECT=Catalog; STATUS=IMPL; OWNER=schema; UPDATED=2026-01-09
+// CANARY: REQ=REQ-CONSTRAINT-001; FEATURE="ConstraintManagement"; ASPECT=Catalog; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=schema; UPDATED=2026-01-09
 // ConstraintInfo stores metadata about a schema constraint
 pub const ConstraintInfo = struct {
     name: []const u8, // Constraint name (user-provided)
@@ -426,7 +426,7 @@ pub const Catalog = struct {
         }
     }
 
-    // CANARY: REQ=REQ-CONSTRAINT-002; FEATURE="ConstraintManagement"; ASPECT=CatalogMethods; STATUS=IMPL; OWNER=schema; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-CONSTRAINT-002; FEATURE="ConstraintManagement"; ASPECT=CatalogMethods; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=schema; UPDATED=2026-01-09
     /// Add a constraint to the catalog
     pub fn addConstraint(self: *Catalog, info: ConstraintInfo) !void {
         self.rwlock.lock();
@@ -519,7 +519,7 @@ pub const Catalog = struct {
         return result.toOwnedSlice();
     }
 
-    // CANARY: REQ=REQ-GRAPH-META-001; FEATURE="GraphMetadataPersistence"; ASPECT=AddGraph; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-GRAPH-META-001; FEATURE="GraphMetadataPersistence"; ASPECT=AddGraph; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-09
     /// Add a graph to the catalog and persist
     pub fn addGraph(self: *Catalog, name: []const u8) !void {
         self.rwlock.lock();
@@ -538,7 +538,7 @@ pub const Catalog = struct {
         try self.save();
     }
 
-    // CANARY: REQ=REQ-GRAPH-META-002; FEATURE="GraphMetadataPersistence"; ASPECT=RemoveGraph; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-GRAPH-META-002; FEATURE="GraphMetadataPersistence"; ASPECT=RemoveGraph; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-09
     /// Remove a graph from the catalog and persist
     pub fn removeGraph(self: *Catalog, name: []const u8) !void {
         self.rwlock.lock();
@@ -552,7 +552,7 @@ pub const Catalog = struct {
         try self.save();
     }
 
-    // CANARY: REQ=REQ-GRAPH-META-003; FEATURE="GraphMetadataPersistence"; ASPECT=GraphExists; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-GRAPH-META-003; FEATURE="GraphMetadataPersistence"; ASPECT=GraphExists; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-09
     /// Check if a graph exists in the catalog
     pub fn graphExists(self: *Catalog, name: []const u8) bool {
         self.rwlock.lockShared();
@@ -562,7 +562,7 @@ pub const Catalog = struct {
     }
 
     // GAP-0139: SHOW INDEXES implementation
-    // CANARY: REQ=REQ-SHOW-INDEXES-001; FEATURE="SHOW INDEXES"; ASPECT=CatalogList; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-SHOW-INDEXES-001; FEATURE="SHOW INDEXES"; ASPECT=CatalogList; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=catalog; UPDATED=2026-01-13
     /// List all indexes in the catalog
     /// Returns a dynamically allocated slice of IndexInfo. Caller owns the returned slice.
     pub fn listAllIndexes(self: *Catalog, allocator: std.mem.Allocator) ![]IndexInfo {
@@ -581,7 +581,7 @@ pub const Catalog = struct {
     }
 
     // GAP-0139: SHOW CONSTRAINTS implementation
-    // CANARY: REQ=REQ-SHOW-CONSTRAINTS-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=CatalogList; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-SHOW-CONSTRAINTS-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=CatalogList; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=catalog; UPDATED=2026-01-13
     /// List all constraints in the catalog
     /// Returns a dynamically allocated slice of ConstraintInfo. Caller owns the returned slice.
     pub fn listAllConstraints(self: *Catalog, allocator: std.mem.Allocator) ![]ConstraintInfo {
@@ -600,7 +600,7 @@ pub const Catalog = struct {
     }
 
     // GAP-0139: SHOW SCHEMAS implementation
-    // CANARY: REQ=REQ-SHOW-SCHEMAS-001; FEATURE="SHOW SCHEMAS"; ASPECT=CatalogList; STATUS=IMPL; OWNER=catalog; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-SHOW-SCHEMAS-001; FEATURE="SHOW SCHEMAS"; ASPECT=CatalogList; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=catalog; UPDATED=2026-01-13
     /// List all schemas in the catalog
     /// Returns a dynamically allocated slice of schema names. Caller owns the returned slice.
     pub fn listAllSchemas(self: *Catalog, allocator: std.mem.Allocator) ![][]const u8 {

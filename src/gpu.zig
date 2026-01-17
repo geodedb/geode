@@ -1,5 +1,5 @@
 // GPU Acceleration Module - Unified Interface
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=UnifiedModule; STATUS=IMPL; OWNER=engine; UPDATED=2025-10-26
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=UnifiedModule; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-10-26
 
 pub const phase0 = @import("gpu/phase0.zig");
 pub const phase1_kernels = @import("gpu/phase1_kernels.zig");

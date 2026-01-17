@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=IntegrationTesting; STATUS=IMPL; TEST=test_repl_quic_integration_e2e; OWNER=repl; UPDATED=2025-10-05
+// CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=IntegrationTesting; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; TEST=test_repl_quic_integration_e2e; OWNER=repl; UPDATED=2025-10-05
 
 // Integration tests for REPL QUIC integration support
 // These tests validate complete end-to-end REPL workflows with QUIC

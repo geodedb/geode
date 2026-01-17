@@ -1,6 +1,6 @@
 # Advanced Types Integration Test Suite
 # Tests the complete integration of Vector, Geographic, and Cryptographic types with GQL
-# CANARY: REQ=REQ-GQL-ADVANCED-TYPES-INTEGRATION; FEATURE="Advanced Types Integration Tests"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_ADVANCED_TYPES_INTEGRATION_All; OWNER=testing; UPDATED=2025-01-03
+# CANARY: REQ=REQ-GQL-ADVANCED-TYPES-INTEGRATION; FEATURE="Advanced Types Integration Tests"; ASPECT=Testing; STATUS=EXEMPT; TEST=TestCANARY_REQ_GQL_ADVANCED_TYPES_INTEGRATION_All; OWNER=testing; UPDATED=2025-01-03
 
 name: "Advanced Types Integration"
 description: "Comprehensive integration testing for Vector, Geographic, and Cryptographic types with GQL queries"

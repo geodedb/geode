@@ -7,7 +7,7 @@ const vector = types.vector;
 const geographic = types.geographic;
 const cryptographic = types.cryptographic;
 
-// CANARY: REQ=REQ-GQL-ADVANCED-TYPES-REGRESSION; FEATURE="Advanced Types Regression Tests"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_ADVANCED_TYPES_REGRESSION_All; OWNER=testing; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-ADVANCED-TYPES-REGRESSION; FEATURE="Advanced Types Regression Tests"; ASPECT=Testing; STATUS=EXEMPT; TEST=TestCANARY_REQ_GQL_ADVANCED_TYPES_REGRESSION_All; OWNER=testing; UPDATED=2025-01-03
 
 test "TestCANARY_REQ_GQL_VECTOR_TYPES_001_VectorF32 comprehensive functionality" {
     const allocator = testing.allocator;

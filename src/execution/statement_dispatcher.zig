@@ -49,7 +49,7 @@ const executeProfile = execution.executeProfile;
 const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
 const encryptPropertyIfNeeded = execution.encryptPropertyIfNeeded;
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-010; FEATURE="FileModularization"; ASPECT=StatementDispatcher; STATUS=IMPL; OWNER=refactoring; UPDATED=2025-10-17
+// CANARY: REQ=REQ-EXEC-REFACTOR-010; FEATURE="FileModularization"; ASPECT=StatementDispatcher; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     switch (stmt) {
         .Query => |q| {
@@ -434,7 +434,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .CreateConstraint => |cc| {
             // GAP-0048: CREATE CONSTRAINT implementation with proper catalog storage and enforcement
-            // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-10
+            // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-10
             const cat = getCatalog(allocator, context);
 
             // Phase 3: Write lock for CREATE CONSTRAINT
@@ -565,7 +565,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .DropConstraint => |dc| {
             // GAP-0048: DROP CONSTRAINT implementation with proper catalog removal
-            // CANARY: REQ=REQ-CONSTRAINT-EXEC-002; FEATURE="ConstraintExecution"; ASPECT=DROP; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-10
+            // CANARY: REQ=REQ-CONSTRAINT-EXEC-002; FEATURE="ConstraintExecution"; ASPECT=DROP; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-10
             const cat = getCatalog(allocator, context);
 
             // Phase 3: Write lock for DROP CONSTRAINT
@@ -654,7 +654,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return result;
         },
         .CreateGraph => |cg| {
-            // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphSupport"; ASPECT=CreateGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+            // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphSupport"; ASPECT=CreateGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
             // CREATE GRAPH implementation with duplicate detection and storage creation
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
@@ -880,7 +880,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .UseGraph => |ug| {
-            // CANARY: REQ=REQ-MULTI-GRAPH-001; FEATURE="MultiGraphSupport"; ASPECT=UseGraph; STATUS=IMPL; OWNER=engine; UPDATED=2025-12-20
+            // CANARY: REQ=REQ-MULTI-GRAPH-001; FEATURE="MultiGraphSupport"; ASPECT=UseGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
             // USE GRAPH implementation - switch active graph context
             const graph_name = ug.graph_name;
 
