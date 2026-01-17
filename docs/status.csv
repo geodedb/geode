@@ -1623,6 +1623,8 @@ REQ-GQL-COUNT-SUBQUERY-002,CountSubquery,Evaluation,TESTED,geodetestlab/specs/gq
 REQ-GQL-COUNT-SUBQUERY-002,GQLCountSubquery,WithWhere,TESTED,test_shell_requirements_verification.zig,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-GQL-CRYPTO-TYPES-001,CryptoTypes,Implementation,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-CRYPTO-TYPES-001,Cryptographic Types Implementation,Types,TESTED,TestCANARY_REQ_GQL_CRYPTO_TYPES_001_All,,types,2025-01-03,src/types/cryptographic.zig
+REQ-GQL-CRYPTO-TYPES-001,RSA Key Generation,UnsupportedAlgorithm,TESTED,TestRsaKeyGenerationReturnsError,,security,2026-01-16,src/types/cryptographic.zig
+REQ-GQL-CRYPTO-TYPES-001,RSA Key Generation Error Test,UnsupportedAlgorithm,TESTED,TestRsaKeyGenerationReturnsError,,security,2026-01-16,src/types/cryptographic.zig
 REQ-GQL-CTE-001,CommonTableExpression,AST,TESTED,geodetestlab/specs/recursive_and_cte.yml,,parser,2026-01-10,src/gql/ast.zig
 REQ-GQL-CTE-002,CTEParsing,ParserProgram,TESTED,geodetestlab/specs/recursive_and_cte.yml,,parser,2026-01-10,src/gql/parser.zig
 REQ-GQL-CTE-003,CTEListParsing,Parser,TESTED,geodetestlab/specs/recursive_and_cte.yml,,parser,2026-01-10,src/gql/parser.zig
@@ -2652,7 +2654,7 @@ REQ-PERF-007,Performance,LatencyBenchmark,TESTED,,,engine,2026-01-15,tests/test_
 REQ-PERF-AGG-001,Performance,AggregationPerformance,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-PERF-ANALYSIS-001,PerformanceAnalysis,Benchmarking,EXEMPT,TestCANARY_PerformanceBenchmark,,performance,2025-10-04,tests/benchmark_performance_analysis.zig
 REQ-PERF-ASYNC-001,AsynchronousIO,Performance,TESTED,TestCANARY_AsynchronousIO,,performance,2025-10-04,src/performance/async_io.zig
-REQ-PERF-ASYNC-001,SimpleAsyncIO,Performance,TESTED,TestCANARY_SimpleAsyncIO,,performance,2025-10-04,src/performance/async_io_simple.zig
+REQ-PERF-ASYNC-001,SimpleAsyncIO,Performance,TESTED,TestCANARY_SimpleAsyncIO,,performance,2026-01-16,src/performance/async_io_simple.zig
 REQ-PERF-ASYNC-001,SimpleAsynchronousIO,Performance,TESTED,TestCANARY_SimpleAsynchronousIO,,performance,2025-10-04,src/performance/simple_async_io.zig
 REQ-PERF-BATCH-001,Performance,BatchProcessing,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-PERF-CACHE-001,Performance,CachePerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig

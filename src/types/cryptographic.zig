@@ -279,18 +279,11 @@ pub const KeyPair = struct {
                 };
             },
             .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
-                // RSA key generation requires external library or larger implementation
-                // For now, generate random bytes as placeholder (RSA needs proper implementation)
-                const private_key = try allocator.alloc(u8, 256);
-                const public_key = try allocator.alloc(u8, 256);
-                std.crypto.random.bytes(private_key);
-                std.crypto.random.bytes(public_key);
-
-                return KeyPair{
-                    .alg = alg,
-                    .private_key = private_key,
-                    .public_key = public_key,
-                };
+                // GAP-0222 FIX: RSA key generation is not supported in Zig stdlib
+                // Return explicit error instead of generating invalid random-byte keys
+                // RSA requires external library (e.g., OpenSSL bindings) for proper implementation
+                // CANARY: REQ=REQ-GQL-CRYPTO-TYPES-001; FEATURE="RSA Key Generation"; ASPECT=UnsupportedAlgorithm; STATUS=TESTED; TEST=TestRsaKeyGenerationReturnsError; OWNER=security; UPDATED=2026-01-16
+                return error.UnsupportedSignatureAlgorithm;
             },
         }
     }
@@ -549,4 +542,46 @@ test "Cryptographic error handling" {
 
     // Test invalid public key length
     try testing.expectError(error.InvalidPublicKeyLength, Signature.fromHex(.Ed25519, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "short", allocator));
+}
+
+// CANARY: REQ=REQ-GQL-CRYPTO-TYPES-001; FEATURE="RSA Key Generation Error Test"; ASPECT=UnsupportedAlgorithm; STATUS=TESTED; TEST=TestRsaKeyGenerationReturnsError; OWNER=security; UPDATED=2026-01-16
+test "GAP-0222: RSA key generation returns UnsupportedSignatureAlgorithm error" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // GAP-0222 FIX: RSA algorithms should return error, not random bytes
+    // RSA-PSS-SHA256 is not supported (requires external library)
+    try testing.expectError(error.UnsupportedSignatureAlgorithm, KeyPair.generate(.RSA_PSS_SHA256, allocator));
+
+    // RSA-PSS-SHA512 is not supported (requires external library)
+    try testing.expectError(error.UnsupportedSignatureAlgorithm, KeyPair.generate(.RSA_PSS_SHA512, allocator));
+}
+
+test "GAP-0222: Supported algorithms generate valid key pairs" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Ed25519 should work
+    const ed25519_key = try KeyPair.generate(.Ed25519, allocator);
+    defer allocator.free(ed25519_key.private_key);
+    defer allocator.free(ed25519_key.public_key);
+    try testing.expectEqual(Signature.SignatureAlg.Ed25519, ed25519_key.alg);
+    try testing.expectEqual(@as(usize, 32), ed25519_key.private_key.len);
+    try testing.expectEqual(@as(usize, 32), ed25519_key.public_key.len);
+
+    // ECDSA-P256 should work
+    const p256_key = try KeyPair.generate(.ECDSA_P256, allocator);
+    defer allocator.free(p256_key.private_key);
+    defer allocator.free(p256_key.public_key);
+    try testing.expectEqual(Signature.SignatureAlg.ECDSA_P256, p256_key.alg);
+    try testing.expectEqual(@as(usize, 32), p256_key.private_key.len);
+    try testing.expectEqual(@as(usize, 33), p256_key.public_key.len); // Compressed format
+
+    // ECDSA-P384 should work
+    const p384_key = try KeyPair.generate(.ECDSA_P384, allocator);
+    defer allocator.free(p384_key.private_key);
+    defer allocator.free(p384_key.public_key);
+    try testing.expectEqual(Signature.SignatureAlg.ECDSA_P384, p384_key.alg);
+    try testing.expectEqual(@as(usize, 48), p384_key.private_key.len);
+    try testing.expectEqual(@as(usize, 49), p384_key.public_key.len); // Compressed format
 }

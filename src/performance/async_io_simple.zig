@@ -1,10 +1,23 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="SimpleAsyncIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_SimpleAsyncIO; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="SimpleAsyncIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_SimpleAsyncIO; OWNER=performance; UPDATED=2026-01-16
 
-/// Simplified asynchronous I/O framework for testing performance concepts
-/// This provides the basic structure for async I/O without complex threading
+/// GAP-0223: MOCK IMPLEMENTATION - This is a simplified/mock async I/O for testing only
+///
+/// This module provides a **synchronous** implementation with an async-like API.
+/// It is intentionally designed for:
+/// - Unit testing async I/O patterns without actual threading
+/// - Performance benchmarking of I/O path overhead
+/// - Development/testing of async I/O interfaces
+///
+/// For production async I/O, use:
+/// - `std.io.poll` for polling-based async
+/// - `std.Thread` with thread pools for true parallelism
+/// - Platform-specific APIs (io_uring on Linux, IOCP on Windows)
+///
+/// IMPORTANT: Operations execute synchronously despite async-like API.
+/// Do NOT use this module expecting actual I/O parallelism.
 /// I/O operation status
 pub const IOStatus = enum {
     success,
@@ -51,7 +64,8 @@ pub const SimpleAsyncIO = struct {
         _ = self; // Nothing to cleanup in this simple implementation
     }
 
-    /// Submit async operation (mock implementation)
+    /// Submit read operation - SYNCHRONOUS MOCK (see module docs for details)
+    /// GAP-0223 FIX: Documented as mock; executes synchronously for testing
     pub fn submitRead(
         self: *Self,
         file_path: []const u8,
