@@ -342,10 +342,9 @@ nfpms:
 # =============================================================================
 
 release:
-  gitlab:
-    # Use CI-provided project path (inferred from CI_PROJECT_PATH or CI_PROJECT_ID)
-    owner: "{{ .Env.CI_PROJECT_NAMESPACE }}"
-    name: "{{ .Env.CI_PROJECT_NAME }}"
+  # Skip GitLab release creation (requires GITLAB_TOKEN with api scope)
+  # Docker images and packages are published directly
+  disable: true
 
   name_template: "Geode v{{ .Version }}"
 
