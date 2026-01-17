@@ -343,8 +343,9 @@ nfpms:
 
 release:
   gitlab:
-    owner: devnw/geode
-    name: geode
+    # Use CI-provided project path (inferred from CI_PROJECT_PATH or CI_PROJECT_ID)
+    owner: "{{ .Env.CI_PROJECT_NAMESPACE }}"
+    name: "{{ .Env.CI_PROJECT_NAME }}"
 
   name_template: "Geode v{{ .Version }}"
 
