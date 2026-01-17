@@ -343,8 +343,8 @@ nfpms:
 
 release:
   gitlab:
-    owner: devnw
-    name: geode/geode
+    owner: devnw/geode
+    name: geode
 
   name_template: "Geode v{{ .Version }}"
 
