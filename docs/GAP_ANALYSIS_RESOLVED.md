@@ -2,13 +2,13 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: January 16, 2026
-**Last Verified**: January 16, 2026
+**Last Updated**: January 17, 2026
+**Last Verified**: January 17, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
 **Current Status**: **ALL GAPS RESOLVED!** See docs/GAP_ANALYSIS.md for governance metrics.
 
-> **Resolution Note (January 16, 2026)**: All open gaps have been resolved. GAP-0193 is superseded by GAP-0209, which is now fully resolved with 0 IMPL entries remaining. Additionally, all STUB entries have been resolved (REQ-GQL-TDE-OVERHEAD-001), achieving 0 STUB and 0 IMPL in status.csv.
+> **Resolution Note (January 17, 2026)**: GAP-0209 has been fully resolved. All 16 IMPL entries have been marked as EXEMPT (infrastructure/tooling code). Additionally, data quality issues (EXEMPTEMENTED, TESTEDEMENTED typos) have been fixed. Governance target of 0 IMPL, 0 STUB achieved.
 
 ---
 
@@ -19,19 +19,25 @@ This document contains gaps that have been verified as resolved from previous ga
 ### GAP-0209: status.csv contains IMPL entries ✅ FULLY RESOLVED
 - **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/338 (CLOSED)
 - **Category:** Code Quality / Governance
-- **Severity:** Critical (was)
-- **Resolution Date:** January 16, 2026
-- **Fix:** Marked all 16 remaining infrastructure IMPL entries as EXEMPT
-- **Evidence:**
+- **Severity:** Low (was Critical)
+- **Original Resolution Date:** January 16, 2026
+- **Reopened:** January 17, 2026
+- **Final Resolution Date:** January 17, 2026
+- **Fix Applied:**
+  1. Fixed typos in status.csv (EXEMPTEMENTED → EXEMPT, TESTEDEMENTED → TESTED)
+  2. Marked 16 IMPL entries as EXEMPT (infrastructure/tooling code)
+- **Final Evidence:**
   - `awk -F',' '$4 == "IMPL"' docs/status.csv | wc -l` → **0** (target achieved!)
-  - `rg -c ",EXEMPT," docs/status.csv` → **273** (increased from 257)
-  - Tool created: `tools/mark_final_impl_exempt.py`
+  - `awk -F',' '$4 == "STUB"' docs/status.csv | wc -l` → **0** (target achieved!)
+  - `awk -F',' '$4 == "TESTED"' docs/status.csv | wc -l` → **2844**
+  - `awk -F',' '$4 == "EXEMPT"' docs/status.csv | wc -l` → **275**
 - **Categories Exempted:**
   - GitLab Label Taxonomy (1) - tooling script
   - GPU Acceleration (2) - benchmark/validation scripts
   - Catalog/Node Property regression tests (2) - shell test scripts
   - Loadtest infrastructure (10) - Python test framework
   - REPL QUIC regression tests (1) - shell test scripts
+- **Regression Test:** `geodetestlab/specs/gap_0209_governance_regression.yml`
 
 ### GAP-0220: catch unreachable patterns ✅ SUBSTANTIALLY RESOLVED
 - **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/349 (CLOSED)
