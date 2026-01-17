@@ -2027,7 +2027,7 @@ REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,BENCHED,,Benchma
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,TESTED,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold,,perf,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,TESTED,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold,,perf,2025-09-26,tests/test_tde_oltp_overhead_threshold.zig
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_PublishedOverheadClaimPresent,,perf,2025-09-27,tests/canary_tde_published_overhead_sync.zig
-REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,STUB,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke,,security,2025-09-26,tests/benchmark_tde_overhead_smoke.zig
+REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,TESTED,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke,,security,2026-01-16,tests/benchmark_tde_overhead_smoke.zig
 REQ-GQL-TDE-OVERHEAD-002,TDE real-path overhead benchmark,PERF,BENCHED,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_002_RealPath,,security,2025-09-26,benchmarks/benchmark_tde_overhead_realpath.zig
 REQ-GQL-TDE-OVERHEAD-003,TDE real AEAD overhead benchmark,PERF,BENCHED,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_003_AEAD,,security,2025-09-26,benchmarks/benchmark_tde_overhead_aead.zig
 REQ-GQL-TDE-OVERHEAD-THRESH-001,TDE AEAD overhead threshold,PERF,TESTED,TestCANARY_REQ_GQL_TDE_OVERHEAD_THRESH_001,,security,2025-09-26,tests/test_tde_aead_overhead_threshold.zig

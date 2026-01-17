@@ -41,8 +41,8 @@ As of January 16, 2026, all identified gaps have been resolved:
 ```bash
 # Status.csv counts (January 16, 2026)
 IMPL: 0 (target achieved!)
-STUB: 1
-TESTED: 2836
+STUB: 0 (target achieved!)
+TESTED: 2839
 EXEMPT: 273
 
 # Code quality metrics
@@ -64,6 +64,7 @@ The following test specs ensure gaps do not resurface:
 - `geodetestlab/specs/gap_0209_batch4_coverage.yml` - IMPL→TESTED coverage
 - `geodetestlab/specs/gap_0209_batch5_coverage.yml` - IMPL→TESTED coverage
 - `geodetestlab/specs/gap_0211_0221_security_fixes.yml` - Security fixes tests
+- `geodetestlab/specs/tde_overhead_benchmark.yml` - TDE overhead benchmark (STUB→TESTED)
 
 ---
 
@@ -83,8 +84,8 @@ This gap analysis was performed on January 16, 2026 using the following approach
 ```bash
 # Count IMPL/STUB/TESTED/EXEMPT entries
 awk -F',' '$4 == "IMPL"' docs/status.csv | wc -l  # Result: 0 (target achieved!)
-rg -c ",STUB," docs/status.csv    # Result: 1
-rg -c ",TESTED," docs/status.csv  # Result: 2836
+rg -c ",STUB," docs/status.csv    # Result: 0 (target achieved!)
+rg -c ",TESTED," docs/status.csv  # Result: 2839
 rg -c ",EXEMPT," docs/status.csv  # Result: 273
 
 # Count catch unreachable

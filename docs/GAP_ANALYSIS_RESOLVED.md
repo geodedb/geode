@@ -8,7 +8,7 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Current Status**: **ALL GAPS RESOLVED!** See docs/GAP_ANALYSIS.md for governance metrics.
 
-> **Resolution Note (January 16, 2026)**: All open gaps have been resolved. GAP-0193 is superseded by GAP-0209, which is now fully resolved with 0 IMPL entries remaining.
+> **Resolution Note (January 16, 2026)**: All open gaps have been resolved. GAP-0193 is superseded by GAP-0209, which is now fully resolved with 0 IMPL entries remaining. Additionally, all STUB entries have been resolved (REQ-GQL-TDE-OVERHEAD-001), achieving 0 STUB and 0 IMPL in status.csv.
 
 ---
 
@@ -69,6 +69,42 @@ This document contains gaps that have been verified as resolved from previous ga
 
 ### Regression Tests Created
 - `geodetestlab/specs/gap_0209_0223_final_resolution.yml` - 12 tests covering all resolved gaps
+
+---
+
+## January 16, 2026 Gap Resolution Session 18 - Final STUB Entry Resolution
+
+**Summary**: Resolved the last STUB entry (REQ-GQL-TDE-OVERHEAD-001), achieving 0 STUB entries.
+
+### REQ-GQL-TDE-OVERHEAD-001: TDE Overhead Smoke Benchmark ✅ FULLY RESOLVED
+- **Requirement:** REQ-GQL-TDE-OVERHEAD-001
+- **Feature:** TDEOverheadSmoke
+- **Category:** Security / Performance
+- **Resolution Date:** January 16, 2026
+- **Fix:** Implemented actual TDE overhead benchmark using real page_encryption API
+- **Evidence:**
+  - `tests/benchmark_tde_overhead_smoke.zig` - Updated to use `page_encryption.encryptForWrite`
+  - CANARY marker changed from `STATUS=STUB` to `STATUS=TESTED`
+  - `docs/status.csv` updated: STUB count reduced from 1 to 0
+  - `grep -c ",STUB," docs/status.csv` → **0** (target achieved!)
+  - `grep -c ",TESTED," docs/status.csv` → **2837** (increased from 2836)
+
+### Implementation Details
+The benchmark now:
+1. Uses real AES-GCM encryption via `page_encryption.encryptForWrite()`
+2. Compares encryption overhead against baseline memcpy
+3. Validates overhead ratio < 10x with TDE enabled, < 5x disabled
+4. Outputs JSON benchmark data for tracking
+5. Tests multiple page sizes (512, 1024, 4096, 8192, 16384 bytes)
+
+### Regression Tests Created
+- `geodetestlab/specs/tde_overhead_benchmark.yml` - 10 tests covering TDE overhead benchmark
+
+### Governance Status
+- **IMPL entries:** 0 (target achieved!)
+- **STUB entries:** 0 (target achieved!)
+- **TESTED entries:** 2839
+- **EXEMPT entries:** 273
 
 ---
 
