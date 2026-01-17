@@ -396,8 +396,6 @@ release:
     **Binary Download**
     Download the appropriate archive for your platform from the assets below.
 
-  disable: false
-
   extra_files:
     - glob: ./dist/*.deb
     - glob: ./dist/*.rpm
