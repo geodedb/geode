@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# CANARY: REQ=REQ-LOADTEST-WORKLOADS-001; FEATURE="WorkloadPatterns"; ASPECT=Definition; STATUS=IMPL; OWNER=loadtest; UPDATED=2026-01-03
+# CANARY: REQ=REQ-LOADTEST-WORKLOADS-001; FEATURE="WorkloadPatterns"; ASPECT=Definition; STATUS=EXEMPT; OWNER=loadtest; UPDATED=2026-01-03
 """
 Geode Workload Pattern Definitions
 

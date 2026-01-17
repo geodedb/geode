@@ -1,6 +1,6 @@
 #!/bin/bash
 # GPU Benchmark Runner - Performance Validation Phase
-# CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Benchmarks; STATUS=IMPL; OWNER=engine; UPDATED=2025-10-26
+# CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Benchmarks; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-10-26
 
 echo "=== GPU Acceleration Benchmarks ==="
 echo "Date: $(date)"

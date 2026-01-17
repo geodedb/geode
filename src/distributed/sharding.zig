@@ -9,6 +9,8 @@ pub const ShardManager = struct {
     shards: std.AutoHashMap(u64, Shard),
     replication_factor: u32,
     partition_strategy: PartitionStrategy,
+    // GAP-0208 FIX: Optional transport callback for network migration
+    transport_callback: ?*TransportCallback = null,
 
     pub const Shard = struct {
         id: u64,
@@ -142,9 +144,6 @@ pub const ShardManager = struct {
         ShardNotFound,
         InvalidResponse,
     };
-
-    // GAP-0208 FIX: Optional transport callback for network migration
-    transport_callback: ?*TransportCallback = null,
 
     pub fn init(allocator: Allocator, replication_factor: u32, strategy: PartitionStrategy) ShardManager {
         return .{

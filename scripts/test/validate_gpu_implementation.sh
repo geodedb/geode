@@ -1,6 +1,6 @@
 #!/bin/bash
 # GPU Implementation Validation Script
-# CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Validation; STATUS=IMPL; OWNER=engine; UPDATED=2025-10-26
+# CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Validation; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-10-26
 
 echo "=== GPU Acceleration Implementation Validation ==="
 echo "Date: $(date)"

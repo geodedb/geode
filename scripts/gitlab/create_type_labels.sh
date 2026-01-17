@@ -1,5 +1,5 @@
 #!/bin/bash
-# CANARY: REQ=REQ-GITLAB-LABELS-001; FEATURE="GitLab Label Taxonomy"; ASPECT=Tooling; STATUS=IMPL; OWNER=tooling; UPDATED=2026-01-14
+# CANARY: REQ=REQ-GITLAB-LABELS-001; FEATURE="GitLab Label Taxonomy"; ASPECT=Tooling; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-14
 # GAP-0164: Create type:: labels in GitLab for consistent issue classification
 #
 # Usage: ./create_type_labels.sh

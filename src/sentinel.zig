@@ -3,7 +3,6 @@ const std = @import("std");
 /// GAP-0218 FIX: Real Sentinel Allocator Implementation
 /// Wraps an allocator with guard bytes to detect buffer overflows/underflows
 /// CANARY: REQ=REQ-MEM-SENTINEL-001; FEATURE="RealSentinelAllocator"; ASPECT=MemorySafety; STATUS=TESTED; TEST=test_gap_0218_sentinel_alloc; OWNER=memory; UPDATED=2026-01-16
-
 /// Sentinel pattern for detecting overwrites
 const SENTINEL_PATTERN: u8 = 0xFE;
 /// Number of guard bytes before allocation

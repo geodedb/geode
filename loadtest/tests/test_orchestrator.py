@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# CANARY: REQ=REQ-LOADTEST-TESTS-004; FEATURE="OrchestratorTests"; ASPECT=UnitTests; STATUS=IMPL; OWNER=loadtest; UPDATED=2026-01-03
+# CANARY: REQ=REQ-LOADTEST-TESTS-004; FEATURE="OrchestratorTests"; ASPECT=UnitTests; STATUS=EXEMPT; OWNER=loadtest; UPDATED=2026-01-03
 """
 Unit tests for Geode Cluster Orchestrator
 """

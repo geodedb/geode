@@ -3502,7 +3502,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 var binding_groups = std.StringHashMap(std.ArrayList(BindingRow)).init(allocator);
                 // GAP-0220 FIX: Use try for proper error propagation
-            var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
                 defer {
                     var giter = binding_groups.iterator();
                     while (giter.next()) |entry| {
@@ -3706,7 +3706,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate GROUP BY key(s) and serialize to string
                         // GAP-0220 FIX: Use try for proper error propagation
-            var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
+                        var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
                         const key_writer = key_buf.writer(allocator);
                         for (group_by.keys, 0..) |key_expr, k| {
                             if (k > 0) key_writer.writeAll("|") catch {};
@@ -3739,7 +3739,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Generate rows for each group
                 // GAP-0220 FIX: Use try for proper error propagation
-    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+                var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
                 var group_iter = binding_groups.iterator();
                 while (group_iter.next()) |group_entry| {
                     const group_bindings = group_entry.value_ptr.items;
@@ -3954,7 +3954,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
             // Generate rows for each group
             // GAP-0220 FIX: Use try for proper error propagation
-    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+            var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
             var group_iter = groups.iterator();
             while (group_iter.next()) |group_entry| {
                 _ = group_entry.key_ptr.*;
@@ -4634,7 +4634,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
                 if (q.where_clause) |where_expr| {
                     // GAP-0220 FIX: Use try for proper error propagation
-            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+                    var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
                     for (with_result.rows) |row| {
                         const where_env = Env{
                             .names = with_result.columns,
@@ -4730,7 +4730,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // CANARY: REQ=REQ-GQL-WITH-RETURN; FEATURE="WithReturnExpressions"; ASPECT=Execution; STATUS=FIXED; OWNER=execution; UPDATED=2025-10-12
 
         // GAP-0220 FIX: Use try for proper error propagation
-    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+        var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
         if (has_relationship) {
             // CANARY: REQ=REQ-GQL-MULTIHOP-001; FEATURE="MultiHopPatterns"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
@@ -6115,7 +6115,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // For simple node matches, we have match_variable
             // For relationship matches, we have left_node_var, rel_var, right_node_var
             // GAP-0220 FIX: Use try for proper error propagation
-        var col_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            var col_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
             defer col_list.deinit(allocator);
 
             if (has_relationship) {
@@ -6170,7 +6170,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
             if (q.where_clause) |where_expr| {
                 // GAP-0220 FIX: Use try for proper error propagation
-            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+                var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
                 for (with_result.rows) |row| {
                     const where_env = Env{
                         .names = with_result.columns,

@@ -883,10 +883,10 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
 
         // Chain to next query using the result as bindings (original per-row logic)
         // GAP-0220 FIX: Use try for proper error propagation
-    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
         var final_columns: [][]const u8 = &.{};
         // GAP-0220 FIX: Use try for proper error propagation
-    var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, 0);
 
         for (current_result.rows) |current_row| {
             // Validate that current_row length matches columns length
@@ -1440,7 +1440,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
             // Apply RETURN clause to transform results
             // GAP-0220 FIX: Use try for proper error propagation
-    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
             for (filtered_result.rows) |row| {
                 var return_row = try allocator.alloc(Value, q.ret.items.len);
@@ -1529,7 +1529,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
             // Apply RETURN clause
             // GAP-0220 FIX: Use try for proper error propagation
-    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
             for (filtered_rows.items) |row| {
                 var return_row = try allocator.alloc(Value, q.ret.items.len);
@@ -1607,7 +1607,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
         // Now evaluate RETURN using the WITH results as environment
         // GAP-0220 FIX: Use try for proper error propagation
-    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
 
         for (with_result.rows) |with_row| {
             var return_row = try allocator.alloc(Value, q.ret.items.len);

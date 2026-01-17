@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# CANARY: REQ=REQ-LOADTEST-REGRESSION-001; FEATURE="RegressionRunner"; ASPECT=Main; STATUS=IMPL; OWNER=loadtest; UPDATED=2026-01-03
+# CANARY: REQ=REQ-LOADTEST-REGRESSION-001; FEATURE="RegressionRunner"; ASPECT=Main; STATUS=EXEMPT; OWNER=loadtest; UPDATED=2026-01-03
 """
 Geode Automated Regression Testing for Scale Performance
 

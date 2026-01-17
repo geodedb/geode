@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=RegressionTesting; STATUS=IMPL; TEST=repl_quic_integration_regression_test; OWNER=repl; UPDATED=2025-10-05
+# CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=RegressionTesting; STATUS=EXEMPT; TEST=repl_quic_integration_regression_test; OWNER=repl; UPDATED=2025-10-05
 
 # Regression test suite for REPL QUIC integration
 # This script validates the QUIC integration functionality

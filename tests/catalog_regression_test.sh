@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CANARY: REQ=REQ-GQL-CATALOG-005; FEATURE="Catalog Regression Test Suite"; ASPECT=TestAutomation; STATUS=IMPL; TEST=CatalogRegressionSuite; OWNER=testing; UPDATED=2025-10-04
+# CANARY: REQ=REQ-GQL-CATALOG-005; FEATURE="Catalog Regression Test Suite"; ASPECT=TestAutomation; STATUS=EXEMPT; TEST=CatalogRegressionSuite; OWNER=testing; UPDATED=2025-10-04
 
 echo "=== Geode Catalog Operations Regression Test Suite ==="
 echo "Testing enhanced GQL catalog operations functionality"

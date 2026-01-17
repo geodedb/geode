@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# CANARY: REQ=REQ-LOADTEST-REGRESSION-002; FEATURE="CIIntegration"; ASPECT=Pipeline; STATUS=IMPL; OWNER=loadtest; UPDATED=2026-01-03
+# CANARY: REQ=REQ-LOADTEST-REGRESSION-002; FEATURE="CIIntegration"; ASPECT=Pipeline; STATUS=EXEMPT; OWNER=loadtest; UPDATED=2026-01-03
 """
 Geode CI/CD Integration for Regression Testing
 

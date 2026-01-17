@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CANARY: REQ=REQ-GQL-NODE-PROPERTY-ACCESS; FEATURE="Node Property Access"; ASPECT=RuntimeStability; STATUS=IMPL; TEST=TestNodePropertyHashMapAccess; OWNER=core; UPDATED=2025-10-05
+# CANARY: REQ=REQ-GQL-NODE-PROPERTY-ACCESS; FEATURE="Node Property Access"; ASPECT=RuntimeStability; STATUS=EXEMPT; TEST=TestNodePropertyHashMapAccess; OWNER=core; UPDATED=2025-10-05
 
 # Regression test for integer overflow crash when accessing node properties
 # Tests the fix for BindingValue storing Node by pointer instead of by value
