@@ -25,7 +25,7 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-EXPRESSION_OPERATORS: GQL Expression Operators Requirements](https://gitlab.com/devnw/geode/geode/-/issues/262)
 - [REQ-DOC-TYPE_CONVERSION_FUNCTIONS: Type Conversion Functions Implementation Requirements](https://gitlab.com/devnw/geode/geode/-/issues/288)
 - [REQ-DOC-UNICODE: UNICODE.md - Geode Unicode Support (v0.18.0) Requirements](https://gitlab.com/devnw/geode/geode/-/issues/268)
-- [REQ-DOC-VALUES_MATCH_CHAINING_SPEC: VALUES -> MATCH Chaining Technical Specification Requirements](https://gitlab.com/devnw/geode/geode/-/issues/269)
+- [REQ-DOC-VALUES_MATCH_CHAINING_SPEC: VALUES → MATCH Chaining Technical Specification Requirements](https://gitlab.com/devnw/geode/geode/-/issues/269)
 - [REQ-DOC-GQL_COMPLIANCE: GQL ISO/IEC 39075:2024 Compliance Guide Requirements](https://gitlab.com/devnw/geode/geode/-/issues/308)
 - [REQ-DOC-GQL_CONFORMANCE_PROFILE: GQL Conformance Profile — MATCH (subset) Requirements](https://gitlab.com/devnw/geode/geode/-/issues/291)
 - [REQ-DOC-MATCH_TUTORIAL: MATCH Subset Tutorial (Geode) Requirements](https://gitlab.com/devnw/geode/geode/-/issues/275)

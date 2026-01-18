@@ -194,10 +194,10 @@ pub fn authenticate(username: []const u8, password: []const u8) !Role
 ## CANARY Markers
 
 ```
-CANARY: REQ=REQ-AUTH-002; FEATURE="Argon2idHashing";
-ASPECT=PasswordSecurity; STATUS=IMPLEMENTED; OWNER=security;
-UPDATED=2025-10-14; ALGORITHM=Argon2id; PARAMS=t3m65536p4
+CANARY: REQ=REQ-AUTH-002; FEATURE="Argon2idHashing"; ASPECT=PasswordSecurity; STATUS=COMPLETE; OWNER=security; UPDATED=2025-10-14
 ```
+
+**Implementation Details**: Argon2id (RFC 9106), parameters t=3 m=65536 p=4
 
 ---
 

@@ -24,21 +24,34 @@ from typing import Dict, List, Tuple
 VALID_STATUSES = {'STUB', 'IMPL', 'TESTED', 'BENCHED', 'COMPLETE', 'EXEMPT'}
 
 # Pattern for complete, conforming CANARY marker
+# Allows multiple TEST= and BENCH= fields (common in test files)
+# Handles both FEATURE="..." and FEATURE=\"...\" (escaped quotes in shell/string literals)
 CANARY_COMPLETE_PATTERN = re.compile(
     r'CANARY:\s*'
     r'REQ=(?P<req>[^;]+);\s*'
-    r'FEATURE="(?P<feature>[^"]+)";\s*'
+    r'FEATURE=\\?"(?P<feature>[^"\\]+(?:\\.[^"\\]*)*)\\?";\s*'  # Handle escaped or unescaped quotes
     r'ASPECT=(?P<aspect>[^;]+);\s*'
     r'STATUS=(?P<status>[^;]+);\s*'
-    r'(?:TEST=(?P<test>[^;]+);\s*)?'
-    r'(?:BENCH=(?P<bench>[^;]+);\s*)?'
+    r'(?:TEST=[^;]+;\s*)*'  # Zero or more TEST= fields
+    r'(?:BENCH=[^;]+;\s*)*'  # Zero or more BENCH= fields
     r'OWNER=(?P<owner>[^;]+);\s*'
     r'UPDATED=(?P<updated>[^;\s]+)'
 )
 
 # Pattern for CANARY markers that appear to be formal (have FEATURE=)
 # Informal markers like "CANARY: REQ=REQ-XXX; some comment" are allowed
-CANARY_LOOSE_PATTERN = re.compile(r'CANARY:\s*REQ=[^;]+;\s*FEATURE=')
+# Handles both FEATURE="..." and FEATURE=\"...\" (escaped quotes)
+CANARY_LOOSE_PATTERN = re.compile(r'CANARY:\s*REQ=[^;]+;\s*FEATURE=\\?"')
+
+# Pattern to identify documentation/example markers (not real markers)
+# These use "..." or placeholders like REQ-XXX or REQ-GQL-###
+CANARY_EXAMPLE_PATTERN = re.compile(
+    r'CANARY:\s*REQ=REQ-(?:XXX|GQL-###|GQL-XXX);.*FEATURE="(?:\.{3}|Name)"'
+    r'|CANARY pattern:'  # Lines documenting the CANARY pattern
+    r'|f\'.* CANARY:'  # Python f-string templates generating markers
+    r'|FEATURE="[^"]*\{[^}]+\}"'  # Python f-string templates with {variable}
+    r'|^\s*line\s*=\s*[\'"]'  # Python test string assignments (line = '...')
+)
 
 
 def lint_file(filepath: Path) -> List[Dict]:
@@ -57,6 +70,10 @@ def lint_file(filepath: Path) -> List[Dict]:
 
     for i, line in enumerate(lines, 1):
         if CANARY_LOOSE_PATTERN.search(line):
+            # Skip documentation examples (template patterns, not real markers)
+            if CANARY_EXAMPLE_PATTERN.search(line):
+                continue
+
             # Found a CANARY marker, check if it's complete
             match = CANARY_COMPLETE_PATTERN.search(line)
 

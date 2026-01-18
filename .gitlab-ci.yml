@@ -105,9 +105,10 @@ governance-canary-drift:
   allow_failure: true
 
 # =============================================================================
-# Governance Stage - CANARY Lint Check
+# Governance Stage - CANARY Lint Check (Repo-Wide)
 # CANARY: REQ=REQ-CI-CANARY-LINT-001; FEATURE="CI CANARY Linting"; ASPECT=Governance; STATUS=TESTED; TEST=governance-canary-lint; OWNER=ci; UPDATED=2026-01-17
 # GAP-0225/GAP-0226: Enforces CANARY marker schema compliance (ASPECT, OWNER, valid STATUS)
+# Now runs repo-wide (not just src/) to ensure docs, tests, and benchmarks comply
 # =============================================================================
 
 governance-canary-lint:
@@ -117,19 +118,92 @@ governance-canary-lint:
     GIT_SUBMODULE_STRATEGY: recursive
   script:
     - |
-      echo "=== Running CANARY Marker Lint ==="
-      # Run the CANARY linter on src/ only to check for malformed markers
-      # (docs/, tests/, benchmarks/ contain examples and are excluded)
-      python3 tools/canary_lint.py --repo src --fail-on-issues || {
+      echo "=== Running CANARY Marker Lint (Repo-Wide) ==="
+      # Run the CANARY linter on entire repo to check for malformed markers
+      # GAP-0225 FIX: Expanded scope from src/ to . (entire repository)
+      python3 tools/canary_lint.py --repo . --fail-on-issues || {
         echo "✗ CANARY markers have schema violations"
-        echo "Run 'python3 tools/canary_normalize.py --repo src' to fix"
+        echo "Run 'python3 tools/canary_normalize.py --repo .' to fix"
         exit 1
       }
       echo "✓ All CANARY markers conform to required schema"
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: true  # Set to false after initial adoption
+  # GAP-0225 FIX: Enforce compliance (was allow_failure: true)
+  allow_failure: false
+
+# =============================================================================
+# Governance Stage - Canaryscan GAP Verification
+# CANARY: REQ=REQ-CI-CANARYSCAN-001; FEATURE="CI Canaryscan Verify"; ASPECT=Governance; STATUS=TESTED; TEST=governance-canaryscan-verify; OWNER=ci; UPDATED=2026-01-17
+# GAP-0227: Enforces GAP_ANALYSIS.md claims against actual CANARY markers
+# =============================================================================
+
+governance-canaryscan-verify:
+  stage: governance
+  image: golang:1.21-alpine
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Building Canaryscan Tool ==="
+      cd tools/canaryscan
+      go build -o /tmp/canaryscan .
+
+      echo "=== Running Canaryscan Verify ==="
+      # GAP-0227 FIX: Run canaryscan with --verify and --strict per GOVERNANCE.md
+      /tmp/canaryscan --root ../.. --verify ../../docs/GAP_ANALYSIS.md --strict || {
+        echo "✗ GAP_ANALYSIS.md contains claims that don't match CANARY markers"
+        echo "Update docs/GAP_ANALYSIS.md to match actual implementation status"
+        exit 1
+      }
+      echo "✓ GAP_ANALYSIS.md claims verified against CANARY markers"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  # GAP-0227 FIX: Enforce verification
+  allow_failure: false
+
+# =============================================================================
+# Governance Stage - REQ-DOC Report Generator
+# CANARY: REQ=REQ-CI-REQ-DOC-REPORT-001; FEATURE="CI REQ-DOC Reports"; ASPECT=Governance; STATUS=TESTED; TEST=governance-req-doc-reports; OWNER=ci; UPDATED=2026-01-17
+# GAP-0229: Generates requirement ID reports for REQ-DOC GitLab issues
+# =============================================================================
+
+governance-req-doc-reports:
+  stage: governance
+  image: python:3.12-slim
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Generating REQ-DOC Requirement Reports ==="
+      # GAP-0229 FIX: Generate requirement ID lists for REQ-DOC GitLab issues
+      mkdir -p reports
+
+      # Generate reports for all mapped issues
+      python3 tools/req_doc_report.py --all-issues
+
+      # Also generate GitLab-ready snippets
+      python3 tools/req_doc_report.py --all-issues --gitlab-snippet
+
+      # Generate summary
+      python3 tools/req_doc_report.py --summary
+
+      echo "=== Generated Reports ==="
+      ls -la reports/
+
+      echo "✓ REQ-DOC reports generated successfully"
+      echo "Note: Copy contents of reports/issue_*_gitlab.md to update GitLab issues"
+  artifacts:
+    when: always
+    paths:
+      - reports/
+    expire_in: 1 week
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: true  # Reports are informational, not blocking
 
 # =============================================================================
 # Governance Stage - Conformance Sync Scanner
@@ -145,15 +219,19 @@ governance-conformance-sync:
   script:
     - |
       echo "=== Running Conformance Sync Scanner ==="
-      # Run the conformance sync scanner to report REQ-GQL ID status
-      # Note: duplicates are expected (same REQ tracked across multiple files)
-      zig run scripts/conformance_sync.zig -- --json > /tmp/conformance_report.json
+      # GAP-0228 FIX: Added --fail-on-issues per docs/kb/CONFORMANCE_SYNC.md
+      zig run scripts/conformance_sync.zig -- --json --fail-on-issues > /tmp/conformance_report.json || {
+        echo "✗ Conformance issues detected (gaps or duplicates)"
+        cat /tmp/conformance_report.json 2>/dev/null || true
+        exit 1
+      }
       cat /tmp/conformance_report.json
-      echo "✓ Conformance scan complete"
+      echo "✓ Conformance scan complete - no issues"
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: true
+  # GAP-0228 FIX: Enforce compliance (was allow_failure: true)
+  allow_failure: false
 
 # =============================================================================
 # Test Stage - Unit Tests

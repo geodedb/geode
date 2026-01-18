@@ -11,15 +11,17 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
-# CANARY pattern: CANARY: REQ=REQ-GQL-XXX; FEATURE="..."; ASPECT=...; STATUS=...; TEST=...; BENCH=...; OWNER=...; UPDATED=...
+# CANARY pattern: CANARY: REQ=REQ-XXX; FEATURE="..."; ASPECT=...; STATUS=...; [TEST=...;]* [BENCH=...;]* OWNER=...; UPDATED=...
+# Allows multiple TEST= and BENCH= fields (common in test files)
+# Handles both FEATURE="..." and FEATURE=\"...\" (escaped quotes in shell/string literals)
 CANARY_PATTERN = re.compile(
     r'CANARY:\s*'
     r'REQ=(?P<req>[^;]+);\s*'
-    r'FEATURE="(?P<feature>[^"]+)";\s*'
+    r'FEATURE=\\?"(?P<feature>[^"\\]+(?:\\.[^"\\]*)*)\\?";\s*'  # Handle escaped or unescaped quotes
     r'ASPECT=(?P<aspect>[^;]+);\s*'
     r'STATUS=(?P<status>[^;]+);\s*'
-    r'(?:TEST=(?P<test>[^;]+);\s*)?'
-    r'(?:BENCH=(?P<bench>[^;]+);\s*)?'
+    r'(?:TEST=[^;]+;\s*)*'  # Zero or more TEST= fields
+    r'(?:BENCH=[^;]+;\s*)*'  # Zero or more BENCH= fields
     r'OWNER=(?P<owner>[^;]+);\s*'
     r'UPDATED=(?P<updated>[^;\s]+)'
 )

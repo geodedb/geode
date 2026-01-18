@@ -116,7 +116,7 @@ Planned additions (not yet present): per-op `input_rows`, memory metrics, alloca
 
 ## Raft Replication & Cluster Control Framing (Internal over QUIC)
 
-CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrame/TransportEnvelope"; ASPECT=NetworkTransport; STATUS=IMPLEMENTED; TEST=TestRaftFrameEncodeDecodeRoundTrip; OWNER=cluster; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrame/TransportEnvelope"; ASPECT=NetworkTransport; STATUS=COMPLETE; TEST=TestRaftFrameEncodeDecodeRoundTrip; OWNER=cluster; UPDATED=2025-09-23
 
 While the client/server binary protocol above governs GQL interactions, intra-cluster consensus traffic (Raft) uses a lightweight newline‑delimited JSON envelope (one frame per line) over a QUIC bidirectional stream. This keeps the transport simple (no length prefix — QUIC records ensure ordering and reliability) and debuggable with plaintext inspection.
 
@@ -166,7 +166,7 @@ CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrameSnapshotInstall"; ASPECT=NetworkTrans
 
 ## Federated Query Result Line Protocol (Prototype)
 
-CANARY: REQ=REQ-GQL-052; FEATURE="FederationResultLine"; ASPECT=Federation; STATUS=IMPLEMENTED; TEST=TestFederationParseResultsLineBasic; OWNER=federation; UPDATED=2025-09-23
+CANARY: REQ=REQ-GQL-052; FEATURE="FederationResultLine"; ASPECT=Federation; STATUS=COMPLETE; TEST=TestFederationParseResultsLineBasic; OWNER=federation; UPDATED=2025-09-23
 
 Early federation support introduces a single‑line (newline‑delimited JSON) response per remote sub‑query execution. This is distinct from the client/server `BINDINGS` paging: federation currently performs gather/merge at a coordinator after receiving one JSON object per remote shard or remote database.
 

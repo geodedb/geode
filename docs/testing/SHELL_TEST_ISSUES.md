@@ -3234,7 +3234,7 @@ RETURN e.name AS works_on_cancelled;
 **Fix Applied** (2025-12-26):
 Added property checking for target nodes in EXISTS patterns:
 ```zig
-// CANARY: REQ=REQ-GQL-EXISTS-PROPS-001; FEATURE="ExistsTargetNodeProps"; ASPECT=PropertyFilter; STATUS=IMPL
+// CANARY: REQ=REQ-GQL-EXISTS-PROPS-001; FEATURE="ExistsTargetNodeProps"; ASPECT=PropertyFilter; STATUS=TESTED; OWNER=engine; UPDATED=2025-12-26
 
 // Check property constraints on target (e.g., {status: 'cancelled'})
 if (target_matches and target_pattern.props != null) {

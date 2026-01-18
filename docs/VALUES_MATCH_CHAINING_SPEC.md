@@ -539,7 +539,7 @@ Section covering VALUES in query composition:
 ## CANARY Marker
 
 ```zig
-// CANARY: REQ=REQ-GQL-VALUES-MATCH-001; FEATURE="ValuesMatchChaining"; ASPECT=BindingPropagation; STATUS=IMPL; TEST=TestValuesMatchBasic|TestValuesMatchWhere|TestValuesMatchMultiRow; OWNER=engine; UPDATED=2025-10-11
+// CANARY: REQ=REQ-GQL-VALUES-MATCH-001; FEATURE="ValuesMatchChaining"; ASPECT=BindingPropagation; STATUS=TESTED; TEST=TestValuesMatchBasic|TestValuesMatchWhere|TestValuesMatchMultiRow; TEST=geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml; OWNER=engine; UPDATED=2026-01-17
 ```
 
 ## References

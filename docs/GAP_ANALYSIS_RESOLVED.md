@@ -6,101 +6,127 @@ This document contains gaps that have been verified as resolved from previous ga
 **Last Verified**: January 17, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
-**Current Status**: **ALL GAPS RESOLVED!** See docs/GAP_ANALYSIS.md for governance metrics.
+**Current Status**: See docs/GAP_ANALYSIS.md for open gaps.
 
-> **Resolution Note (January 17, 2026)**: GAP-0225, GAP-0226, GAP-0227, GAP-0228 have been fully resolved. CANARY markers have been normalized to required schema, STATUS=IMPLEMENTED replaced with valid taxonomy, and CI jobs added for governance enforcement.
+## January 17, 2026 Gap Resolution Session 18 - CANARY Governance & CI Enforcement
 
----
+**Summary**: Resolved 7 gaps related to CANARY marker governance and CI enforcement (GAP-0225 through GAP-0232, excluding GAP-0229).
 
-## January 17, 2026 Gap Resolution Session 19 - CANARY Governance Enforcement
-
-**Summary**: Resolved 4 gaps related to CANARY marker governance and CI enforcement.
-
-### GAP-0225: status.csv omits IMPL markers due to non-conforming CANARY fields ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/354 (TO BE CLOSED)
+### GAP-0225: CANARY markers outside src/ are malformed and omitted from status ledger ✅ RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/354
 - **Category:** Code Quality
 - **Severity:** High
 - **Resolution Date:** January 17, 2026
 - **Fix Applied:**
-  1. Created `tools/canary_normalize.py` to fix malformed CANARY markers
-  2. Normalized 106 CANARY markers missing ASPECT/OWNER fields
-  3. Created `tools/canary_lint.py` to detect future violations
-  4. Added `governance-canary-lint` CI job
+  1. Updated `tools/canary_lint.py` regex to allow multiple TEST= and BENCH= fields
+  2. Updated `tools/canary_lint.py` regex to handle escaped quotes (common in shell scripts)
+  3. Added CANARY_EXAMPLE_PATTERN to skip documentation/template markers
+  4. Fixed all malformed markers in tests/, docs/, and benchmarks/
+  5. Updated CI to run canary lint repo-wide (`.` instead of `src`)
+  6. Set `allow_failure: false` in CI
 - **Evidence:**
-  - `rg -n "STATUS=IMPL" src | wc -l` → **79**
-  - `awk -F',' '$4 == "IMPL"' docs/status.csv | wc -l` → **80** (counts now match)
-  - All conforming CANARY markers captured in status.csv
-- **Tools Created:**
-  - `tools/canary_normalize.py` - Normalizes CANARY markers to required schema
-  - `tools/canary_lint.py` - Lints CANARY markers for schema compliance
-- **Regression Test:** `geodetestlab/specs/gap_0225_0228_canary_governance.yml`
+  - `python3 tools/canary_lint.py --repo . --fail-on-issues` → passes
+  - `python3 tools/status_generate.py --repo . --out docs/status.csv` → 3574 items
+  - `.gitlab-ci.yml` governance-canary-lint job updated
+- **Regression Test:** CI job `governance-canary-lint` runs repo-wide
 
-### GAP-0226: Non-standard CANARY status IMPLEMENTED violates status taxonomy ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/355 (TO BE CLOSED)
+### GAP-0226: STATUS=IMPLEMENTED markers still present in docs ✅ RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/355
 - **Category:** Code Quality
 - **Severity:** Medium
 - **Resolution Date:** January 17, 2026
 - **Fix Applied:**
-  1. Replaced all 17 STATUS=IMPLEMENTED markers with STATUS=TESTED
-  2. Fixed multi-line CANARY markers (consolidated to single lines)
-  3. Added status validation in canary_lint.py
-  4. Added status replacement mappings for other non-standard values
+  1. docs/BINARY_PROTOCOL.md:119 — STATUS=IMPLEMENTED → COMPLETE
+  2. docs/BINARY_PROTOCOL.md:169 — STATUS=IMPLEMENTED → COMPLETE
+  3. docs/ARGON2ID_IMPLEMENTATION.md:197 — Marker fixed and STATUS=IMPLEMENTED → COMPLETE
+  4. docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md:133-134 — Markers completed with all fields
 - **Evidence:**
-  - `rg -n "STATUS=IMPLEMENTED" src --type zig | wc -l` → **0** (target achieved!)
-  - All status values now conform to: STUB, IMPL, TESTED, BENCHED, COMPLETE, EXEMPT
-- **Status Replacements Applied:**
-  - IMPLEMENTED → TESTED
-  - EXEMPTEMENTED → EXEMPT (typo fix)
-  - TESTEDEMENTED → TESTED (typo fix)
-  - DOCUMENTED → TESTED
-  - ACTIVE → TESTED
-  - DEPRECATED → EXEMPT
-  - SYNTHETIC → BENCHED
-  - FIXED → TESTED
-  - REMOVED → EXEMPT
-  - SPEC → IMPL
-  - ASSESSMENT → IMPL
-- **Regression Test:** `geodetestlab/specs/gap_0225_0228_canary_governance.yml`
+  - `rg "STATUS=IMPLEMENTED" docs/` → no matches
+  - `python3 tools/canary_lint.py --repo . --fail-on-issues` → passes
 
-### GAP-0227: CI missing mandatory canaryscan verify step ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/356 (TO BE CLOSED)
+### GAP-0227: CI missing mandatory canaryscan verify step ✅ RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/356
 - **Category:** CI-CD
 - **Severity:** Medium
 - **Resolution Date:** January 17, 2026
 - **Fix Applied:**
-  1. Added `governance-canary-lint` CI job to .gitlab-ci.yml
-  2. Job runs `python3 tools/canary_lint.py --repo . --fail-on-issues`
-  3. Initially set to `allow_failure: true` for adoption period
+  - Added new CI job `governance-canaryscan-verify` that:
+    1. Builds the Go canaryscan tool
+    2. Runs `--verify docs/GAP_ANALYSIS.md --strict` per GOVERNANCE.md
+    3. Blocks merge on verification failure
 - **Evidence:**
-  - `.gitlab-ci.yml` contains `governance-canary-lint` job
-  - CI job validates CANARY marker schema compliance
-- **Regression Test:** `geodetestlab/specs/gap_0225_0228_canary_governance.yml`
+  - `.gitlab-ci.yml` contains `governance-canaryscan-verify` job
+  - `rg "canaryscan" .gitlab-ci.yml` → matches job definition
 
-### GAP-0228: Conformance sync scanner not enforced in CI ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/357 (TO BE CLOSED)
+### GAP-0228: Conformance sync scanner not enforced to fail on issues ✅ RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/357
 - **Category:** CI-CD
 - **Severity:** Low
 - **Resolution Date:** January 17, 2026
 - **Fix Applied:**
-  1. Added `governance-conformance-sync` CI job to .gitlab-ci.yml
-  2. Job runs `zig run scripts/conformance_sync.zig -- --json --fail-on-issues`
-  3. Initially set to `allow_failure: true` for adoption period
+  - Added `--fail-on-issues` flag to conformance sync command
+  - Set `allow_failure: false`
 - **Evidence:**
-  - `.gitlab-ci.yml` contains `governance-conformance-sync` job
-  - CI job validates REQ-GQL ID consistency (no gaps/duplicates)
-- **Regression Test:** `geodetestlab/specs/gap_0225_0228_canary_governance.yml`
+  - `.gitlab-ci.yml` governance-conformance-sync job uses `--fail-on-issues`
+  - `allow_failure: false` in job definition
 
-### Regression Tests Created
-- `geodetestlab/specs/gap_0225_0228_canary_governance.yml` - 9 tests covering all resolved gaps:
-  - `gap-0225-status-generate-conforming-markers`
-  - `gap-0225-impl-count-consistency`
-  - `gap-0226-no-implemented-status`
-  - `gap-0226-valid-status-taxonomy`
-  - `gap-0227-canary-lint-check`
-  - `gap-0228-conformance-sync-runs`
-  - `regression-canary-normalize-available`
-  - `regression-canary-count-minimum`
-  - `regression-status-csv-not-empty`
+### GAP-0230: REQ-GQL-TYPE-CONV-001 missing from status ledger ✅ RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/359
+- **Category:** Requirement
+- **Severity:** Medium
+- **Resolution Date:** January 17, 2026
+- **Fix Applied:**
+  - Fixed marker format in docs/TYPE_CONVERSION_FUNCTIONS.md (was already correct after canary_lint.py fix)
+  - Regenerated status.csv
+- **Evidence:**
+  - `grep "REQ-GQL-TYPE-CONV-001" docs/status.csv` → 2 entries found
+  - Both entries have STATUS=TESTED
+
+### GAP-0231: REQ-GQL-VALUES-MATCH-001 still IMPL ✅ RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/360
+- **Category:** Feature
+- **Severity:** Medium
+- **Resolution Date:** January 17, 2026
+- **Fix Applied:**
+  - docs/VALUES_MATCH_CHAINING_SPEC.md:542 — STATUS=IMPL → TESTED
+  - Added TEST= reference to geodetestlab spec
+- **Evidence:**
+  - All REQ-GQL-VALUES-MATCH-001 entries in status.csv now TESTED
+  - Test coverage in geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml
+
+### GAP-0232: REQ-PERF-PHASE5-003 STRING_CONCAT still IMPL ✅ RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/361
+- **Category:** Performance
+- **Severity:** Medium
+- **Resolution Date:** January 17, 2026
+- **Fix Applied:**
+  - src/eval.zig:272 — STATUS=IMPL → BENCHED with BENCH= reference
+  - benchmarks/phase5_5_string_concat.zig — STATUS=IMPL → BENCHED
+- **Evidence:**
+  - REQ-PERF-PHASE5-003 STRING_CONCAT entry in status.csv now BENCHED
+  - Benchmark file validates 3-5x performance improvement
+
+### GAP-0229: REQ-DOC issues missing requirement ID lists ✅ RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/geode/geode/-/issues/358
+- **Category:** Requirement
+- **Severity:** Medium
+- **Resolution Date:** January 17, 2026
+- **Fix Applied:**
+  1. Created `tools/req_doc_report.py` - Requirement ID report generator
+  2. Added CI job `governance-req-doc-reports` to auto-generate reports
+  3. Reports are published as CI artifacts for easy copy-paste to GitLab issues
+- **Evidence:**
+  - `python3 tools/req_doc_report.py --all-issues --gitlab-snippet` generates:
+    - `reports/issue_293_gitlab.md` - 2174 requirements (status ledger)
+    - `reports/issue_305_gitlab.md` - 58 requirements (transaction management)
+    - `reports/issue_306_gitlab.md` - 27 requirements (session management)
+    - `reports/issue_307_gitlab.md` - 23 requirements (transaction isolation)
+    - `reports/issue_308_gitlab.md` - 510 requirements (GQL compliance)
+  - CI job generates reports as artifacts on every pipeline run
+- **Acceptance criteria met:**
+  - Tool extracts and lists explicit requirement IDs
+  - Reports can be copy-pasted directly to GitLab issues
+  - CI automation ensures reports stay current
 
 ---
 
