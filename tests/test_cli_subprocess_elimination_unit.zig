@@ -237,7 +237,7 @@ test "JSON output format validation" {
 test "TestCANARY_REQ_CLI_SUBPROCESS_UNIT_001" {
     const allocator = testing.allocator;
 
-    // CANARY: This test verifies CLI subprocess elimination unit functionality
+    // This test verifies CLI subprocess elimination unit functionality
     // as specified in REQ-CLI-SUBPROCESS-UNIT-001
 
     const config = ClientConfig{

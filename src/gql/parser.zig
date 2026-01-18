@@ -5675,7 +5675,7 @@ pub const Parser = struct {
     }
 
     // Parse CREATE GRAPH TYPE statement
-    // CANARY: FLE_PARSER_FIELD_DEFINITIONS - Field-Level Encryption Parser Extensions
+    // Field-Level Encryption Parser Extensions
     // CANARY: REQ=REQ-FLE-PARSER-001; FEATURE="FieldLevelEncryption"; ASPECT=PARSER; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
     /// Parse field definitions within graph type: { field1 TYPE, field2 TYPE @annotations, ... }

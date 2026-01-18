@@ -258,8 +258,8 @@ test "backup compression" {
     try testing.expect(nodes.len == 100);
 }
 
-test "CANARY: REQ=REQ-GQL-BACKUP-RESTORE" {
-    // CANARY: REQ=REQ-GQL-BACKUP-RESTORE; FEATURE="BackupRestore"; ASPECT=Core; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_BACKUP_RESTORE; OWNER=team; UPDATED=2025-10-02
+test "REQ-GQL-BACKUP-RESTORE validation" {
+    // CANARY: REQ=REQ-GQL-BACKUP-RESTORE; FEATURE="BackupRestore"; ASPECT=Core; STATUS=TESTED; TEST=test_backup_restore.zig; OWNER=team; UPDATED=2025-10-02
     const allocator = std.testing.allocator;
 
     const tmp_dir = try std.fs.cwd().makeOpenPath("test_backup_canary", .{});

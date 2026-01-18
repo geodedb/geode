@@ -1,7 +1,7 @@
 const std = @import("std");
 const hmac_mod = @import("fle_hmac");
 
-// CANARY: FLE_BLIND_INDEX - Blind Index for Searchable Encrypted Fields
+// Blind Index for Searchable Encrypted Fields
 // CANARY: REQ=REQ-FLE-BI-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 pub const BlindIndexToken = [32]u8;

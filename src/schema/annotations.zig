@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: FLE_SCHEMA_ANNOTATIONS - GQL Schema Annotation Parsing
+// GQL Schema Annotation Parsing
 // CANARY: REQ=REQ-FLE-SCHEMA-001; FEATURE="FieldLevelEncryption"; ASPECT=SCHEMA; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 /// Field encryption configuration

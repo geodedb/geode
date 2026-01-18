@@ -300,7 +300,7 @@ test "CANARY compliance markers in documentation structure" {
 
 // CANARY compliance test
 test "TestCANARY_REQ_DOCUMENTATION_STRUCTURE_001" {
-    // CANARY: This test verifies documentation structure functionality
+    // This test verifies documentation structure functionality
     // as specified in REQ-DOCUMENTATION-STRUCTURE-001
 
     var gpa = std.heap.GeneralPurposeAllocator(.{});

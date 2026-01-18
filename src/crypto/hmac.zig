@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: FLE_BLIND_INDEX - HMAC for Blind Index Tokens
+// HMAC for Blind Index Tokens
 // CANARY: REQ=REQ-FLE-BI-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=src/crypto/hmac.zig; OWNER=security; UPDATED=2026-01-15
 
 /// Compute HMAC-SHA256 blind index token

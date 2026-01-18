@@ -1,4 +1,4 @@
-// CANARY: LSP_PROTOCOL_TESTS
+// Module implementation
 // Test suite for LSP protocol types and structures
 
 const std = @import("std");

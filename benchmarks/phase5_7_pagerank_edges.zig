@@ -4,7 +4,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: BENCHMARK_PHASE5_7 - Performance validation for Phase 5.2.1 (P1-1) optimization
+// Benchmark Phase PHASE5_7 - Performance validation for Phase 5.2.1 (P1-1) optimization
 // CANARY: REQ=REQ-PERF-PHASE5-P1-001; FEATURE="PageRankOptimization"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=performance; UPDATED=2025-11-16
 
 // =============================================================================

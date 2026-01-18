@@ -1,7 +1,7 @@
 const std = @import("std");
 const annotations = @import("annotations.zig");
 
-// CANARY: FLE_SCHEMA_CATALOG - Global Schema Metadata Catalog
+// Global Schema Metadata Catalog
 // CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=SCHEMA; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 /// Thread-safe global schema catalog for field-level encryption metadata

@@ -48,7 +48,7 @@ pub const EncryptionKey = struct {
     algorithm: EncryptionAlgorithm,
 };
 
-// CANARY: PERF_PHASE2_KEY_CACHE - Pre-computed encryption keys for hot pages
+// PERF: PHASE2_KEY_CACHE - Pre-computed encryption keys for hot pages
 // CANARY: REQ=REQ-PERF-PHASE2-003; FEATURE="StorageOptimization"; ASPECT=ENCRYPTION; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=performance; UPDATED=2026-01-15
 pub const PageCrypto = struct {
     allocator: Allocator,

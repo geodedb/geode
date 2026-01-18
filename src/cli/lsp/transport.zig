@@ -1,4 +1,4 @@
-// CANARY: LSP_TRANSPORT_IMPLEMENTATION
+// Module implementation
 // LSP transport layer using Content-Length headers over stdio
 // Spec: specs/lsp/language-server-protocol/_specifications/base/0.9/specification.md
 

@@ -1,4 +1,4 @@
-// CANARY: LSP_SERVER_TESTS
+// Module implementation
 // Integration tests for LSP server components
 
 const std = @import("std");

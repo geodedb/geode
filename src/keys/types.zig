@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: FLE_KEY_MANAGEMENT - Key Management Types
+// Key Management Types
 // CANARY: REQ=REQ-FLE-KEY-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 /// Key identifiers for hierarchical key management

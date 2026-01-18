@@ -284,7 +284,7 @@ test "integration message format validation" {
 test "TestCANARY_REQ_CLI_BACKUP_INTEGRATION_001" {
     const allocator = testing.allocator;
 
-    // CANARY: This test verifies remote backup/restore integration functionality
+    // This test verifies remote backup/restore integration functionality
     // as specified in REQ-CLI-BACKUP-INTEGRATION-001
 
     var mock_client = MockQuicClient.init(allocator, "BACKUP_SUCCESS: backup_id=canary123456789abcdef0, type=full\n");

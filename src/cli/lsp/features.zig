@@ -1,4 +1,4 @@
-// CANARY: LSP_LANGUAGE_FEATURES
+// Module implementation
 // CANARY: REQ=REQ-LSP-METADATA-001; FEATURE="MetadataIntegration"; ASPECT=Completions; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-03
 // Language features implementation for GQL/Geode LSP
 

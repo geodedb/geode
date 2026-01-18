@@ -15,7 +15,7 @@ fn generateTimeBasedId() u64 {
     return (timestamp_ms << 16) | @as(u64, random_bits);
 }
 
-// CANARY: FLE_STORAGE_INTEGRATION - Field-Level Encryption Storage Hooks
+// Field-Level Encryption Storage Hooks
 // CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FieldLevelEncryption"; ASPECT=STORAGE; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 // Simple graph store with file-based persistence for testing

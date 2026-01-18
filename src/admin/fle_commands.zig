@@ -7,7 +7,7 @@ const fle_blind_index = @import("fle_blind_index");
 const fle_hmac = @import("fle_hmac"); // GAP-0207 FIX: Import hmac for blind index computation
 const annotations = @import("../schema/annotations.zig");
 
-// CANARY: FLE_ADMIN_CLI - Field-Level Encryption Admin Commands
+// Field-Level Encryption Admin Commands
 // CANARY: REQ=REQ-FLE-ADMIN-001; FEATURE="FieldLevelEncryption"; ASPECT=ADMIN; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
 /// Admin CLI commands for Field-Level Encryption management

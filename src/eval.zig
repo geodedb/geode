@@ -268,7 +268,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             // NULL + anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk .{ .Null = {} };
             // String concatenation: string + string
-            // CANARY: PERF_PHASE5_STRING_CONCAT - Direct memory allocation for string concatenation
+            // PERF_PHASE5_STRING_CONCAT - Direct memory allocation for string concatenation
             // CANARY: REQ=REQ-PERF-PHASE5-003; FEATURE="EvalOptimization"; ASPECT=STRING_CONCAT; STATUS=BENCHED; BENCH=benchmarks/phase5_5_string_concat.zig; OWNER=performance; UPDATED=2026-01-17
             // Phase 5.1.3 (P0-3): Use direct allocation + memcpy (3-5x faster than allocPrint)
             if (l == .Str and r == .Str) {

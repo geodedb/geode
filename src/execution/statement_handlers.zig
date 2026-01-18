@@ -349,7 +349,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     };
 }
 
-// CANARY: PERF_PHASE5_COLUMN_BATCH_ALLOC - Helper function for batch column allocation
+// PERF: PHASE5_COLUMN_BATCH_ALLOC - Helper function for batch column allocation
 // CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=HELPER_FN; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
 /// Phase 5.1.1 optimization: Allocate all column strings in a single buffer
 /// Reduces N allocations to 1 allocation for N columns (20-30% performance gain)
@@ -513,7 +513,7 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                     var final_rows = try std.ArrayList([]Value).initCapacity(allocator, result_rows.items.len * 4); // Estimate
                     var final_columns: ?[]const []const u8 = null;
 
-                    // CANARY: PERF_PHASE5_PARAM_ALLOC - Allocate parameter arrays once instead of per-iteration
+                    // PERF: PHASE5_PARAM_ALLOC - Allocate parameter arrays once instead of per-iteration
                     // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=PARAM_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-17
                     // Phase 5.1.2: Pre-allocate parameter arrays before loop (reduces N allocations to 1)
                     var param_names = try allocator.alloc([]const u8, values_stmt.column_names.len);

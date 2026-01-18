@@ -1,4 +1,4 @@
-// CANARY: LSP_FEATURES_TESTS
+// Module implementation
 // Test suite for LSP language features
 
 const std = @import("std");

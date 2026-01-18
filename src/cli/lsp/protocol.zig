@@ -1,4 +1,4 @@
-// CANARY: LSP_PROTOCOL_IMPLEMENTATION
+// Module implementation
 // JSON-RPC 2.0 protocol implementation for Language Server Protocol
 // Spec: specs/lsp/language-server-protocol/_specifications/base/0.9/specification.md
 

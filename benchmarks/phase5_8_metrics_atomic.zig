@@ -4,7 +4,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: BENCHMARK_PHASE5_8 - Metrics optimization validation for Phase 5.2.2 (P1-2)
+// Benchmark Phase PHASE5_8 - Metrics optimization validation for Phase 5.2.2 (P1-2)
 // CANARY: REQ=REQ-PERF-PHASE5-P1-002; FEATURE="MetricsOptimization"; ASPECT=TESTING; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-11-16
 
 // =============================================================================

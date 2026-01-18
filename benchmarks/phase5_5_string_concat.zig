@@ -4,7 +4,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: BENCHMARK_PHASE5_5 - Performance validation for Phase 5.1.3 (P0-3) optimization
+// Benchmark Phase PHASE5_5 - Performance validation for Phase 5.1.3 (P0-3) optimization
 // CANARY: REQ=REQ-PERF-PHASE5-003; FEATURE="EvalOptimization"; ASPECT=TESTING; STATUS=BENCHED; BENCH=benchmarks/phase5_5_string_concat.zig; OWNER=performance; UPDATED=2026-01-17
 
 // =============================================================================

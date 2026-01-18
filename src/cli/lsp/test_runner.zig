@@ -1,4 +1,4 @@
-// CANARY: LSP_TEST_RUNNER
+// Module implementation
 // Main test runner for all LSP tests
 
 const std = @import("std");

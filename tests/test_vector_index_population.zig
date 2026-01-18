@@ -385,7 +385,7 @@ test "vector index population error handling" {
 
 // CANARY compliance test for enhanced dimension detection
 test "TestCANARY_REQ_VECTOR_INDEX_POPULATION_001_DimensionDetection" {
-    // CANARY: This test verifies enhanced vector index population functionality
+    // This test verifies enhanced vector index population functionality
     // with dynamic dimension detection as specified in REQ-VECTOR-INDEX-POPULATION-001
 
     _ = testing.allocator;

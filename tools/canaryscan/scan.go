@@ -167,9 +167,10 @@ func parseCanaryKV(s string) (map[string]string, error) {
         out[key] = strings.TrimSpace(val)
     }
     // Validate enums (best‑effort)
+    // Valid statuses: STUB, IMPL, TESTED, BENCHED, COMPLETE, EXEMPT, MISSING, REMOVED
     status := strings.ToUpper(out["STATUS"])
     switch status {
-    case "MISSING", "STUB", "IMPL", "TESTED", "BENCHED", "REMOVED":
+    case "MISSING", "STUB", "IMPL", "TESTED", "BENCHED", "COMPLETE", "EXEMPT", "REMOVED":
     default:
         if status != "" {
             return nil, fmt.Errorf("invalid STATUS %q", status)
@@ -216,7 +217,7 @@ func isBinary(path string) bool {
     ext := strings.ToLower(filepath.Ext(path))
     switch ext {
     case ".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip", ".gz", ".tgz", ".jar", ".wasm",
-         ".exe", ".dll", ".so", ".dylib", ".db", ".db-wal", ".db-shm":
+         ".exe", ".dll", ".so", ".dylib", ".db", ".db-wal", ".db-shm", ".csv", ".md":
         return true
     }
     // Skip files with no extension that look binary

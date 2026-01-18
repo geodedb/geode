@@ -367,7 +367,7 @@ test "Documentation build integration and CI compatibility" {
 
 // CANARY compliance test
 test "TestCANARY_REQ_DOCUMENTATION_SYSTEM_INTEGRATION_001" {
-    // CANARY: This test verifies documentation system integration functionality
+    // This test verifies documentation system integration functionality
     // as specified in REQ-DOCUMENTATION-SYSTEM-INTEGRATION-001
 
     var gpa = std.heap.GeneralPurposeAllocator(.{});

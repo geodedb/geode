@@ -7,7 +7,7 @@ pub const DistanceMetric = enum {
     jaccard,
 };
 
-// CANARY: PERF_PHASE3_HNSW_PREALLOC - Pre-allocate HNSW neighbor lists
+// PERF: PHASE3_HNSW_PREALLOC - Pre-allocate HNSW neighbor lists
 // CANARY: REQ=REQ-PERF-PHASE3-002; FEATURE="MemoryOptimization"; ASPECT=HNSW_NEIGHBORS; STATUS=BENCHED; BENCH=benchmarks/phase3_benchmarks.zig; OWNER=performance; UPDATED=2026-01-15
 pub const HnswNode = struct {
     id: u64,

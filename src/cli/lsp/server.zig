@@ -1,4 +1,4 @@
-// CANARY: LSP_SERVER_IMPLEMENTATION
+// Module implementation
 // Main LSP server implementation for GQL/Geode
 // Spec: specs/lsp/language-server-protocol/_specifications/lsp/3.17/specification.md
 

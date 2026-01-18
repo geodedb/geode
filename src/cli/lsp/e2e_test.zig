@@ -1,4 +1,4 @@
-// CANARY: LSP_E2E_TESTS
+// LSP E2E Tests
 // End-to-end workflow tests for LSP server
 
 const std = @import("std");

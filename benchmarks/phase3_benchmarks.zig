@@ -4,7 +4,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: BENCHMARK_PHASE3 - Performance validation for Phase 3 concurrency and memory optimizations
+// Benchmark Phase PHASE3 - Performance validation for Phase 3 concurrency and memory optimizations
 // CANARY: REQ=REQ-PERF-PHASE3-BENCH-001; FEATURE="ConcurrencyOptimization"; ASPECT=TESTING; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
 
 // =============================================================================

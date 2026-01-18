@@ -177,7 +177,7 @@ test "default configuration values" {
 
 // CANARY compliance test
 test "TestCANARY_REQ_CLI_SUBPROCESS_UNIT_002" {
-    // CANARY: This test verifies CLI subprocess elimination unit functionality
+    // This test verifies CLI subprocess elimination unit functionality
     // as specified in REQ-CLI-SUBPROCESS-UNIT-002
 
     const config = ClientConfig{

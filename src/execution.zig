@@ -3,9 +3,9 @@ const fle_integration = @import("fle_integration.zig");
 const fle_catalog = @import("schema/fle_catalog.zig");
 const fle_annotations = @import("schema/annotations.zig");
 
-// CANARY: FLE_EXECUTION_INTEGRATION - Field-Level Encryption Execution Hooks
+// Field-Level Encryption Execution Hooks
 // CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15
-// CANARY: FLE_CATALOG_REGISTRATION - Schema Catalog Registration During Execution
+// Schema Catalog Registration During Execution
 // CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=CATALOG; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15
 const ast = @import("gql/ast.zig");
 
@@ -395,7 +395,7 @@ pub const ExecutionResult = struct {
     owns_value_memory: bool = false, // Set to true when values were duplicated and need freeing
     // Variable bindings from CREATE patterns (for passing to UNION parts)
     variable_bindings: ?*std.StringHashMap(u64) = null,
-    // CANARY: PERF_PHASE5_COLUMN_BATCH_ALLOC - Batch column string allocation optimization
+    // PERF: PHASE5_COLUMN_BATCH_ALLOC - Batch column string allocation optimization
     // CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=BATCH_ALLOC; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
     column_buffer: ?[]u8 = null, // Single buffer for all column strings (reduces N allocations to 1)
 

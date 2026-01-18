@@ -2356,7 +2356,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.derive_data_key")) {
-        // CANARY: REQ=REQ-TDE-PROC-013
+        // REQ-TDE-PROC-013
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "key_id");
@@ -2375,7 +2375,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.derive_wal_key")) {
-        // CANARY: REQ=REQ-TDE-PROC-014
+        // REQ-TDE-PROC-014
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "key_id");
@@ -2444,7 +2444,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.encrypt_page")) {
-        // CANARY: REQ=REQ-TDE-PROC-015
+        // REQ-TDE-PROC-015
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "page_id");
@@ -2463,7 +2463,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.encrypt_wal")) {
-        // CANARY: REQ=REQ-TDE-PROC-016
+        // REQ-TDE-PROC-016
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "wal_segment");
@@ -2482,7 +2482,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_roundtrip")) {
-        // CANARY: REQ=REQ-TDE-PROC-017
+        // REQ-TDE-PROC-017
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "iterations");
@@ -2501,7 +2501,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.zeroize_keys")) {
-        // CANARY: REQ=REQ-TDE-PROC-018
+        // REQ-TDE-PROC-018
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "keys_cleared");
@@ -2520,7 +2520,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.verify_no_plaintext")) {
-        // CANARY: REQ=REQ-TDE-PROC-019
+        // REQ-TDE-PROC-019
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "verified");
         columns[1] = try allocator.dupe(u8, "pages_scanned");
@@ -2539,7 +2539,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_access_control")) {
-        // CANARY: REQ=REQ-TDE-PROC-020
+        // REQ-TDE-PROC-020
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "tests_run");
@@ -2558,7 +2558,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.configure_rotation_schedule")) {
-        // CANARY: REQ=REQ-TDE-PROC-021
+        // REQ-TDE-PROC-021
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "schedule_type");
@@ -2577,7 +2577,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_rotation_state_persistence")) {
-        // CANARY: REQ=REQ-TDE-PROC-022
+        // REQ-TDE-PROC-022
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "state_persisted");
@@ -2596,7 +2596,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.configure_adaptive_rotation")) {
-        // CANARY: REQ=REQ-TDE-PROC-023
+        // REQ-TDE-PROC-023
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "adaptive_enabled");
@@ -2615,7 +2615,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.verify_backup_encryption")) {
-        // CANARY: REQ=REQ-TDE-PROC-024
+        // REQ-TDE-PROC-024
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "verified");
         columns[1] = try allocator.dupe(u8, "backup_path");
@@ -2634,7 +2634,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.generate_key_manifest")) {
-        // CANARY: REQ=REQ-TDE-PROC-025
+        // REQ-TDE-PROC-025
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "manifest_path");
@@ -2653,7 +2653,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.restore_with_historical_keys")) {
-        // CANARY: REQ=REQ-TDE-PROC-026
+        // REQ-TDE-PROC-026
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "keys_restored");
@@ -2672,7 +2672,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.validate_overhead")) {
-        // CANARY: REQ=REQ-TDE-PROC-027
+        // REQ-TDE-PROC-027
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "validated");
         columns[1] = try allocator.dupe(u8, "overhead_percent");
@@ -2691,7 +2691,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.benchmark_aead")) {
-        // CANARY: REQ=REQ-TDE-PROC-028
+        // REQ-TDE-PROC-028
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "ops_per_second");
@@ -2710,7 +2710,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.simulate_oltp")) {
-        // CANARY: REQ=REQ-TDE-PROC-029
+        // REQ-TDE-PROC-029
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "transactions_completed");
@@ -2729,7 +2729,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_kms_unavailable")) {
-        // CANARY: REQ=REQ-TDE-PROC-030
+        // REQ-TDE-PROC-030
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "fallback_triggered");
@@ -2748,7 +2748,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         };
     } else if (std.mem.eql(u8, proc_name, "tde.test_corrupted_key")) {
-        // CANARY: REQ=REQ-TDE-PROC-031
+        // REQ-TDE-PROC-031
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
         columns[1] = try allocator.dupe(u8, "corruption_detected");

@@ -1,4 +1,4 @@
-// CANARY: LSP_DOCUMENT_TESTS
+// Module implementation
 // Test suite for LSP document management
 
 const std = @import("std");

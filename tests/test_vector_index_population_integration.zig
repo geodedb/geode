@@ -570,7 +570,7 @@ test "integration vector index population mixed data types" {
 test "TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001" {
     const allocator = testing.allocator;
 
-    // CANARY: This test verifies complete vector index population integration functionality
+    // This test verifies complete vector index population integration functionality
     // as specified in REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001
 
     // Test complete end-to-end vector index population with CREATE INDEX simulation

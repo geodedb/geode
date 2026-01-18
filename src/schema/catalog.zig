@@ -1,7 +1,7 @@
 const std = @import("std");
 const graph_storage_manager = @import("../server/graph_storage_manager.zig");
 
-// CANARY: PERF_PHASE3_RWLOCK - RwLock for concurrent catalog access
+// PERF: PHASE3_RWLOCK - RwLock for concurrent catalog access
 // CANARY: REQ=REQ-PERF-PHASE3-001; FEATURE="ConcurrencyOptimization"; ASPECT=CATALOG_LOCK; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-17
 // CANARY: REQ=REQ-ARCH-M2-FIX; FEATURE="DependencyInjection"; ASPECT=CATALOG; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // Phase 3 optimization: RwLock allows concurrent reads (2-3x concurrent query throughput)

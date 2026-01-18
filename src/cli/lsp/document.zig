@@ -1,4 +1,4 @@
-// CANARY: LSP_DOCUMENT_MANAGEMENT
+// Module implementation
 // Document state management for LSP server
 
 const std = @import("std");

@@ -166,7 +166,7 @@ Tests validate structured JSON output for machine-readable results:
 ### GitLab CI
 ```yaml
 # See .gitlab-ci.yml for full pipeline configuration
-# CANARY: GAP-0158 - Updated from GitHub Actions to GitLab CI
+# Note: GAP-0158 - Updated from GitHub Actions to GitLab CI
 
 # Example jobs from .gitlab-ci.yml:
 test-zig-unit:

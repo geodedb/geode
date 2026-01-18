@@ -115,7 +115,7 @@ pub const VectorF32 = struct {
     pub fn cosineSimilarity(self: VectorF32, other: VectorF32) !f32 {
         if (self.dim != other.dim) return error.DimensionMismatch;
 
-        // CANARY: PERF_PHASE5_SIMD_COSINE - SIMD optimization for cosine similarity
+        // PERF: PHASE5_SIMD_COSINE - SIMD optimization for cosine similarity
         // CANARY: REQ=REQ-PERF-PHASE5-003; FEATURE="VectorOptimization"; ASPECT=SIMD_COSINE; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-11-16
 
         // Use SIMD for faster computation when available

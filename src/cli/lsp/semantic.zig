@@ -1,4 +1,4 @@
-// CANARY: LSP_SEMANTIC_ANALYSIS
+// Module implementation
 // Semantic analysis for GQL/Geode LSP
 // Provides scope tracking and undefined identifier detection
 

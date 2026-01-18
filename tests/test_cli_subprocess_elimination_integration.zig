@@ -312,7 +312,7 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_001" {
     const server = try getTestServer(allocator);
     defer allocator.free(server);
 
-    // CANARY: This test verifies CLI subprocess elimination integration functionality
+    // This test verifies CLI subprocess elimination integration functionality
     // as specified in REQ-CLI-SUBPROCESS-INTEGRATION-001
 
     const args = [_][]const u8{
