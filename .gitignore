@@ -206,3 +206,4 @@ geodetestlab/.venv/
 geodetestlab/venv/
 geodetestlab/**/__pycache__/
 geodetestlab/**/*.egg-info/
+reports/
