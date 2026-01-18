@@ -59,9 +59,9 @@ Follow the established test format:
 ```
 
 ### 4. Add CANARY Markers
-Every integration test must include appropriate CANARY markers:
-```zig
-// CANARY:INTEGRATION:<feature1>_<feature2>:TEST
+Every integration test must include appropriate CANARY markers following the standard format:
+```
+REQ=REQ-INTEG-<feature1>-<feature2>-001; FEATURE="<description>"; ASPECT=Integration; STATUS=TESTED; TEST=<test-file>; OWNER=integration; UPDATED=<date>
 ```
 
 ## Test Categories

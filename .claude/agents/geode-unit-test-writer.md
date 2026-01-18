@@ -65,11 +65,11 @@ test "feature: description" {
 ```
 
 ### CANARY Markers
-Every test file must include:
-```zig
-// CANARY: UNIT_TEST_COVERAGE_<FEATURE_NAME>
-// Evidence: Unit tests for <feature> covering <aspects>
+Every test file must include a proper CANARY marker following this format:
 ```
+REQ=<requirement-id>; FEATURE="<name>"; ASPECT=UnitTesting; STATUS=TESTED; TEST=<test-file>; OWNER=<component>; UPDATED=<date>
+```
+Example: `REQ=REQ-VECTOR-001; FEATURE="Vector Operations"; ASPECT=UnitTesting; STATUS=TESTED; TEST=vector_test.zig; OWNER=types; UPDATED=2026-01-17`
 
 ### Vector/Numeric Testing
 - Use appropriate epsilon comparisons for floating-point values
