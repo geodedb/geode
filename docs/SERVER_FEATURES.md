@@ -5,9 +5,9 @@
 Geode is an enterprise-ready graph database server with industry-leading compliance and performance. This document provides comprehensive technical details on the server's core features, architecture, and capabilities.
 
 **Status**: Production Ready
-**GQL Compliance**: 98.6% (69/70 ISO/IEC 39075:2024 tests)
-**Test Coverage**: 88.3% (1523/1725 geodetestlab tests)
-**CANARY Markers**: 1284 governance compliance markers
+**GQL Compliance**: 100% (70/70 ISO/IEC 39075:2024 tests)
+**Test Coverage**: 97.4% (1644/1688 geodetestlab tests)
+**CANARY Markers**: 1,735 governance markers tracking 2,190+ requirements
 
 ---
 
@@ -437,7 +437,7 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 **CANARY**: `REQ-GQL-016`, `REQ-GQL-021`
 
 **Planning Phases**:
-1. **Parse**: GQL → AST (98.6% ISO compliance)
+1. **Parse**: GQL → AST (100% ISO compliance)
 2. **Validate**: Type checking, schema validation
 3. **Rewrite**: Predicate pushdown, constant folding
 4. **Enumerate**: Generate alternative plans

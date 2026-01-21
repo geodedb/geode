@@ -13,7 +13,7 @@ This document provides the authoritative implementation status for Geode as of O
 
 | Feature | Status | Evidence |
 |---------|--------|----------|
-| GQL Parser | Complete | 98.6% ISO compliance, src/gql/parser.zig |
+| GQL Parser | Complete | 100% ISO compliance (70/70 tests), src/gql/parser.zig |
 | Query Planner | Complete | Cost-based optimization, src/planner/ |
 | Storage Engine | Complete | MVCC, WAL, src/storage/ |
 | Index System | Complete | 6 index types including HNSW |
@@ -55,9 +55,10 @@ The following critical security gaps were identified and fixed:
 
 ## Test Coverage
 
-- **Unit Tests**: 97%+ pass rate
-- **Integration Tests**: 88.3% coverage (1523/1725 tests)
-- **GQL Compliance**: 98.6% (69/70 ISO tests)
+- **Unit Tests**: 100% pass rate (393/393 Zig tests)
+- **Integration Tests**: 97.4% pass rate (1644/1688 tests)
+- **GQL Compliance**: 100% (70/70 ISO tests)
+- **CANARY Status**: 1,735 markers tracking 2,190+ requirements
 
 ## Build Verification
 

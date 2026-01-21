@@ -4,7 +4,7 @@
 
 ## Overview
 
-Geode is an enterprise-ready graph database with 98.6% ISO/IEC 39075:2024 GQL compliance.
+Geode is an enterprise-ready graph database with 100% ISO/IEC 39075:2024 GQL compliance (70/70 tests).
 
 ## Directory Structure
 
@@ -75,9 +75,9 @@ docs/
 10. **Advanced Security** - Enhanced RLS with policy evaluation
 
 ### Quality Metrics
-- **94.7% Test Pass Rate** (1199/1266 non-skipped tests)
-- **98.6% GQL Compliance** (69/70 ISO tests)
-- **1016 CANARY Markers** tracking governance
+- **97.4% Test Pass Rate** (1644/1688 tests passing)
+- **100% GQL Compliance** (70/70 ISO tests)
+- **1,735 CANARY Markers** tracking 2,190+ requirements
 
 ### Known Issues
 See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test limitations:

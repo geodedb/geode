@@ -161,7 +161,7 @@ INTEGER, FLOAT, STRING, BOOLEAN, DATE, TIME, DATETIME, DURATION, POINT, VECTOR, 
 The LSP server uses Geode's existing GQL parser (`parseGql` from `src/lib.zig`) to:
 - Detect syntax errors in real-time
 - Generate accurate diagnostics with line/column information
-- Leverage the 98.6% ISO/IEC 39075:2024 compliant parser
+- Leverage the 100% ISO/IEC 39075:2024 compliant parser (70/70 tests)
 
 ### Performance
 - Incremental document updates supported
