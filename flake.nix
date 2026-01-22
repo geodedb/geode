@@ -6,7 +6,7 @@
     unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     dev-env.url = "github:devnw/dev-env";
-    quic.url = "gitlab:devnw/zig/quic";
+    quic.url = "git+https://gitlab.com/devnw/zig/quic.git";
   };
 
   outputs =
