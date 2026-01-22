@@ -7,7 +7,7 @@
 
 set -e
 
-PROJECT="devnw/geode/geode"
+PROJECT="devnw/codepros/geode"
 LABEL_PREFIX="type::"
 
 # Required labels per gap analysis labeling rules

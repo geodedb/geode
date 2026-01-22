@@ -172,7 +172,7 @@ tests:
     description: "Verify all security fixes compile correctly"
     type: shell
     command: |
-      cd /home/benji/src/gl/devnw/geode/geode
+      cd /home/benji/src/gl/devnw/codepros/geode
       make build 2>&1
       if [ $? -eq 0 ]; then
         echo "PASS: Security fixes compile successfully"

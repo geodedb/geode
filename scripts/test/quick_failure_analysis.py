@@ -7,8 +7,8 @@ from pathlib import Path
 from collections import defaultdict
 
 def main():
-    specs_dir = Path("/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs")
-    binary = "/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"
+    specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
+    binary = "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"
 
     # Categories
     server_tests = []  # Tests that need a running server

@@ -296,7 +296,7 @@ def generate_html_report(results: dict[str, Any], totals: dict[str, int], output
 
         <div class="footer">
             <p>Geode Graph Database - Docker Integration Test Suite</p>
-            <p>For more information, see <a href="https://gitlab.com/devnw/geode/geode" style="color: #60a5fa;">documentation</a></p>
+            <p>For more information, see <a href="https://gitlab.com/devnw/codepros/geode" style="color: #60a5fa;">documentation</a></p>
         </div>
     </div>
 </body>

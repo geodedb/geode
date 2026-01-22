@@ -1,6 +1,6 @@
 # GAP-0209 Governance Regression Tests
 # Ensures status.csv maintains 0 IMPL and 0 STUB entries
-# https://gitlab.com/devnw/geode/geode/-/issues/338
+# https://gitlab.com/devnw/codepros/geode/-/issues/338
 #
 # These tests verify the governance policy targets and data quality
 # of the status.csv requirement ledger.

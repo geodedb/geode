@@ -5,8 +5,8 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    dev-env.url = "github:spyderorg/dev-env";
-    quic.url = "github:spyderorg/quic";
+    dev-env.url = "github:devnw/dev-env";
+    quic.url = "gitlab:devnw/zig/quic";
   };
 
   outputs =
@@ -164,7 +164,7 @@
             
             meta = {
               description = "CLI testing framework for Geode graph database";
-              license = pkgs.lib.licenses.mit;
+              license = pkgs.lib.licenses.asl20;
             };
           };
 
@@ -283,7 +283,7 @@
                 export CUDA_INCLUDE_DIR="${pkgs.cudaPackages.libnpp.out}/include"
                 export CUDA_LIB_DIR="${pkgs.cudaPackages.libnpp.out}/lib"
 
-                echo "🔺 Geode Development Environment"
+                echo "🔺 Geode Development Environment (CodePros)"
                 echo "Zig version: $(zig version)"
                 echo "Python version: $(${pythonWithPackages}/bin/python --version | cut -d' ' -f2)"
                 echo ""

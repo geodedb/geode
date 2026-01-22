@@ -27,7 +27,7 @@ def test_geode_basic():
         print(f"Using port: {port}")
         
         # Start server
-        geode_binary = "/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"
+        geode_binary = "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"
         server_cmd = [
             geode_binary, "serve",
             "--data-dir", temp_dir,

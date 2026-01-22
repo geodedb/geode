@@ -92,10 +92,10 @@ def test_spec(spec_path):
 
 def main():
     specs = [
-        "/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs/geode_tde_security.yml",
-        "/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs/geode_cdc_comprehensive.yml",
-        "/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs/geode_audit_logging_enterprise.yml",
-        "/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs/geode_auth_security.yml",
+        "/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs/geode_tde_security.yml",
+        "/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs/geode_cdc_comprehensive.yml",
+        "/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs/geode_audit_logging_enterprise.yml",
+        "/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs/geode_auth_security.yml",
     ]
 
     total_passed = 0

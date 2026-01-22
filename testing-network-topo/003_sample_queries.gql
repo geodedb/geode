@@ -1,0 +1,270 @@
+// =============================================================================
+// Network Topology Mapper - Sample Analysis Queries
+// =============================================================================
+// Purpose: Example queries for network topology analysis, attack path
+//          identification, and security posture assessment
+// Prerequisites: Run 001_schema_migration.gql and 002_test_data.gql first
+// =============================================================================
+
+USE GRAPH network_topology;
+
+// =============================================================================
+// TOPOLOGY DISCOVERY QUERIES
+// =============================================================================
+
+// Query 1: List all subnets with their security zones
+MATCH (s:Subnet)
+RETURN s.name AS subnet, s.cidr AS cidr, s.zone_type AS zone,
+       s.security_level AS security_level, s.is_internet_facing AS internet_facing
+ORDER BY s.security_level DESC;
+
+// Query 2: List all hosts with their network location
+MATCH (h:Host)-[:HAS_INTERFACE]->(i:Interface)-[:CONNECTS_TO]->(s:Subnet)
+RETURN h.hostname AS host, h.host_type AS type, i.ipv4_address AS ip,
+       s.name AS subnet, s.zone_type AS zone
+ORDER BY s.zone_type, h.hostname;
+
+// Query 3: Map service dependencies across the infrastructure
+MATCH (h1:Host)-[:RUNS_SERVICE]->(s1:Service)-[:DEPENDS_ON]->(s2:Service)<-[:RUNS_SERVICE]-(h2:Host)
+RETURN h1.hostname AS consumer_host, s1.name AS consumer_service,
+       h2.hostname AS provider_host, s2.name AS provider_service
+ORDER BY h1.hostname;
+
+// Query 4: Find services and their listening ports
+MATCH (h:Host)-[:RUNS_SERVICE]->(svc:Service)-[:LISTENS_ON]->(p:Port)
+RETURN h.hostname AS host, svc.name AS service, svc.version AS version,
+       p.port_number AS port, p.protocol AS protocol
+ORDER BY h.hostname, p.port_number;
+
+// =============================================================================
+// INTERNET EXPOSURE ANALYSIS
+// =============================================================================
+
+// Query 5: Find all internet-exposed services
+MATCH (as:AttackSurface {exposure_level: 'internet'})-[:EXPOSES_SERVICE]->(svc:Service)
+OPTIONAL MATCH (svc)-[:LISTENS_ON]->(p:Port)
+RETURN as.name AS attack_surface, svc.name AS service, svc.version AS version,
+       p.port_number AS port, svc.is_encrypted AS encrypted
+ORDER BY svc.name;
+
+// Query 6: Internet-exposed hosts with risk assessment
+MATCH (as:AttackSurface {exposure_level: 'internet'})-[:EXPOSES]->(h:Host)
+RETURN h.hostname AS host, h.host_type AS type, h.risk_score AS risk_score,
+       h.is_critical AS is_critical
+ORDER BY h.risk_score DESC;
+
+// Query 7: Find internet-exposed services with known vulnerabilities
+MATCH (as:AttackSurface {exposure_level: 'internet'})-[:EXPOSES_SERVICE]->(svc:Service)
+       -[:HAS_VULNERABILITY]->(v:Vulnerability)
+RETURN svc.name AS service, svc.version AS version, v.cve_id AS cve,
+       v.name AS vulnerability, v.cvss_score AS cvss, v.severity AS severity
+ORDER BY v.cvss_score DESC;
+
+// =============================================================================
+// VULNERABILITY ANALYSIS
+// =============================================================================
+
+// Query 8: All vulnerabilities sorted by CVSS score
+MATCH (v:Vulnerability)
+RETURN v.name AS vulnerability, v.cve_id AS cve, v.cvss_score AS cvss,
+       v.severity AS severity, v.exploit_available AS has_exploit,
+       v.patch_available AS has_patch
+ORDER BY v.cvss_score DESC;
+
+// Query 9: Services with critical vulnerabilities
+MATCH (svc:Service)-[:HAS_VULNERABILITY]->(v:Vulnerability)
+WHERE v.severity = 'critical'
+MATCH (h:Host)-[:RUNS_SERVICE]->(svc)
+RETURN h.hostname AS host, svc.name AS service, v.name AS vulnerability,
+       v.cvss_score AS cvss
+ORDER BY v.cvss_score DESC;
+
+// Query 10: Hosts with multiple vulnerabilities
+MATCH (h:Host)-[:HAS_VULNERABILITY]->(v:Vulnerability)
+WITH h, count(v) AS vuln_count, collect(v.name) AS vulnerabilities
+WHERE vuln_count >= 1
+RETURN h.hostname AS host, vuln_count AS vulnerability_count, vulnerabilities
+ORDER BY vuln_count DESC;
+
+// Query 11: Unpatched critical vulnerabilities
+MATCH (v:Vulnerability)
+WHERE v.cvss_score >= 9.0 AND v.patch_available = false
+OPTIONAL MATCH (svc:Service)-[:HAS_VULNERABILITY]->(v)
+OPTIONAL MATCH (h:Host)-[:HAS_VULNERABILITY]->(v)
+RETURN v.name AS vulnerability, v.cve_id AS cve, v.cvss_score AS cvss,
+       collect(DISTINCT svc.name) AS affected_services,
+       collect(DISTINCT h.hostname) AS affected_hosts;
+
+// =============================================================================
+// NETWORK CONNECTIVITY ANALYSIS
+// =============================================================================
+
+// Query 12: Direct connectivity between hosts
+MATCH (h1:Host)-[r:CAN_REACH]->(h2:Host)
+RETURN h1.hostname AS source, h2.hostname AS destination,
+       r.via_protocol AS protocol, r.via_port AS port, r.is_filtered AS filtered
+ORDER BY h1.hostname, h2.hostname;
+
+// Query 13: Subnet routing topology
+MATCH (s1:Subnet)-[r:ROUTES_TO]->(s2:Subnet)
+RETURN s1.name AS from_subnet, s2.name AS to_subnet,
+       r.via_router AS router, r.metric AS metric
+ORDER BY s1.name, r.metric;
+
+// Query 14: Find all paths from DMZ to Database tier
+MATCH path = (h1:Host)-[:CAN_REACH*1..5]->(h2:Host)
+WHERE h1.host_id = 'host-web-01' AND h2.host_id = 'host-db-01'
+RETURN [n IN nodes(path) | n.hostname] AS path_hosts, length(path) AS hops
+ORDER BY hops
+LIMIT 10;
+
+// Query 15: Cross-zone service dependencies (potential security concern)
+MATCH (h1:Host)-[:RUNS_SERVICE]->(s1:Service)-[:DEPENDS_ON]->(s2:Service)<-[:RUNS_SERVICE]-(h2:Host),
+      (h1)-[:HAS_INTERFACE]->()-[:CONNECTS_TO]->(sub1:Subnet),
+      (h2)-[:HAS_INTERFACE]->()-[:CONNECTS_TO]->(sub2:Subnet)
+WHERE sub1.zone_type <> sub2.zone_type
+RETURN s1.name AS from_service, sub1.zone_type AS from_zone,
+       s2.name AS to_service, sub2.zone_type AS to_zone,
+       sub1.security_level AS from_sec_level, sub2.security_level AS to_sec_level
+ORDER BY sub2.security_level DESC;
+
+// =============================================================================
+// FIREWALL ANALYSIS
+// =============================================================================
+
+// Query 16: All firewall rules by priority
+MATCH (f:Firewall)-[:HAS_RULE]->(r:FirewallRule)
+RETURN f.name AS firewall, r.name AS rule, r.priority AS priority,
+       r.action AS action, r.src_cidr AS source, r.dst_cidr AS destination,
+       r.dst_port_range AS port, r.protocol AS protocol
+ORDER BY r.priority;
+
+// Query 17: Allow rules that could permit lateral movement
+MATCH (f:Firewall)-[:HAS_RULE]->(r:FirewallRule)
+WHERE r.action = 'allow' AND r.direction IN ['both', 'inbound']
+RETURN r.name AS rule, r.src_cidr AS source, r.dst_cidr AS destination,
+       r.dst_port_range AS ports, r.protocol AS protocol
+ORDER BY r.priority;
+
+// Query 18: Subnets protected by firewalls
+MATCH (f:Firewall)-[:PROTECTS]->(s:Subnet)
+RETURN f.name AS firewall, s.name AS protected_subnet,
+       s.zone_type AS zone, s.security_level AS security_level
+ORDER BY s.security_level DESC;
+
+// =============================================================================
+// ATTACK PATH ANALYSIS
+// =============================================================================
+
+// Query 19: All identified attack paths by risk score
+MATCH (ap:AttackPath)
+RETURN ap.name AS attack_path, ap.path_type AS type,
+       ap.complexity AS complexity, ap.impact AS impact,
+       ap.likelihood AS likelihood, ap.risk_score AS risk_score,
+       ap.steps_count AS steps, ap.is_validated AS validated
+ORDER BY ap.risk_score DESC;
+
+// Query 20: Attack paths exploiting critical vulnerabilities
+MATCH (ap:AttackPath)-[:EXPLOITS]->(v:Vulnerability)
+WHERE v.cvss_score >= 8.0
+RETURN ap.name AS attack_path, ap.risk_score AS path_risk,
+       v.name AS vulnerability, v.cvss_score AS vuln_cvss,
+       v.exploit_maturity AS exploit_maturity
+ORDER BY ap.risk_score DESC, v.cvss_score DESC;
+
+// Query 21: Attack path steps with MITRE ATT&CK techniques
+MATCH (ap:AttackPath)-[step:PATH_STEP]->(h:Host)
+RETURN ap.name AS attack_path, step.step_number AS step,
+       h.hostname AS target_host, step.technique AS mitre_technique,
+       step.action AS action, step.required_access AS requires,
+       step.gained_access AS gains
+ORDER BY ap.path_id, step.step_number;
+
+// Query 22: High-risk attack paths to critical assets
+MATCH (ap:AttackPath)-[:PATH_STEP]->(h:Host {is_critical: true})
+WHERE ap.risk_score >= 8.0
+RETURN DISTINCT ap.name AS attack_path, ap.risk_score AS risk,
+       h.hostname AS critical_target, ap.path_type AS attack_type,
+       ap.mitre_techniques AS techniques
+ORDER BY ap.risk_score DESC;
+
+// Query 23: Attack paths with high success probability
+MATCH (ap:AttackPath)-[e:EXPLOITS]->(v:Vulnerability)
+WHERE e.success_probability >= 0.7
+RETURN ap.name AS attack_path, v.name AS vulnerability,
+       e.success_probability AS success_prob, e.detection_likelihood AS detection_prob,
+       e.exploit_method AS method
+ORDER BY e.success_probability DESC;
+
+// =============================================================================
+// CREDENTIAL ANALYSIS
+// =============================================================================
+
+// Query 24: Weak or default credentials
+MATCH (c:Credential)
+WHERE c.is_weak = true OR c.is_default = true
+OPTIONAL MATCH (c)-[:AUTHENTICATES]->(svc:Service)
+OPTIONAL MATCH (c)-[:GRANTS_ACCESS]->(h:Host)
+RETURN c.credential_type AS type, c.username AS username,
+       c.privilege_level AS privilege, c.is_default AS is_default,
+       c.is_weak AS is_weak, svc.name AS service, h.hostname AS host
+ORDER BY c.privilege_level DESC;
+
+// Query 25: High-privilege credentials
+MATCH (c:Credential)
+WHERE c.privilege_level IN ['admin', 'root', 'system']
+OPTIONAL MATCH (c)-[:GRANTS_ACCESS]->(h:Host)
+RETURN c.credential_type AS type, c.username AS username,
+       c.privilege_level AS privilege, h.hostname AS accessible_host,
+       c.is_shared AS is_shared
+ORDER BY c.privilege_level;
+
+// =============================================================================
+// SECURITY POSTURE ASSESSMENT
+// =============================================================================
+
+// Query 26: Risk summary by subnet
+MATCH (h:Host)-[:HAS_INTERFACE]->()-[:CONNECTS_TO]->(s:Subnet)
+WITH s, avg(h.risk_score) AS avg_risk, max(h.risk_score) AS max_risk,
+     count(h) AS host_count
+RETURN s.name AS subnet, s.zone_type AS zone, s.security_level AS sec_level,
+       avg_risk AS average_risk, max_risk AS highest_risk, host_count AS hosts
+ORDER BY avg_risk DESC;
+
+// Query 27: Critical assets exposure assessment
+MATCH (h:Host {is_critical: true})
+OPTIONAL MATCH (as:AttackSurface)-[:EXPOSES]->(h)
+OPTIONAL MATCH (h)-[:HAS_VULNERABILITY]->(v:Vulnerability)
+OPTIONAL MATCH (h)-[:RUNS_SERVICE]->(svc:Service)-[:HAS_VULNERABILITY]->(sv:Vulnerability)
+RETURN h.hostname AS critical_host, h.risk_score AS risk_score,
+       collect(DISTINCT as.name) AS exposure_points,
+       count(DISTINCT v) + count(DISTINCT sv) AS total_vulnerabilities
+ORDER BY h.risk_score DESC;
+
+// Query 28: Services without authentication
+MATCH (svc:Service)
+WHERE svc.requires_auth = false
+MATCH (h:Host)-[:RUNS_SERVICE]->(svc)
+RETURN h.hostname AS host, svc.name AS service, svc.version AS version,
+       svc.is_encrypted AS encrypted
+ORDER BY h.hostname;
+
+// Query 29: Unencrypted services in high-security zones
+MATCH (h:Host)-[:RUNS_SERVICE]->(svc:Service),
+      (h)-[:HAS_INTERFACE]->()-[:CONNECTS_TO]->(s:Subnet)
+WHERE svc.is_encrypted = false AND s.security_level >= 7
+RETURN h.hostname AS host, svc.name AS service, s.name AS subnet,
+       s.security_level AS security_level
+ORDER BY s.security_level DESC;
+
+// Query 30: Complete network topology summary
+MATCH (s:Subnet)
+OPTIONAL MATCH (h:Host)-[:HAS_INTERFACE]->()-[:CONNECTS_TO]->(s)
+WITH s, count(h) AS hosts
+OPTIONAL MATCH (s)<-[:ROUTES_TO]-(connected:Subnet)
+WITH s, hosts, count(connected) AS incoming_routes
+OPTIONAL MATCH (s)-[:ROUTES_TO]->(outgoing:Subnet)
+RETURN s.name AS subnet, s.cidr AS cidr, s.zone_type AS zone,
+       s.security_level AS security_level, s.is_internet_facing AS internet_facing,
+       hosts AS host_count, incoming_routes AS routes_in, count(outgoing) AS routes_out
+ORDER BY s.zone_type, s.name;

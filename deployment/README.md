@@ -166,7 +166,7 @@ If not using a package manager:
 
 ```bash
 # Download and install
-wget https://gitlab.com/devnw/geode/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.deb
+wget https://github.com/codeprosorg/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.deb
 sudo dpkg -i geode_0.x.x_Linux_x86_64.deb
 
 # Start service
@@ -177,7 +177,7 @@ sudo systemctl start geode
 
 ```bash
 # Download and install
-wget https://gitlab.com/devnw/geode/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.rpm
+wget https://github.com/codeprosorg/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.rpm
 sudo rpm -i geode_0.x.x_Linux_x86_64.rpm
 
 # Start service
@@ -188,7 +188,7 @@ sudo systemctl start geode
 
 ```bash
 # Download and install
-wget https://gitlab.com/devnw/geode/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.apk
+wget https://github.com/codeprosorg/geode/releases/download/v0.x.x/geode_0.x.x_Linux_x86_64.apk
 sudo apk add --allow-untrusted geode_0.x.x_Linux_x86_64.apk
 
 # Start service (using OpenRC)
@@ -200,7 +200,7 @@ sudo rc-update add geode
 
 ```bash
 # Add tap and install
-brew tap spyderorg/tap
+brew tap codeprosorg/tap
 brew install geode
 
 # Start service (macOS)
@@ -214,7 +214,7 @@ sudo systemctl start geode
 
 ```bash
 # Pull image
-docker pull ghcr.io/spyderorg/geode:latest
+docker pull ghcr.io/codeprosorg/geode:latest
 
 # Run with persistent storage
 docker run -d \
@@ -222,7 +222,7 @@ docker run -d \
   -p 8443:8443/udp \
   -v geode-data:/data \
   -v geode-certs:/certs \
-  ghcr.io/spyderorg/geode:latest
+  ghcr.io/codeprosorg/geode:latest
 
 # View logs
 docker logs -f geode
@@ -429,6 +429,6 @@ sudo groupdel geode
 
 ## Support
 
-- Documentation: https://gitlab.com/devnw/geode/geode/tree/main/docs
-- Issues: https://gitlab.com/devnw/geode/geode/issues
-- Discussions: https://gitlab.com/devnw/geode/geode/discussions
+- Documentation: https://github.com/codeprosorg/geode/tree/main/docs
+- Issues: https://github.com/codeprosorg/geode/issues
+- Discussions: https://github.com/codeprosorg/geode/discussions

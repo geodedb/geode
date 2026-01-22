@@ -26,7 +26,7 @@ class FailureComparison:
     improvement_rate: float
 
 class FailureTracker:
-    def __init__(self, log_dir: Path = Path("/home/benji/src/gl/devnw/geode/geode/test_logs")):
+    def __init__(self, log_dir: Path = Path("/home/benji/src/gl/devnw/codepros/geode/test_logs")):
         self.log_dir = log_dir
         
     def get_run_directories(self) -> List[Path]:
@@ -315,7 +315,7 @@ def main():
     
     parser = argparse.ArgumentParser(description="Geodetestlab Failure Tracker")
     parser.add_argument("--log-dir", type=Path,
-                        default=Path("/home/benji/src/gl/devnw/geode/geode/test_logs"),
+                        default=Path("/home/benji/src/gl/devnw/codepros/geode/test_logs"),
                         help="Directory containing test logs")
     parser.add_argument("--report", action="store_true",
                         help="Generate progress report")

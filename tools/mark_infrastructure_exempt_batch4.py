@@ -169,7 +169,7 @@ def process_file(file_path: Path, feature: str, pattern: re.Pattern) -> tuple[in
     return 0, []
 
 def main():
-    repo_root = Path('/home/benji/src/gl/devnw/geode/geode')
+    repo_root = Path('/home/benji/src/gl/devnw/codepros/geode')
     src_path = repo_root / 'src'
     extensions = {'.zig'}
 

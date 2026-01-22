@@ -245,7 +245,7 @@ The QUIC library is a git submodule at `vendor/quic/`.
 
 ```bash
 # Clone with submodules
-git clone --recursive https://gitlab.com/devnw/geode/geode.git
+git clone --recursive https://gitlab.com/devnw/codepros/geode.git
 
 # Or if already cloned
 git submodule update --init --recursive

@@ -4,7 +4,7 @@
 import subprocess
 import sys
 
-binary = '/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode'
+binary = '/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode'
 
 print("Test 1: Run with shell=True")
 try:

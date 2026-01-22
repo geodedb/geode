@@ -8,7 +8,7 @@ from pathlib import Path
 from collections import defaultdict
 import time
 
-BINARY = "/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"
+BINARY = "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"
 
 def run_test_simple(test_case):
     """Run test with minimal overhead - no cleanup, no isolation."""
@@ -87,7 +87,7 @@ def process_spec(spec_file):
     return passed, failed, skipped, failures
 
 def main():
-    specs_dir = Path("/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
     spec_files = sorted(specs_dir.glob("*.yml"))
 
     print(f"Processing {len(spec_files)} spec files...")

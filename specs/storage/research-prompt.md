@@ -4,7 +4,7 @@
 
 ### 0) Fill These Inputs
 
-* **REPO_URL**: https://gitlab.com/devnw/geode/geode
+* **REPO_URL**: https://gitlab.com/devnw/codepros/geode
 * **COMMIT_SHA / TAG**: `main` branch
 * **SCOPE**: file storage (on‑disk layout, logging, durability), page management (layout, free space, GC), indexing (structures, concurrency, maintenance).
 * **RECENCY_WINDOW**: 2018–present (allow seminal works older than 2018; justify).

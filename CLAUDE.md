@@ -193,6 +193,10 @@ Based on [TODO.md](docs/TODO.md), all major development priorities have been suc
 
 *Last Updated: January 2026*
 *Status: PRODUCTION READY - 100% GQL compliance, 97.4% test coverage, all major features implemented*
+*License: Apache License, Version 2.0 - Copyright 2024-2025 CodePros*
+
+## Important Development Guidelines
+
 - You have completely botched the geodetestlab fixes by mocking and simulating the responses from `geode` in the test harness itself. NEVER EVER DO THIS! Always add the complex missing logic and fixes to the code to make the tests work unless the tests are actually wrong
 - NO MOCK DATA, NO SIMULATION, IMPLEMENT THE COMPLEX FEATURES
-- Always verify against the authoritative GQL specification before making architectural changes. The PDF at ./docs/kb/gql/ISO_IEC_39075_2024(en).pdf is the source of truth, not assumptions or secondary sources.
+- Always verify against the authoritative GQL specification before making architectural changes. The official ISO/IEC 39075:2024 standard is the source of truth, not assumptions or secondary sources.

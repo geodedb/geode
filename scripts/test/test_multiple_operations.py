@@ -6,7 +6,7 @@ import sys
 
 def run_query(query, expect_exit_code=0):
     cmd = [
-        "/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode",
+        "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode",
         "query",
         "--server 127.0.0.1:3141 --insecure",
         query

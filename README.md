@@ -35,16 +35,16 @@ Geode is a production-ready graph database implementing the **ISO/IEC 39075:2024
 #### Using Nix (Recommended)
 ```bash
 # Run Geode directly
-nix run github:spyderorg/geode
+nix run github:codeprosorg/geode
 
 # Enter development environment
-nix develop github:spyderorg/geode
+nix develop github:codeprosorg/geode
 ```
 
 #### Traditional Build
 ```bash
 # Prerequisites: Zig 0.15.1+
-git clone https://gitlab.com/devnw/geode/geode
+git clone https://github.com/codeprosorg/geode
 cd geode
 
 # Build optimized version
@@ -317,7 +317,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 ### **Development Setup**
 1. **Prerequisites**: Zig 0.15.1+, Git
-2. **Clone Repository**: `git clone https://gitlab.com/devnw/geode/geode`
+2. **Clone Repository**: `git clone https://github.com/codeprosorg/geode`
 3. **Development Environment**: `nix develop` (recommended) or manual setup
 4. **Run Tests**: `make test` to verify setup
 
@@ -334,17 +334,19 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 ## 📄 License
 
-<!-- SPDX-License-Identifier: TODO -->
+This project is licensed under the Apache License, Version 2.0 - see the [LICENSE](LICENSE) file for details.
+
+Copyright 2024-2025 CodePros
 
 ## 🔗 Links
 
 - **Documentation**: [./docs/](docs/)
-- **GitHub Repository**: [https://gitlab.com/devnw/geode/geode](https://gitlab.com/devnw/geode/geode)
-- **Issue Tracker**: [GitHub Issues](https://gitlab.com/devnw/geode/geode/issues)
+- **GitHub Repository**: [https://github.com/codeprosorg/geode](https://github.com/codeprosorg/geode)
+- **Issue Tracker**: [GitHub Issues](https://github.com/codeprosorg/geode/issues)
 - **ISO/IEC 39075:2024**: [GQL Standard](https://www.iso.org/standard/76120.html)
 
 ---
 
 **Geode** - Enterprise-ready graph database for the modern data stack
 
-*Built with ❤️ by the Spyder Organization*
+*Built with ❤️ by CodePros*

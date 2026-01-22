@@ -1,6 +1,6 @@
 [Unit]
 Description=Geode Authentication Management Service
-Documentation=https://gitlab.com/devnw/geode/geode
+Documentation=https://gitlab.com/devnw/codepros/geode
 After=geode.service
 Requires=geode.service
 

@@ -7,7 +7,7 @@ import sys
 def run_command(args, check_exit_code=None, check_stdout=None, check_stderr=None):
     """Run a command and check its output."""
     result = subprocess.run(
-        ["/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"] + args,
+        ["/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"] + args,
         capture_output=True,
         text=True
     )

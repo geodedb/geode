@@ -7,10 +7,10 @@ name = "geodetestlab"
 version = "0.1.0"
 description = "Interactive CLI testing system for Geode graph database with LLM fuzzing"
 authors = [
-    {name = "Geode Team", email = "team@geode.dev"}
+    {name = "CodePros", email = "team@codepros.dev"}
 ]
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 keywords = ["testing", "cli", "database", "geode", "graph", "gql"]
 classifiers = [
@@ -52,10 +52,10 @@ dev = [
 geodetestlab = "geodetestlab.cli:main"
 
 [project.urls]
-Homepage = "https://gitlab.com/devnw/geode/geode"
-Repository = "https://gitlab.com/devnw/geode/geode"
-Documentation = "https://docs.geode.dev"
-"Bug Tracker" = "https://gitlab.com/devnw/geode/geode/issues"
+Homepage = "https://github.com/codeprosorg/geode"
+Repository = "https://github.com/codeprosorg/geode"
+Documentation = "https://github.com/codeprosorg/geode/tree/main/docs"
+"Bug Tracker" = "https://github.com/codeprosorg/geode/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

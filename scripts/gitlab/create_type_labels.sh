@@ -4,7 +4,7 @@
 #
 # Usage: ./create_type_labels.sh
 # Requires: GITLAB_TOKEN environment variable with api scope
-# Project: devnw/geode/geode
+# Project: devnw/codepros/geode
 
 set -e
 

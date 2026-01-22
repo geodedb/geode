@@ -1,6 +1,6 @@
 [Unit]
 Description=Geode Graph Database Server
-Documentation=https://gitlab.com/devnw/geode/geode
+Documentation=https://gitlab.com/devnw/codepros/geode
 After=network.target
 
 [Service]

@@ -143,7 +143,7 @@ All significant features and implementations must include CANARY markers for gov
 
 ### GQL Compliance
 
-Geode targets 98%+ compliance with ISO/IEC 39075:2024 (GQL standard). Always verify against the authoritative specification (`docs/kb/gql/ISO_IEC_39075_2024(en).pdf`) before making architectural changes.
+Geode targets 98%+ compliance with ISO/IEC 39075:2024 (GQL standard). Always verify against the authoritative ISO specification before making architectural changes. The official standard can be obtained from [ISO](https://www.iso.org/standard/76120.html).
 
 ### Testing Requirements
 
@@ -203,7 +203,7 @@ Report security vulnerabilities privately to the maintainers.
    ```bash
    # Install Zig 0.15.1
    # Clone repository
-   git clone https://gitlab.com/devnw/geode/geode.git
+   git clone https://github.com/codeprosorg/geode.git
    cd geode
 
    # Build
@@ -230,11 +230,15 @@ Report security vulnerabilities privately to the maintainers.
 - **Documentation**: `docs/` directory
 - **API Reference**: `docs/API_REFERENCE.md`
 - **Quick Reference**: `docs/QUICK_REFERENCE.md`
-- **GQL Spec**: `docs/kb/gql/ISO_IEC_39075_2024(en).pdf`
+- **GQL Spec**: [ISO/IEC 39075:2024](https://www.iso.org/standard/76120.html)
 
 ## Questions?
 
-Open an issue or discussion on GitHub for questions about contributing.
+Open an issue or discussion on [GitHub](https://github.com/codeprosorg/geode) for questions about contributing.
+
+## License
+
+By contributing to Geode, you agree that your contributions will be licensed under the Apache License, Version 2.0.
 
 ---
 

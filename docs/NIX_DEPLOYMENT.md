@@ -48,7 +48,7 @@ Nix Configuration Structure
 
 ```bash
 # Clone the repository
-git clone https://gitlab.com/devnw/geode/geode.git
+git clone https://github.com/codeprosorg/geode.git
 cd geode
 
 # Build default package
@@ -153,9 +153,9 @@ Add to your `configuration.nix`:
 ```nix
 {
   # Import the Geode module
-  imports = [ 
+  imports = [
     (fetchGit {
-      url = "https://gitlab.com/devnw/geode/geode";
+      url = "https://github.com/codeprosorg/geode";
       ref = "main";
     } + "/nix/modules/geode-daemon.nix")
   ];
@@ -786,7 +786,7 @@ nix develop .#deploy
 ```nix
 # In your project's flake.nix
 {
-  inputs.geode.url = "github:spyderorg/geode";
+  inputs.geode.url = "github:codeprosorg/geode";
   
   outputs = { self, nixpkgs, geode, ... }:
     let

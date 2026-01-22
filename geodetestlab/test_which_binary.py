@@ -3,7 +3,7 @@
 
 import sys
 import os
-sys.path.insert(0, '/home/benji/src/gl/devnw/geode/geode/geodetestlab/geodetestlab')
+sys.path.insert(0, '/home/benji/src/gl/devnw/codepros/geode/geodetestlab/geodetestlab')
 
 from core.utils import find_geode_binary
 

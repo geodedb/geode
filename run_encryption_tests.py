@@ -16,7 +16,7 @@ def run_geode_query(query):
     """Execute a GQL query and return result."""
     try:
         result = subprocess.run(
-            ["/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode", "query", query],
+            ["/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode", "query", query],
             capture_output=True,
             text=True,
             timeout=5,
@@ -33,7 +33,7 @@ def run_geode_command(cmd_args):
     global test_env
     try:
         result = subprocess.run(
-            ["/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"] + cmd_args,
+            ["/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"] + cmd_args,
             capture_output=True,
             text=True,
             timeout=5,
@@ -161,7 +161,7 @@ def run_spec(spec_path):
     return results
 
 def main():
-    specs_dir = Path("/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs/encryption")
+    specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs/encryption")
 
     if not specs_dir.exists():
         print(f"Error: Specs directory not found: {specs_dir}")

@@ -148,7 +148,7 @@ in stdenv.mkDerivation rec {
       - Comprehensive type system with 50+ data types
       - Advanced indexing: Patricia trie, R-tree, HNSW with persistence
     '';
-    homepage = "https://gitlab.com/devnw/geode/geode";
+    homepage = "https://gitlab.com/devnw/codepros/geode";
     license = licenses.mit;
     maintainers = with maintainers; [ ]; # Add maintainers here
     platforms = platforms.unix;

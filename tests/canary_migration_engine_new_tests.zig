@@ -1,5 +1,5 @@
 const std = @import("std");
-const migrate = @import("/home/benji/src/gl/devnw/geode/geode/src/migration/mod.zig");
+const migrate = @import("/home/benji/src/gl/devnw/codepros/geode/src/migration/mod.zig");
 
 const ExecRecorder = struct {
     allocator: std.mem.Allocator,

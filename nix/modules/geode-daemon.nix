@@ -349,7 +349,7 @@ in {
     # Main Geode systemd service
     systemd.services.geode = {
       description = "Geode Graph Database Daemon";
-      documentation = [ "https://gitlab.com/devnw/geode/geode" ];
+      documentation = [ "https://github.com/codeprosorg/geode" ];
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ] ++ optional cfg.tls.generateSelfSigned "geode-cert-gen.service";
       wants = optional cfg.tls.generateSelfSigned "geode-cert-gen.service";

@@ -28,7 +28,7 @@ When cloning the geode repository, initialize the submodule:
 
 ```bash
 # Clone with submodules
-git clone --recursive https://gitlab.com/devnw/geode/geode.git
+git clone --recursive https://gitlab.com/devnw/codepros/geode.git
 
 # Or if already cloned without submodules
 git submodule update --init --recursive

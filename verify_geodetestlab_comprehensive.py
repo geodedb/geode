@@ -10,7 +10,7 @@ def run_test(test_case):
     expect = test_case.get("expect", {})
     
     result = subprocess.run(
-        ["/home/benji/src/gl/devnw/geode/geode/zig-out/bin/geode"] + args,
+        ["/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"] + args,
         capture_output=True,
         text=True
     )
@@ -36,7 +36,7 @@ def run_test(test_case):
     return True, "PASSED"
 
 # Load the spec
-with open("/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs/geode_comprehensive.yml", "r") as f:
+with open("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs/geode_comprehensive.yml", "r") as f:
     spec = yaml.safe_load(f)
 
 passed = 0

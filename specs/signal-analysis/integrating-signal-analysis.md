@@ -168,10 +168,10 @@ In conclusion, the trade‑offs favor **embedding the runtime detection logic** 
 ### Reference Index
 
 - **\[1] \[2] \[6] \[7] \[8] \[9] \[11] \[13] \[14] \[18] \[20]** _TIMESERIES‑GEODE.md_
-  [https://gitlab.com/devnw/geode/geode/blob/4b4ab09180f3403718b770ab1b99fc76493f9ac6/docs/archive/TIMESERIES-GEODE.md](https://gitlab.com/devnw/geode/geode/blob/4b4ab09180f3403718b770ab1b99fc76493f9ac6/docs/archive/TIMESERIES-GEODE.md)
+  [https://gitlab.com/devnw/codepros/geode/blob/4b4ab09180f3403718b770ab1b99fc76493f9ac6/docs/archive/TIMESERIES-GEODE.md](https://gitlab.com/devnw/codepros/geode/blob/4b4ab09180f3403718b770ab1b99fc76493f9ac6/docs/archive/TIMESERIES-GEODE.md)
 
 - **\[3] \[4] \[5]** _TIMESERIES_INTEGRATION.md_
-  [https://gitlab.com/devnw/geode/geode/blob/4b4ab09180f3403718b770ab1b99fc76493f9ac6/docs/archive/TIMESERIES_INTEGRATION.md](https://gitlab.com/devnw/geode/geode/blob/4b4ab09180f3403718b770ab1b99fc76493f9ac6/docs/archive/TIMESERIES_INTEGRATION.md)
+  [https://gitlab.com/devnw/codepros/geode/blob/4b4ab09180f3403718b770ab1b99fc76493f9ac6/docs/archive/TIMESERIES_INTEGRATION.md](https://gitlab.com/devnw/codepros/geode/blob/4b4ab09180f3403718b770ab1b99fc76493f9ac6/docs/archive/TIMESERIES_INTEGRATION.md)
 
 - **\[10] \[12] \[15] \[16] \[17] \[19] \[21] \[22] \[23]** _Signal Analysis of Time‑Series Data for Anomaly Detection in Cybersecurity.docx_
   file://file-FBmZ3orhERjVFZdxSZvxBS

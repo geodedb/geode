@@ -351,8 +351,8 @@ pub fn createVaultKMSFromEnv(allocator: std.mem.Allocator) !VaultKMSProvider {
     const vault_token = std.process.getEnvVarOwned(allocator, "VAULT_TOKEN") catch return error.VaultTokenNotSet;
     defer allocator.free(vault_token);
 
-    const key_path = std.process.getEnvVarOwned(allocator, "VAULT_KEY_PATH") catch "spyder";
-    defer if (!std.mem.eql(u8, key_path, "spyder")) allocator.free(key_path);
+    const key_path = std.process.getEnvVarOwned(allocator, "VAULT_KEY_PATH") catch "geode";
+    defer if (!std.mem.eql(u8, key_path, "geode")) allocator.free(key_path);
 
     return VaultKMSProvider.init(allocator, try allocator.dupe(u8, vault_addr), try allocator.dupe(u8, vault_token), try allocator.dupe(u8, key_path));
 }

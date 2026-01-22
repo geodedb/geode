@@ -50,7 +50,7 @@ def process_file(file_path: Path) -> tuple[int, list[str]]:
     return 0, []
 
 def main():
-    repo_root = Path('/home/benji/src/gl/devnw/geode/geode')
+    repo_root = Path('/home/benji/src/gl/devnw/codepros/geode')
     src_path = repo_root / 'src'
     extensions = {'.zig'}
     total_converted = 0

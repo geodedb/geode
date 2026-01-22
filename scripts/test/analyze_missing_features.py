@@ -6,7 +6,7 @@ from pathlib import Path
 from collections import defaultdict
 
 def analyze_specs():
-    specs_dir = Path("/home/benji/src/gl/devnw/geode/geode/geodetestlab/specs")
+    specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
     
     # Track all commands and subcommands used
     commands = defaultdict(set)

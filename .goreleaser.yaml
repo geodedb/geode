@@ -133,7 +133,7 @@ dockers:
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source={{.GitURL}}"
       - "--label=org.opencontainers.image.description=Geode Graph Database - GQL-compliant property-graph database"
-      - "--label=org.opencontainers.image.licenses=MIT"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
 
   - id: geode-debian-arm64
     ids:
@@ -232,15 +232,15 @@ nfpms:
     package_name: geode
     ids:
       - geode
-    vendor: Spyder
-    homepage: https://gitlab.com/devnw/geode/geode
-    maintainer: Geode Team <geode@devnw.com>
+    vendor: CodePros
+    homepage: https://github.com/codeprosorg/geode
+    maintainer: Geode Team <geode@codepros.dev>
     description: |-
       Geode Graph Database - ISO/IEC 39075:2024 GQL-compliant property-graph database.
 
       Geode is a high-performance graph database implementing the GQL standard
       with ACID guarantees, QUIC/TLS transport, and enterprise security features.
-    license: MIT
+    license: Apache-2.0
     formats:
       - deb
       - rpm
@@ -371,13 +371,13 @@ release:
     **Linux (Debian/Ubuntu)**
     ```bash
     # Download and install
-    wget https://gitlab.com/devnw/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.deb
+    wget https://github.com/codeprosorg/geode/releases/download/v{{ .Version }}/geode_{{ .Version }}_Linux_x86_64.deb
     sudo dpkg -i geode_{{ .Version }}_Linux_x86_64.deb
     ```
 
     **Linux (RHEL/Fedora)**
     ```bash
-    wget https://gitlab.com/devnw/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.rpm
+    wget https://github.com/codeprosorg/geode/releases/download/v{{ .Version }}/geode_{{ .Version }}_Linux_x86_64.rpm
     sudo rpm -i geode_{{ .Version }}_Linux_x86_64.rpm
     ```
 
@@ -389,7 +389,7 @@ release:
 
     **macOS (Homebrew)**
     ```bash
-    brew tap devnw/geode
+    brew tap codeprosorg/geode
     brew install geode
     ```
 
@@ -415,13 +415,13 @@ release:
 #       owner: devnw
 #       name: homebrew-geode
 #       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-#     url_template: "https://gitlab.com/devnw/geode/geode/-/releases/{{ .Tag }}/downloads/{{ .ArtifactName }}"
+#     url_template: "https://gitlab.com/devnw/codepros/geode/-/releases/{{ .Tag }}/downloads/{{ .ArtifactName }}"
 #     commit_author:
 #       name: geode-bot
 #       email: geode-bot@devnw.com
 #     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
 #     directory: Formula
-#     homepage: "https://gitlab.com/devnw/geode/geode"
+#     homepage: "https://gitlab.com/devnw/codepros/geode"
 #     description: "ISO/IEC 39075:2024 GQL-compliant property-graph database"
 #     license: "MIT"
 #     skip_upload: auto

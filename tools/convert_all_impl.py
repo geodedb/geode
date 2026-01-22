@@ -221,7 +221,7 @@ def process_file_exempt(file_path: Path, feature: str, pattern: re.Pattern, repo
     return 0
 
 def main():
-    repo_root = Path('/home/benji/src/gl/devnw/geode/geode')
+    repo_root = Path('/home/benji/src/gl/devnw/codepros/geode')
 
     total_tested = 0
     total_exempt = 0
