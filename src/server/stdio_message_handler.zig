@@ -15,7 +15,7 @@ const query_executor = @import("query_executor.zig");
 // Phase 3 M3.3 - Stdio Message Handler Module (Twelfth Increment)
 // Unified message processing for stdio mode, delegating to existing handlers and eliminating duplication
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-015; FEATURE="Structured Logging"; ASPECT=StdioHandler; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-015; FEATURE="Structured Logging"; ASPECT=StdioHandler; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;

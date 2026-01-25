@@ -58,3 +58,141 @@ pub fn demoUsage() !void {
     try det.noteAccess(2, "row:1", true);
     std.debug.assert(det.predictConflict(1, 2));
 }
+
+// ==================== Unit Tests (GAP-0237) ====================
+// CANARY: REQ=REQ-GAP-0237; FEATURE="MVCCAdvancedUnitTests"; ASPECT=EarlyDetect; STATUS=TESTED; TEST=test_early_detector; OWNER=txn; UPDATED=2026-01-25
+
+test "EarlyDetector init and deinit" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+    // Should be empty initially
+    try std.testing.expectEqual(@as(usize, 0), det.keys.count());
+}
+
+test "EarlyDetector noteAccess tracks transaction accesses" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key1", false);
+    try det.noteAccess(1, "key2", true);
+
+    const accesses = det.keys.get(1);
+    try std.testing.expect(accesses != null);
+    try std.testing.expectEqual(@as(usize, 2), accesses.?.items.len);
+}
+
+test "EarlyDetector predictConflict returns false for non-overlapping reads" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key1", false);
+    try det.noteAccess(2, "key2", false);
+
+    try std.testing.expect(!det.predictConflict(1, 2));
+}
+
+test "EarlyDetector predictConflict returns false for overlapping reads" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key1", false);
+    try det.noteAccess(2, "key1", false); // Same key, both reads
+
+    try std.testing.expect(!det.predictConflict(1, 2));
+}
+
+test "EarlyDetector predictConflict returns true for read-write conflict" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key1", false); // read
+    try det.noteAccess(2, "key1", true); // write
+
+    try std.testing.expect(det.predictConflict(1, 2));
+}
+
+test "EarlyDetector predictConflict returns true for write-write conflict" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key1", true); // write
+    try det.noteAccess(2, "key1", true); // write
+
+    try std.testing.expect(det.predictConflict(1, 2));
+}
+
+test "EarlyDetector predictConflict returns false for unknown transaction" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key1", true);
+
+    try std.testing.expect(!det.predictConflict(1, 99)); // txn 99 doesn't exist
+    try std.testing.expect(!det.predictConflict(99, 1));
+}
+
+test "EarlyDetector multiple keys per transaction" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key1", false);
+    try det.noteAccess(1, "key2", false);
+    try det.noteAccess(1, "key3", true);
+
+    const accesses = det.keys.get(1).?;
+    try std.testing.expectEqual(@as(usize, 3), accesses.items.len);
+}
+
+test "EarlyDetector multiple transactions" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key_a", false);
+    try det.noteAccess(2, "key_b", false);
+    try det.noteAccess(3, "key_c", false);
+
+    try std.testing.expectEqual(@as(usize, 3), det.keys.count());
+}
+
+test "EarlyDetector no conflict between independent transactions" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key_a", true);
+    try det.noteAccess(2, "key_b", true);
+    try det.noteAccess(3, "key_c", true);
+
+    // All different keys, no conflicts
+    try std.testing.expect(!det.predictConflict(1, 2));
+    try std.testing.expect(!det.predictConflict(2, 3));
+    try std.testing.expect(!det.predictConflict(1, 3));
+}
+
+test "EarlyDetector predictConflict is symmetric" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "shared", true);
+    try det.noteAccess(2, "shared", false);
+
+    // Should detect conflict in both directions
+    try std.testing.expect(det.predictConflict(1, 2));
+    try std.testing.expect(det.predictConflict(2, 1));
+}
+
+test "EarlyDetector Access struct" {
+    const access = EarlyDetector.Access{ .key = "test", .write = true };
+    try std.testing.expectEqualStrings("test", access.key);
+    try std.testing.expect(access.write);
+}
+
+test "EarlyDetector self-conflict check" {
+    var det = EarlyDetector.init(std.testing.allocator);
+    defer det.deinit();
+
+    try det.noteAccess(1, "key1", true);
+    try det.noteAccess(1, "key1", false);
+
+    // Same transaction checking against itself
+    try std.testing.expect(det.predictConflict(1, 1));
+}

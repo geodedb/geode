@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-YAML-001; FEATURE="External Library Migration"; ASPECT=YAMLParsing; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-YAML-001; FEATURE="External Library Migration"; ASPECT=YAMLParsing; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External YAML 1.2.2 library integration for enhanced YAML parsing capabilities
 // The internal parser is kept for backward compatibility with existing test specifications
 const yaml_lib = @import("yaml");

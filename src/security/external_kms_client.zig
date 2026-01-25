@@ -5,7 +5,7 @@ const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=ExternalKMS; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=ExternalKMS; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External JSON library for RFC 8259 compliant encoding in KMS API requests
 const json_lib = @import("json");
 

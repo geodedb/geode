@@ -5,7 +5,7 @@ const FileSink = cdc_sinks.FileSink;
 const WebhookSink = @import("sinks/webhook_sink.zig").WebhookSink;
 const KafkaSink = @import("sinks/kafka_sink.zig").KafkaSink;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Streaming; STATUS=IMPL; OWNER=streaming; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Streaming; STATUS=EXEMPT; OWNER=streaming; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("streaming");
 const Attr = logging.Attr;

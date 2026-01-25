@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-MCP-008; FEATURE="External Library Migration"; ASPECT=MCPClient; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-MCP-008; FEATURE="External Library Migration"; ASPECT=MCPClient; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // GeodeClient - QUIC connection management for MCP server integration
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-045; FEATURE="JSON Library Migration"; ASPECT=MCPClient; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24

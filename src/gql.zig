@@ -208,7 +208,7 @@ test "diagnostics acceptance: codes presence" {
     try std.testing.expectEqualStrings("TypeMismatch", d.codeName(.TypeMismatch));
 }
 
-// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=Core; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-14
+// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Legality (US001)"; ASPECT=Core; STATUS=TESTED; TEST=src/gql.zig; OWNER=planner; UPDATED=2026-01-25
 // GAP-0161: Pagination orderedness legality is now implemented as a planner/runtime check.
 // See planner.zig:222-225 (OffsetPushdownRequiresOrder), query_executor.zig:471-494 (diagnostics)
 

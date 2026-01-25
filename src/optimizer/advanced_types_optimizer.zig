@@ -286,7 +286,7 @@ pub const AdvancedTypesOptimizer = struct {
 
     // Filter optimization helpers
     /// Check if filter involves vector operations (similarity search, distance)
-    // CANARY: REQ=REQ-OPTIMIZER-FILTER-001; FEATURE="Vector Filter Detection"; ASPECT=Vector; STATUS=IMPL; OWNER=optimizer; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-OPTIMIZER-FILTER-001; FEATURE="Vector Filter Detection"; ASPECT=Vector; STATUS=TESTED; TEST=src/optimizer/advanced_types_optimizer.zig; OWNER=optimizer; UPDATED=2026-01-25
     /// GAP-0049: Implements actual filter type detection based on predicate_type
     fn isVectorFilter(self: *AdvancedTypesOptimizer, filter_op: *FilterOperation) bool {
         _ = self;
@@ -294,7 +294,7 @@ pub const AdvancedTypesOptimizer = struct {
     }
 
     /// Check if filter involves geographic operations (spatial distance, containment)
-    // CANARY: REQ=REQ-OPTIMIZER-FILTER-002; FEATURE="Geographic Filter Detection"; ASPECT=Graph; STATUS=IMPL; OWNER=optimizer; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-OPTIMIZER-FILTER-002; FEATURE="Geographic Filter Detection"; ASPECT=Graph; STATUS=TESTED; TEST=src/optimizer/advanced_types_optimizer.zig; OWNER=optimizer; UPDATED=2026-01-25
     /// GAP-0049: Implements actual filter type detection based on predicate_type
     fn isGeographicFilter(self: *AdvancedTypesOptimizer, filter_op: *FilterOperation) bool {
         _ = self;
@@ -302,7 +302,7 @@ pub const AdvancedTypesOptimizer = struct {
     }
 
     /// Check if filter involves cryptographic operations (signature verification)
-    // CANARY: REQ=REQ-OPTIMIZER-FILTER-003; FEATURE="Cryptographic Filter Detection"; ASPECT=Graph; STATUS=IMPL; OWNER=optimizer; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-OPTIMIZER-FILTER-003; FEATURE="Cryptographic Filter Detection"; ASPECT=Graph; STATUS=TESTED; TEST=src/optimizer/advanced_types_optimizer.zig; OWNER=optimizer; UPDATED=2026-01-25
     /// GAP-0049: Implements actual filter type detection based on predicate_type
     fn isCryptographicFilter(self: *AdvancedTypesOptimizer, filter_op: *FilterOperation) bool {
         _ = self;

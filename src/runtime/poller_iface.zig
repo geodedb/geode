@@ -69,3 +69,117 @@ pub const Poller = struct {
 // Multi-loop: create N loop threads; on Unix use SO_REUSEPORT sockets per loop;
 // on Windows use IOCP with N workers, but ensure single-thread-per-connection by partitioning.
 // (See design.)
+
+// ==================== Unit Tests (GAP-0238) ====================
+// CANARY: REQ=REQ-GAP-0238; FEATURE="RuntimeUnitTests"; ASPECT=PollerInterface; STATUS=TESTED; TEST=test_poller; OWNER=runtime; UPDATED=2026-01-25
+
+test "Event struct initializes correctly" {
+    const event = Poller.Event{
+        .fd = 42,
+        .readable = true,
+        .writable = false,
+        .user = 123,
+    };
+    try std.testing.expectEqual(@as(i32, 42), event.fd);
+    try std.testing.expect(event.readable);
+    try std.testing.expect(!event.writable);
+    try std.testing.expectEqual(@as(usize, 123), event.user);
+}
+
+test "Poller initLinux returns empty poller" {
+    const poller = try Poller.initLinux(std.testing.allocator);
+    _ = poller;
+}
+
+test "Poller initKqueue returns empty poller" {
+    const poller = try Poller.initKqueue(std.testing.allocator);
+    _ = poller;
+}
+
+test "Poller initIOCP returns empty poller" {
+    const poller = try Poller.initIOCP(std.testing.allocator);
+    _ = poller;
+}
+
+test "Poller register accepts parameters" {
+    var poller = try Poller.initLinux(std.testing.allocator);
+    try poller.register(1, 0x01, 100);
+}
+
+test "Poller wait returns zero events (stub implementation)" {
+    var poller = try Poller.initLinux(std.testing.allocator);
+    var events: [10]Poller.Event = undefined;
+    const count = try poller.wait(&events, 100);
+    try std.testing.expectEqual(@as(usize, 0), count);
+}
+
+test "Event with all flags set" {
+    const event = Poller.Event{
+        .fd = 1,
+        .readable = true,
+        .writable = true,
+        .user = 0,
+    };
+    try std.testing.expect(event.readable);
+    try std.testing.expect(event.writable);
+}
+
+test "Event with no flags set" {
+    const event = Poller.Event{
+        .fd = 1,
+        .readable = false,
+        .writable = false,
+        .user = 0,
+    };
+    try std.testing.expect(!event.readable);
+    try std.testing.expect(!event.writable);
+}
+
+test "Event with negative fd" {
+    // Invalid fd values should still be storable
+    const event = Poller.Event{
+        .fd = -1,
+        .readable = false,
+        .writable = false,
+        .user = 0,
+    };
+    try std.testing.expectEqual(@as(i32, -1), event.fd);
+}
+
+test "Event with large user data" {
+    const event = Poller.Event{
+        .fd = 0,
+        .readable = false,
+        .writable = false,
+        .user = std.math.maxInt(usize),
+    };
+    try std.testing.expectEqual(std.math.maxInt(usize), event.user);
+}
+
+test "Poller register multiple fds" {
+    var poller = try Poller.initLinux(std.testing.allocator);
+    try poller.register(1, 0x01, 100);
+    try poller.register(2, 0x02, 200);
+    try poller.register(3, 0x03, 300);
+}
+
+test "Poller wait with zero timeout" {
+    var poller = try Poller.initLinux(std.testing.allocator);
+    var events: [10]Poller.Event = undefined;
+    const count = try poller.wait(&events, 0);
+    try std.testing.expectEqual(@as(usize, 0), count);
+}
+
+test "Poller wait with negative timeout" {
+    var poller = try Poller.initLinux(std.testing.allocator);
+    var events: [10]Poller.Event = undefined;
+    const count = try poller.wait(&events, -1);
+    try std.testing.expectEqual(@as(usize, 0), count);
+}
+
+test "Poller wait with empty buffer" {
+    var poller = try Poller.initLinux(std.testing.allocator);
+    var events: [0]Poller.Event = undefined;
+    const count = try poller.wait(&events, 100);
+    try std.testing.expectEqual(@as(usize, 0), count);
+}

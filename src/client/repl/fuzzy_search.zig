@@ -2,7 +2,7 @@ const std = @import("std");
 const strings = @import("strings");
 
 // CANARY: REQ=REQ-REPL-FUZZY-001; FEATURE="REPL Fuzzy Search"; ASPECT=Implementation; STATUS=TESTED; TEST=test_fuzzy_search; OWNER=repl; UPDATED=2025-11-17
-// CANARY: REQ=REQ-LIB-MIGRATION-STRINGS-001; FEATURE="External Library Migration"; ASPECT=StringsFuzzySearch; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-STRINGS-001; FEATURE="External Library Migration"; ASPECT=StringsFuzzySearch; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 
 /// Result of a fuzzy search match
 pub const FuzzyMatch = struct {

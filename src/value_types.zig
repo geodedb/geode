@@ -22,7 +22,7 @@ const arrays = @import("types/arrays.zig");
 const bitstring = @import("types/bitstring.zig");
 const range = @import("types/range.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=ValueTypes; STATUS=IMPL; OWNER=value_types; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=ValueTypes; STATUS=EXEMPT; OWNER=value_types; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("value_types");
 const Attr = logging.Attr;

@@ -1,7 +1,7 @@
 // Auto-generated SPIR-V shader sources for Vulkan compute
 // Phase 2: Shader compilation pipeline
 //
-// CANARY: REQ=REQ-GPU-002; FEATURE="Vulkan Shader Compilation"; ASPECT=Implementation; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+// CANARY: REQ=REQ-GPU-002; FEATURE="Vulkan Shader Compilation"; ASPECT=Implementation; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
 // STATUS=TESTED; TEST=tests/gpu/test_vulkan_basic.zig:1; BENCH=None; OWNER=gpu; UPDATED=2025-10-26
 
 const std = @import("std");

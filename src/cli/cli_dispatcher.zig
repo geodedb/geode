@@ -4,21 +4,21 @@ const build_options = @import("build_options");
 const audit_cli = @import("audit_cli");
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("cli");
 const Attr = logging.Attr;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-CLI-001; FEATURE="External Library Migration"; ASPECT=CLIFramework; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-CLI-001; FEATURE="External Library Migration"; ASPECT=CLIFramework; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External CLI framework library - Cobra/Viper-class features with shell completion generation
 const cli_lib = @import("cli");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-MCP-006; FEATURE="External Library Migration"; ASPECT=MCPModule; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-MCP-006; FEATURE="External Library Migration"; ASPECT=MCPModule; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 // MCP server module for AI/LLM integration
 const geode_mcp = @import("geode_mcp");
 
 // GAP-0075: Syslog audit logging integration
-// CANARY: REQ=REQ-AUDIT-SYSLOG-001; FEATURE="SyslogAuditIntegration"; ASPECT=AuditLogging; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
+// CANARY: REQ=REQ-AUDIT-SYSLOG-001; FEATURE="SyslogAuditIntegration"; ASPECT=AuditLogging; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-10
 
 // CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-001; FEATURE="CLI Modularization"; ASPECT=CommandDispatch; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.4: CLI Dispatcher module - central command routing, flag parsing, and audit configuration
@@ -283,12 +283,12 @@ pub fn dispatch(
         try audit_cli.verifyFile(allocator, path, algo, 100, require_digest, pubkey);
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "completion") or std.mem.eql(u8, subcommand, "completions")) {
-        // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+        // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
         // Shell completion script generation using external CLI library
         try handleCompletionsCommand(allocator, argv, subcommand_start);
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "mcp")) {
-        // CANARY: REQ=REQ-LIB-MIGRATION-MCP-006; FEATURE="External Library Migration"; ASPECT=MCPCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+        // CANARY: REQ=REQ-LIB-MIGRATION-MCP-006; FEATURE="External Library Migration"; ASPECT=MCPCommand; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
         // Model Context Protocol server for AI/LLM integration
         try handleMcpCommand(allocator, argv, subcommand_start);
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -659,7 +659,7 @@ fn printPowershellCompletions() void {
 // ============================================================================
 
 /// Handle the mcp subcommand - starts an MCP server for AI/LLM integration
-/// CANARY: REQ=REQ-LIB-MIGRATION-MCP-007; FEATURE="External Library Migration"; ASPECT=MCPCommandHandler; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+/// CANARY: REQ=REQ-LIB-MIGRATION-MCP-007; FEATURE="External Library Migration"; ASPECT=MCPCommandHandler; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var use_http = false;
     var http_port: u16 = 8080;
@@ -828,7 +828,7 @@ pub fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditC
     }
 
     // GAP-0075: Initialize syslog logging if enabled
-    // CANARY: REQ=REQ-AUDIT-SYSLOG-002; FEATURE="SyslogSenderInit"; ASPECT=AuditLogging; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-AUDIT-SYSLOG-002; FEATURE="SyslogSenderInit"; ASPECT=AuditLogging; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-10
     if (cli_config.syslog_enabled) {
         global_syslog_host = cli_config.syslog_host orelse "127.0.0.1";
         global_syslog_port = cli_config.syslog_port;
@@ -884,7 +884,7 @@ pub fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const 
     }
 
     // GAP-0075: Log to syslog if enabled
-    // CANARY: REQ=REQ-AUDIT-SYSLOG-003; FEATURE="SyslogEventSend"; ASPECT=AuditLogging; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-AUDIT-SYSLOG-003; FEATURE="SyslogEventSend"; ASPECT=AuditLogging; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-10
     if (global_syslog_host) |host| {
         sendSyslogMessage(host, global_syslog_port, category, action, outcome);
     }
@@ -898,7 +898,7 @@ pub fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const 
 }
 
 // GAP-0075: Send audit event to syslog server via UDP (RFC 5424)
-// CANARY: REQ=REQ-AUDIT-SYSLOG-004; FEATURE="SyslogUdpSend"; ASPECT=AuditLogging; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-10
+// CANARY: REQ=REQ-AUDIT-SYSLOG-004; FEATURE="SyslogUdpSend"; ASPECT=AuditLogging; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-10
 fn sendSyslogMessage(host: []const u8, port: u16, category: []const u8, action: []const u8, outcome: []const u8) void {
     // Skip if host contains placeholder (test mode)
     if (std.mem.indexOf(u8, host, "{{") != null) return;

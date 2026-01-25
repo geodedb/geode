@@ -24,22 +24,22 @@ const constraint_manager = @import("constraint_manager.zig");
 // ============================================================================
 
 /// Database metadata catalog (schemas, graphs, indexes)
-/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-002; FEATURE="Catalog Re-export"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-002; FEATURE="Catalog Re-export"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
 pub const Catalog = catalog.Catalog;
 pub const IndexInfo = catalog.IndexInfo;
 
 /// FLE schema catalog for encryption metadata
-/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-003; FEATURE="FLE Catalog Re-export"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-003; FEATURE="FLE Catalog Re-export"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
 pub const SchemaCatalog = fle_catalog.SchemaCatalog;
 
 /// Type metadata and annotations
-/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-004; FEATURE="Annotations Re-export"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-004; FEATURE="Annotations Re-export"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
 pub const TypeMetadata = annotations.TypeMetadata;
 pub const FieldMetadata = annotations.FieldMetadata;
 pub const EncryptionAlgorithm = annotations.EncryptionAlgorithm;
 
 /// Constraint management
-/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-005; FEATURE="Constraints Re-export"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-005; FEATURE="Constraints Re-export"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
 pub const ConstraintManager = constraint_manager.ConstraintManager;
 pub const Constraint = constraint_manager.Constraint;
 
@@ -50,7 +50,7 @@ pub const Constraint = constraint_manager.Constraint;
 /// SchemaManager provides a unified interface for all schema operations
 /// Coordinates between database catalog, FLE catalog, annotations, and constraints
 ///
-/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-006; FEATURE="Unified Schema Manager"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-006; FEATURE="Unified Schema Manager"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
 pub const SchemaManager = struct {
     allocator: std.mem.Allocator,
     db_catalog: *Catalog,
@@ -65,7 +65,7 @@ pub const SchemaManager = struct {
     ///
     /// Returns: Initialized SchemaManager or error
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-007; FEATURE="Schema Manager Init"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-007; FEATURE="Schema Manager Init"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn init(allocator: std.mem.Allocator, data_dir: []const u8) !SchemaManager {
         const db_catalog_inst = try Catalog.init(allocator, data_dir);
         errdefer db_catalog_inst.deinit();
@@ -87,7 +87,7 @@ pub const SchemaManager = struct {
 
     /// Clean up schema manager resources
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-008; FEATURE="Schema Manager Cleanup"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-008; FEATURE="Schema Manager Cleanup"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn deinit(self: *SchemaManager) void {
         self.db_catalog.deinit();
         self.allocator.destroy(self.db_catalog);
@@ -104,7 +104,7 @@ pub const SchemaManager = struct {
 
     /// Create a new schema
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-009; FEATURE="Schema Creation"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-009; FEATURE="Schema Creation"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn createSchema(self: *SchemaManager, schema_name: []const u8) !void {
         self.db_catalog.rwlock.lock();
         defer self.db_catalog.rwlock.unlock();
@@ -115,7 +115,7 @@ pub const SchemaManager = struct {
 
     /// Check if schema exists
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-010; FEATURE="Schema Existence Check"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-010; FEATURE="Schema Existence Check"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn schemaExists(self: *SchemaManager, schema_name: []const u8) bool {
         self.db_catalog.rwlock.lockShared();
         defer self.db_catalog.rwlock.unlockShared();
@@ -125,7 +125,7 @@ pub const SchemaManager = struct {
 
     /// Create a new graph
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-011; FEATURE="Graph Creation"; ASPECT=Graph; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-011; FEATURE="Graph Creation"; ASPECT=Graph; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn createGraph(self: *SchemaManager, graph_name: []const u8) !void {
         self.db_catalog.rwlock.lock();
         defer self.db_catalog.rwlock.unlock();
@@ -136,7 +136,7 @@ pub const SchemaManager = struct {
 
     /// Check if graph exists
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-012; FEATURE="Graph Existence Check"; ASPECT=Graph; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-012; FEATURE="Graph Existence Check"; ASPECT=Graph; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn graphExists(self: *SchemaManager, graph_name: []const u8) bool {
         self.db_catalog.rwlock.lockShared();
         defer self.db_catalog.rwlock.unlockShared();
@@ -146,7 +146,7 @@ pub const SchemaManager = struct {
 
     /// Create an index
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-013; FEATURE="Index Creation"; ASPECT=Index; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-013; FEATURE="Index Creation"; ASPECT=Index; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn createIndex(self: *SchemaManager, index_info: IndexInfo) !void {
         self.db_catalog.rwlock.lock();
         defer self.db_catalog.rwlock.unlock();
@@ -157,7 +157,7 @@ pub const SchemaManager = struct {
 
     /// Get index information
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-014; FEATURE="Index Retrieval"; ASPECT=Index; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-014; FEATURE="Index Retrieval"; ASPECT=Index; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn getIndex(self: *SchemaManager, label: []const u8, index_name: []const u8) !?IndexInfo {
         self.db_catalog.rwlock.lockShared();
         defer self.db_catalog.rwlock.unlockShared();
@@ -171,7 +171,7 @@ pub const SchemaManager = struct {
 
     /// Register a type with encryption metadata
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-015; FEATURE="FLE Type Registration"; ASPECT=Types; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-015; FEATURE="FLE Type Registration"; ASPECT=Types; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn registerEncryptedType(
         self: *SchemaManager,
         type_name: []const u8,
@@ -182,7 +182,7 @@ pub const SchemaManager = struct {
 
     /// Get encryption metadata for a type
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-016; FEATURE="FLE Metadata Retrieval"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-016; FEATURE="FLE Metadata Retrieval"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn getEncryptionMetadata(self: *SchemaManager, type_name: []const u8) ?*const TypeMetadata {
         return self.fle_catalog.getType(type_name);
     }
@@ -193,21 +193,21 @@ pub const SchemaManager = struct {
 
     /// Add a constraint
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-017; FEATURE="Constraint Addition"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-017; FEATURE="Constraint Addition"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn addConstraint(self: *SchemaManager, constraint: Constraint) !void {
         try self.constraint_mgr.addConstraint(constraint);
     }
 
     /// Get constraints for a label
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-018; FEATURE="Constraint Retrieval"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-018; FEATURE="Constraint Retrieval"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn getConstraintsForLabel(self: *SchemaManager, label: []const u8) []const Constraint {
         return self.constraint_mgr.getConstraintsForLabel(label);
     }
 
     /// Validate data against constraints
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-019; FEATURE="Constraint Validation"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-019; FEATURE="Constraint Validation"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn validateConstraints(
         self: *SchemaManager,
         label: []const u8,
@@ -222,7 +222,7 @@ pub const SchemaManager = struct {
 
     /// Get scoped index key (label:index_name)
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-020; FEATURE="Scoped Index Key"; ASPECT=Index; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-020; FEATURE="Scoped Index Key"; ASPECT=Index; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn getScopedIndexKey(
         self: *SchemaManager,
         label: []const u8,
@@ -233,7 +233,7 @@ pub const SchemaManager = struct {
 
     /// Persist all schema state to disk
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-021; FEATURE="Schema Persistence"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-021; FEATURE="Schema Persistence"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn saveAll(self: *SchemaManager) !void {
         self.db_catalog.rwlock.lock();
         defer self.db_catalog.rwlock.unlock();
@@ -245,7 +245,7 @@ pub const SchemaManager = struct {
 
     /// Reload schema state from disk
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-022; FEATURE="Schema Reload"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-022; FEATURE="Schema Reload"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn reload(self: *SchemaManager) !void {
         self.db_catalog.rwlock.lock();
         defer self.db_catalog.rwlock.unlock();
@@ -262,7 +262,7 @@ pub const SchemaManager = struct {
 ///
 /// This is the recommended way to initialize schema management for the database.
 ///
-/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-023; FEATURE="Schema Manager Factory"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-023; FEATURE="Schema Manager Factory"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
 pub fn createSchemaManager(allocator: std.mem.Allocator, data_dir: []const u8) !SchemaManager {
     return SchemaManager.init(allocator, data_dir);
 }
@@ -272,5 +272,5 @@ pub fn createSchemaManager(allocator: std.mem.Allocator, data_dir: []const u8) !
 // ============================================================================
 
 /// Generate scoped index key (utility function)
-/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-024; FEATURE="Utility Re-export"; ASPECT=Core; STATUS=IMPL; OWNER=core; UPDATED=2026-01-17
+/// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-024; FEATURE="Utility Re-export"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
 pub const getScopedIndexKey = catalog.getScopedIndexKey;

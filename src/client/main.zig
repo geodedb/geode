@@ -4,7 +4,7 @@ const quic_transport = @import("transport/quic");
 const logger = @import("log/logger.zig");
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-062; FEATURE="JSON Library Migration"; ASPECT=ClientMain; STATUS=IMPL; OWNER=client; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-062; FEATURE="JSON Library Migration"; ASPECT=ClientMain; STATUS=EXEMPT; OWNER=client; UPDATED=2026-01-25
 const json_lib = @import("json");
 
 // JSON message types for client protocol

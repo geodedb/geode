@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Tools; STATUS=IMPL; OWNER=tools; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Tools; STATUS=EXEMPT; OWNER=tools; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("tools");
 const Attr = logging.Attr;

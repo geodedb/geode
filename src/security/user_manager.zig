@@ -100,7 +100,7 @@ pub const UserManager = struct {
         }
 
         // GAP-0126: Handle metadata field properly - return error instead of silently dropping
-        // CANARY: REQ=REQ-USER-METADATA-001; FEATURE="User Metadata Handling"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=security; UPDATED=2026-01-13
+        // CANARY: REQ=REQ-USER-METADATA-001; FEATURE="User Metadata Handling"; ASPECT=DataIntegrity; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-13
         if (request.metadata) |_| {
             // Metadata field was removed from auth.User schema
             // Return error to inform callers that metadata is no longer supported

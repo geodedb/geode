@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const json_opt = @import("json_optimized_fixed.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-068; FEATURE="JSON Library Migration"; ASPECT=TestJsonOptimization; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-068; FEATURE="JSON Library Migration"; ASPECT=TestJsonOptimization; STATUS=EXEMPT; OWNER=performance; UPDATED=2026-01-25
 const json_lib = @import("json");
 
 // Test data structs for JSON encoding

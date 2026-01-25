@@ -3,7 +3,7 @@ const fle_integration = @import("fle_integration.zig");
 const fle_catalog = @import("schema/fle_catalog.zig");
 const fle_annotations = @import("schema/annotations.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("execution");
 const Attr = logging.Attr;

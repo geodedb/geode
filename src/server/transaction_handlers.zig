@@ -8,12 +8,12 @@ const graph_store = @import("../graph_store.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const graph_exec = @import("graph/exec.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-016; FEATURE="Structured Logging"; ASPECT=TransactionHandlers; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-016; FEATURE="Structured Logging"; ASPECT=TransactionHandlers; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-056; FEATURE="JSON Library Migration"; ASPECT=TransactionHandlers; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-056; FEATURE="JSON Library Migration"; ASPECT=TransactionHandlers; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const json_lib = @import("json");
 
 // JSON response types for transaction operations

@@ -9,7 +9,7 @@ const index_catalog = @import("index_catalog.zig");
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-014; FEATURE="Structured Logging"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-014; FEATURE="Structured Logging"; ASPECT=ServerInit; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;

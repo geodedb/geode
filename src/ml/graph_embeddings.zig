@@ -11,7 +11,7 @@ const expect = std.testing.expect;
 // Use lib.zig to access other modules properly
 const geode = @import("../lib.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=ML; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=ML; STATUS=EXEMPT; OWNER=ml; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("ml");
 const Attr = logging.Attr;

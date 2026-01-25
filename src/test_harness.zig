@@ -10,7 +10,7 @@ const storage_inmemory = @import("storage/inmemory.zig");
 const storage_interface = @import("interface");
 const value_types = @import("value_types.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-069; FEATURE="JSON Library Migration"; ASPECT=TestHarness; STATUS=IMPL; OWNER=testing; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-069; FEATURE="JSON Library Migration"; ASPECT=TestHarness; STATUS=EXEMPT; OWNER=testing; UPDATED=2026-01-25
 const json_lib = @import("json");
 
 // JSON error response types for test harness

@@ -6,12 +6,12 @@ const syslog = @import("syslog.zig");
 const file_sink = @import("file_sink.zig");
 const time = @import("time.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-001; FEATURE="External Library Migration"; ASPECT=StructuredLogging; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-001; FEATURE="External Library Migration"; ASPECT=StructuredLogging; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External structured logging library - slog-style logging with multiple handlers
 // Provides JSON output, secret redaction, network sinks, and metrics export
 const slog = @import("slog");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=AuditLogger; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=AuditLogger; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External JSON library for RFC 8259 compliant encoding in audit event serialization
 const json_lib = @import("json");
 

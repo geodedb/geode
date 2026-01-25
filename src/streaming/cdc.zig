@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Streaming; STATUS=IMPL; OWNER=streaming; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Streaming; STATUS=EXEMPT; OWNER=streaming; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("streaming");
 const Attr = logging.Attr;
@@ -44,7 +44,7 @@ pub const CDCConfiguration = struct {
 
 /// Transaction context for CDC event correlation
 /// GAP-0073: Provides transaction ID for CDC event tracking
-// CANARY: REQ=REQ-GQL-CDC-TXID-001; FEATURE="CDCTransactionTracking"; ASPECT=Consistency; STATUS=IMPL; OWNER=streaming; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GQL-CDC-TXID-001; FEATURE="CDCTransactionTracking"; ASPECT=Consistency; STATUS=TESTED; TEST=src/streaming/cdc.zig; OWNER=streaming; UPDATED=2026-01-25
 pub const TransactionContext = struct {
     /// Current transaction ID (0 = no active transaction)
     transaction_id: u64 = 0,

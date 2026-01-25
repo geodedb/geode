@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan_loader.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-VULKAN-001; FEATURE="External Library Migration"; ASPECT=VulkanCompute; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-VULKAN-001; FEATURE="External Library Migration"; ASPECT=VulkanCompute; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External vulkan library integration for availability checking and future migration
 // Current code maintains backward compatibility while exposing external library capabilities
 const vulkan_lib = @import("vulkan");

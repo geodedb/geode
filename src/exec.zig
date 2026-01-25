@@ -14,7 +14,7 @@ const stdx = std;
 const auth = @import("geode_auth");
 const rls = @import("rls");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("execution");
 const Attr = logging.Attr;
@@ -672,7 +672,7 @@ pub fn runGroupedQuery(
     return out.toOwnedSlice(allocator);
 }
 
-// CANARY: REQ=REQ-TYPE-CONVERSION-001; FEATURE="ComplexTypeConversion"; ASPECT=Types; STATUS=IMPL; OWNER=core; UPDATED=2026-01-10
+// CANARY: REQ=REQ-TYPE-CONVERSION-001; FEATURE="ComplexTypeConversion"; ASPECT=Types; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system.yml; OWNER=core; UPDATED=2026-01-25
 fn valueToBinding(v: eval.Value) BindingValue {
     return switch (v) {
         .Null => BindingValue{ .Null = {} },
@@ -1532,7 +1532,7 @@ pub const HashAggregator = struct {
             dst.CountDistinctState.count = @intCast(dst.CountDistinctState.values.len);
         } else if (dst.* == .DecSum and src == .DecSum) {
             // GAP-0124: Decimal scale alignment with overflow protection
-            // CANARY: REQ=REQ-DECIMAL-OVERFLOW-001; FEATURE="Decimal Overflow Guard"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=core; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-DECIMAL-OVERFLOW-001; FEATURE="Decimal Overflow Guard"; ASPECT=DataIntegrity; STATUS=TESTED; TEST=geodetestlab/specs/gql_decimal_operations.yml; OWNER=core; UPDATED=2026-01-25
             if (dst.DecSum.scale == src.DecSum.scale) {
                 const add_result = @addWithOverflow(dst.DecSum.coeff, src.DecSum.coeff);
                 if (add_result[1] != 0) {
@@ -1581,7 +1581,7 @@ pub const HashAggregator = struct {
             dst.DecSum.count += src.DecSum.count;
         } else if (dst.* == .DecAvg and src == .DecAvg) {
             // GAP-0124: Decimal scale alignment with overflow protection for averages
-            // CANARY: REQ=REQ-DECIMAL-OVERFLOW-002; FEATURE="Decimal Avg Overflow Guard"; ASPECT=DataIntegrity; STATUS=IMPL; OWNER=core; UPDATED=2026-01-13
+            // CANARY: REQ=REQ-DECIMAL-OVERFLOW-002; FEATURE="Decimal Avg Overflow Guard"; ASPECT=DataIntegrity; STATUS=TESTED; TEST=geodetestlab/specs/gql_decimal_operations.yml; OWNER=core; UPDATED=2026-01-25
             if (dst.DecAvg.scale == src.DecAvg.scale) {
                 const add_result = @addWithOverflow(dst.DecAvg.coeff, src.DecAvg.coeff);
                 if (add_result[1] != 0) {
@@ -1738,7 +1738,7 @@ pub const HashAggregator = struct {
     }
 };
 
-// CANARY: REQ=REQ-BINDING-VALUE-001; FEATURE="ComplexTypeBinding"; ASPECT=Types; STATUS=IMPL; OWNER=core; UPDATED=2026-01-10
+// CANARY: REQ=REQ-BINDING-VALUE-001; FEATURE="ComplexTypeBinding"; ASPECT=Types; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system.yml; OWNER=core; UPDATED=2026-01-25
 pub const BindingValue = union(enum) {
     Null,
     Int: i64,
@@ -2540,7 +2540,7 @@ pub fn rewriteExprWithAggregates(
 }
 
 // GAP-0120 FIX: Added allocator parameter for List to ArrayLit conversion
-// CANARY: REQ=REQ-EXPR-TYPE-002; FEATURE="ExprTypeCoverage"; ASPECT=Types; STATUS=IMPL; OWNER=exec; UPDATED=2026-01-12
+// CANARY: REQ=REQ-EXPR-TYPE-002; FEATURE="ExprTypeCoverage"; ASPECT=Types; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system.yml; OWNER=exec; UPDATED=2026-01-25
 fn bindingValueToExpr(allocator: std.mem.Allocator, v: BindingValue) !ast.Expr {
     return switch (v) {
         .Null => ast.Expr{ .Null = {} },

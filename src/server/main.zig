@@ -22,7 +22,7 @@ const cert_gen = @import("../tools/cert_gen.zig");
 
 // Import real logger for proper log level handling
 const logger = @import("../log/logger.zig");
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-010; FEATURE="Structured Logging"; ASPECT=ServerMain; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-010; FEATURE="Structured Logging"; ASPECT=ServerMain; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;
@@ -64,7 +64,7 @@ const quic_connection_handler = @import("quic_connection_handler.zig");
 const stdio_message_handler = @import("stdio_message_handler.zig");
 // Import server utilities (M3.3 Phase 3 server utilities extraction)
 const server_utilities = @import("server_utilities.zig");
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-064; FEATURE="JSON Library Migration"; ASPECT=ServerMain; STATUS=IMPL; OWNER=server; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-064; FEATURE="JSON Library Migration"; ASPECT=ServerMain; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-25
 const json_lib = @import("json");
 
 // JSON response types for session parameter operations

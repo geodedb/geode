@@ -1113,7 +1113,7 @@ pub const Parser = struct {
                     self.advance();
 
                     // GAP-0125: Parse imported variables if WITH clause appears at start of CALL block
-                    // CANARY: REQ=REQ-SUBQUERY-IMPORT-001; FEATURE="Subquery Imported Variables"; ASPECT=GQLCompliance; STATUS=IMPL; OWNER=parser; UPDATED=2026-01-13
+                    // CANARY: REQ=REQ-SUBQUERY-IMPORT-001; FEATURE="Subquery Imported Variables"; ASPECT=GQLCompliance; STATUS=TESTED; TEST=geodetestlab/specs/gql_subquery_comprehensive.yml; OWNER=parser; UPDATED=2026-01-25
                     var imported_vars: ?[][]const u8 = null;
                     if (self.cur.kind == .WITH) {
                         // Check if this is a WITH for imported variables (single variable references)

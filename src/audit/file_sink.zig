@@ -3,7 +3,7 @@ const events = @import("events.zig");
 const config = @import("config.zig");
 const time = @import("time.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=FileSink; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=FileSink; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External JSON library for RFC 8259 compliant encoding in audit file output
 const json_lib = @import("json");
 

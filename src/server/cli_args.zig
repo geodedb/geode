@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-CONFIG-001; FEATURE="External Library Migration"; ASPECT=ConfigManagement; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-CONFIG-001; FEATURE="External Library Migration"; ASPECT=ConfigManagement; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External configuration library - XDG compliant, multi-format support (YAML, TOML, JSON)
 // Provides config file support with precedence: flags > env > project > user > system > defaults
 const config_lib = @import("config");

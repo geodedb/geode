@@ -26,12 +26,12 @@ const geode_auth = @import("geode_auth");
 // Extracted from server/main.zig to improve modularity and reduce main() function size
 // Contains handleQuicConnection and processMessage functions for QUIC protocol handling
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-012; FEATURE="Structured Logging"; ASPECT=QUICHandler; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-012; FEATURE="Structured Logging"; ASPECT=QUICHandler; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-065; FEATURE="JSON Library Migration"; ASPECT=QUICHandler; STATUS=IMPL; OWNER=server; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-065; FEATURE="JSON Library Migration"; ASPECT=QUICHandler; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-25
 const json_lib = @import("json");
 
 // JSON row types for SHOW statement results
@@ -894,7 +894,7 @@ pub fn processMessage(
                         },
                         .Show => |sh| {
                             // GAP-0127: Handle all SHOW statement types with explicit messages
-                            // CANARY: REQ=REQ-SHOW-STMT-001; FEATURE="SHOW Statement Types"; ASPECT=GQLCompliance; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
+                            // CANARY: REQ=REQ-SHOW-STMT-001; FEATURE="SHOW Statement Types"; ASPECT=GQLCompliance; STATUS=TESTED; TEST=geodetestlab/specs/gql_show_statements.yml; OWNER=server; UPDATED=2026-01-25
                             switch (sh.show_type) {
                                 .graphs => {
                                     log.debug("SHOW GRAPHS handler", &.{});

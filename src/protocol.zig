@@ -186,7 +186,7 @@ pub const Status = struct {
     status_subclass: ?[]const u8 = null,
 };
 
-// CANARY: REQ=REQ-PROTOCOL-TYPES-001; FEATURE="Protocol Type Definitions"; ASPECT=Protocol; STATUS=IMPL; OWNER=protocol; UPDATED=2026-01-10
+// CANARY: REQ=REQ-PROTOCOL-TYPES-001; FEATURE="Protocol Type Definitions"; ASPECT=Protocol; STATUS=TESTED; TEST=geodetestlab/specs/gql_protocol_compliance.yml; OWNER=protocol; UPDATED=2026-01-25
 // Type definitions for distributed query coordination (GAP-0053)
 pub const BindingValue = union(enum) {
     Null,
@@ -221,7 +221,7 @@ pub const Value = union(enum) {
 };
 
 /// Compare two BindingValues with NULL handling according to NULLS FIRST/LAST policy
-// CANARY: REQ=REQ-DIST-CMP-001; FEATURE="Distributed Value Comparison"; ASPECT=Distributed; STATUS=IMPL; OWNER=protocol; UPDATED=2026-01-10
+// CANARY: REQ=REQ-DIST-CMP-001; FEATURE="Distributed Value Comparison"; ASPECT=Distributed; STATUS=TESTED; TEST=geodetestlab/specs/gql_distributed_queries.yml; OWNER=protocol; UPDATED=2026-01-25
 pub fn compareBindingValues(a: BindingValue, b: BindingValue, nulls_first: bool) std.math.Order {
     // Handle NULL cases first according to policy
     const a_is_null = (a == .Null);
@@ -290,7 +290,7 @@ pub fn compareBindingValues(a: BindingValue, b: BindingValue, nulls_first: bool)
 }
 
 /// Compare two binding rows by specified column indices with order directions
-// CANARY: REQ=REQ-DIST-ROW-CMP-001; FEATURE="Distributed Row Comparison"; ASPECT=Distributed; STATUS=IMPL; OWNER=protocol; UPDATED=2026-01-10
+// CANARY: REQ=REQ-DIST-ROW-CMP-001; FEATURE="Distributed Row Comparison"; ASPECT=Distributed; STATUS=TESTED; TEST=geodetestlab/specs/gql_distributed_queries.yml; OWNER=protocol; UPDATED=2026-01-25
 pub fn compareBindingRows(
     a: BindingRow,
     b: BindingRow,

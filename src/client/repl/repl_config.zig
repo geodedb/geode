@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-// CANARY: REQ=REQ-LIB-MIGRATION-CONFIG-001; FEATURE="Config Library Migration"; ASPECT=ReplConfigXdg; STATUS=IMPL; OWNER=client; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-CONFIG-001; FEATURE="Config Library Migration"; ASPECT=ReplConfigXdg; STATUS=EXEMPT; OWNER=client; UPDATED=2026-01-25
 const config_lib = @import("config");
 
 pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {

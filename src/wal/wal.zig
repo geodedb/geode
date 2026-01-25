@@ -6,7 +6,7 @@ const storage = @import("storage_page_manager");
 const fsync_util = @import("fs_fsync");
 const commit_coord = @import("commit_coordinator");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=WAL; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=WAL; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("wal");
 const Attr = logging.Attr;

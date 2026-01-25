@@ -1,5 +1,5 @@
 // Test suite for ABAC enforcement wiring in server execution
-// CANARY: REQ=REQ-ABAC-WIRE-TEST-001; FEATURE="ABAC Enforcement Tests"; ASPECT=Testing; STATUS=IMPL; OWNER=server; UPDATED=2026-01-17
+// CANARY: REQ=REQ-ABAC-WIRE-TEST-001; FEATURE="ABAC Enforcement Tests"; ASPECT=Testing; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=server; UPDATED=2026-01-25
 //         ASPECT=TESTING; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Unit tests for SecurityManager initialization and ABAC enforcement
 

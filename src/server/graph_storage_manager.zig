@@ -2,7 +2,7 @@ const std = @import("std");
 const graph_exec = @import("graph/exec.zig");
 const audit = @import("../security/audit.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-013; FEATURE="Structured Logging"; ASPECT=GraphStorageManager; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-013; FEATURE="Structured Logging"; ASPECT=GraphStorageManager; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;

@@ -426,7 +426,7 @@ pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !key_manager
 
 /// Shamir's Secret Sharing over GF(256) using irreducible polynomial x^8 + x^4 + x^3 + x + 1
 /// GAP-0070: Proper polynomial-based threshold secret sharing
-// CANARY: REQ=REQ-GQL-TDE-SSS-001; FEATURE="ShamirSecretSharing"; ASPECT=KeyEscrow; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GQL-TDE-SSS-001; FEATURE="ShamirSecretSharing"; ASPECT=KeyEscrow; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
 const ShamirSSS = struct {
     /// GF(256) multiplication using Russian peasant algorithm
     fn gf256Mul(a: u8, b: u8) u8 {

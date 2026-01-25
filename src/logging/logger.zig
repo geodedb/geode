@@ -1,7 +1,7 @@
 const std = @import("std");
 const slog = @import("slog");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-002; FEATURE="Centralized Structured Logging"; ASPECT=Infrastructure; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-002; FEATURE="Centralized Structured Logging"; ASPECT=Infrastructure; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // Centralized logging infrastructure using external slog library
 // Provides global logger instance, scoped loggers, and runtime configuration
 

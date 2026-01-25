@@ -622,7 +622,7 @@ fn evaluateExpressionInBinding(
         .Bool => |b| .{ .Value = .{ .Bool = b } },
         .Null => .Null,
         // GAP-0120 FIX: Add support for more expression types
-        // CANARY: REQ=REQ-EXPR-TYPE-003; FEATURE="ExprTypeCoverage"; ASPECT=Types; STATUS=IMPL; OWNER=exec; UPDATED=2026-01-12
+        // CANARY: REQ=REQ-EXPR-TYPE-003; FEATURE="ExprTypeCoverage"; ASPECT=Types; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system.yml; OWNER=exec; UPDATED=2026-01-25
         .Decimal => |d| .{ .Value = .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } },
         .DoubleLit => |f| blk_double: {
             // Convert f64 to Decimal for PropertyValue (PropertyValue doesn't have Float)

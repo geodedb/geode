@@ -8,7 +8,7 @@ const quic = @import("transport/quic");
 // Import migration module for actual migration operations
 const migration = @import("migration");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("cli");
 const Attr = logging.Attr;

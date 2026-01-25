@@ -3827,7 +3827,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // PERF: PHASE5_ENV_ALLOC_GROUPBY - Pre-allocate environment arrays for GROUP BY loop
-            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-17
+            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=ENV_REUSE; STATUS=BENCHED; BENCH=docs/benchmarks/phase5_allocation.md; OWNER=performance; UPDATED=2026-01-25
             // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
             var env_names_buf: [][]const u8 = &.{};
             var env_values_buf: []Value = &.{};
@@ -4386,7 +4386,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // PERF: PHASE5_ENV_ALLOC_AGGREGATE - Pre-allocate environment arrays for aggregation loop
-            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=ENV_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-17
+            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=ENV_REUSE; STATUS=BENCHED; BENCH=docs/benchmarks/phase5_allocation.md; OWNER=performance; UPDATED=2026-01-25
             // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
             var env_names_buf: [][]const u8 = &.{};
             var env_values_buf: []Value = &.{};

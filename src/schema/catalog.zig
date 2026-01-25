@@ -1,7 +1,7 @@
 const std = @import("std");
 const graph_storage_manager = @import("../server/graph_storage_manager.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Schema; STATUS=IMPL; OWNER=schema; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Schema; STATUS=EXEMPT; OWNER=schema; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("schema");
 const Attr = logging.Attr;

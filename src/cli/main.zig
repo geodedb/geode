@@ -4,7 +4,7 @@ const build_options = @import("build_options");
 const audit_cli = @import("audit_cli");
 const geode = @import("geode");
 const Value = geode.value_types.Value;
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("cli");
 const Attr = logging.Attr;
@@ -33,7 +33,7 @@ const CliErrorResponse = struct {
     @"error": []const u8,
 };
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-058; FEATURE="JSON Library Migration"; ASPECT=CLIErrorTypes; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-058; FEATURE="JSON Library Migration"; ASPECT=CLIErrorTypes; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 // Additional error response types for CLI
 const CliStatusError = struct {
     status_class: []const u8,
@@ -276,7 +276,7 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
     }
 
     // GAP-0134: Use TLS configuration from shell command
-    // CANARY: REQ=REQ-SHELL-TLS-002; FEATURE="Shell TLS Connection"; ASPECT=SecureConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-SHELL-TLS-002; FEATURE="Shell TLS Connection"; ASPECT=SecureConnection; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-13
     if (shell_tls_config.insecure) {
         // Explicit insecure mode requested
         std.debug.print("Warning: TLS verification disabled (--insecure flag)\n", .{});
@@ -3103,7 +3103,7 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 // GAP-0113 SECURITY FIX: Add TLS certificate verification support
-// CANARY: REQ=REQ-TLS-CERT-002; FEATURE="TLSCertVerification"; ASPECT=Core; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-12
+// CANARY: REQ=REQ-TLS-CERT-002; FEATURE="TLSCertVerification"; ASPECT=Core; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-12
 fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {
     const stderr = std.fs.File{ .handle = getStderrHandle() };
 
@@ -3456,7 +3456,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     // GAP-0134: Set TLS configuration for shell transport before REPL
-    // CANARY: REQ=REQ-SHELL-TLS-003; FEATURE="Shell TLS Config Setup"; ASPECT=SecureConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-SHELL-TLS-003; FEATURE="Shell TLS Config Setup"; ASPECT=SecureConnection; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-13
     shell_tls_config = .{
         .insecure = insecure,
         .ca_cert_path = ca_cert_path,

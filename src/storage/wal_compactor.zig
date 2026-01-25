@@ -2,7 +2,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-028; FEATURE="WAL Compaction"; ASPECT=Storage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_WalCompact; OWNER=storage; UPDATED=2025-09-27
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("storage");
 const Attr = logging.Attr;

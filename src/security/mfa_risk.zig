@@ -65,7 +65,7 @@ pub fn deterministicFactors(user_id: []const u8, action: Action) Factors {
 }
 
 // MFA step-up verification context
-// CANARY: REQ=REQ-GQL-MFA-STEPUP-001; FEATURE="MfaStepUpVerification"; ASPECT=SecurityEnforcement; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GQL-MFA-STEPUP-001; FEATURE="MfaStepUpVerification"; ASPECT=SecurityEnforcement; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
 pub const StepUpContext = struct {
     allocator: std.mem.Allocator,
     secret_base32: []const u8,

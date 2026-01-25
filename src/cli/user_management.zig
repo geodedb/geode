@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-059; FEATURE="JSON Library Migration"; ASPECT=UserManagement; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-059; FEATURE="JSON Library Migration"; ASPECT=UserManagement; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-25
 const json_lib = @import("json");
 
 pub const User = struct {

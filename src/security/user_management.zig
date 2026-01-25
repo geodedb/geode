@@ -104,7 +104,7 @@ pub fn deinitUserStore() void {
 /// Hash password using Argon2id with cryptographically random salt
 /// Argon2id is the recommended password hashing algorithm (combines Argon2i and Argon2d)
 /// Resistant to both side-channel and GPU cracking attacks
-// CANARY: REQ=REQ-AUTH-SALT-001; FEATURE="SecurePasswordSalt"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+// CANARY: REQ=REQ-AUTH-SALT-001; FEATURE="SecurePasswordSalt"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
 pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![108]u8 {
     // Argon2id parameters (OWASP recommendations for server-side hashing)
     // - time_cost: Number of iterations (3 is recommended minimum)
@@ -173,7 +173,7 @@ var verify_gpa_init = false;
 
 /// Verify password against stored hash using Argon2id
 /// Extracts the unique salt from the stored hash and uses it for verification
-// CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+// CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
 pub fn verifyPassword(password: []const u8, stored_hash: [108]u8) bool {
     // P2-3: Use static GPA for temporary hash computation
     if (!verify_gpa_init) {

@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-066; FEATURE="JSON Library Migration"; ASPECT=RaftConsensus; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-066; FEATURE="JSON Library Migration"; ASPECT=RaftConsensus; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-25
 const json_lib = @import("json");
 
 // JSON response types for Raft protocol

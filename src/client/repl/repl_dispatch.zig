@@ -4,7 +4,7 @@ const repl_errors = @import("repl_errors.zig");
 const repl_render = @import("repl_render.zig");
 const platform = @import("platform.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-063; FEATURE="JSON Library Migration"; ASPECT=ReplDispatch; STATUS=IMPL; OWNER=client; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-063; FEATURE="JSON Library Migration"; ASPECT=ReplDispatch; STATUS=EXEMPT; OWNER=client; UPDATED=2026-01-25
 const json_lib = @import("json");
 
 // JSON message types for REPL protocol

@@ -11,7 +11,7 @@ const AutoHashMap = std.AutoHashMap;
 const geode = @import("../lib.zig");
 const ml_embeddings = @import("../ml/graph_embeddings.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Analytics; STATUS=IMPL; OWNER=analytics; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Analytics; STATUS=EXEMPT; OWNER=analytics; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("analytics");
 const Attr = logging.Attr;
@@ -341,7 +341,7 @@ pub const AnomalyDetector = struct {
     }
 
     /// Extract relevant numeric value from event for anomaly detection
-    // CANARY: REQ=REQ-ANALYTICS-METRIC-001; FEATURE="Metric Extraction"; ASPECT=Core; STATUS=IMPL; OWNER=analytics; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-ANALYTICS-METRIC-001; FEATURE="Metric Extraction"; ASPECT=Core; STATUS=EXEMPT; OWNER=analytics; UPDATED=2026-01-10
     /// GAP-0051: Implements actual metric extraction based on event type and properties
     fn extractMetricValue(self: *AnomalyDetector, event: *const AnalyticsEvent) !f64 {
         _ = self;

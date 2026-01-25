@@ -642,3 +642,200 @@ pub fn testSimulateDrift() void {
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PlanDryRunIntegrity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_PlanDryRunIntegrity; OWNER=migration; UPDATED=2026-01-11
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=CliParityStatusCommand; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_CliParityStatusCommand; OWNER=migration; UPDATED=2026-01-11
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DriftPolicyOutcomeStrict; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict; OWNER=migration; UPDATED=2026-01-11
+
+// ==================== Unit Tests (GAP-0233) ====================
+// CANARY: REQ=REQ-GAP-0233; FEATURE="MigrationUnitTests"; ASPECT=RegressionTest; STATUS=TESTED; TEST=test_migration_parseVersion; OWNER=migration; UPDATED=2026-01-25
+
+test "parseVersion extracts leading digits from migration name" {
+    try std.testing.expectEqual(@as(?i64, 1), parseVersion("001_init.gql"));
+    try std.testing.expectEqual(@as(?i64, 42), parseVersion("42_schema.gql"));
+    try std.testing.expectEqual(@as(?i64, 123456), parseVersion("123456_large.gql"));
+    try std.testing.expectEqual(@as(?i64, null), parseVersion("no_digits.gql"));
+    try std.testing.expectEqual(@as(?i64, null), parseVersion(""));
+}
+
+test "checksumPrefix returns 7-char hex prefix" {
+    const prefix = checksumPrefix("test content");
+    try std.testing.expectEqual(@as(usize, 7), prefix.len);
+    // Verify it's valid hex
+    for (prefix) |c| {
+        try std.testing.expect((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f'));
+    }
+}
+
+test "computeFingerprint is deterministic" {
+    const rows = [_]StatusRow{
+        .{ .version = 1, .name = "001_init.gql", .applied = true, .checksum_prefix = "abc1234".* },
+        .{ .version = 2, .name = "002_add.gql", .applied = true, .checksum_prefix = "def5678".* },
+    };
+    const fp1 = computeFingerprint(&rows);
+    const fp2 = computeFingerprint(&rows);
+    try std.testing.expectEqual(fp1, fp2);
+}
+
+test "computeFingerprint ignores unapplied rows" {
+    const applied_rows = [_]StatusRow{
+        .{ .version = 1, .name = "001_init.gql", .applied = true, .checksum_prefix = "abc1234".* },
+    };
+    const mixed_rows = [_]StatusRow{
+        .{ .version = 1, .name = "001_init.gql", .applied = true, .checksum_prefix = "abc1234".* },
+        .{ .version = 2, .name = "002_add.gql", .applied = false, .checksum_prefix = "def5678".* },
+    };
+    try std.testing.expectEqual(computeFingerprint(&applied_rows), computeFingerprint(&mixed_rows));
+}
+
+test "versionExists checks applied status" {
+    const rows = [_]StatusRow{
+        .{ .version = 1, .name = "001_init.gql", .applied = true, .checksum_prefix = "abc1234".* },
+        .{ .version = 2, .name = "002_add.gql", .applied = false, .checksum_prefix = "def5678".* },
+    };
+    try std.testing.expect(versionExists(&rows, 1));
+    try std.testing.expect(!versionExists(&rows, 2)); // not applied
+    try std.testing.expect(!versionExists(&rows, 3)); // doesn't exist
+}
+
+test "QueryExecutor can execute with context" {
+    var called = false;
+    const executor = QueryExecutor{
+        .context = @ptrCast(&called),
+        .execFn = struct {
+            fn exec(ctx: ?*anyopaque, _: []const u8) anyerror!void {
+                const ptr: *bool = @ptrCast(@alignCast(ctx.?));
+                ptr.* = true;
+            }
+        }.exec,
+    };
+    try executor.execFn(executor.context, "test script");
+    try std.testing.expect(called);
+}
+
+test "PolicyMode defaults to lenient" {
+    try std.testing.expectEqual(PolicyMode.lenient, policy_mode);
+}
+
+test "enforcePolicy sets strict mode" {
+    // Reset to known state
+    policy_mode = .lenient;
+    try enforcePolicy("STRICT");
+    try std.testing.expect(isStrictPolicy());
+    // Restore
+    policy_mode = .lenient;
+}
+
+test "enforcePolicy sets lenient mode" {
+    policy_mode = .strict;
+    try enforcePolicy("LENIENT");
+    try std.testing.expect(!isStrictPolicy());
+}
+
+test "enforcePolicy rejects invalid modes" {
+    const result = enforcePolicy("INVALID");
+    try std.testing.expectError(error.NotImplemented, result);
+}
+
+test "latestApplied returns null for empty rows" {
+    const rows = [_]StatusRow{};
+    try std.testing.expectEqual(@as(?StatusRow, null), latestApplied(&rows));
+}
+
+test "latestApplied returns highest applied version" {
+    const rows = [_]StatusRow{
+        .{ .version = 1, .name = "001_init.gql", .applied = true, .checksum_prefix = "abc1234".* },
+        .{ .version = 3, .name = "003_add.gql", .applied = true, .checksum_prefix = "def5678".* },
+        .{ .version = 2, .name = "002_mod.gql", .applied = true, .checksum_prefix = "ghi9012".* },
+    };
+    const latest = latestApplied(&rows).?;
+    try std.testing.expectEqual(@as(i64, 3), latest.version);
+}
+
+test "latestApplied skips unapplied rows" {
+    const rows = [_]StatusRow{
+        .{ .version = 1, .name = "001_init.gql", .applied = true, .checksum_prefix = "abc1234".* },
+        .{ .version = 5, .name = "005_big.gql", .applied = false, .checksum_prefix = "def5678".* },
+        .{ .version = 2, .name = "002_mod.gql", .applied = true, .checksum_prefix = "ghi9012".* },
+    };
+    const latest = latestApplied(&rows).?;
+    try std.testing.expectEqual(@as(i64, 2), latest.version);
+}
+
+test "checksumPrefix produces different hashes for different inputs" {
+    const p1 = checksumPrefix("content A");
+    const p2 = checksumPrefix("content B");
+    try std.testing.expect(!std.mem.eql(u8, &p1, &p2));
+}
+
+test "checksumPrefix handles empty input" {
+    const prefix = checksumPrefix("");
+    try std.testing.expectEqual(@as(usize, 7), prefix.len);
+}
+
+test "checksumPrefix handles binary data" {
+    const binary = [_]u8{ 0x00, 0xFF, 0x80, 0x7F };
+    const prefix = checksumPrefix(&binary);
+    try std.testing.expectEqual(@as(usize, 7), prefix.len);
+}
+
+test "parseVersion handles leading zeros" {
+    try std.testing.expectEqual(@as(?i64, 1), parseVersion("001_init.gql"));
+    try std.testing.expectEqual(@as(?i64, 12), parseVersion("012_schema.gql"));
+    try std.testing.expectEqual(@as(?i64, 100), parseVersion("100_feature.gql"));
+}
+
+test "parseVersion rejects very long numbers" {
+    // More than 17 digits should return null to prevent overflow
+    try std.testing.expectEqual(@as(?i64, null), parseVersion("123456789012345678_too_long.gql"));
+}
+
+test "StatusRow has correct defaults" {
+    const row = StatusRow{};
+    try std.testing.expectEqual(@as(i64, 0), row.version);
+    try std.testing.expectEqual(false, row.applied);
+    try std.testing.expect(std.mem.eql(u8, "0000000", &row.checksum_prefix));
+}
+
+test "MigrationConfig has sensible defaults" {
+    const cfg = MigrationConfig{};
+    try std.testing.expect(std.mem.eql(u8, "migrations", cfg.migrations_dir));
+    try std.testing.expect(std.mem.eql(u8, "migration_ledger.json", cfg.ledger_filename));
+}
+
+test "Metrics initializes to zero" {
+    const metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.applied_total);
+    try std.testing.expectEqual(@as(u64, 0), metrics.failed_total);
+    try std.testing.expectEqual(@as(u64, 0), metrics.drift_detected_total);
+    try std.testing.expectEqual(@as(u64, 0), metrics.lock_steal_attempts_total);
+}
+
+test "LockHandle has correct defaults" {
+    const handle = LockHandle{};
+    try std.testing.expectEqual(@as(u64, 0), handle.id);
+    try std.testing.expect(std.mem.eql(u8, "local", handle.owner));
+}
+
+test "MigrationPlan has empty defaults" {
+    const plan = MigrationPlan{};
+    try std.testing.expectEqual(@as(usize, 0), plan.up.len);
+    try std.testing.expectEqual(@as(usize, 0), plan.down.len);
+}
+
+test "computeFingerprint with single applied row" {
+    const rows = [_]StatusRow{
+        .{ .version = 1, .name = "001_init.gql", .applied = true, .checksum_prefix = "abc1234".* },
+    };
+    const fp = computeFingerprint(&rows);
+    // Should produce a non-zero fingerprint
+    try std.testing.expect(fp != 0);
+}
+
+test "computeFingerprint with empty rows" {
+    const rows = [_]StatusRow{};
+    const fp = computeFingerprint(&rows);
+    // Empty rows should return base FNV hash
+    try std.testing.expectEqual(@as(u64, 0xcbf29ce484222325), fp);
+}
+
+test "nowMs returns positive timestamp" {
+    const ts = nowMs();
+    try std.testing.expect(ts > 0);
+}

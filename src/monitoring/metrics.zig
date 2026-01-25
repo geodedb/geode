@@ -399,6 +399,226 @@ pub const MetricsCollector = struct {
     }
 };
 
+// ==================== Unit Tests (GAP-0236) ====================
+// CANARY: REQ=REQ-GAP-0236; FEATURE="MonitoringUnitTests"; ASPECT=Counter; STATUS=TESTED; TEST=test_counter_operations; OWNER=monitoring; UPDATED=2026-01-25
+
+test "Counter increment and get" {
+    var counter = MetricsCollector.Counter.init();
+    try std.testing.expectEqual(@as(u64, 0), counter.get());
+    counter.increment();
+    try std.testing.expectEqual(@as(u64, 1), counter.get());
+    counter.increment();
+    counter.increment();
+    try std.testing.expectEqual(@as(u64, 3), counter.get());
+}
+
+test "Counter add and reset" {
+    var counter = MetricsCollector.Counter.init();
+    counter.add(10);
+    try std.testing.expectEqual(@as(u64, 10), counter.get());
+    counter.add(5);
+    try std.testing.expectEqual(@as(u64, 15), counter.get());
+    counter.reset();
+    try std.testing.expectEqual(@as(u64, 0), counter.get());
+}
+
+test "Gauge set tracks min/max" {
+    var gauge = MetricsCollector.Gauge.init();
+    gauge.set(50);
+    try std.testing.expectEqual(@as(i64, 50), gauge.get());
+    gauge.set(100);
+    try std.testing.expectEqual(@as(i64, 100), gauge.get());
+    try std.testing.expectEqual(@as(i64, 50), gauge.getMin());
+    try std.testing.expectEqual(@as(i64, 100), gauge.getMax());
+    gauge.set(25);
+    try std.testing.expectEqual(@as(i64, 25), gauge.get());
+    try std.testing.expectEqual(@as(i64, 25), gauge.getMin());
+}
+
+test "Histogram records samples and computes mean" {
+    var hist = MetricsCollector.Histogram.init(std.testing.allocator);
+    defer hist.deinit();
+
+    try hist.record(10.0);
+    try hist.record(20.0);
+    try hist.record(30.0);
+
+    try std.testing.expectEqual(@as(u64, 3), hist.count.load(.monotonic));
+    try std.testing.expectApproxEqAbs(@as(f64, 20.0), hist.mean(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), hist.min, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), hist.max, 0.001);
+}
+
+test "Histogram clear resets all values" {
+    var hist = MetricsCollector.Histogram.init(std.testing.allocator);
+    defer hist.deinit();
+
+    try hist.record(100.0);
+    try hist.record(200.0);
+    hist.clear();
+
+    try std.testing.expectEqual(@as(u64, 0), hist.count.load(.monotonic));
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), hist.mean(), 0.001);
+}
+
+test "MetricsCollector creates and retrieves counters" {
+    var collector = MetricsCollector.init(std.testing.allocator, .{});
+    defer collector.deinit();
+
+    const c1 = try collector.counter("test_counter");
+    c1.increment();
+    const c2 = try collector.counter("test_counter");
+    try std.testing.expectEqual(@as(u64, 1), c2.get());
+}
+
+test "MetricsCollector creates and retrieves gauges" {
+    var collector = MetricsCollector.init(std.testing.allocator, .{});
+    defer collector.deinit();
+
+    const g1 = try collector.gauge("test_gauge");
+    g1.set(42);
+    const g2 = try collector.gauge("test_gauge");
+    try std.testing.expectEqual(@as(i64, 42), g2.get());
+}
+
+test "Histogram percentile calculation" {
+    var hist = MetricsCollector.Histogram.init(std.testing.allocator);
+    defer hist.deinit();
+
+    // Add 100 samples: 1, 2, 3, ..., 100
+    var i: usize = 1;
+    while (i <= 100) : (i += 1) {
+        try hist.record(@as(f64, @floatFromInt(i)));
+    }
+
+    // p50 should be around 50
+    const p50 = hist.percentile(0.5);
+    try std.testing.expect(p50 >= 45.0 and p50 <= 55.0);
+
+    // p99 should be around 99
+    const p99 = hist.percentile(0.99);
+    try std.testing.expect(p99 >= 95.0 and p99 <= 100.0);
+}
+
+test "Histogram empty percentile returns 0" {
+    var hist = MetricsCollector.Histogram.init(std.testing.allocator);
+    defer hist.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), hist.percentile(0.5), 0.001);
+}
+
+test "Gauge negative values" {
+    var gauge = MetricsCollector.Gauge.init();
+    gauge.set(-100);
+    try std.testing.expectEqual(@as(i64, -100), gauge.get());
+    gauge.set(-50);
+    try std.testing.expectEqual(@as(i64, -100), gauge.getMin());
+    try std.testing.expectEqual(@as(i64, -50), gauge.getMax());
+}
+
+test "Counter multiple adds" {
+    var counter = MetricsCollector.Counter.init();
+    counter.add(100);
+    counter.add(200);
+    counter.add(300);
+    try std.testing.expectEqual(@as(u64, 600), counter.get());
+}
+
+test "MetricsCollector creates histograms" {
+    var collector = MetricsCollector.init(std.testing.allocator, .{});
+    defer collector.deinit();
+
+    const h = try collector.histogram("test_hist");
+    try h.record(1.0);
+    try h.record(2.0);
+    try std.testing.expectEqual(@as(u64, 2), h.count.load(.monotonic));
+}
+
+test "MetricsCollector multiple counters" {
+    var collector = MetricsCollector.init(std.testing.allocator, .{});
+    defer collector.deinit();
+
+    const c1 = try collector.counter("counter_a");
+    const c2 = try collector.counter("counter_b");
+
+    c1.increment();
+    c2.add(5);
+
+    try std.testing.expectEqual(@as(u64, 1), c1.get());
+    try std.testing.expectEqual(@as(u64, 5), c2.get());
+}
+
+test "MetricsCollector multiple gauges" {
+    var collector = MetricsCollector.init(std.testing.allocator, .{});
+    defer collector.deinit();
+
+    const g1 = try collector.gauge("gauge_a");
+    const g2 = try collector.gauge("gauge_b");
+
+    g1.set(100);
+    g2.set(200);
+
+    try std.testing.expectEqual(@as(i64, 100), g1.get());
+    try std.testing.expectEqual(@as(i64, 200), g2.get());
+}
+
+test "Counter thread-safe increment" {
+    var counter = MetricsCollector.Counter.init();
+
+    // Simulate multiple increments
+    var i: u32 = 0;
+    while (i < 1000) : (i += 1) {
+        counter.increment();
+    }
+
+    try std.testing.expectEqual(@as(u64, 1000), counter.get());
+}
+
+test "Histogram sum calculation" {
+    var hist = MetricsCollector.Histogram.init(std.testing.allocator);
+    defer hist.deinit();
+
+    try hist.record(10.0);
+    try hist.record(20.0);
+    try hist.record(30.0);
+
+    try std.testing.expectApproxEqAbs(@as(f64, 60.0), hist.sum, 0.001);
+}
+
+test "Gauge tracks updates correctly" {
+    var gauge = MetricsCollector.Gauge.init();
+
+    gauge.set(10);
+    gauge.set(20);
+    gauge.set(5);
+    gauge.set(15);
+
+    try std.testing.expectEqual(@as(i64, 15), gauge.get());
+    try std.testing.expectEqual(@as(i64, 5), gauge.getMin());
+    try std.testing.expectEqual(@as(i64, 20), gauge.getMax());
+}
+
+test "Config has sensible defaults" {
+    const cfg = MetricsCollector.Config{};
+    try std.testing.expectEqual(@as(u64, 1000), cfg.collection_interval_ms);
+    try std.testing.expectEqual(@as(u64, 3600000), cfg.retention_period_ms);
+    try std.testing.expect(cfg.enable_percentiles);
+}
+
+test "MetricsCollector snapshot returns timestamp" {
+    var collector = MetricsCollector.init(std.testing.allocator, .{});
+    defer collector.deinit();
+
+    const snap = try collector.snapshot();
+    defer {
+        snap.counters.deinit();
+        snap.gauges.deinit();
+        snap.histograms.deinit();
+    }
+
+    try std.testing.expect(snap.timestamp > 0);
+}
+
 // Query profiler for detailed execution plans
 pub const QueryProfiler = struct {
     allocator: Allocator,

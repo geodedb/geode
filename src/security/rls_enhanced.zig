@@ -346,7 +346,7 @@ pub const ExpressionCompiler = struct {
         return try self.evaluateInterpreted(expression.raw, row, context);
     }
 
-    // CANARY: REQ=REQ-RLS-CONTEXT-001; FEATURE="RLSContextEvaluation"; ASPECT=RLS; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-RLS-CONTEXT-001; FEATURE="RLSContextEvaluation"; ASPECT=RLS; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
     fn evaluateCompiled(
         self: *ExpressionCompiler,
         compiled: *rls.RLSEngine.CompiledExpression,

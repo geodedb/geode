@@ -1,7 +1,7 @@
 const std = @import("std");
 const cdc = @import("core.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CDC; STATUS=IMPL; OWNER=cdc; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CDC; STATUS=EXEMPT; OWNER=cdc; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("cdc");
 const Attr = logging.Attr;

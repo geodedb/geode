@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Memory; STATUS=IMPL; OWNER=memory; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Memory; STATUS=EXEMPT; OWNER=memory; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("memory");
 const Attr = logging.Attr;

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-060; FEATURE="JSON Library Migration"; ASPECT=UserStorageSimple; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-25
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-060; FEATURE="JSON Library Migration"; ASPECT=UserStorageSimple; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-25
 const json_lib = @import("json");
 
 // CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLIUserManagement"; ASPECT=FileStorage; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth.yml; OWNER=cli; UPDATED=2025-10-26

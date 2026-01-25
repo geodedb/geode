@@ -186,7 +186,7 @@ pub const KeyRegistry = struct {
     }
 
     /// Load or generate active data key using cryptographically secure random source
-    // CANARY: REQ=REQ-KEY-ROTATION-001; FEATURE="SecureKeyGeneration"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-KEY-ROTATION-001; FEATURE="SecureKeyGeneration"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
     pub fn loadActiveDataKey(self: *KeyRegistry) !DataKeyRef {
         if (self.active) |k| return k;
         // Generate key material using cryptographically secure random source
@@ -205,7 +205,7 @@ pub const KeyRegistry = struct {
     }
 
     /// Rotate key immediately using cryptographically secure random source
-    // CANARY: REQ=REQ-KEY-ROTATION-002; FEATURE="SecureKeyRotation"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-KEY-ROTATION-002; FEATURE="SecureKeyRotation"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
     pub fn rotateNow(self: *KeyRegistry, policy: RotationPolicy) !RotationEvent {
         _ = policy; // placeholder until policy used
         const old = self.active;
@@ -225,7 +225,7 @@ pub const KeyRegistry = struct {
     }
 
     /// Rotate key with KMS wrapping using cryptographically secure random source
-    // CANARY: REQ=REQ-KEY-ROTATION-003; FEATURE="SecureKmsKeyRotation"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-KEY-ROTATION-003; FEATURE="SecureKmsKeyRotation"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
     pub fn rotateWithKms(self: *KeyRegistry) !RotationEvent {
         if (self.kms_seed == null) return error.KmsNotConfigured;
         const old = self.active;

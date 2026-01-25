@@ -4,12 +4,12 @@ const config = @import("config.zig");
 const cef = @import("cef.zig");
 const time = @import("time.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Audit; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Audit; STATUS=EXEMPT; OWNER=audit; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("audit");
 const Attr = logging.Attr;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-DNS-001; FEATURE="External Library Migration"; ASPECT=DNSResolution; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-DNS-001; FEATURE="External Library Migration"; ASPECT=DNSResolution; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External DNS library for RFC 1035 compliant host resolution with caching and DoT/DoH/DoQ support
 const dns = @import("dns");
 

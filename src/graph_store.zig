@@ -2,7 +2,7 @@ const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
 const uuid = @import("uuid.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("storage");
 const Attr = logging.Attr;

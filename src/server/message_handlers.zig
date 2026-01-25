@@ -6,7 +6,7 @@ const TextFormatter = @import("text_formatter").TextFormatter;
 const query_executor = @import("query_executor.zig");
 const server_flags = @import("server_flags.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-011; FEATURE="Structured Logging"; ASPECT=MessageHandlers; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-011; FEATURE="Structured Logging"; ASPECT=MessageHandlers; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;

@@ -4,7 +4,7 @@ const storage = @import("../storage/interface.zig");
 
 // Advanced path algorithms for graph traversal
 // GAP-0084: Extended to collect edge IDs during path finding
-// CANARY: REQ=REQ-GQL-PATH-001; FEATURE="PathEdgeCollection"; ASPECT=GraphTraversal; STATUS=IMPL; OWNER=graph; UPDATED=2026-01-10
+// CANARY: REQ=REQ-GQL-PATH-001; FEATURE="PathEdgeCollection"; ASPECT=GraphTraversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_path_traversal.yml; OWNER=graph; UPDATED=2026-01-25
 pub const PathAlgorithms = struct {
     allocator: Allocator,
 

@@ -514,7 +514,7 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                     var final_columns: ?[]const []const u8 = null;
 
                     // PERF: PHASE5_PARAM_ALLOC - Allocate parameter arrays once instead of per-iteration
-                    // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=PARAM_REUSE; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-17
+                    // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=PARAM_REUSE; STATUS=BENCHED; BENCH=docs/benchmarks/phase5_allocation.md; OWNER=performance; UPDATED=2026-01-25
                     // Phase 5.1.2: Pre-allocate parameter arrays before loop (reduces N allocations to 1)
                     var param_names = try allocator.alloc([]const u8, values_stmt.column_names.len);
                     defer allocator.free(param_names);

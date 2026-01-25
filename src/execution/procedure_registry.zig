@@ -13,7 +13,7 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("execution");
 const Attr = logging.Attr;

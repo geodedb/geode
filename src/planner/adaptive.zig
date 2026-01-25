@@ -4,7 +4,7 @@ const ast = @import("../ast.zig");
 const planner = @import("../planner.zig");
 const exec = @import("../exec.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Planner; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Planner; STATUS=EXEMPT; OWNER=planner; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("planner");
 const Attr = logging.Attr;

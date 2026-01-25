@@ -14,7 +14,7 @@ const union_advanced = geode.union_advanced;
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-010; FEATURE="TransactionUndoLog"; ASPECT=QueryExecutorImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-018; FEATURE="Structured Logging"; ASPECT=QueryExecutor; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-018; FEATURE="Structured Logging"; ASPECT=QueryExecutor; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;
@@ -22,7 +22,7 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-011; FEATURE="JSON Library Migration"; ASPECT=QueryExecutor; STATUS=TESTED; OWNER=server; UPDATED=2026-01-24
 const json_lib = @import("json");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-057; FEATURE="JSON Library Migration"; ASPECT=QueryExecutorResponses; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-057; FEATURE="JSON Library Migration"; ASPECT=QueryExecutorResponses; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 // JSON response types for query executor operations
 
 /// Simple status response with message

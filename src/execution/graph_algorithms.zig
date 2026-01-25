@@ -385,7 +385,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                         // Check if node has this property with matching value
                         if (node.properties.get(prop.key)) |node_prop_val| {
                             // GAP-0120 FIX: Proper type coverage for property values
-                            // CANARY: REQ=REQ-EXPR-TYPE-001; FEATURE="ExprTypeCoverage"; ASPECT=Types; STATUS=IMPL; OWNER=exec; UPDATED=2026-01-12
+                            // CANARY: REQ=REQ-EXPR-TYPE-001; FEATURE="ExprTypeCoverage"; ASPECT=Types; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system.yml; OWNER=exec; UPDATED=2026-01-25
                             const node_val = switch (node_prop_val) {
                                 .String => |s| Value{ .Str = s },
                                 .Int => |i| Value{ .Int = i },

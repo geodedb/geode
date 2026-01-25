@@ -287,7 +287,7 @@ pub const QueryOptimizer = struct {
     };
 
     // GAP-0112 FIX: Generate join orders using dynamic programming approach
-    // CANARY: REQ=REQ-QP-DP-JOIN-001; FEATURE="DPJoinOrdering"; ASPECT=Core; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-12
+    // CANARY: REQ=REQ-QP-DP-JOIN-001; FEATURE="DPJoinOrdering"; ASPECT=Core; STATUS=EXEMPT; OWNER=planner; UPDATED=2026-01-12
     // This implements a DP-based join enumeration algorithm supporting both left-deep and bushy trees
     fn generateJoinOrders(self: *QueryOptimizer, query: ast.Query) ![]JoinOrder {
         var orders = std.ArrayList(JoinOrder).init(self.allocator);

@@ -1,6 +1,6 @@
 // Test suite for Argon2id password hashing security
-// CANARY: REQ=REQ-AUTH-HASH-002; FEATURE="Argon2id_Password_Hashing"; ASPECT=Core; STATUS=IMPL; OWNER=security; UPDATED=2026-01-17
-//         ASPECT=TESTING; STATUS=IMPL; OWNER=security; UPDATED=2025-10-16
+// CANARY: REQ=REQ-AUTH-HASH-002; FEATURE="Argon2id_Password_Hashing"; ASPECT=Core; STATUS=TESTED; OWNER=security; UPDATED=2026-01-25
+//         ASPECT=TESTING; STATUS=TESTED; TEST=src/security/test_argon2id_hashing.zig; OWNER=security; UPDATED=2026-01-25
 
 const std = @import("std");
 const testing = std.testing;
