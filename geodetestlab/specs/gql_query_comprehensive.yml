@@ -541,6 +541,8 @@ invariants:
   - type: "server_running"
 
 cleanup:
-  - "query \"MATCH (n) DETACH DELETE n\""
+  - args: ["query", "MATCH (n) DETACH DELETE n"]
+    expect:
+      exit_code: 0
 
 tags: ["query", "match", "optional", "filter", "let", "for", "iso-gql", "comprehensive"]

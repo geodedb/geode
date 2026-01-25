@@ -256,13 +256,17 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                                 processed_arg = processed_arg.replace(f"EXISTS {old_name}", f"EXISTS {old_name}_{test_id}")
 
                         # Add unique suffixes to labels/types for test isolation (setup)
+                        # Use dictionary to avoid duplicate replacements when same label appears multiple times
                         label_pattern = r':([A-Z][a-zA-Z0-9_]*)'
                         label_matches = list(re.finditer(label_pattern, processed_arg))
+                        label_replacements = {}
                         for match in label_matches:
                             old_label = match.group(1)
                             if old_label.upper() not in ['ORDER', 'BY', 'ASC', 'DESC', 'NULL', 'TRUE', 'FALSE', 'AND', 'OR', 'NOT']:
                                 new_label = f"{old_label}_{test_id}"
-                                processed_arg = processed_arg.replace(f":{old_label}", f":{new_label}")
+                                label_replacements[f":{old_label}"] = f":{new_label}"
+                        for old, new in label_replacements.items():
+                            processed_arg = processed_arg.replace(old, new)
 
                     setup_processed.append(processed_arg)
 

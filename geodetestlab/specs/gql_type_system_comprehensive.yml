@@ -394,7 +394,9 @@ tests:
   - name: "type-function-exists"
     description: "Test exists() function"
     setup:
-      - "query \"CREATE (n:TypeTest {existing_prop: 'value'})\""
+      - args: ["query", "CREATE (n:TypeTest {existing_prop: 'value'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:TypeTest) RETURN exists(n.existing_prop) AS has_prop, exists(n.missing_prop) AS missing_prop"]
     expect:
       exit_code: 0
@@ -628,7 +630,9 @@ tests:
   - name: "type-property-access-mixed"
     description: "Test property access with mixed types"
     setup:
-      - "query \"CREATE (n:TypeNode {int_prop: 42, string_prop: 'text', bool_prop: true, list_prop: [1, 2, 3], map_prop: {nested: 'value'}})\""
+      - args: ["query", "CREATE (n:TypeNode {int_prop: 42, string_prop: 'text', bool_prop: true, list_prop: [1, 2, 3], map_prop: {nested: 'value'}})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:TypeNode) RETURN n.int_prop AS int_val, n.string_prop AS string_val, n.bool_prop AS bool_val, n.list_prop AS list_val, n.map_prop AS map_val"]
     expect:
       exit_code: 0
@@ -704,7 +708,9 @@ tests:
   - name: "type-dynamic-property-access"
     description: "Test dynamic property access on complex types"
     setup:
-      - "query \"CREATE (n:DynamicTest {data: {level1: {level2: {value: 'deep_value'}}}})\""
+      - args: ["query", "CREATE (n:DynamicTest {data: {level1: {level2: {value: 'deep_value'}}}})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:DynamicTest) RETURN n.data.level1.level2.value AS deep_value"]
     expect:
       exit_code: 0

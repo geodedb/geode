@@ -31,7 +31,9 @@ tests:
   - name: "basic-commit"
     description: "Test basic COMMIT command"
     setup:
-      - "query \"START TRANSACTION\""
+      - args: ["query", "START TRANSACTION"]
+        expect:
+          exit_code: 0
     args: ["query", "COMMIT"]
     expect:
       exit_code: 0
@@ -40,7 +42,9 @@ tests:
   - name: "basic-rollback"
     description: "Test basic ROLLBACK command"
     setup:
-      - "query \"START TRANSACTION\""
+      - args: ["query", "START TRANSACTION"]
+        expect:
+          exit_code: 0
     args: ["query", "ROLLBACK"]
     expect:
       exit_code: 0
@@ -95,7 +99,9 @@ tests:
   - name: "transaction-read-only-workflow"
     description: "Read-only transaction workflow"
     setup:
-      - "query \"CREATE (n:ReadTestNode {id: 1, value: 'test'})\""
+      - args: ["query", "CREATE (n:ReadTestNode {id: 1, value: 'test'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -248,7 +254,9 @@ tests:
       geode_query:
         status_class: "25000"  # Invalid transaction state
     cleanup:
-      - "query \"ROLLBACK\""
+      - args: ["query", "ROLLBACK"]
+        expect:
+          exit_code: 0
     tags: ["transaction", "error", "nested"]
 
   # ===============================

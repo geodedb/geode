@@ -24,8 +24,12 @@ tests:
   - name: "union-basic"
     description: "Test basic UNION operation"
     setup:
-      - "query \"CREATE (a:TypeA {id: 1, value: 'first'}), (b:TypeA {id: 2, value: 'second'})\""
-      - "query \"CREATE (c:TypeB {id: 3, value: 'third'}), (d:TypeB {id: 4, value: 'fourth'})\""
+      - args: ["query", "CREATE (a:TypeA {id: 1, value: 'first'}), (b:TypeA {id: 2, value: 'second'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:TypeB {id: 3, value: 'third'}), (d:TypeB {id: 4, value: 'fourth'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -42,8 +46,12 @@ tests:
   - name: "union-distinct"
     description: "Test UNION DISTINCT operation"
     setup:
-      - "query \"CREATE (a:UnionTest {id: 1, name: 'common'}), (b:UnionTest {id: 2, name: 'unique1'})\""
-      - "query \"CREATE (c:UnionTest {id: 1, name: 'common'}), (d:UnionTest {id: 3, name: 'unique2'})\""
+      - args: ["query", "CREATE (a:UnionTest {id: 1, name: 'common'}), (b:UnionTest {id: 2, name: 'unique1'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:UnionTest {id: 1, name: 'common'}), (d:UnionTest {id: 3, name: 'unique2'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -60,8 +68,12 @@ tests:
   - name: "union-all"
     description: "Test UNION ALL operation (preserves duplicates)"
     setup:
-      - "query \"CREATE (a:UnionAllTest {id: 1, type: 'duplicate'})\""
-      - "query \"CREATE (b:UnionAllTest {id: 1, type: 'duplicate'})\""
+      - args: ["query", "CREATE (a:UnionAllTest {id: 1, type: 'duplicate'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (b:UnionAllTest {id: 1, type: 'duplicate'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -83,8 +95,12 @@ tests:
     description: "Test basic INTERSECT operation"
     skip: true  # INTERSECT not yet implemented (returns 0A000)
     setup:
-      - "query \"CREATE (a:IntersectA {id: 1, value: 'shared'}), (b:IntersectA {id: 2, value: 'unique_a'})\""
-      - "query \"CREATE (c:IntersectB {id: 1, value: 'shared'}), (d:IntersectB {id: 3, value: 'unique_b'})\""
+      - args: ["query", "CREATE (a:IntersectA {id: 1, value: 'shared'}), (b:IntersectA {id: 2, value: 'unique_a'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:IntersectB {id: 1, value: 'shared'}), (d:IntersectB {id: 3, value: 'unique_b'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -102,8 +118,12 @@ tests:
     description: "Test INTERSECT DISTINCT operation"
     skip: true  # INTERSECT DISTINCT not yet implemented (returns 0A000)
     setup:
-      - "query \"CREATE (a:IntDistinct {id: 1, name: 'common'}), (b:IntDistinct {id: 1, name: 'common'})\""
-      - "query \"CREATE (c:IntDistinct {id: 1, name: 'common'}), (d:IntDistinct {id: 2, name: 'different'})\""
+      - args: ["query", "CREATE (a:IntDistinct {id: 1, name: 'common'}), (b:IntDistinct {id: 1, name: 'common'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:IntDistinct {id: 1, name: 'common'}), (d:IntDistinct {id: 2, name: 'different'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -121,8 +141,12 @@ tests:
     description: "Test INTERSECT ALL operation (frequency-based intersection)"
     skip: true  # INTERSECT ALL not yet implemented (returns 0A000)
     setup:
-      - "query \"CREATE (a:IntAll {id: 1, type: 'multi'}), (b:IntAll {id: 1, type: 'multi'})\""
-      - "query \"CREATE (c:IntAll {id: 1, type: 'multi'}), (d:IntAll {id: 1, type: 'multi'}), (e:IntAll {id: 1, type: 'multi'})\""
+      - args: ["query", "CREATE (a:IntAll {id: 1, type: 'multi'}), (b:IntAll {id: 1, type: 'multi'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:IntAll {id: 1, type: 'multi'}), (d:IntAll {id: 1, type: 'multi'}), (e:IntAll {id: 1, type: 'multi'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -144,8 +168,12 @@ tests:
     description: "Test basic EXCEPT operation"
     skip: true  # EXCEPT not yet implemented (returns 0A000)
     setup:
-      - "query \"CREATE (a:ExceptA {id: 1, value: 'keep'}), (b:ExceptA {id: 2, value: 'remove'})\""
-      - "query \"CREATE (c:ExceptB {id: 2, value: 'remove'}), (d:ExceptB {id: 3, value: 'other'})\""
+      - args: ["query", "CREATE (a:ExceptA {id: 1, value: 'keep'}), (b:ExceptA {id: 2, value: 'remove'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:ExceptB {id: 2, value: 'remove'}), (d:ExceptB {id: 3, value: 'other'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -163,8 +191,12 @@ tests:
     description: "Test EXCEPT DISTINCT operation"
     skip: true  # EXCEPT DISTINCT not yet implemented (returns 0A000)
     setup:
-      - "query \"CREATE (a:ExcDistinct {id: 1, name: 'keep'}), (b:ExcDistinct {id: 1, name: 'keep'}), (c:ExcDistinct {id: 2, name: 'remove'})\""
-      - "query \"CREATE (d:ExcDistinct {id: 2, name: 'remove'})\""
+      - args: ["query", "CREATE (a:ExcDistinct {id: 1, name: 'keep'}), (b:ExcDistinct {id: 1, name: 'keep'}), (c:ExcDistinct {id: 2, name: 'remove'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (d:ExcDistinct {id: 2, name: 'remove'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -182,8 +214,12 @@ tests:
     description: "Test EXCEPT ALL operation (frequency-based subtraction)"
     skip: true  # EXCEPT ALL not yet implemented (returns 0A000)
     setup:
-      - "query \"CREATE (a:ExcAll {id: 1, type: 'freq'}), (b:ExcAll {id: 1, type: 'freq'}), (c:ExcAll {id: 1, type: 'freq'})\""
-      - "query \"CREATE (d:ExcAll {id: 1, type: 'freq'})\""
+      - args: ["query", "CREATE (a:ExcAll {id: 1, type: 'freq'}), (b:ExcAll {id: 1, type: 'freq'}), (c:ExcAll {id: 1, type: 'freq'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (d:ExcAll {id: 1, type: 'freq'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -204,7 +240,9 @@ tests:
   - name: "multi-way-union"
     description: "Test multi-way UNION operation"
     setup:
-      - "query \"CREATE (a:MultiA {id: 1, source: 'A'}), (b:MultiB {id: 2, source: 'B'}), (c:MultiC {id: 3, source: 'C'})\""
+      - args: ["query", "CREATE (a:MultiA {id: 1, source: 'A'}), (b:MultiB {id: 2, source: 'B'}), (c:MultiC {id: 3, source: 'C'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -224,9 +262,15 @@ tests:
     description: "Test mixed set operations (UNION with INTERSECT)"
     skip: true  # INTERSECT not yet implemented (returns 0A000)
     setup:
-      - "query \"CREATE (a:MixedA {id: 1, type: 'common'}), (b:MixedA {id: 2, type: 'unique_a'})\""
-      - "query \"CREATE (c:MixedB {id: 1, type: 'common'}), (d:MixedB {id: 3, type: 'unique_b'})\""
-      - "query \"CREATE (e:MixedC {id: 1, type: 'common'}), (f:MixedC {id: 4, type: 'unique_c'})\""
+      - args: ["query", "CREATE (a:MixedA {id: 1, type: 'common'}), (b:MixedA {id: 2, type: 'unique_a'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:MixedB {id: 1, type: 'common'}), (d:MixedB {id: 3, type: 'unique_b'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (e:MixedC {id: 1, type: 'common'}), (f:MixedC {id: 4, type: 'unique_c'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -249,8 +293,12 @@ tests:
   - name: "union-with-order-by"
     description: "Test UNION with ORDER BY clause"
     setup:
-      - "query \"CREATE (a:OrderA {id: 3, name: 'third'}), (b:OrderA {id: 1, name: 'first'})\""
-      - "query \"CREATE (c:OrderB {id: 4, name: 'fourth'}), (d:OrderB {id: 2, name: 'second'})\""
+      - args: ["query", "CREATE (a:OrderA {id: 3, name: 'third'}), (b:OrderA {id: 1, name: 'first'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:OrderB {id: 4, name: 'fourth'}), (d:OrderB {id: 2, name: 'second'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -268,8 +316,12 @@ tests:
   - name: "union-with-limit"
     description: "Test UNION with LIMIT clause"
     setup:
-      - "query \"CREATE (a:LimitA {id: 1, value: 'a1'}), (b:LimitA {id: 2, value: 'a2'})\""
-      - "query \"CREATE (c:LimitB {id: 3, value: 'b1'}), (d:LimitB {id: 4, value: 'b2'})\""
+      - args: ["query", "CREATE (a:LimitA {id: 1, value: 'a1'}), (b:LimitA {id: 2, value: 'a2'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:LimitB {id: 3, value: 'b1'}), (d:LimitB {id: 4, value: 'b2'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -342,8 +394,12 @@ tests:
   - name: "set-operations-with-aggregation"
     description: "Test set operations with aggregation"
     setup:
-      - "query \"CREATE (a:AggA {category: 'X', value: 10}), (b:AggA {category: 'X', value: 20})\""
-      - "query \"CREATE (c:AggB {category: 'Y', value: 15}), (d:AggB {category: 'Y', value: 25})\""
+      - args: ["query", "CREATE (a:AggA {category: 'X', value: 10}), (b:AggA {category: 'X', value: 20})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:AggB {category: 'Y', value: 15}), (d:AggB {category: 'Y', value: 25})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -360,8 +416,12 @@ tests:
   - name: "set-operations-with-subqueries"
     description: "Test set operations with subqueries"
     setup:
-      - "query \"CREATE (a:SubA {id: 1, parent_id: 10}), (b:SubA {id: 2, parent_id: 10})\""
-      - "query \"CREATE (c:SubB {id: 3, parent_id: 20}), (d:SubB {id: 4, parent_id: 20})\""
+      - args: ["query", "CREATE (a:SubA {id: 1, parent_id: 10}), (b:SubA {id: 2, parent_id: 10})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (c:SubB {id: 3, parent_id: 20}), (d:SubB {id: 4, parent_id: 20})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -398,8 +458,12 @@ tests:
     description: "Test INTERSECT with no common rows"
     skip: true  # INTERSECT not yet implemented (returns 0A000)
     setup:
-      - "query \"CREATE (a:NoCommonA {id: 1, value: 'unique_a'})\""
-      - "query \"CREATE (b:NoCommonB {id: 2, value: 'unique_b'})\""
+      - args: ["query", "CREATE (a:NoCommonA {id: 1, value: 'unique_a'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (b:NoCommonB {id: 2, value: 'unique_b'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -421,8 +485,12 @@ tests:
     description: "Performance test with larger datasets in UNION"
     timeout_ms: 30000
     setup:
-      - "query \"CREATE (n1:PerfA {id: 1, batch: 'A'}), (n2:PerfA {id: 2, batch: 'A'}), (n3:PerfA {id: 3, batch: 'A'}), (n4:PerfA {id: 4, batch: 'A'}), (n5:PerfA {id: 5, batch: 'A'})\""
-      - "query \"CREATE (n6:PerfB {id: 6, batch: 'B'}), (n7:PerfB {id: 7, batch: 'B'}), (n8:PerfB {id: 8, batch: 'B'}), (n9:PerfB {id: 9, batch: 'B'}), (n10:PerfB {id: 10, batch: 'B'})\""
+      - args: ["query", "CREATE (n1:PerfA {id: 1, batch: 'A'}), (n2:PerfA {id: 2, batch: 'A'}), (n3:PerfA {id: 3, batch: 'A'}), (n4:PerfA {id: 4, batch: 'A'}), (n5:PerfA {id: 5, batch: 'A'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (n6:PerfB {id: 6, batch: 'B'}), (n7:PerfB {id: 7, batch: 'B'}), (n8:PerfB {id: 8, batch: 'B'}), (n9:PerfB {id: 9, batch: 'B'}), (n10:PerfB {id: 10, batch: 'B'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |

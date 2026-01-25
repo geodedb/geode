@@ -598,7 +598,9 @@ tests:
   - name: "aggregation-count-star"
     description: "Test count(*) aggregation function"
     setup:
-      - "query \"CREATE (a:CountTest {id: 1}), (b:CountTest {id: 2}), (c:CountTest {id: 3})\""
+      - args: ["query", "CREATE (a:CountTest {id: 1}), (b:CountTest {id: 2}), (c:CountTest {id: 3})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:CountTest) RETURN count(*) AS total"]
     expect:
       exit_code: 0
@@ -613,7 +615,9 @@ tests:
   - name: "aggregation-count-property"
     description: "Test count(property) aggregation function"
     setup:
-      - "query \"CREATE (a:CountPropTest {value: 1}), (b:CountPropTest {value: 2}), (c:CountPropTest)\""
+      - args: ["query", "CREATE (a:CountPropTest {value: 1}), (b:CountPropTest {value: 2}), (c:CountPropTest)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:CountPropTest) RETURN count(n.value) AS non_null_count"]
     expect:
       exit_code: 0
@@ -628,7 +632,9 @@ tests:
   - name: "aggregation-sum"
     description: "Test sum() aggregation function"
     setup:
-      - "query \"CREATE (a:SumTest {value: 10}), (b:SumTest {value: 20}), (c:SumTest {value: 30})\""
+      - args: ["query", "CREATE (a:SumTest {value: 10}), (b:SumTest {value: 20}), (c:SumTest {value: 30})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:SumTest) RETURN sum(n.value) AS total"]
     expect:
       exit_code: 0
@@ -643,7 +649,9 @@ tests:
   - name: "aggregation-avg"
     description: "Test avg() aggregation function"
     setup:
-      - "query \"CREATE (a:AvgTest {value: 10}), (b:AvgTest {value: 20}), (c:AvgTest {value: 30})\""
+      - args: ["query", "CREATE (a:AvgTest {value: 10}), (b:AvgTest {value: 20}), (c:AvgTest {value: 30})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:AvgTest) RETURN avg(n.value) AS average"]
     expect:
       exit_code: 0
@@ -658,7 +666,9 @@ tests:
   - name: "aggregation-min"
     description: "Test min() aggregation function"
     setup:
-      - "query \"CREATE (a:MinTest {value: 5}), (b:MinTest {value: 15}), (c:MinTest {value: 3})\""
+      - args: ["query", "CREATE (a:MinTest {value: 5}), (b:MinTest {value: 15}), (c:MinTest {value: 3})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:MinTest) RETURN min(n.value) AS minimum"]
     expect:
       exit_code: 0
@@ -673,7 +683,9 @@ tests:
   - name: "aggregation-max"
     description: "Test max() aggregation function"
     setup:
-      - "query \"CREATE (a:MaxTest {value: 5}), (b:MaxTest {value: 15}), (c:MaxTest {value: 3})\""
+      - args: ["query", "CREATE (a:MaxTest {value: 5}), (b:MaxTest {value: 15}), (c:MaxTest {value: 3})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:MaxTest) RETURN max(n.value) AS maximum"]
     expect:
       exit_code: 0
@@ -812,7 +824,9 @@ tests:
   - name: "property-access-basic"
     description: "Test basic property access expression"
     setup:
-      - "query \"CREATE (n:PropTest {name: 'test_node', value: 42})\""
+      - args: ["query", "CREATE (n:PropTest {name: 'test_node', value: 42})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:PropTest) RETURN n.name AS name, n.value AS value"]
     expect:
       exit_code: 0
@@ -829,7 +843,9 @@ tests:
   - name: "property-access-in-expression"
     description: "Test property access within arithmetic expression"
     setup:
-      - "query \"CREATE (n:PropArithTest {a: 10, b: 5})\""
+      - args: ["query", "CREATE (n:PropArithTest {a: 10, b: 5})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:PropArithTest) RETURN n.a + n.b AS sum, n.a * n.b AS product"]
     expect:
       exit_code: 0

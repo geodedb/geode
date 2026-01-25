@@ -38,7 +38,9 @@ tests:
   - name: "create-schema-if-not-exists-duplicate"
     description: "Test CREATE SCHEMA IF NOT EXISTS on existing schema"
     setup:
-      - "query \"CREATE SCHEMA existing_schema\""
+      - args: ["query", "CREATE SCHEMA existing_schema"]
+        expect:
+          exit_code: 0
     args: ["query", "CREATE SCHEMA IF NOT EXISTS existing_schema"]
     expect:
       exit_code: 0
@@ -48,7 +50,9 @@ tests:
     description: "Test basic DROP SCHEMA command"
     skip: true  # Works manually, test runner name isolation issue - needs investigation
     setup:
-      - "query \"CREATE SCHEMA drop_test_schema\""
+      - args: ["query", "CREATE SCHEMA drop_test_schema"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP SCHEMA drop_test_schema"]
     expect:
       exit_code: 0
@@ -57,7 +61,9 @@ tests:
   - name: "drop-schema-if-exists"
     description: "Test DROP SCHEMA IF EXISTS"
     setup:
-      - "query \"CREATE SCHEMA conditional_drop_schema\""
+      - args: ["query", "CREATE SCHEMA conditional_drop_schema"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP SCHEMA IF EXISTS conditional_drop_schema"]
     expect:
       exit_code: 0
@@ -98,7 +104,9 @@ tests:
   - name: "create-or-replace-graph"
     description: "Test CREATE OR REPLACE GRAPH"
     setup:
-      - "query \"CREATE GRAPH replace_test_graph ANY\""
+      - args: ["query", "CREATE GRAPH replace_test_graph ANY"]
+        expect:
+          exit_code: 0
     args: ["query", "CREATE OR REPLACE GRAPH replace_test_graph ANY"]
     expect:
       exit_code: 0
@@ -130,7 +138,9 @@ tests:
   - name: "create-graph-like-existing"
     description: "Test CREATE GRAPH LIKE existing graph"
     setup:
-      - "query \"CREATE GRAPH IF NOT EXISTS source_graph ANY\""
+      - args: ["query", "CREATE GRAPH IF NOT EXISTS source_graph ANY"]
+        expect:
+          exit_code: 0
     args: ["query", "CREATE GRAPH IF NOT EXISTS like_graph LIKE source_graph"]
     expect:
       exit_code: 0
@@ -140,7 +150,9 @@ tests:
   - name: "create-graph-as-copy-of"
     description: "Test CREATE GRAPH AS COPY OF existing graph"
     setup:
-      - "query \"CREATE GRAPH IF NOT EXISTS copy_source_graph ANY\""
+      - args: ["query", "CREATE GRAPH IF NOT EXISTS copy_source_graph ANY"]
+        expect:
+          exit_code: 0
     args: ["query", "CREATE OR REPLACE GRAPH copy_target_graph ANY AS COPY OF copy_source_graph"]
     expect:
       exit_code: 0
@@ -150,7 +162,9 @@ tests:
     description: "Test basic DROP GRAPH command"
     skip: true  # Works manually, test runner name isolation issue - needs investigation
     setup:
-      - "query \"CREATE GRAPH drop_test_graph ANY\""
+      - args: ["query", "CREATE GRAPH drop_test_graph ANY"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP GRAPH drop_test_graph"]
     expect:
       exit_code: 0
@@ -160,7 +174,9 @@ tests:
     description: "Test DROP PROPERTY GRAPH command"
     skip: true  # Works manually, test runner name isolation issue - needs investigation
     setup:
-      - "query \"CREATE PROPERTY GRAPH drop_property_test_graph ANY\""
+      - args: ["query", "CREATE PROPERTY GRAPH drop_property_test_graph ANY"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP PROPERTY GRAPH drop_property_test_graph"]
     expect:
       exit_code: 0
@@ -169,7 +185,9 @@ tests:
   - name: "drop-graph-if-exists"
     description: "Test DROP GRAPH IF EXISTS"
     setup:
-      - "query \"CREATE GRAPH conditional_drop_graph ANY\""
+      - args: ["query", "CREATE GRAPH conditional_drop_graph ANY"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP GRAPH IF EXISTS conditional_drop_graph"]
     expect:
       exit_code: 0
@@ -211,7 +229,9 @@ tests:
     description: "Test CREATE OR REPLACE GRAPH TYPE"
     skip: true  # Works manually, test runner name isolation issue - needs investigation
     setup:
-      - "query \"CREATE GRAPH TYPE replace_test_graph_type AS { }\""
+      - args: ["query", "CREATE GRAPH TYPE replace_test_graph_type AS { }"]
+        expect:
+          exit_code: 0
     args: ["query", "CREATE OR REPLACE GRAPH TYPE replace_test_graph_type AS { }"]
     expect:
       exit_code: 0
@@ -228,7 +248,9 @@ tests:
   - name: "create-graph-type-copy-of"
     description: "Test CREATE GRAPH TYPE AS COPY OF existing type"
     setup:
-      - "query \"CREATE GRAPH TYPE source_graph_type AS { }\""
+      - args: ["query", "CREATE GRAPH TYPE source_graph_type AS { }"]
+        expect:
+          exit_code: 0
     args: ["query", "CREATE GRAPH TYPE copy_graph_type AS COPY OF source_graph_type"]
     expect:
       exit_code: 0
@@ -238,7 +260,9 @@ tests:
   - name: "create-graph-type-like"
     description: "Test CREATE GRAPH TYPE LIKE existing graph"
     setup:
-      - "query \"CREATE GRAPH like_source_graph ANY\""
+      - args: ["query", "CREATE GRAPH like_source_graph ANY"]
+        expect:
+          exit_code: 0
     args: ["query", "CREATE GRAPH TYPE like_graph_type LIKE like_source_graph"]
     expect:
       exit_code: 0
@@ -247,7 +271,9 @@ tests:
   - name: "drop-graph-type-basic"
     description: "Test basic DROP GRAPH TYPE command"
     setup:
-      - "query \"CREATE GRAPH TYPE drop_test_graph_type AS { }\""
+      - args: ["query", "CREATE GRAPH TYPE drop_test_graph_type AS { }"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP GRAPH TYPE drop_test_graph_type"]
     expect:
       exit_code: 0
@@ -256,7 +282,9 @@ tests:
   - name: "drop-property-graph-type-basic"
     description: "Test DROP PROPERTY GRAPH TYPE command"
     setup:
-      - "query \"CREATE PROPERTY GRAPH TYPE drop_property_test_graph_type AS { }\""
+      - args: ["query", "CREATE PROPERTY GRAPH TYPE drop_property_test_graph_type AS { }"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP PROPERTY GRAPH TYPE drop_property_test_graph_type"]
     expect:
       exit_code: 0
@@ -265,7 +293,9 @@ tests:
   - name: "drop-graph-type-if-exists"
     description: "Test DROP GRAPH TYPE IF EXISTS"
     setup:
-      - "query \"CREATE GRAPH TYPE conditional_drop_graph_type AS { }\""
+      - args: ["query", "CREATE GRAPH TYPE conditional_drop_graph_type AS { }"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP GRAPH TYPE IF EXISTS conditional_drop_graph_type"]
     expect:
       exit_code: 0
@@ -316,14 +346,18 @@ tests:
     description: "Test creating duplicate schema without IF NOT EXISTS (should error)"
     skip: true  # Geode returns status codes via response, not exit codes - test runner limitation
     setup:
-      - "query \"CREATE SCHEMA duplicate_error_schema\""
+      - args: ["query", "CREATE SCHEMA duplicate_error_schema"]
+        expect:
+          exit_code: 0
     args: ["query", "CREATE SCHEMA duplicate_error_schema"]
     expect:
       exit_code: 0
       geode_query:
         status_class: "42000"  # Schema already exists
     cleanup:
-      - "query \"DROP SCHEMA duplicate_error_schema\""
+      - args: ["query", "DROP SCHEMA duplicate_error_schema"]
+        expect:
+          exit_code: 0
     tags: ["catalog", "error", "schema", "duplicate"]
 
   - name: "drop-nonexistent-schema-error"
@@ -340,14 +374,18 @@ tests:
     description: "Test creating duplicate graph without IF NOT EXISTS (should error)"
     skip: true  # Geode returns status codes via response, not exit codes - test runner limitation
     setup:
-      - "query \"CREATE GRAPH duplicate_error_graph ANY\""
+      - args: ["query", "CREATE GRAPH duplicate_error_graph ANY"]
+        expect:
+          exit_code: 0
     args: ["query", "CREATE GRAPH duplicate_error_graph ANY"]
     expect:
       exit_code: 0
       geode_query:
         status_class: "42000"  # Graph already exists
     cleanup:
-      - "query \"DROP GRAPH duplicate_error_graph\""
+      - args: ["query", "DROP GRAPH duplicate_error_graph"]
+        expect:
+          exit_code: 0
     tags: ["catalog", "error", "graph", "duplicate"]
 
   - name: "drop-nonexistent-graph-error"

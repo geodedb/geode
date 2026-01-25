@@ -272,7 +272,9 @@ tests:
     description: "Test DROP GRAPH statement"
     skip: true  # Works manually, test runner name isolation issue - needs investigation
     setup:
-      - "query \"CREATE GRAPH IF NOT EXISTS test_graph_1 ANY\""
+      - args: ["query", "CREATE GRAPH IF NOT EXISTS test_graph_1 ANY"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP GRAPH test_graph_1"]
     expect:
       exit_code: 0
@@ -310,7 +312,9 @@ tests:
     description: "Test DROP SCHEMA statement"
     skip: true  # Works manually, test runner name isolation issue - needs investigation
     setup:
-      - "query \"CREATE SCHEMA IF NOT EXISTS test_schema\""
+      - args: ["query", "CREATE SCHEMA IF NOT EXISTS test_schema"]
+        expect:
+          exit_code: 0
     args: ["query", "DROP SCHEMA test_schema"]
     expect:
       exit_code: 0
