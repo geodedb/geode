@@ -18,6 +18,12 @@ stages:
   - test
   - release
 
+# Default configuration applied to all jobs
+default:
+  tags:
+    - company
+    - linux
+
 variables:
   DOCKER_BUILDKIT: 1
   ZIG_VERSION: "0.15.2"
