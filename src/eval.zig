@@ -1378,6 +1378,234 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = result };
             }
 
+            // CANARY: REQ=REQ-GQL-CAST-001; FEATURE="TypeCasting"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-25
+            // Handle CAST(expr AS type) - type conversions
+            if (std.mem.eql(u8, function_name, "cast")) {
+                if (call.args.len != 2) break :blk_call .{ .Null = {} };
+
+                // First arg is the value to cast, second is the type name as string
+                const value_arg = try evalExpr(allocator, call.args[0].*, env);
+                const type_arg = try evalExpr(allocator, call.args[1].*, env);
+
+                // NULL input returns NULL
+                if (value_arg == .Null) break :blk_call .{ .Null = {} };
+
+                // Get the target type string
+                const target_type = switch (type_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                // Parse precision and scale from type string if present (e.g., "DECIMAL(10,2)")
+                var base_type = target_type;
+                var precision: ?u8 = null;
+                var scale: ?u8 = null;
+                if (std.mem.indexOf(u8, target_type, "(")) |paren_idx| {
+                    base_type = target_type[0..paren_idx];
+                    const rest = target_type[paren_idx + 1 ..];
+                    if (std.mem.indexOf(u8, rest, ")")) |end_paren| {
+                        const params = rest[0..end_paren];
+                        if (std.mem.indexOf(u8, params, ",")) |comma_idx| {
+                            // precision,scale
+                            precision = std.fmt.parseInt(u8, params[0..comma_idx], 10) catch null;
+                            scale = std.fmt.parseInt(u8, params[comma_idx + 1 ..], 10) catch null;
+                        } else {
+                            // just precision
+                            precision = std.fmt.parseInt(u8, params, 10) catch null;
+                        }
+                    }
+                }
+
+                // Normalize base type to uppercase for comparison
+                var upper_buf: [32]u8 = undefined;
+                const type_len = @min(base_type.len, upper_buf.len);
+                for (base_type[0..type_len], 0..) |c, i| {
+                    upper_buf[i] = std.ascii.toUpper(c);
+                }
+                const upper_type = upper_buf[0..type_len];
+
+                // DECIMAL/NUMERIC conversion
+                if (std.mem.eql(u8, upper_type, "DECIMAL") or std.mem.eql(u8, upper_type, "NUMERIC")) {
+                    const target_scale: u8 = scale orelse 0;
+                    switch (value_arg) {
+                        .Int => |i| {
+                            // Convert int to decimal with given scale
+                            var coeff = @as(i128, i);
+                            var s: u8 = 0;
+                            while (s < target_scale) : (s += 1) {
+                                coeff *= 10;
+                            }
+                            break :blk_call .{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
+                        },
+                        .Decimal => |d| {
+                            // Adjust scale if needed
+                            var coeff = d.coeff;
+                            var current_scale = d.scale;
+                            while (current_scale < target_scale) : (current_scale += 1) {
+                                coeff *= 10;
+                            }
+                            while (current_scale > target_scale) : (current_scale -= 1) {
+                                coeff = @divTrunc(coeff, 10);
+                            }
+                            break :blk_call .{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
+                        },
+                        .Str => |s| {
+                            // Parse string to decimal
+                            if (std.mem.indexOf(u8, s, ".")) |dot_idx| {
+                                const int_part = s[0..dot_idx];
+                                const frac_part = s[dot_idx + 1 ..];
+                                const int_val = std.fmt.parseInt(i128, int_part, 10) catch break :blk_call .{ .Null = {} };
+                                const frac_val = std.fmt.parseInt(i128, frac_part, 10) catch break :blk_call .{ .Null = {} };
+                                var coeff = int_val;
+                                const frac_len = frac_part.len;
+                                var mult: i128 = 1;
+                                var k: usize = 0;
+                                while (k < frac_len) : (k += 1) {
+                                    mult *= 10;
+                                }
+                                coeff = coeff * mult + frac_val;
+                                // Adjust to target scale
+                                var current_scale: u8 = @intCast(frac_len);
+                                while (current_scale < target_scale) : (current_scale += 1) {
+                                    coeff *= 10;
+                                }
+                                while (current_scale > target_scale) : (current_scale -= 1) {
+                                    coeff = @divTrunc(coeff, 10);
+                                }
+                                break :blk_call .{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
+                            } else {
+                                const int_val = std.fmt.parseInt(i128, s, 10) catch break :blk_call .{ .Null = {} };
+                                var coeff = int_val;
+                                var sc: u8 = 0;
+                                while (sc < target_scale) : (sc += 1) {
+                                    coeff *= 10;
+                                }
+                                break :blk_call .{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
+                            }
+                        },
+                        else => break :blk_call .{ .Null = {} },
+                    }
+                }
+
+                // INTEGER/INT conversion
+                if (std.mem.eql(u8, upper_type, "INTEGER") or std.mem.eql(u8, upper_type, "INT") or std.mem.eql(u8, upper_type, "BIGINT")) {
+                    switch (value_arg) {
+                        .Int => |i| break :blk_call .{ .Int = i },
+                        .Decimal => |d| {
+                            // Truncate to integer
+                            var coeff = d.coeff;
+                            var sc = d.scale;
+                            while (sc > 0) : (sc -= 1) {
+                                coeff = @divTrunc(coeff, 10);
+                            }
+                            break :blk_call .{ .Int = @intCast(coeff) };
+                        },
+                        .Str => |s| {
+                            // Parse string, possibly with decimal point
+                            if (std.mem.indexOf(u8, s, ".")) |dot_idx| {
+                                const int_part = s[0..dot_idx];
+                                const val = std.fmt.parseInt(i64, int_part, 10) catch break :blk_call .{ .Null = {} };
+                                break :blk_call .{ .Int = val };
+                            } else {
+                                const val = std.fmt.parseInt(i64, s, 10) catch break :blk_call .{ .Null = {} };
+                                break :blk_call .{ .Int = val };
+                            }
+                        },
+                        .Bool => |b| break :blk_call .{ .Int = if (b) 1 else 0 },
+                        else => break :blk_call .{ .Null = {} },
+                    }
+                }
+
+                // STRING/VARCHAR/TEXT conversion
+                if (std.mem.eql(u8, upper_type, "STRING") or std.mem.eql(u8, upper_type, "VARCHAR") or std.mem.eql(u8, upper_type, "TEXT")) {
+                    switch (value_arg) {
+                        .Int => |i| {
+                            const str = try std.fmt.allocPrint(allocator, "{d}", .{i});
+                            break :blk_call .{ .Str = str };
+                        },
+                        .Decimal => |d| {
+                            // Format decimal as string with proper decimal point
+                            if (d.scale == 0) {
+                                const str = try std.fmt.allocPrint(allocator, "{d}", .{d.coeff});
+                                break :blk_call .{ .Str = str };
+                            } else {
+                                var divisor: i128 = 1;
+                                var sc = d.scale;
+                                while (sc > 0) : (sc -= 1) {
+                                    divisor *= 10;
+                                }
+                                const int_part = @divTrunc(d.coeff, divisor);
+                                const frac_part_signed = @rem(d.coeff, divisor);
+                                const frac_part = if (frac_part_signed < 0) -frac_part_signed else frac_part_signed;
+                                // Build the string manually with leading zeros for fractional part
+                                // First format the fractional part
+                                var frac_buf: [32]u8 = undefined;
+                                const frac_str = std.fmt.bufPrint(&frac_buf, "{d}", .{frac_part}) catch break :blk_call .{ .Null = {} };
+                                // Calculate leading zeros needed
+                                const frac_len = frac_str.len;
+                                const zeros_needed: usize = if (d.scale > frac_len) d.scale - @as(u8, @intCast(frac_len)) else 0;
+                                // Allocate result buffer
+                                var int_buf: [32]u8 = undefined;
+                                const int_str = std.fmt.bufPrint(&int_buf, "{d}", .{int_part}) catch break :blk_call .{ .Null = {} };
+                                const total_len = int_str.len + 1 + zeros_needed + frac_len; // int + '.' + zeros + frac
+                                const result = allocator.alloc(u8, total_len) catch break :blk_call .{ .Null = {} };
+                                var pos: usize = 0;
+                                @memcpy(result[pos..][0..int_str.len], int_str);
+                                pos += int_str.len;
+                                result[pos] = '.';
+                                pos += 1;
+                                @memset(result[pos..][0..zeros_needed], '0');
+                                pos += zeros_needed;
+                                @memcpy(result[pos..][0..frac_len], frac_str);
+                                break :blk_call .{ .Str = result };
+                            }
+                        },
+                        .Bool => |b| break :blk_call .{ .Str = if (b) "true" else "false" },
+                        .Str => |s| break :blk_call .{ .Str = s },
+                        else => break :blk_call .{ .Null = {} },
+                    }
+                }
+
+                // FLOAT/DOUBLE/REAL conversion (stored as Decimal internally)
+                if (std.mem.eql(u8, upper_type, "FLOAT") or std.mem.eql(u8, upper_type, "DOUBLE") or std.mem.eql(u8, upper_type, "REAL")) {
+                    switch (value_arg) {
+                        .Int => |i| {
+                            // Convert int to decimal with 6 decimal places for float representation
+                            const coeff = @as(i128, i) * 1000000;
+                            break :blk_call .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+                        },
+                        .Decimal => |d| break :blk_call .{ .Decimal = d },
+                        .Str => |s| {
+                            const f = std.fmt.parseFloat(f64, s) catch break :blk_call .{ .Null = {} };
+                            const coeff = @as(i128, @intFromFloat(f * 1000000));
+                            break :blk_call .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+                        },
+                        else => break :blk_call .{ .Null = {} },
+                    }
+                }
+
+                // BOOLEAN/BOOL conversion
+                if (std.mem.eql(u8, upper_type, "BOOLEAN") or std.mem.eql(u8, upper_type, "BOOL")) {
+                    switch (value_arg) {
+                        .Bool => |b| break :blk_call .{ .Bool = b },
+                        .Int => |i| break :blk_call .{ .Bool = i != 0 },
+                        .Str => |s| {
+                            if (std.ascii.eqlIgnoreCase(s, "true") or std.mem.eql(u8, s, "1")) {
+                                break :blk_call .{ .Bool = true };
+                            } else if (std.ascii.eqlIgnoreCase(s, "false") or std.mem.eql(u8, s, "0")) {
+                                break :blk_call .{ .Bool = false };
+                            } else {
+                                break :blk_call .{ .Null = {} };
+                            }
+                        },
+                        else => break :blk_call .{ .Null = {} },
+                    }
+                }
+
+                // Unknown type - return null
+                break :blk_call .{ .Null = {} };
+            }
+
             // CANARY: REQ=REQ-GQL-KEYS-002; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
             // B06 Fix: Handle keys() for Map, Node, AND Edge types
             if (std.mem.eql(u8, function_name, "keys")) {
@@ -2153,6 +2381,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             },
                             .Int => |i| Value{ .Int = i },
                             .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                             .Bool => |b| Value{ .Bool = b },
                             .Null => Value{ .Null = {} },
                             .ExtValue => |ext| Value{ .ExtValue = ext },
@@ -2166,6 +2395,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             .String => |s| Value{ .Str = s },
                             .Int => |i| Value{ .Int = i },
                             .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                             .Bool => |b| Value{ .Bool = b },
                             .Null => Value{ .Null = {} },
                             .ExtValue => |ext| Value{ .ExtValue = ext },
@@ -2314,6 +2544,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             },
                             else => Value{ .ExtValue = ext },
                         },
+                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                     };
                     break :blk_member result;
                 }
@@ -2355,6 +2586,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             },
                             else => Value{ .ExtValue = ext },
                         },
+                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                     };
                     break :blk_member result;
                 }
@@ -2853,6 +3085,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                         .Int => |i| Value{ .Int = i },
                         .String => |s| Value{ .Str = s },
                         .Float => |f| Value{ .Double = f }, // Convert PropertyValue.Float (f64) to Value.Double
+                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                         .ExtValue => |ext| Value{ .ExtValue = ext },
                     };
                     prop_map.put(entry.key_ptr.*, prop_val) catch continue;
@@ -2871,6 +3104,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                         .Int => |i| Value{ .Int = i },
                         .String => |s| Value{ .Str = s },
                         .Float => |f| Value{ .Double = f }, // Convert PropertyValue.Float (f64) to Value.Double
+                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                         .ExtValue => |ext| Value{ .ExtValue = ext },
                     };
                     prop_map.put(entry.key_ptr.*, prop_val) catch continue;

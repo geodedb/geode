@@ -222,6 +222,12 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                             }
                                             sum_float += @floatFromInt(ext.Int);
                                         }
+                                    } else if (val == .Decimal) {
+                                        // CANARY: REQ=REQ-AGGREGATION-SUM-DECIMAL-001; FEATURE="SumAggregation"; ASPECT=DecimalPropertySupport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0123_0136_regression.yml; OWNER=engine; UPDATED=2026-01-25
+                                        // Handle Decimal property values directly
+                                        has_float = true;
+                                        const decimal_float = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
+                                        sum_float += decimal_float;
                                     }
                                 }
                             }
@@ -305,6 +311,12 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                         count += 1;
                                     } else if (val == .Float) {
                                         sum += val.Float;
+                                        count += 1;
+                                    } else if (val == .Decimal) {
+                                        // CANARY: REQ=REQ-AGGREGATION-AVG-DECIMAL-001; FEATURE="AvgAggregation"; ASPECT=DecimalPropertySupport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0123_0136_regression.yml; OWNER=engine; UPDATED=2026-01-25
+                                        // Handle Decimal property values directly
+                                        const decimal_float = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
+                                        sum += decimal_float;
                                         count += 1;
                                     }
                                 }
@@ -421,6 +433,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                             .Bool => |b| Value{ .Bool = b },
                                             .Null => Value{ .Null = {} },
                                             .ExtValue => |ext| Value{ .ExtValue = ext },
+                                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                         };
                                         try list.append(allocator, value);
                                     }
@@ -453,6 +466,10 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     } else if (val == .Float) {
                                         sum += val.Float;
                                         count += 1;
+                                    } else if (val == .Decimal) {
+                                        const decimal_float = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
+                                        sum += decimal_float;
+                                        count += 1;
                                     }
                                 }
                             }
@@ -469,6 +486,8 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                             value = @floatFromInt(val.Int);
                                         } else if (val == .Float) {
                                             value = val.Float;
+                                        } else if (val == .Decimal) {
+                                            value = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
                                         } else {
                                             continue;
                                         }
@@ -511,6 +530,10 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     } else if (val == .Float) {
                                         sum += val.Float;
                                         count += 1;
+                                    } else if (val == .Decimal) {
+                                        const decimal_float = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
+                                        sum += decimal_float;
+                                        count += 1;
                                     }
                                 }
                             }
@@ -527,6 +550,8 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                             value = @floatFromInt(val.Int);
                                         } else if (val == .Float) {
                                             value = val.Float;
+                                        } else if (val == .Decimal) {
+                                            value = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
                                         } else {
                                             continue;
                                         }
@@ -581,6 +606,7 @@ pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node
                     .Bool => |b| return Value{ .Bool = b },
                     .Null => return Value{ .Null = {} },
                     .ExtValue => |ext| return Value{ .ExtValue = ext },
+                    .Decimal => |d| return Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                 }
             }
             return Value{ .Null = {} };
@@ -596,6 +622,7 @@ pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node
                     .Bool => |b| return Value{ .Bool = b },
                     .Null => return Value{ .Null = {} },
                     .ExtValue => |ext| return Value{ .ExtValue = ext },
+                    .Decimal => |d| return Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                 }
             }
             return Value{ .Null = {} };
@@ -803,6 +830,12 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                     } else if (val == .Float) {
                                         has_float = true;
                                         sum_float += val.Float;
+                                    } else if (val == .Decimal) {
+                                        // CANARY: REQ=REQ-AGGREGATION-SUM-DECIMAL-002; FEATURE="SumAggregation"; ASPECT=DecimalPropertySupport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0123_0136_regression.yml; OWNER=engine; UPDATED=2026-01-25
+                                        // Handle Decimal property values directly
+                                        has_float = true;
+                                        const decimal_float = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
+                                        sum_float += decimal_float;
                                     } else if (val == .ExtValue) {
                                         // Handle ExtValue which may contain Decimal values
                                         const ext = val.ExtValue;
@@ -854,6 +887,12 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                         count += 1;
                                     } else if (val == .Float) {
                                         sum += val.Float;
+                                        count += 1;
+                                    } else if (val == .Decimal) {
+                                        // CANARY: REQ=REQ-AGGREGATION-AVG-DECIMAL-002; FEATURE="AvgAggregation"; ASPECT=DecimalPropertySupport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0123_0136_regression.yml; OWNER=engine; UPDATED=2026-01-25
+                                        // Handle Decimal property values directly
+                                        const decimal_float = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
+                                        sum += decimal_float;
                                         count += 1;
                                     } else if (val == .ExtValue) {
                                         // Handle ExtValue which may contain Decimal values
@@ -988,6 +1027,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                             .Bool => |b| Value{ .Bool = b },
                                             .Null => Value{ .Null = {} },
                                             .ExtValue => |ext| Value{ .ExtValue = ext },
+                                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                         };
                                         try list.append(allocator, value);
                                     }

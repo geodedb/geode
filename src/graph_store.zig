@@ -113,6 +113,8 @@ pub const PropertyValue = union(enum) {
     Bool: bool,
     Null,
     ExtValue: @import("eval_extended.zig").ExtValue,
+    // CANARY: REQ=REQ-GQL-DECIMAL-001; FEATURE="DecimalPrecision"; ASPECT=PropertyStorage; STATUS=TESTED; TEST=geodetestlab/specs/gap_analysis_fixes_january_2026.yml; OWNER=core; UPDATED=2026-01-25
+    Decimal: struct { coeff: i128, scale: u8 },
 };
 
 // CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=enterprise; UPDATED=2026-01-09
@@ -695,6 +697,7 @@ pub const GraphStore = struct {
                     .Bool => 3,
                     .Null => 4,
                     .ExtValue => 5, // ExtValue types
+                    .Decimal => 6, // Decimal with preserved precision
                 };
                 _ = try file.write(&[1]u8{val_type});
 
@@ -926,6 +929,13 @@ pub const GraphStore = struct {
                             },
                         }
                     },
+                    .Decimal => |d| {
+                        // Write coefficient (i128 = 16 bytes) and scale (u8 = 1 byte)
+                        var buf: [17]u8 = undefined;
+                        std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
+                        buf[16] = d.scale;
+                        _ = try file.write(&buf);
+                    },
                 }
             }
 
@@ -976,6 +986,7 @@ pub const GraphStore = struct {
                     .Bool => 3,
                     .Null => 4,
                     .ExtValue => 5,
+                    .Decimal => 6,
                 };
                 _ = try file.write(&[1]u8{val_type});
 
@@ -1050,6 +1061,13 @@ pub const GraphStore = struct {
                             },
                             else => {},
                         }
+                    },
+                    .Decimal => |d| {
+                        // Write coefficient (i128 = 16 bytes) and scale (u8 = 1 byte)
+                        var buf: [17]u8 = undefined;
+                        std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
+                        buf[16] = d.scale;
+                        _ = try file.write(&buf);
                     },
                 }
             }

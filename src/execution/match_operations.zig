@@ -432,7 +432,8 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
                             .Bool => |b| Value{ .Bool = b },
                             .Int => |i| Value{ .Int = i },
                             .String => |s| Value{ .Str = s },
-                            .Float => Value{ .Null = {} },
+                            .Float => |f| Value{ .Double = f },
+                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                             .ExtValue => |ext| Value{ .ExtValue = ext },
                         };
                         const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
@@ -669,7 +670,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                             .Bool => |b| Value{ .Bool = b },
                             .Int => |i| Value{ .Int = i },
                             .String => |s| Value{ .Str = s },
-                            .Float => Value{ .Null = {} },
+                            .Float => |f| Value{ .Double = f },
+                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                             .ExtValue => |ext| Value{ .ExtValue = ext },
                         };
                         const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
@@ -765,7 +767,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                                             .Bool => |b| Value{ .Bool = b },
                                             .Int => |ii| Value{ .Int = ii },
                                             .String => |s| Value{ .Str = s },
-                                            .Float => Value{ .Null = {} },
+                                            .Float => |f| Value{ .Double = f },
+                                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                             .ExtValue => |ext| Value{ .ExtValue = ext },
                                         };
                                         if (!valuesEqual(node_val, expected_val)) {
@@ -933,8 +936,9 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                                                     .Bool => |b| Value{ .Bool = b },
                                                     .Int => |ii| Value{ .Int = ii },
                                                     .String => |s| Value{ .Str = s },
-                                                    .Float => Value{ .Null = {} },
+                                                    .Float => |f| Value{ .Double = f },
                                                     .ExtValue => |ext| Value{ .ExtValue = ext },
+                                                    .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                                 };
                                                 if (!valuesEqual(node_val, expected_val)) {
                                                     self.allocator.free(env_names);
@@ -1700,7 +1704,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         .Bool => |b| Value{ .Bool = b },
                         .Int => |i| Value{ .Int = i },
                         .String => |s| Value{ .Str = s },
-                        .Float => Value{ .Null = {} },
+                        .Float => |f| Value{ .Double = f },
+                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                         .ExtValue => |ext| Value{ .ExtValue = ext },
                     };
                     // Evaluate property value with parameters
@@ -1969,7 +1974,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                                         .Bool => |b| Value{ .Bool = b },
                                         .Int => |i| Value{ .Int = i },
                                         .String => |s| Value{ .Str = s },
-                                        .Float => Value{ .Null = {} },
+                                        .Float => |f| Value{ .Double = f },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                         .ExtValue => |ext| Value{ .ExtValue = ext },
                                     };
                                     const prop_val = eval.evalExpr(allocator, prop.value.*, base_env) catch Value{ .Null = {} };
@@ -2058,8 +2064,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                                         .Bool => |b| Value{ .Bool = b },
                                         .Int => |i| Value{ .Int = i },
                                         .String => |s| Value{ .Str = s },
-                                        .Float => Value{ .Null = {} },
+                                        .Float => |f| Value{ .Double = f },
                                         .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                     };
                                     const prop_val = eval.evalExpr(allocator, prop.value.*, base_env) catch Value{ .Null = {} };
                                     if (!valuesEqual(node_val, prop_val)) {
@@ -2133,8 +2140,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                                         .Bool => |b| Value{ .Bool = b },
                                         .Int => |i| Value{ .Int = i },
                                         .String => |s| Value{ .Str = s },
-                                        .Float => Value{ .Null = {} },
+                                        .Float => |f| Value{ .Double = f },
                                         .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                     };
                                     const prop_val = eval.evalExpr(allocator, prop.value.*, base_env) catch Value{ .Null = {} };
                                     if (!valuesEqual(node_val, prop_val)) {
@@ -2407,8 +2415,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                                         .Bool => |b| Value{ .Bool = b },
                                         .Int => |i| Value{ .Int = i },
                                         .String => |s| Value{ .Str = s },
-                                        .Float => Value{ .Null = {} },
+                                        .Float => |f| Value{ .Double = f },
                                         .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                     };
                                     // Evaluate property value using current row's bindings (env)
                                     const prop_val = eval.evalExpr(allocator, prop.value.*, env) catch Value{ .Null = {} };
@@ -3231,7 +3240,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         .Bool => |b| Value{ .Bool = b },
                                         .Int => |i| Value{ .Int = i },
                                         .String => |s| Value{ .Str = s },
-                                        .Float => Value{ .Null = {} },
+                                        .Float => |f| Value{ .Double = f },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                         .ExtValue => |ext| Value{ .ExtValue = ext },
                                     };
                                     const prop_env = eval.Env{
@@ -3556,8 +3566,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     .Bool => |b| Value{ .Bool = b },
                                     .Int => |i| Value{ .Int = i },
                                     .String => |s| Value{ .Str = s },
-                                    .Float => Value{ .Null = {} },
+                                    .Float => |f| Value{ .Double = f },
                                     .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                 };
                                 const prop_env = eval.Env{
                                     .names = param_names,
@@ -3625,8 +3636,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         .Bool => |b| Value{ .Bool = b },
                                         .Int => |i| Value{ .Int = i },
                                         .String => |s| Value{ .Str = s },
-                                        .Float => Value{ .Null = {} },
+                                        .Float => |f| Value{ .Double = f },
                                         .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                     };
                                     const prop_env = eval.Env{
                                         .names = param_names,
@@ -4242,8 +4254,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     .Bool => |b| Value{ .Bool = b },
                                     .Int => |i| Value{ .Int = i },
                                     .String => |s| Value{ .Str = s },
-                                    .Float => Value{ .Null = {} },
+                                    .Float => |f| Value{ .Double = f },
                                     .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                 };
                                 // Evaluate the expected property value
                                 const empty_env = eval.Env{
@@ -4314,8 +4327,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         .Bool => |b| Value{ .Bool = b },
                                         .Int => |i| Value{ .Int = i },
                                         .String => |s| Value{ .Str = s },
-                                        .Float => Value{ .Null = {} },
+                                        .Float => |f| Value{ .Double = f },
                                         .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                     };
                                     // Evaluate the expected property value
                                     const empty_env = eval.Env{
@@ -4426,8 +4440,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 .Bool => |b| Value{ .Bool = b },
                                 .Int => |i| Value{ .Int = i },
                                 .String => |s| Value{ .Str = s },
-                                .Float => Value{ .Null = {} },
+                                .Float => |f| Value{ .Double = f },
                                 .ExtValue => |ext| Value{ .ExtValue = ext },
+                                .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                             };
                             // Evaluate the expected property value
                             const empty_env = eval.Env{
@@ -4522,7 +4537,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         break :blk graph_store.PropertyValue{ .String = final_value };
                                     },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                    .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                    .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                     .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                     else => graph_store.PropertyValue{ .Null = {} },
@@ -4792,8 +4807,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     .Bool => |b| Value{ .Bool = b },
                                     .Int => |i| Value{ .Int = i },
                                     .String => |s| Value{ .Str = s },
-                                    .Float => Value{ .Null = {} },
+                                    .Float => |f| Value{ .Double = f },
                                     .ExtValue => |ext| Value{ .ExtValue = ext },
+                                    .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                 };
                                 const prop_env = eval.Env{
                                     .names = param_names,
@@ -4917,8 +4933,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                             .Bool => |b| Value{ .Bool = b },
                                             .Int => |i| Value{ .Int = i },
                                             .String => |s| Value{ .Str = s },
-                                            .Float => Value{ .Null = {} },
+                                            .Float => |f| Value{ .Double = f },
                                             .ExtValue => |ext| Value{ .ExtValue = ext },
+                                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                         };
                                         const prop_env = eval.Env{
                                             .names = param_names,
@@ -5263,8 +5280,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 .Bool => |b| Value{ .Bool = b },
                                 .Int => |i| Value{ .Int = i },
                                 .String => |s| Value{ .Str = s },
-                                .Float => Value{ .Null = {} },
+                                .Float => |f| Value{ .Double = f },
                                 .ExtValue => |ext| Value{ .ExtValue = ext },
+                                .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                             };
                             // Evaluate the expected property value
                             const prop_env = eval.Env{
@@ -5344,8 +5362,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         .Bool => |b| Value{ .Bool = b },
                                         .Int => |i| Value{ .Int = i },
                                         .String => |s| Value{ .Str = s },
-                                        .Float => Value{ .Null = {} },
+                                        .Float => |f| Value{ .Double = f },
                                         .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                     };
                                     const prop_env = eval.Env{
                                         .names = param_names,
@@ -5550,8 +5569,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         .Bool => |b| Value{ .Bool = b },
                                         .Int => |i| Value{ .Int = i },
                                         .String => |s| Value{ .Str = s },
-                                        .Float => Value{ .Null = {} },
+                                        .Float => |f| Value{ .Double = f },
                                         .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                     };
                                     const prop_env = eval.Env{
                                         .names = param_names,
@@ -5670,7 +5690,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                                 break :blk graph_store.PropertyValue{ .String = final_value };
                                             },
                                             .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                                             .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                             .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                             else => graph_store.PropertyValue{ .Null = {} },
@@ -5693,7 +5713,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                                 break :blk graph_store.PropertyValue{ .String = final_value };
                                             },
                                             .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                                             .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                             .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                             else => graph_store.PropertyValue{ .Null = {} },
@@ -5716,7 +5736,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                                 break :blk graph_store.PropertyValue{ .String = final_value };
                                             },
                                             .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                                             .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                             .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                             else => graph_store.PropertyValue{ .Null = {} },
@@ -5817,8 +5837,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 .Bool => |b| Value{ .Bool = b },
                                 .Int => |i| Value{ .Int = i },
                                 .String => |s| Value{ .Str = s },
-                                .Float => Value{ .Null = {} }, // Float not directly supported
+                                .Float => |f| Value{ .Double = f }, // Float not directly supported
                                 .ExtValue => |ext| Value{ .ExtValue = ext },
+                                .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                             };
                             // Evaluate expected value from pattern (with access to parameters)
                             const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
@@ -5927,7 +5948,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         break :blk graph_store.PropertyValue{ .String = final_value };
                                     },
                                     .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                    .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                    .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                                     .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                     .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                     else => graph_store.PropertyValue{ .Null = {} },
@@ -5969,7 +5990,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         const prop_value = switch (value) {
                                             .Str => |s| graph_store.PropertyValue{ .String = s },
                                             .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                                             .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                             .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                             else => graph_store.PropertyValue{ .Null = {} },

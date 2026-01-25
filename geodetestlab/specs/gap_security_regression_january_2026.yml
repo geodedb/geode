@@ -238,7 +238,7 @@ tests:
     args: ["query", "-"]
     stdin: |
       CREATE (n:CDCTest_0101 {event: 'insert_event'});
-      SET n.event = 'update_event';
+      MATCH (m:CDCTest_0101) SET m.event = 'update_event';
       MATCH (n:CDCTest_0101) RETURN n.event AS status
     expect:
       exit_code: 0
@@ -298,7 +298,7 @@ tests:
     stdin: |
       BEGIN;
       CREATE (n:IsolationTest {state: 'initial'});
-      SET n.state = 'modified';
+      MATCH (m:IsolationTest) SET m.state = 'modified';
       COMMIT;
       MATCH (n:IsolationTest) RETURN n.state AS final
     expect:
