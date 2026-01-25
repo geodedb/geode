@@ -167,8 +167,33 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
         import shlex
         for cmd_item in setup_commands:
             try:
-                # Handle both string and dict formats
-                if isinstance(cmd_item, dict):
+                # Handle string format - could be shell command or geode command
+                if isinstance(cmd_item, str):
+                    # Check if it looks like a shell command (starts with common shell commands)
+                    shell_commands = ['mkdir', 'rm', 'cat', 'echo', 'cd', 'cp', 'mv', 'touch', 'chmod', 'ls', 'pwd', 'export', 'source', '.']
+                    first_word = cmd_item.strip().split()[0] if cmd_item.strip() else ''
+
+                    if first_word in shell_commands or '>' in cmd_item or '|' in cmd_item or '<<' in cmd_item:
+                        # Shell command - execute via system shell
+                        shell_result = subprocess.run(
+                            cmd_item,
+                            shell=True,
+                            capture_output=True,
+                            encoding='utf-8',
+                            errors='replace',
+                            timeout=30
+                        )
+                        if shell_result.returncode != 0:
+                            error_msg = f"setup command failed (exit {shell_result.returncode})"
+                            if shell_result.stderr:
+                                error_msg += f": {shell_result.stderr[:200]}"
+                            return False, error_msg
+                        continue  # Move to next setup command
+                    else:
+                        # Geode command string format: "geode query '...'"
+                        setup_args = shlex.split(cmd_item)
+                        setup_stdin = None
+                elif isinstance(cmd_item, dict):
                     # Dict format: {"args": ["query", "..."]} or {"command": "shell", "args": [], "stdin": "..."}
                     setup_command = cmd_item.get("command", None)
                     setup_args = cmd_item.get("args", [])
@@ -184,9 +209,7 @@ def run_test(test_case, binary="./zig-out/bin/geode", spec_name="", instance_id=
                             if len(setup_args) == 0 or setup_args[0] != setup_command:
                                 setup_args = [setup_command] + setup_args
                 else:
-                    # String format: "geode query '...'"
-                    setup_args = shlex.split(cmd_item)
-                    setup_stdin = None
+                    continue  # Skip unknown format
 
                 # Apply variable substitution and isolation to setup args
                 setup_processed = []
@@ -903,12 +926,31 @@ def main():
         try:
             # Execute spec-level setup if present
             spec_setup = spec.get("setup", [])
-            if spec_setup and spec_server_enabled:
+            if spec_setup:
                 print(f"  Running spec-level setup for {spec_file.name} ({len(spec_setup)} commands)...")
                 setup_failed = False
                 for setup_idx, setup_item in enumerate(spec_setup):
                     try:
-                        # Build setup command from the spec setup item
+                        # Handle string format (shell commands) vs dict format (geode commands)
+                        if isinstance(setup_item, str):
+                            # Shell command - execute via system shell
+                            result = subprocess.run(
+                                setup_item,
+                                shell=True,
+                                capture_output=True,
+                                encoding='utf-8',
+                                errors='replace',
+                                timeout=30
+                            )
+                            if result.returncode != 0:
+                                print(f"    Setup command {setup_idx + 1} failed: exit code {result.returncode}")
+                                if result.stderr:
+                                    print(f"      stderr: {result.stderr[:200]}")
+                                setup_failed = True
+                                break
+                            continue  # Move to next setup command
+
+                        # Dict format - geode command
                         setup_args = setup_item.get("args", [])
                         setup_stdin = setup_item.get("stdin", None)
                         setup_expect = setup_item.get("expect", {})
@@ -1030,6 +1072,31 @@ def main():
                     test_index += 1  # Increment after normal test completes
 
         finally:
+            # Execute spec-level cleanup if present
+            spec_cleanup = spec.get("cleanup", [])
+            if spec_cleanup:
+                print(f"  Running spec-level cleanup for {spec_file.name}...")
+                for cleanup_item in spec_cleanup:
+                    try:
+                        if isinstance(cleanup_item, str):
+                            # Shell command - execute via system shell
+                            subprocess.run(
+                                cleanup_item,
+                                shell=True,
+                                capture_output=True,
+                                timeout=30
+                            )
+                        elif isinstance(cleanup_item, dict):
+                            # Geode command
+                            cleanup_args = cleanup_item.get("args", [])
+                            subprocess.run(
+                                [binary] + cleanup_args,
+                                capture_output=True,
+                                timeout=30
+                            )
+                    except:
+                        pass  # Ignore cleanup errors
+
             # Stop server if it was started
             if server_proc is not None:
                 print(f"  Stopping server for {spec_file.name}...")
