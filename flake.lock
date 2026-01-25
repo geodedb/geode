@@ -1202,11 +1202,11 @@
         "nixpkgs": "nixpkgs_11"
       },
       "locked": {
-        "lastModified": 1769378149,
-        "narHash": "sha256-Qs2lNKSXqETbq0LHZb3iw3ZhhMuSnRHDrpx2zHmkU/w=",
+        "lastModified": 1769378624,
+        "narHash": "sha256-ZzbSugVsJ2Wpr/Cjz6Vq23R0KggoJkUJ+7zrUpL/k0k=",
         "ref": "refs/heads/main",
-        "rev": "469fbe0eb702bafc46c060bed82f96258a0d9e3f",
-        "revCount": 7,
+        "rev": "d7a8f856413ca6a71f96a259e87300a0233e892e",
+        "revCount": 8,
         "type": "git",
         "url": "https://gitlab.com/devnw/zig/quic.git"
       },
