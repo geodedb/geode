@@ -8,6 +8,18 @@ cli:
     startup_timeout_ms: 30000
     args: ["--log-level", "error"]
 
+setup:
+  # Create shared test data for Person queries
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (:Person {name: 'Alice', age: 30})
+      CREATE (:Person {name: 'Bob', age: 25})
+      CREATE (:Person {name: 'Charlie', age: 35})
+      CREATE (:Person {name: 'David', age: 28})
+      CREATE (:Person {name: 'Eve', age: 32})
+    expect:
+      exit_code: 0
+
 tests:
   # Property-based Ordering (previously fixed)
   - name: order-by-node-property
@@ -51,13 +63,13 @@ tests:
       stdout_contains: ["name"]
 
   - name: skip-and-limit
-    args: ["query", "MATCH (n:Person) RETURN n.name SKIP 1 LIMIT 2", "--format", "json"]
+    args: ["query", "MATCH (n:Person) RETURN n.name ORDER BY n.name SKIP 1 LIMIT 2", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["name"]
 
   - name: limit-then-skip-order
-    args: ["query", "MATCH (n:Person) RETURN n.name LIMIT 10 SKIP 2", "--format", "json"]
+    args: ["query", "MATCH (n:Person) RETURN n.name ORDER BY n.name LIMIT 10 SKIP 2", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: ["name"]
@@ -292,17 +304,18 @@ tests:
       exit_code: 0
       stdout_contains: ["2", "4", "6", "8", "10"]
 
-  # SQL-style comments
-  - name: sql-style-comments
-    args: ["query", "RETURN 1 AS x -- this is a comment", "--format", "json"]
+  # GQL-style comments (double-dash disabled per GB02, use // instead)
+  - name: gql-style-comments
+    args: ["query", "-", "--format", "json"]
+    stdin: "RETURN 1 AS x // this is a comment"
     expect:
       exit_code: 0
-      stdout_contains: ["x"]
+      stdout_contains: ["x", "1"]
 
-  - name: sql-style-comments-multiline
+  - name: gql-style-comments-multiline
     args: ["query", "-", "--format", "json"]
     stdin: |
-      -- This is a SQL comment
+      // This is a GQL comment
       RETURN 42 AS value
     expect:
       exit_code: 0
