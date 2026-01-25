@@ -352,7 +352,7 @@ REQ-CI-CANARY-LINT-001,CI CANARY Linting,Governance,TESTED,,,ci,2026-01-17,.gitl
 REQ-CI-CANARY-LINT-TEST-001,CANARY Lint Unit Tests,UnitTesting,TESTED,,,governance,2026-01-17,tools/test_canary_lint.py
 REQ-CI-CANARYSCAN-001,CI Canaryscan Verify,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml
 REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml
-REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml
+REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-25,.gitlab-ci.yml
 REQ-CI-GOV-001,CI Governance Checks,Core,TESTED,,,ci,2026-01-16,.gitlab-ci.yml
 REQ-CI-NIX-001,Nix Flake CI,Packaging,TESTED,,,ci,2026-01-22,.gitlab-ci.yml
 REQ-CI-REQ-DOC-REGRESSION-001,REQ-DOC Report Regression Tests,RegressionTesting,TESTED,,,governance,2026-01-17,geodetestlab/specs/gap_0229_req_doc_reports.yml

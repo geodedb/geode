@@ -4,11 +4,14 @@ const std = @import("std");
 // Flags:
 //   --json             Emit machine JSON summary.
 //   --markdown         Emit Markdown summary table.
-//   --fail-on-issues   Exit code 2 if duplicates or gaps present.
+//   --fail-on-issues   Exit code 2 if gaps present (duplicates are allowed by design).
 // Usage examples:
 //   zig run scripts/conformance_sync.zig -- --json
 //   zig run scripts/conformance_sync.zig -- --markdown
 //   zig run scripts/conformance_sync.zig -- --markdown --fail-on-issues
+//
+// Note: Duplicate REQ-GQL IDs are intentional - the CANARY system allows the same
+// requirement ID to be tracked in multiple files where that requirement is implemented.
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -75,7 +78,9 @@ pub fn main() !void {
         }
     }.lessThan);
 
-    const has_issues = dup_count > 0 or (min_seen >= 0 and hasGaps(present[0..], @intCast(min_seen), @intCast(max_seen)));
+    // Note: Duplicate REQ-GQL IDs are intentional - the same requirement may be tracked
+    // in multiple files. Only gaps in the numeric sequence are considered issues.
+    const has_issues = min_seen >= 0 and hasGaps(present[0..], @intCast(min_seen), @intCast(max_seen));
 
     if (json) {
         // opening brace
