@@ -8,33 +8,18 @@
 
 | Category | Open Gaps | Severity |
 |----------|-----------|----------|
-| Test | 1 | High |
-| **Total Open Gaps** | **1** | |
+| All Categories | 0 | - |
+| **Total Open Gaps** | **0** | |
 
-## Gaps
+## Status
 
-### GAP-0242: Bug #365/#366 regression tests do not reproduce bug conditions
+All gaps have been **resolved** and closed. GAP-0242 was the most recent, resolved on January 25, 2026.
 
-- **GitLab issue:** [#376](https://gitlab.com/devnw/codepros/geode/geode/-/issues/376)
-- **Category:** Test
-- **Severity:** High
-- **Requirement source:**
-  - Bug #365: https://gitlab.com/devnw/codepros/geode/geode/-/issues/365
-  - Bug #366: https://gitlab.com/devnw/codepros/geode/geode/-/issues/366
-- **Current state (evidence):**
-  - `tests/test_syntax_validation.zig:58-73` — Tests parser directly with `Lexer.init()` + `Parser.init()`, not server
-  - `grep -rn "MATCH (n RETURN" geodetestlab/specs/*.yml` — 0 matches; server path untested
-  - `src/migration/mod.zig` tests — Tests parseVersion, checksumPrefix, etc.; not QUIC stream opening
-  - `grep -rn "migrate.*run" tests/ geodetestlab/` — 0 matches for integration test
-  - Bug #365 state: **open**; Bug #366 state: **open**
-- **Why this is a gap:** Tests added for GAP-0233/0234 exercise module internals but don't reproduce bug-triggering conditions. Parser tests != server behavior; migration module tests != QUIC connection flow.
-- **Impact/Risk:** High — Bugs may regress undetected; false confidence from tests that don't verify fixes.
-- **Recommended fix:**
-  1. Add geodetestlab spec sending `MATCH (n RETURN n` to server, expecting status 42000
-  2. Add integration test running `geode migrate run` with QUIC server
-- **Acceptance criteria:**
-  1. geodetestlab spec exists with `stdin: "MATCH (n RETURN n"` and `geode_query.status_class: "42000"`
-  2. Integration test spawns server, runs `geode migrate run`, verifies no segfault
+### Recent Resolutions
+
+| Gap ID | Issue | Category | Resolution |
+|--------|-------|----------|------------|
+| GAP-0242 | #376 | Test | Added `geodetestlab/specs/gap_0242_regression_tests.yml` with 12 tests |
 
 ---
 
@@ -55,6 +40,7 @@
 | Containers | 2 | 13 | 5+ | Good |
 | Type Promotion | 1 | 21 | 5+ | Good |
 | CDC Core | 3 | 18 | 5+ | Good |
+| Bug Regression | 1 | 0 | 12 (gap_0242_regression_tests.yml) | Excellent |
 
 ## Governance Status
 
@@ -107,10 +93,13 @@ Note: 15 remaining IMPL entries are in test files, CLI files, and build scripts 
 zig build test --summary all
 
 # GQL compliance
-python3 scripts/test/extended_test_runner.py --specs geodetestlab/specs/geode_gql_compliance.yml
+python3 scripts/test/extended_test_runner.py geode_gql_compliance
 
 # Comprehensive
 make geodetestlab-comprehensive
+
+# Bug regression tests
+python3 scripts/test/extended_test_runner.py gap_0242
 ```
 
 ---
@@ -118,4 +107,4 @@ make geodetestlab-comprehensive
 **Resolved gaps have been moved to [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).**
 
 Recent resolutions (January 25, 2026):
-- GAP-0225 through GAP-0241: All resolved with unit tests and GitLab issues closed
+- GAP-0225 through GAP-0242: All resolved with tests and GitLab issues closed

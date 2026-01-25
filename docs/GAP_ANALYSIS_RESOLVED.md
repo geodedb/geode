@@ -8,6 +8,42 @@ This document contains gaps that have been verified as resolved from previous ga
 
 **Current Status**: All gaps resolved as of January 25, 2026. See docs/GAP_ANALYSIS.md.
 
+## January 25, 2026 Gap Resolution Session 20 - Server-Side Bug Regression Tests
+
+**Summary**: Resolved GAP-0242 by adding server-side regression tests that reproduce actual bug conditions.
+
+### GAP-0242: Bug #365/#366 regression tests do not reproduce bug conditions ✅ RESOLVED
+- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/376
+- **Category:** Test
+- **Severity:** High
+- **Resolution Date:** January 25, 2026
+- **Fix Applied:**
+  1. Created `geodetestlab/specs/gap_0242_regression_tests.yml` with 12 server-side regression tests:
+     - **Bug #365 tests (7 tests):**
+       - `bug-365-missing-paren-server`: Tests `MATCH (n RETURN n` returns status 42000
+       - `bug-365-missing-paren-variation`: Tests `MATCH (n WHERE...` variations
+       - `bug-365-unclosed-string`: Tests unclosed string literals
+       - `bug-365-incomplete-where`: Tests incomplete WHERE clauses
+       - `bug-365-unmatched-bracket`: Tests unmatched list brackets
+       - `bug-365-unmatched-brace`: Tests unmatched map braces
+       - `bug-365-control-valid-match`: Control test for valid syntax
+     - **Bug #366 tests (4 tests):**
+       - `bug-366-migrate-run-no-segfault`: Tests migrate run with QUIC server (dry-run)
+       - `bug-366-migrate-status-server`: Tests migrate status with server
+       - `bug-366-migrate-run-empty-dir`: Tests empty migration directory
+       - `bug-366-migrate-run-invalid-server`: Tests graceful failure
+     - **Stress test (1 test):**
+       - `regression-repeated-invalid-syntax`: Repeated invalid syntax queries
+- **Evidence:**
+  - `python3 scripts/test/extended_test_runner.py gap_0242` → 12 passed, 0 failed
+  - Server correctly returns status 42000 for invalid syntax
+  - Migration commands do not segfault with QUIC connections
+- **Related Bugs:**
+  - Bug #365 (syntax validation): Confirmed FIXED - server rejects invalid syntax
+  - Bug #366 (migrate segfault): Confirmed FIXED - no segfault on QUIC stream opening
+
+---
+
 ## January 25, 2026 Gap Resolution Session 19 - Unit Test Coverage & IMPL Elimination
 
 **Summary**: Resolved 9 gaps (GAP-0233 through GAP-0241) covering unit test coverage gaps and IMPL entry reduction.
