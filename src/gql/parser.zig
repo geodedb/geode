@@ -189,6 +189,11 @@ pub const Parser = struct {
             .XOR,
             .ZONED,
             .ORDINALITY,
+            // Temporal type keywords - used as function names (e.g., date('2024-01-15'))
+            .DATE,
+            .TIME,
+            .DATETIME,
+            .TIMESTAMP,
             => true,
             else => false,
         };
@@ -3279,6 +3284,14 @@ pub const Parser = struct {
                     if (std.ascii.eqlIgnoreCase(name, "shortestPath") or std.ascii.eqlIgnoreCase(name, "allShortestPaths")) {
                         const is_all = std.ascii.eqlIgnoreCase(name, "allShortestPaths");
                         self.advance(); // consume '('
+                        // CANARY: REQ=REQ-GQL-PATH-NULL-001; FEATURE="ShortestPath"; ASPECT=NullHandling; STATUS=TESTED; TEST=geodetestlab/specs/gap_0087_0089_resolution.yml; OWNER=parser; UPDATED=2026-01-25
+                        // Handle NULL input - shortestPath(null) should return NULL
+                        if (self.cur.kind == .NULL) {
+                            self.advance(); // consume NULL
+                            _ = try self.expect(.r_paren);
+                            base = .Null;
+                            continue;
+                        }
                         // Parse graph pattern argument
                         const pattern = try self.parseGraphPattern();
                         _ = try self.expect(.r_paren);
@@ -3670,6 +3683,71 @@ pub const Parser = struct {
                 self.advance();
                 return .Null;
             },
+            .CAST => blk_cast: {
+                // CANARY: REQ=REQ-GQL-CAST-001; FEATURE="TypeCasting"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=parser; UPDATED=2026-01-25
+                // Parse CAST(expr AS type) or CAST(expr AS type(precision)) or CAST(expr AS type(precision, scale))
+                self.advance(); // consume CAST
+                _ = try self.expect(.l_paren);
+
+                // Parse the expression to cast
+                const expr = try self.parseOrExpr();
+                const expr_ptr = try self.arena.allocator().create(ast.Expr);
+                expr_ptr.* = expr;
+
+                // Expect AS keyword
+                _ = try self.expect(.AS);
+
+                // Parse target type - accept identifier or any keyword (type names like DECIMAL are parsed as identifiers)
+                const type_name: []const u8 = self.cur.lexeme;
+                if (self.cur.kind == .identifier or self.cur.lexeme.len > 0) {
+                    self.advance();
+                } else {
+                    return self.unexpected("expected type name in CAST");
+                }
+
+                // Check for optional precision/scale: (precision) or (precision, scale)
+                var full_type_name = type_name;
+                if (self.cur.kind == .l_paren) {
+                    self.advance(); // consume (
+                    var type_buf = std.ArrayList(u8).initCapacity(self.arena.allocator(), 32) catch @panic("OOM");
+                    try type_buf.appendSlice(self.arena.allocator(), type_name);
+                    try type_buf.appendSlice(self.arena.allocator(), "(");
+
+                    // Parse precision
+                    if (self.cur.kind != .integer_lit) return self.unexpected("expected precision in CAST type");
+                    try type_buf.appendSlice(self.arena.allocator(), self.cur.lexeme);
+                    self.advance();
+
+                    // Optional scale
+                    if (self.cur.kind == .comma) {
+                        self.advance();
+                        try type_buf.appendSlice(self.arena.allocator(), ",");
+                        if (self.cur.kind != .integer_lit) return self.unexpected("expected scale in CAST type");
+                        try type_buf.appendSlice(self.arena.allocator(), self.cur.lexeme);
+                        self.advance();
+                    }
+
+                    _ = try self.expect(.r_paren);
+                    try type_buf.appendSlice(self.arena.allocator(), ")");
+                    full_type_name = try type_buf.toOwnedSlice(self.arena.allocator());
+                }
+
+                _ = try self.expect(.r_paren); // closing paren of CAST
+
+                // Create a Call node with "cast" as the function name
+                const a = self.arena.allocator();
+                const callee_ptr = try a.create(ast.Expr);
+                callee_ptr.* = .{ .Ident = .{ .orig = "cast", .cnf = "CAST" } };
+
+                const type_ptr = try a.create(ast.Expr);
+                type_ptr.* = .{ .String = full_type_name };
+
+                const args = try a.alloc(*ast.Expr, 2);
+                args[0] = expr_ptr;
+                args[1] = type_ptr;
+
+                break :blk_cast .{ .Call = .{ .callee = callee_ptr, .args = args } };
+            },
             .l_paren => blk_paren: {
                 // grouping
                 self.advance();
@@ -3900,6 +3978,7 @@ pub const Parser = struct {
             .Ident => true,
             .Member => true,
             .Call => true, // allow nested function calls
+            .Null => true, // NULL is valid for functions like abs(NULL)
             else => false,
         };
     }
@@ -3944,6 +4023,11 @@ pub const Parser = struct {
         if (std.ascii.eqlIgnoreCase(name, "toString")) {
             // Accept any single expression for toString() function
             return n == 1;
+        }
+        // CANARY: REQ=REQ-GQL-CAST-003; FEATURE="TypeCasting"; ASPECT=Validation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=parser; UPDATED=2026-01-25
+        if (std.ascii.eqlIgnoreCase(name, "cast")) {
+            // CAST(expr, type_string) - requires exactly 2 args
+            return n == 2;
         }
         if (std.ascii.eqlIgnoreCase(name, "abs")) {
             return n == 1 and argIsNumericLike(args[0]);
@@ -6193,11 +6277,11 @@ pub const Parser = struct {
                     .expression = graph_expr,
                 } },
             } };
-        } else if (self.cur.kind == .time_lit or
+        } else if (self.cur.kind == .time_lit or self.cur.kind == .TIME or
             (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TIME")))
         {
             // Handle TIME ZONE in SESSION SET context
-            // Note: "TIME" without following string literal is lexed as .identifier
+            // Note: "TIME" without following string literal is now lexed as .TIME keyword
             self.advance();
             _ = try self.expect(.ZONE);
 

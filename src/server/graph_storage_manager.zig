@@ -365,19 +365,25 @@ pub fn getGraphStorageByName(name: ?[]const u8) ?*graph_exec.GraphStorage {
 /// Create a new empty graph storage with the given name
 /// Returns error if graph already exists
 pub fn createGraphStorage(allocator: std.mem.Allocator, name: []const u8) !*graph_exec.GraphStorage {
-    std.debug.print("[GRAPH] createGraphStorage called with name='{s}'\n", .{name});
+    log.debug("createGraphStorage called", &.{
+        Attr.string("name", name),
+    });
 
     // Initialize multi-graph storage if needed
     if (g_graph_storages == null) {
-        std.debug.print("[GRAPH] createGraphStorage: initializing multi-graph storage\n", .{});
+        log.debug("createGraphStorage: initializing multi-graph storage", &.{});
         initMultiGraphStorage(allocator);
     }
 
     // Check if graph already exists
     if (g_graph_storages) |storages| {
-        std.debug.print("[GRAPH] createGraphStorage: checking if graph exists in {d} entries\n", .{storages.count()});
+        log.debug("createGraphStorage: checking if graph exists", &.{
+            Attr.int("entries", @intCast(storages.count())),
+        });
         if (storages.contains(name)) {
-            std.debug.print("[GRAPH] createGraphStorage: graph '{s}' already exists\n", .{name});
+            log.debug("createGraphStorage: graph already exists", &.{
+                Attr.string("name", name),
+            });
             return error.GraphAlreadyExists;
         }
     }
@@ -390,10 +396,15 @@ pub fn createGraphStorage(allocator: std.mem.Allocator, name: []const u8) !*grap
     if (g_graph_storages) |*storages| {
         const name_copy = try allocator.dupe(u8, name);
         try storages.put(name_copy, graph);
-        std.debug.print("[GRAPH] createGraphStorage: added '{s}' to storage, now {d} entries\n", .{ name, storages.count() });
+        log.debug("createGraphStorage: added to storage", &.{
+            Attr.string("name", name),
+            Attr.int("entries", @intCast(storages.count())),
+        });
     }
 
-    std.debug.print("[GRAPH] createGraphStorage: SUCCESS created '{s}'\n", .{name});
+    log.debug("createGraphStorage: SUCCESS", &.{
+        Attr.string("name", name),
+    });
     return graph;
 }
 
@@ -407,25 +418,31 @@ pub fn graphExists(name: []const u8) bool {
 
 /// List all graph names
 pub fn listGraphNames(allocator: std.mem.Allocator) ![][]const u8 {
-    std.debug.print("[GRAPH] listGraphNames called\n", .{});
+    log.debug("listGraphNames called", &.{});
     var names = try std.ArrayList([]const u8).initCapacity(allocator, 32);
     errdefer names.deinit(allocator);
 
     if (g_graph_storages) |storages| {
-        std.debug.print("[GRAPH] listGraphNames: g_graph_storages has {d} entries\n", .{storages.count()});
+        log.debug("listGraphNames: has entries", &.{
+            Attr.int("count", @intCast(storages.count())),
+        });
         var it = storages.keyIterator();
         while (it.next()) |key| {
-            std.debug.print("[GRAPH]   - listing: '{s}'\n", .{key.*});
+            log.debug("listGraphNames: listing", &.{
+                Attr.string("name", key.*),
+            });
             try names.append(allocator, try allocator.dupe(u8, key.*));
         }
     } else if (g_graph_storage != null) {
-        std.debug.print("[GRAPH] listGraphNames: g_graph_storages is null, using default\n", .{});
+        log.debug("listGraphNames: using default", &.{});
         try names.append(allocator, try allocator.dupe(u8, DEFAULT_GRAPH_NAME));
     } else {
-        std.debug.print("[GRAPH] listGraphNames: no storages at all\n", .{});
+        log.debug("listGraphNames: no storages", &.{});
     }
 
-    std.debug.print("[GRAPH] listGraphNames returning {d} names\n", .{names.items.len});
+    log.debug("listGraphNames returning", &.{
+        Attr.int("count", @intCast(names.items.len)),
+    });
     return names.toOwnedSlice(allocator);
 }
 
@@ -488,20 +505,26 @@ pub fn listNodeLabels(allocator: std.mem.Allocator) ![][]const u8 {
 
 /// Drop a graph storage by name
 pub fn dropGraphStorage(name: []const u8) !void {
-    // Debug: Log entry to function
-    std.debug.print("[GRAPH] dropGraphStorage called with name='{s}' len={d}\n", .{ name, name.len });
+    log.debug("dropGraphStorage called", &.{
+        Attr.string("name", name),
+        Attr.int("len", @intCast(name.len)),
+    });
 
     if (std.mem.eql(u8, name, DEFAULT_GRAPH_NAME)) {
-        std.debug.print("[GRAPH] dropGraphStorage: refusing to drop default graph\n", .{});
+        log.debug("dropGraphStorage: refusing to drop default graph", &.{});
         return error.CannotDropDefaultGraph;
     }
 
     if (g_graph_storages) |*storages| {
-        // Debug: List all keys in storages
-        std.debug.print("[GRAPH] dropGraphStorage: g_graph_storages has {d} entries\n", .{storages.count()});
+        log.debug("dropGraphStorage: checking storages", &.{
+            Attr.int("entries", @intCast(storages.count())),
+        });
         var it = storages.keyIterator();
         while (it.next()) |key| {
-            std.debug.print("[GRAPH]   - stored key: '{s}' len={d}\n", .{ key.*, key.*.len });
+            log.debug("dropGraphStorage: stored key", &.{
+                Attr.string("key", key.*),
+                Attr.int("len", @intCast(key.*.len)),
+            });
         }
 
         if (storages.fetchRemove(name)) |entry| {
@@ -510,13 +533,17 @@ pub fn dropGraphStorage(name: []const u8) !void {
             entry.value.deinit();
             alloc.destroy(entry.value);
             alloc.free(entry.key);
-            std.debug.print("[GRAPH] dropGraphStorage: SUCCESS dropped '{s}'\n", .{name});
+            log.debug("dropGraphStorage: SUCCESS", &.{
+                Attr.string("name", name),
+            });
         } else {
-            std.debug.print("[GRAPH] dropGraphStorage: fetchRemove returned null for '{s}'\n", .{name});
+            log.debug("dropGraphStorage: fetchRemove returned null", &.{
+                Attr.string("name", name),
+            });
             return error.GraphNotFound;
         }
     } else {
-        std.debug.print("[GRAPH] dropGraphStorage: g_graph_storages is null\n", .{});
+        log.debug("dropGraphStorage: g_graph_storages is null", &.{});
         return error.GraphNotFound;
     }
 }

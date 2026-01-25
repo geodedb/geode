@@ -1,6 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-061; FEATURE="JSON Library Migration"; ASPECT=UserStorageSecure; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-25
+const json_lib = @import("json");
+
 // CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLIUserManagement"; ASPECT=SecureStorage; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth.yml; OWNER=cli; UPDATED=2026-01-09
 // Secure encrypted user storage for CLI commands
 // Uses AES-256-GCM authenticated encryption with Argon2id password hashing
@@ -24,6 +27,17 @@ pub const User = struct {
         }
         allocator.free(self.roles);
     }
+};
+
+// JSON struct for unmarshaling - salt is hex-encoded in JSON
+const JsonUser = struct {
+    username: []const u8,
+    email: []const u8,
+    password_hash: []const u8,
+    salt: []const u8, // Hex-encoded in JSON
+    roles: []const []const u8 = &.{},
+    created_at: i64 = 0,
+    is_active: bool = true,
 };
 
 pub const UserStorage = struct {
@@ -235,67 +249,57 @@ pub const UserStorage = struct {
             return try self.allocator.alloc(User, 0);
         }
 
-        // Decrypt the data (simplified - in production use proper AES-GCM)
+        // Decrypt the data
         const json_data = try self.decryptData(encrypted_data);
         defer self.allocator.free(json_data);
 
-        // Parse JSON
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, json_data, .{});
-        defer parsed.deinit();
+        // Parse JSON using json library unmarshal
+        var json_users = json_lib.unmarshal([]JsonUser, self.allocator, json_data) catch {
+            return try self.allocator.alloc(User, 0);
+        };
+        defer json_lib.free([]JsonUser, self.allocator, &json_users);
 
-        if (parsed.value != .array) return error.InvalidFormat;
-
-        const users_array = parsed.value.array.items;
-        var users = try self.allocator.alloc(User, users_array.len);
+        var users = try self.allocator.alloc(User, json_users.len);
         var user_count: usize = 0;
 
-        for (users_array) |user_val| {
-            if (user_val != .object) continue;
+        for (json_users) |json_user| {
+            // Allocate roles
+            var roles = try self.allocator.alloc([]const u8, json_user.roles.len);
+            for (json_user.roles, 0..) |role, i| {
+                roles[i] = try self.allocator.dupe(u8, role);
+            }
 
-            const obj = user_val.object;
-            const username = obj.get("username") orelse continue;
-            const email = obj.get("email") orelse continue;
-            const password_hash = obj.get("password_hash") orelse continue;
-            const salt = obj.get("salt") orelse continue;
-            const roles_val = obj.get("roles") orelse continue;
-            const created_at = obj.get("created_at") orelse continue;
-            const is_active_val = obj.get("is_active");
-
-            if (username != .string or email != .string or password_hash != .string or
-                salt != .string or roles_val != .array or created_at != .integer)
-            {
+            // Hex-decode salt from JSON
+            const salt_hex = json_user.salt;
+            if (salt_hex.len != 64) continue; // Salt must be 32 bytes = 64 hex chars
+            var salt_bytes: [32]u8 = undefined;
+            var valid_salt = true;
+            var i: usize = 0;
+            while (i < 32) : (i += 1) {
+                const high = std.fmt.charToDigit(salt_hex[i * 2], 16) catch {
+                    valid_salt = false;
+                    break;
+                };
+                const low = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch {
+                    valid_salt = false;
+                    break;
+                };
+                salt_bytes[i] = (high << 4) | low;
+            }
+            if (!valid_salt) {
+                for (roles) |role| self.allocator.free(role);
+                self.allocator.free(roles);
                 continue;
             }
 
-            var roles = try self.allocator.alloc([]const u8, roles_val.array.items.len);
-            var role_count: usize = 0;
-            for (roles_val.array.items) |role_val| {
-                if (role_val == .string) {
-                    roles[role_count] = try self.allocator.dupe(u8, role_val.string);
-                    role_count += 1;
-                }
-            }
-            roles = roles[0..role_count];
-
-            // Hex-decode salt from JSON
-            const salt_hex = salt.string;
-            if (salt_hex.len != 64) continue; // Salt must be 32 bytes = 64 hex chars
-            var salt_bytes: [32]u8 = undefined;
-            var i: usize = 0;
-            while (i < 32) : (i += 1) {
-                const high = std.fmt.charToDigit(salt_hex[i * 2], 16) catch continue;
-                const low = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch continue;
-                salt_bytes[i] = (high << 4) | low;
-            }
-
             users[user_count] = User{
-                .username = try self.allocator.dupe(u8, username.string),
-                .email = try self.allocator.dupe(u8, email.string),
-                .password_hash = try self.allocator.dupe(u8, password_hash.string),
+                .username = try self.allocator.dupe(u8, json_user.username),
+                .email = try self.allocator.dupe(u8, json_user.email),
+                .password_hash = try self.allocator.dupe(u8, json_user.password_hash),
                 .salt = try self.allocator.dupe(u8, &salt_bytes),
                 .roles = roles,
-                .created_at = created_at.integer,
-                .is_active = if (is_active_val) |v| if (v == .bool) v.bool else true else true,
+                .created_at = json_user.created_at,
+                .is_active = json_user.is_active,
             };
             user_count += 1;
         }
@@ -307,35 +311,40 @@ pub const UserStorage = struct {
         const data_path = try self.getDataPath();
         defer self.allocator.free(data_path);
 
-        // Serialize to JSON
-        var json_array = std.ArrayList(u8).initCapacity(self.allocator, 1024) catch return error.OutOfMemory;
-        defer json_array.deinit(self.allocator);
+        // Convert users to JSON-compatible format with hex-encoded salt
+        var json_users = try self.allocator.alloc(JsonUser, users.len);
+        defer self.allocator.free(json_users);
 
-        try json_array.appendSlice(self.allocator, "[");
+        var salt_hex_strs = try self.allocator.alloc([]const u8, users.len);
+        defer {
+            for (salt_hex_strs[0..users.len]) |s| {
+                self.allocator.free(s);
+            }
+            self.allocator.free(salt_hex_strs);
+        }
+
         for (users, 0..) |user, i| {
-            if (i > 0) try json_array.appendSlice(self.allocator, ",");
-
             // Hex-encode salt for JSON storage
             const salt_hex = std.fmt.bytesToHex(user.salt[0..32].*, .lower);
+            salt_hex_strs[i] = try self.allocator.dupe(u8, &salt_hex);
 
-            try json_array.appendSlice(self.allocator, "{");
-            try std.fmt.format(json_array.writer(self.allocator), "\"username\":\"{s}\",", .{user.username});
-            try std.fmt.format(json_array.writer(self.allocator), "\"email\":\"{s}\",", .{user.email});
-            try std.fmt.format(json_array.writer(self.allocator), "\"password_hash\":\"{s}\",", .{user.password_hash});
-            try std.fmt.format(json_array.writer(self.allocator), "\"salt\":\"{s}\",", .{salt_hex});
-            try std.fmt.format(json_array.writer(self.allocator), "\"created_at\":{d},", .{user.created_at});
-            try std.fmt.format(json_array.writer(self.allocator), "\"is_active\":{},", .{user.is_active});
-            try json_array.appendSlice(self.allocator, "\"roles\":[");
-            for (user.roles, 0..) |role, ri| {
-                if (ri > 0) try json_array.appendSlice(self.allocator, ",");
-                try std.fmt.format(json_array.writer(self.allocator), "\"{s}\"", .{role});
-            }
-            try json_array.appendSlice(self.allocator, "]}");
+            json_users[i] = JsonUser{
+                .username = user.username,
+                .email = user.email,
+                .password_hash = user.password_hash,
+                .salt = salt_hex_strs[i],
+                .roles = user.roles,
+                .created_at = user.created_at,
+                .is_active = user.is_active,
+            };
         }
-        try json_array.appendSlice(self.allocator, "]");
+
+        // Encode users to JSON using json library
+        const json_str = try json_lib.encode(self.allocator, json_users, .{});
+        defer self.allocator.free(json_str);
 
         // Encrypt the data
-        const encrypted_data = try self.encryptData(json_array.items);
+        const encrypted_data = try self.encryptData(json_str);
         defer self.allocator.free(encrypted_data);
 
         // Write to file

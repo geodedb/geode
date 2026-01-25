@@ -1,9 +1,21 @@
 # JSON Library Migration Plan
 
-> **Status**: PLANNING
+> **Status**: IN PROGRESS - Phase 7 Complete (Core Server Files)
 > **Created**: 2026-01-24
+> **Updated**: 2026-01-24
 > **Priority**: HIGH - Technical Debt Reduction
 > **Estimated Scope**: 69 files, ~400+ manual JSON composition sites
+> **Phase 1 Completed**: Protocol Layer (3 files, 12 frame builders migrated)
+> **Phase 2 Completed**: Execution Layer (4 files: crud_operations, value_utilities, execution, eval_extended)
+> **Phase 3 Completed**: CLI Layer (2 files: main.zig, backup_cli.zig - HELLO/RUN_GQL/RESTORE messages)
+> **Phase 4 Completed**: MCP & Streaming (5 files: tools.zig, resources.zig, client.zig, lsp.zig, cdc_enhanced.zig)
+> **Phase 5 Completed**: Supporting Systems (5 files: logger.zig, file_sink.zig, audit.zig, external_kms_client.zig, twophase.zig)
+> **Phase 6 Completed**: Testing & Validation (wire protocol tests, streaming encoder fixes, API corrections)
+> **Phase 7 Completed**: Final Cleanup - Core Server Files
+>   - `transaction_handlers.zig` - 8 patterns migrated (TXN_BEGIN, TXN_COMMIT, TXN_ROLLBACK)
+>   - `query_executor.zig` - 70+ patterns migrated (index ops, backup, schema, graph, session)
+>   - `cli/main.zig` - 6 patterns migrated (error responses, column defs)
+> **Remaining**: 10 files with low-priority patterns (test harness, tools, client, distributed)
 
 ## Executive Summary
 
@@ -218,9 +230,16 @@ pub fn buildSchemaLine(allocator: std.mem.Allocator, cols: []const SchemaCol, ad
 2. `src/server/query_executor.zig` - `bindingValueRowToJson`
 3. `src/server/stdio_message_handler.zig` - Response formatting
 
-### Phase 2: Execution Layer (Week 2-3)
+### Phase 2: Execution Layer (Week 2-3) - COMPLETED
 
 **Goal**: Replace value serialization in execution paths.
+
+**Status**: COMPLETE (2026-01-24)
+- `src/execution/crud_operations.zig` - Migrated `valueMapToJson`, `encodeValueToStream`, `formatDecimalForJson`
+- `src/execution/value_utilities.zig` - Added JSON library import, `writeJsonEscapedString` helper
+- `src/execution.zig` - Migrated `toJsonWithFlags` to use streaming encoder
+- `src/eval_extended.zig` - Migrated `wkbToGeoJson` for GeoJSON output
+- Build.zig updated to provide `json` module to test modules
 
 #### 2.1 Value Type Encoding
 
@@ -284,9 +303,20 @@ fn valueToJsonValue(allocator: std.mem.Allocator, value: Value) !json.Value {
 3. `src/execution.zig` - Result building
 4. `src/eval_extended.zig` - Extended value encoding
 
-### Phase 3: CLI Layer (Week 3-4)
+### Phase 3: CLI Layer (Week 3-4) - COMPLETED
 
 **Goal**: Replace manual JSON in CLI handlers.
+
+**Status**: COMPLETE (2026-01-24)
+- `src/cli/main.zig` - Added json_lib import, CliHelloMessage/CliRunGqlMessage/CliErrorResponse structs
+  - Migrated HELLO message encoding (2 locations)
+  - Migrated RUN_GQL message encoding
+  - Migrated dynamic error responses
+- `src/cli/backup_cli.zig` - Added json_lib import, BackupHelloMessage/BackupRunGqlMessage structs
+  - Migrated execMigrationScript HELLO/RUN_GQL messages
+  - Migrated executeRemoteBackup HELLO message
+  - Migrated restore HELLO and RESTORE messages
+- Build.zig updated to provide `json` module to cli_tests
 
 #### 3.1 Response Standardization
 
@@ -322,9 +352,17 @@ pub const CliResult = struct {
 2. `src/cli/backup_cli.zig` - Backup response formatting
 3. `src/cli/security/session_storage.zig` - Session data persistence
 
-### Phase 4: MCP & Streaming (Week 4-5)
+### Phase 4: MCP & Streaming (Week 4-5) - COMPLETED
 
 **Goal**: Migrate MCP protocol and CDC streaming.
+
+**Status**: COMPLETE (2026-01-24)
+- `src/mcp/tools.zig` - Migrated formatToolResult, formatErrorResponse
+- `src/mcp/resources.zig` - Migrated formatResourceResponse, formatResourceError
+- `src/mcp/client.zig` - Migrated query() with streaming encoder, explain()
+- `src/mcp/lsp.zig` - Migrated validation, completion, hover response formatting
+- `src/streaming/cdc_enhanced.zig` - Migrated serializeEvent, exportDiagnostics, malformedLogSnapshots
+- Build.zig updated to provide `json` module to mcp_cli_mod
 
 #### 4.1 MCP Tool Responses
 
@@ -594,19 +632,19 @@ Add tracking markers for migration progress:
 
 ## File Inventory
 
-### Priority 1 - Critical (5 files)
-- [ ] `src/protocol.zig`
-- [ ] `src/server/query_executor.zig`
+### Priority 1 - Critical (5 files) - Phase 1 Complete
+- [x] `src/protocol.zig` - **COMPLETED** (12 frame builders migrated)
+- [x] `src/server/query_executor.zig` - **COMPLETED** (bindingValueRowToJson, writeJsonValue)
 - [ ] `src/execution/crud_operations.zig`
 - [ ] `src/cli/main.zig`
-- [ ] `src/server/stdio_message_handler.zig`
+- [x] `src/server/stdio_message_handler.zig` - **COMPLETED** (error response encoding)
 
-### Priority 2 - High Impact (11 files)
-- [ ] `src/mcp/tools.zig`
-- [ ] `src/mcp/resources.zig`
-- [ ] `src/mcp/client.zig`
-- [ ] `src/mcp/lsp.zig`
-- [ ] `src/streaming/cdc_enhanced.zig`
+### Priority 2 - High Impact (11 files) - Phase 4 Complete
+- [x] `src/mcp/tools.zig` - **COMPLETED** (formatToolResult, formatErrorResponse)
+- [x] `src/mcp/resources.zig` - **COMPLETED** (formatResourceResponse, formatResourceError)
+- [x] `src/mcp/client.zig` - **COMPLETED** (query, explain - streaming encoder)
+- [x] `src/mcp/lsp.zig` - **COMPLETED** (validation, completion, hover responses)
+- [x] `src/streaming/cdc_enhanced.zig` - **COMPLETED** (serializeEvent, exportDiagnostics)
 - [ ] `src/audit/logger.zig`
 - [ ] `src/audit/file_sink.zig`
 - [ ] `src/security/audit.zig`
@@ -712,6 +750,167 @@ try encoder.field("count");
 try encoder.number(42);
 try encoder.endObject();
 ```
+
+---
+
+## Phase 1 Completion Summary (2026-01-24)
+
+### Files Migrated
+1. **`src/protocol.zig`** - Core wire protocol frame builders
+   - `buildSchemaLine()` - Uses `json.encode()` with `SchemaResponse` struct
+   - `buildBindingsLine()` - Uses streaming encoder for raw JSON embedding
+   - `buildExplainLine()` - Uses streaming encoder for raw JSON embedding
+   - `buildProfileLine()` - Uses streaming encoder with overflow protection
+   - `buildCdcDiagnosticsLine()` - Uses streaming encoder
+   - `buildCdcControlLine()` - Uses `json.encode()` with `CdcControlResponse` struct
+   - `buildErrorLine()` - Uses `json.encode()` with `ErrorResponse` struct
+   - `buildErrorLineWithFlags()` - Uses `json.encode()` with optional fields
+   - `buildErrorLineWithFlagsCustomStatus()` - Uses `json.encode()` with status override
+
+2. **`src/server/query_executor.zig`** - Query result serialization
+   - `bindingValueRowToJson()` - Uses streaming encoder for dynamic field names
+   - `writeJsonValue()` - Added proper RFC 8259 string escaping
+   - Added `writeEscapedJsonString()` helper for proper escape sequences
+   - Added `formatDecimalValue()` helper for precise decimal representation
+
+3. **`src/server/stdio_message_handler.zig`** - STDIO protocol
+   - Error response encoding using `StdioErrorResponse` struct
+   - Added `json_lib` import
+
+### Response Type Structs Added
+- `SchemaResponse` - SCHEMA frame encoding
+- `BindingsResponse` - BINDINGS frame encoding
+- `ExplainResponse` - EXPLAIN frame encoding
+- `ProfileResponse` - PROFILE frame encoding
+- `CdcDiagnosticsResponse` - CDC_DIAGNOSTICS frame encoding
+- `CdcControlResponse` - CDC_CONTROL frame encoding
+- `ErrorResponse` - ERROR frame encoding
+- `StdioErrorResponse` - STDIO error encoding
+
+### CANARY Markers Added
+- REQ-LIB-MIGRATION-JSON-002 through REQ-LIB-MIGRATION-JSON-014
+
+### Tests Added
+- `TestCANARY_REQ_LIB_MIGRATION_JSON_002_SchemaLineFormat`
+- `TestCANARY_REQ_LIB_MIGRATION_JSON_003_BindingsLineFormat`
+- `TestCANARY_REQ_LIB_MIGRATION_JSON_007_CdcControlLineFormat`
+- `TestCANARY_REQ_LIB_MIGRATION_JSON_008_ErrorLineFormat`
+- `TestCANARY_REQ_LIB_MIGRATION_JSON_009_ErrorLineWithFlagsFormat`
+
+### Verification
+- Build: **PASSED**
+- Unit Tests: **PASSED**
+- Wire protocol compatibility: **MAINTAINED**
+
+---
+
+## Phase 4 Completion Summary (2026-01-24)
+
+### Files Migrated
+1. **`src/mcp/tools.zig`** - MCP tool responses
+   - Added `json_lib` import and `McpToolContent`/`McpToolResult` structs
+   - Migrated `formatToolResult()` to use `json.encode()`
+   - Migrated `formatErrorResponse()` to use `json.encode()`
+   - Removed manual `escapeJsonString` function
+
+2. **`src/mcp/resources.zig`** - MCP resource serialization
+   - Added `json_lib` import and `McpResourceResponse`/`McpResourceError` structs
+   - Migrated `formatResourceResponse()` to use `json.encode()`
+   - Migrated `formatResourceError()` to use `json.encode()`
+   - Updated tests to verify JSON library escaping
+
+3. **`src/mcp/client.zig`** - MCP client messages
+   - Added `json_lib` import and `ClientRunGqlMessage` struct
+   - Migrated `query()` to use streaming encoder for params embedding
+   - Migrated `explain()` to use `json.encode()`
+   - Removed manual `escapeJsonString` function and related tests
+
+4. **`src/mcp/lsp.zig`** - LSP protocol responses
+   - Added `json_lib` import and response type structs:
+     - `ValidationResponse`, `DiagnosticJson`
+     - `CompletionResponse`, `CompletionItemJson`
+     - `HoverResponse`
+   - Migrated `formatValidationResponse()` to use `json.encode()`
+   - Migrated `formatCompletionResponse()` to use `json.encode()` with optional field handling
+   - Migrated `formatHoverResponse()` to use `json.encode()`
+   - Removed manual `appendEscaped` and `appendInt` helper functions
+
+5. **`src/streaming/cdc_enhanced.zig`** - CDC event encoding
+   - Added `json_lib` import and response type structs:
+     - `MalformedSnapshotEntry`, `MalformedHashJsonEntry`
+     - `CDCDiagnosticsConfig`, `CDCDiagnosticsEngine`
+     - `CDCDiagnosticsResponse`, `CDCChangeEventJson`
+   - Migrated `serializeEvent()` to use `json.encode()`
+   - Migrated `malformedLogSnapshots()` to use `json.encode()`
+   - Migrated `exportDiagnostics()` to use `json.encode()` with nested struct encoding
+   - Added `collectMalformedSnapshots()` and `collectMalformedHashes()` helpers
+   - Removed manual `writeInt`, `writeFloat`, `writeIntSigned` helpers
+   - Removed `MalformedRing.writeJson()` and `MalformedHashStore.writeJson()` methods
+
+### Build Configuration Updated
+- Added `json` module to `mcp_cli_mod` in `build.zig`
+
+### CANARY Markers Added
+- REQ-LIB-MIGRATION-JSON-042 through REQ-LIB-MIGRATION-JSON-055
+
+### Tests Updated
+- Replaced `escapeJsonString` tests with JSON library escaping verification tests
+- Updated `appendEscaped` test to verify JSON library handles special characters
+
+### Verification
+- Build: **PASSED**
+- All migrations use type-safe struct encoding
+- Manual JSON string composition eliminated in migrated files
+
+---
+
+## Phase 7 Completion Summary (2026-01-24)
+
+### Files Migrated
+
+1. **`src/server/transaction_handlers.zig`** - Transaction response encoding
+   - Added `json_lib` import and response type structs:
+     - `TxnStateError` - Transaction state error responses
+     - `SerializationError` - MVCC serialization failure responses
+     - `CommitError` - Transaction commit failure responses
+     - `TxnSuccessResponse` - TXN_BEGIN/COMMIT/ROLLBACK success responses
+   - Migrated 8 manual JSON patterns for transaction operations
+   - All transaction responses now use type-safe struct encoding
+
+2. **`src/server/query_executor.zig`** - Query operation responses
+   - Added `StatusResponse`, `BackupSuccessResponse`, `BackupVerifyResponse` structs
+   - Added `encodeStatusResponse()` helper function for consistent formatting
+   - Migrated 70+ manual JSON patterns:
+     - Index operations (CREATE INDEX, DROP INDEX)
+     - Backup operations (BACKUP, RESTORE, VERIFY)
+     - Schema operations (CREATE/DROP SCHEMA)
+     - Graph operations (CREATE/DROP GRAPH, GRAPH TYPE)
+     - Session management (SET/RESET)
+   - All query executor responses now use type-safe struct encoding
+
+3. **`src/cli/main.zig`** - CLI error responses
+   - Added additional response type structs:
+     - `CliStatusError` - Generic status error responses
+     - `CliTypeError` - Typed error responses with message
+     - `CliResultError` - Result-wrapped error responses
+     - `CliColumnDef` - Column definition encoding
+   - Migrated 6 manual JSON patterns in QUIC and STDIO server modes
+   - All CLI error responses now use type-safe struct encoding
+
+### CANARY Markers Added
+- REQ-LIB-MIGRATION-JSON-056 (TransactionHandlers)
+- REQ-LIB-MIGRATION-JSON-057 (QueryExecutorResponses)
+- REQ-LIB-MIGRATION-JSON-058 (CLIErrorTypes)
+
+### Pattern Migration Summary
+- **Total patterns migrated in Phase 7**: ~84 patterns
+- **Remaining files with patterns**: 10 files (low-priority: test harness, tools, client, distributed)
+
+### Verification
+- Build: **PASSED**
+- All migrations use type-safe struct encoding
+- Proper memory management with `defer allocator.free()`
+- Variable shadowing issues resolved
 
 ---
 

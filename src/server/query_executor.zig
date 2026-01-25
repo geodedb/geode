@@ -22,6 +22,54 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-011; FEATURE="JSON Library Migration"; ASPECT=QueryExecutor; STATUS=TESTED; OWNER=server; UPDATED=2026-01-24
 const json_lib = @import("json");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-057; FEATURE="JSON Library Migration"; ASPECT=QueryExecutorResponses; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+// JSON response types for query executor operations
+
+/// Simple status response with message
+const StatusResponse = struct {
+    status_class: []const u8,
+    message: []const u8,
+};
+
+/// Backup success response with metadata
+const BackupSuccessResponse = struct {
+    status_class: []const u8 = "00000",
+    message: []const u8 = "Backup completed successfully",
+    backup_id: []const u8,
+    type: []const u8,
+    size_mb: f64,
+    compression: []const u8,
+    encryption: []const u8,
+    lsn_range: []const u8,
+};
+
+/// Backup verification response
+const BackupVerifyResponse = struct {
+    status_class: []const u8 = "00000",
+    message: []const u8 = "Backup verification successful",
+    version: u16,
+    type: []const u8,
+    timestamp: i64,
+    encrypted: bool,
+    start_lsn: u64,
+    end_lsn: u64,
+    size_bytes: u64,
+};
+
+/// Helper to create and encode status response with newline
+fn encodeStatusResponse(allocator: std.mem.Allocator, status_class: []const u8, message: []const u8) ![]const u8 {
+    const response = StatusResponse{
+        .status_class = status_class,
+        .message = message,
+    };
+    const json_str = try json_lib.encode(allocator, response, .{});
+    defer allocator.free(json_str);
+    const result = try allocator.alloc(u8, json_str.len + 1);
+    @memcpy(result[0..json_str.len], json_str);
+    result[json_str.len] = '\n';
+    return result;
+}
+
 // CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=QUERY_EXECUTOR; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.3 - Query Executor Module (Incremental Extraction - Eighth Increment)
 // Extracted query utility, diagnostic, AST analysis, and query evaluation functions from server/main.zig for better separation of concerns
@@ -136,8 +184,8 @@ pub inline fn bindingValueTypeName(v: anytype) []const u8 {
 /// (names only used; types informational)
 /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-012; FEATURE="JSON Library Migration"; ASPECT=BindingValueRow; STATUS=TESTED; OWNER=server; UPDATED=2026-01-24
 pub fn bindingValueRowToJson(allocator: std.mem.Allocator, cols: []const protocol.SchemaCol, brow: []const exec.BindingValue) []const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
-    var encoder = json_lib.streamingEncoder(allocator, buf.writer(), .{});
+    var buf = std.ArrayList(u8).initCapacity(allocator, 128) catch return &.{};
+    var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
 
     encoder.beginObject() catch return &.{};
 
@@ -166,7 +214,7 @@ pub fn bindingValueRowToJson(allocator: std.mem.Allocator, cols: []const protoco
     }
 
     encoder.endObject() catch {};
-    return buf.toOwnedSlice() catch &.{};
+    return buf.toOwnedSlice(allocator) catch &.{};
 }
 
 /// Helper to format decimal values with proper scale handling
@@ -1554,9 +1602,13 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
     // Check if index already exists
     if (index_manager.property_indexes.contains(stmt.name)) {
         if (stmt.if_not_exists) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} already exists, skipping\"}}\n", .{stmt.name});
+            const msg = try std.fmt.allocPrint(allocator, "Index {s} already exists, skipping", .{stmt.name});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         }
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42P07\",\"message\":\"Index {s} already exists\"}}\n", .{stmt.name});
+        const msg = try std.fmt.allocPrint(allocator, "Index {s} already exists", .{stmt.name});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "42P07", msg);
     }
 
     // Map AST index type to IndexManager type
@@ -1602,7 +1654,7 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
                 // Composite index
                 try index_manager.createCompositeIndex(stmt.name, stmt.label, stmt.properties, stmt.unique);
             } else {
-                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Index must have at least one property\"}}\n", .{});
+                return encodeStatusResponse(allocator, "22023", "Index must have at least one property");
             }
         },
     }
@@ -1751,16 +1803,22 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
         }
     }
 
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} created successfully, populated with {d} entries\"}}\n", .{ stmt.name, population_count });
+    const msg = try std.fmt.allocPrint(allocator, "Index {s} created successfully, populated with {d} entries", .{ stmt.name, population_count });
+    defer allocator.free(msg);
+    return encodeStatusResponse(allocator, "00000", msg);
 }
 
 fn executeDropIndexStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DropIndexStatement) ![]const u8 {
     // Check if index manager exists
     if (state.index_manager_ptr == null) {
         if (stmt.if_exists) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} does not exist, skipping\"}}\n", .{stmt.name});
+            const msg = try std.fmt.allocPrint(allocator, "Index {s} does not exist, skipping", .{stmt.name});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         }
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"Index {s} does not exist\"}}\n", .{stmt.name});
+        const msg = try std.fmt.allocPrint(allocator, "Index {s} does not exist", .{stmt.name});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "42704", msg);
     }
 
     const index_manager: *geode.index.IndexManager = @ptrCast(@alignCast(state.index_manager_ptr.?));
@@ -1806,9 +1864,13 @@ fn executeDropIndexStatement(allocator: std.mem.Allocator, state: *ServerState, 
 
     if (!found) {
         if (stmt.if_exists) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} does not exist, skipping\"}}\n", .{stmt.name});
+            const msg = try std.fmt.allocPrint(allocator, "Index {s} does not exist, skipping", .{stmt.name});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         }
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"Index {s} does not exist\"}}\n", .{stmt.name});
+        const msg = try std.fmt.allocPrint(allocator, "Index {s} does not exist", .{stmt.name});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "42704", msg);
     }
 
     // Remove statistics for dropped index
@@ -1820,24 +1882,30 @@ fn executeDropIndexStatement(allocator: std.mem.Allocator, state: *ServerState, 
 
     index_manager.statistics.total_indexes -= 1;
 
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Index {s} dropped successfully\"}}\n", .{stmt.name});
+    const msg = try std.fmt.allocPrint(allocator, "Index {s} dropped successfully", .{stmt.name});
+    defer allocator.free(msg);
+    return encodeStatusResponse(allocator, "00000", msg);
 }
 
 fn executeBackupStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.BackupStatement) ![]const u8 {
     // Get or create backup manager
     const backup_manager = getOrCreateBackupManager(allocator, state) catch |err| {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"0A000\",\"message\":\"Failed to initialize backup system: {s}\"}}\n", .{@errorName(err)});
+        const msg = try std.fmt.allocPrint(allocator, "Failed to initialize backup system: {s}", .{@errorName(err)});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "0A000", msg);
     };
 
     // Validate backup path
     if (stmt.path.len == 0) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup path\"}}\n", .{});
+        return encodeStatusResponse(allocator, "22023", "Invalid backup path");
     }
 
     // Check if backup directory is accessible
     const backup_dir = std.fs.path.dirname(stmt.path) orelse ".";
     std.fs.cwd().access(backup_dir, .{}) catch {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Backup directory not accessible: {s}\"}}\n", .{backup_dir});
+        const msg = try std.fmt.allocPrint(allocator, "Backup directory not accessible: {s}", .{backup_dir});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "58030", msg);
     };
 
     // Determine backup type and execute
@@ -1847,7 +1915,9 @@ fn executeBackupStatement(allocator: std.mem.Allocator, state: *ServerState, stm
         backup_manager.createFullBackup();
 
     const metadata = backup_result catch |err| {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Backup failed: {s}\"}}\n", .{@errorName(err)});
+        const msg = try std.fmt.allocPrint(allocator, "Backup failed: {s}", .{@errorName(err)});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "58030", msg);
     };
 
     // Run retention policy to clean up old backups
@@ -1870,25 +1940,49 @@ fn executeBackupStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     const size_mb = @as(f64, @floatFromInt(metadata.size_bytes)) / (1024.0 * 1024.0);
     const encrypted_str = if (metadata.encrypted) "encrypted" else "unencrypted";
 
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Backup completed successfully\",\"backup_id\":\"{x}\",\"type\":\"{s}\",\"size_mb\":{d:.2},\"compression\":\"{s}\",\"encryption\":\"{s}\",\"lsn_range\":\"{d}-{d}\"}}\n", .{ metadata.backup_id, backup_type_str, size_mb, compression_str, encrypted_str, metadata.start_lsn, metadata.end_lsn });
+    // Format backup_id as hex string
+    var backup_id_buf: [16]u8 = undefined;
+    const backup_id_str = std.fmt.bufPrint(&backup_id_buf, "{x}", .{metadata.backup_id}) catch "0";
+    // Format LSN range
+    var lsn_buf: [48]u8 = undefined;
+    const lsn_range = std.fmt.bufPrint(&lsn_buf, "{d}-{d}", .{ metadata.start_lsn, metadata.end_lsn }) catch "0-0";
+
+    const response = BackupSuccessResponse{
+        .backup_id = backup_id_str,
+        .type = backup_type_str,
+        .size_mb = size_mb,
+        .compression = compression_str,
+        .encryption = encrypted_str,
+        .lsn_range = lsn_range,
+    };
+    const json_str = try json_lib.encode(allocator, response, .{});
+    defer allocator.free(json_str);
+    const result = try allocator.alloc(u8, json_str.len + 1);
+    @memcpy(result[0..json_str.len], json_str);
+    result[json_str.len] = '\n';
+    return result;
 }
 
 fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.RestoreStatement) ![]const u8 {
     // Get or create backup manager
     const backup_manager = getOrCreateBackupManager(allocator, state) catch |err| {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"0A000\",\"message\":\"Failed to initialize backup system: {s}\"}}\n", .{@errorName(err)});
+        const msg = try std.fmt.allocPrint(allocator, "Failed to initialize backup system: {s}", .{@errorName(err)});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "0A000", msg);
     };
 
     // Validate restore path
     if (stmt.path.len == 0) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid restore path\"}}\n", .{});
+        return encodeStatusResponse(allocator, "22023", "Invalid restore path");
     }
 
     // GAP-0214 FIX: Real backup file reading and validation
     // CANARY: REQ=REQ-BACKUP-VERIFY-001; FEATURE="RealBackupVerification"; ASPECT=DataIntegrity; STATUS=TESTED; TEST=test_gap_0214_backup_verify; OWNER=backup; UPDATED=2026-01-16
     if (stmt.verify_only) {
         const file = std.fs.cwd().openFile(stmt.path, .{}) catch |err| {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Cannot open backup file: {s}\"}}\n", .{@errorName(err)});
+            const msg = try std.fmt.allocPrint(allocator, "Cannot open backup file: {s}", .{@errorName(err)});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "58030", msg);
         };
         defer file.close();
 
@@ -1914,11 +2008,15 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
 
         var header_bytes: [@sizeOf(BackupHeader)]u8 = undefined;
         const bytes_read = file.readAll(&header_bytes) catch |err| {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Failed to read backup header: {s}\"}}\n", .{@errorName(err)});
+            const msg = try std.fmt.allocPrint(allocator, "Failed to read backup header: {s}", .{@errorName(err)});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "58030", msg);
         };
 
         if (bytes_read < @sizeOf(BackupHeader)) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup file: header too short (got {} bytes, expected {})\"}}\n", .{ bytes_read, @sizeOf(BackupHeader) });
+            const msg = try std.fmt.allocPrint(allocator, "Invalid backup file: header too short (got {} bytes, expected {})", .{ bytes_read, @sizeOf(BackupHeader) });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "22023", msg);
         }
 
         // Parse header and validate
@@ -1926,28 +2024,38 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
 
         // Validate magic number
         if (header.magic != BACKUP_MAGIC) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup file: bad magic number (expected 0x{X:0>8}, got 0x{X:0>8})\"}}\n", .{ BACKUP_MAGIC, header.magic });
+            const msg = try std.fmt.allocPrint(allocator, "Invalid backup file: bad magic number (expected 0x{X:0>8}, got 0x{X:0>8})", .{ BACKUP_MAGIC, header.magic });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "22023", msg);
         }
 
         // Validate version
         if (header.version < BACKUP_VERSION_MIN or header.version > BACKUP_VERSION_MAX) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Unsupported backup version: {} (supported: {}-{})\"}}\n", .{ header.version, BACKUP_VERSION_MIN, BACKUP_VERSION_MAX });
+            const msg = try std.fmt.allocPrint(allocator, "Unsupported backup version: {} (supported: {}-{})", .{ header.version, BACKUP_VERSION_MIN, BACKUP_VERSION_MAX });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "22023", msg);
         }
 
         // Validate timestamp (must be positive and not in the future)
         const current_time = std.time.milliTimestamp();
         if (header.timestamp <= 0 or header.timestamp > current_time + 86400000) { // Allow 1 day clock skew
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup timestamp: {}\"}}\n", .{header.timestamp});
+            const msg = try std.fmt.allocPrint(allocator, "Invalid backup timestamp: {}", .{header.timestamp});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "22023", msg);
         }
 
         // Validate LSN ordering (end_lsn must be >= start_lsn)
         if (header.end_lsn < header.start_lsn) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup LSN range: start={} > end={}\"}}\n", .{ header.start_lsn, header.end_lsn });
+            const msg = try std.fmt.allocPrint(allocator, "Invalid backup LSN range: start={} > end={}", .{ header.start_lsn, header.end_lsn });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "22023", msg);
         }
 
         // Get file size for reporting
         const file_stat = file.stat() catch |err| {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Failed to get file stats: {s}\"}}\n", .{@errorName(err)});
+            const msg = try std.fmt.allocPrint(allocator, "Failed to get file stats: {s}", .{@errorName(err)});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "58030", msg);
         };
 
         // Backup type description
@@ -1958,21 +2066,29 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
             else => "unknown",
         };
 
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Backup verification successful\",\"version\":{},\"type\":\"{s}\",\"timestamp\":{},\"encrypted\":{},\"start_lsn\":{},\"end_lsn\":{},\"size_bytes\":{}}}\n", .{
-            header.version,
-            backup_type_name,
-            header.timestamp,
-            header.encrypted,
-            header.start_lsn,
-            header.end_lsn,
-            file_stat.size,
-        });
+        const verify_response = BackupVerifyResponse{
+            .version = header.version,
+            .type = backup_type_name,
+            .timestamp = header.timestamp,
+            .encrypted = header.encrypted,
+            .start_lsn = header.start_lsn,
+            .end_lsn = header.end_lsn,
+            .size_bytes = file_stat.size,
+        };
+        const json_str = try json_lib.encode(allocator, verify_response, .{});
+        defer allocator.free(json_str);
+        const verify_result = try allocator.alloc(u8, json_str.len + 1);
+        @memcpy(verify_result[0..json_str.len], json_str);
+        verify_result[json_str.len] = '\n';
+        return verify_result;
     }
 
     // Determine target timestamp for point-in-time recovery
     const target_timestamp = if (stmt.timestamp) |ts_str|
         std.fmt.parseInt(i64, ts_str, 10) catch {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22008\",\"message\":\"Invalid timestamp format: {s}\"}}\n", .{ts_str});
+            const msg = try std.fmt.allocPrint(allocator, "Invalid timestamp format: {s}", .{ts_str});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "22008", msg);
         }
     else
         std.time.milliTimestamp(); // Default to current time
@@ -1981,12 +2097,18 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
     const restore_dir = "restore_data";
     std.fs.cwd().makePath(restore_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Cannot create restore directory: {s}\"}}\n", .{@errorName(err)}),
+        else => {
+            const msg = try std.fmt.allocPrint(allocator, "Cannot create restore directory: {s}", .{@errorName(err)});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "58030", msg);
+        },
     };
 
     // Perform point-in-time restore using backup manager
     backup_manager.restoreToPointInTime(target_timestamp, restore_dir) catch |err| {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Restore failed: {s}\"}}\n", .{@errorName(err)});
+        const msg = try std.fmt.allocPrint(allocator, "Restore failed: {s}", .{@errorName(err)});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "58030", msg);
     };
 
     // Clear existing data and load restored data
@@ -2008,10 +2130,14 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
     // CANARY: REQ=REQ-PITR-LOAD-001; FEATURE="PITR Data Loading"; ASPECT=DataRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
     // Load restored data from restore_dir into active server state
     loadRestoredDataIntoState(allocator, state, restore_dir) catch |err| {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Failed to load restored data: {s}\"}}\n", .{@errorName(err)});
+        const msg = try std.fmt.allocPrint(allocator, "Failed to load restored data: {s}", .{@errorName(err)});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "58030", msg);
     };
 
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Point-in-time restore completed successfully to timestamp {}\"}}\n", .{target_timestamp});
+    const msg = try std.fmt.allocPrint(allocator, "Point-in-time restore completed successfully to timestamp {}", .{target_timestamp});
+    defer allocator.free(msg);
+    return encodeStatusResponse(allocator, "00000", msg);
 }
 
 // CANARY: REQ=REQ-PITR-LOAD-002; FEATURE="PITR Data Loading"; ASPECT=StateRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
@@ -2275,20 +2401,24 @@ fn checkPermission(allocator: std.mem.Allocator, state: *ServerState, resource: 
 fn executeCreateSchemaStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateSchemaStatement) ![]const u8 {
     // Check permission first
     if (!try checkPermission(allocator, state, "schema", Action.create)) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to create schema\"}}\n", .{});
+        return encodeStatusResponse(allocator, "42501", "Permission denied: insufficient privileges to create schema");
     }
 
     // Validate the schema name
     if (stmt.name.len == 0) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid schema name\"}}\n", .{});
+        return encodeStatusResponse(allocator, "22023", "Invalid schema name");
     }
 
     // Check if schema already exists
     if (state.catalog_schemas.contains(stmt.name)) {
         if (stmt.if_not_exists) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Schema {s} already exists\"}}\n", .{stmt.name});
+            const msg = try std.fmt.allocPrint(allocator, "Schema {s} already exists", .{stmt.name});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         } else {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42P06\",\"message\":\"Schema {s} already exists\"}}\n", .{stmt.name});
+            const msg = try std.fmt.allocPrint(allocator, "Schema {s} already exists", .{stmt.name});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "42P06", msg);
         }
     }
 
@@ -2303,31 +2433,39 @@ fn executeCreateSchemaStatement(allocator: std.mem.Allocator, state: *ServerStat
 
     try state.catalog_schemas.put(schema_name, new_schema);
 
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Schema {s} created successfully\"}}\n", .{stmt.name});
+    const msg = try std.fmt.allocPrint(allocator, "Schema {s} created successfully", .{stmt.name});
+    defer allocator.free(msg);
+    return encodeStatusResponse(allocator, "00000", msg);
 }
 
 // Execute DROP SCHEMA statement
 fn executeDropSchemaStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DropSchemaStatement) ![]const u8 {
     // Check permission first
     if (!try checkPermission(allocator, state, "schema", Action.delete)) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to drop schema\"}}\n", .{});
+        return encodeStatusResponse(allocator, "42501", "Permission denied: insufficient privileges to drop schema");
     }
 
     // Validate the schema name
     if (stmt.name.len == 0) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid schema name\"}}\n", .{});
+        return encodeStatusResponse(allocator, "22023", "Invalid schema name");
     }
 
     // Check if schema exists
     if (state.catalog_schemas.fetchRemove(stmt.name)) |entry| {
         // Free the allocated schema name
         allocator.free(entry.key);
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Schema {s} dropped successfully\"}}\n", .{stmt.name});
+        const msg = try std.fmt.allocPrint(allocator, "Schema {s} dropped successfully", .{stmt.name});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "00000", msg);
     } else {
         if (stmt.if_exists) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Schema {s} does not exist\"}}\n", .{stmt.name});
+            const msg = try std.fmt.allocPrint(allocator, "Schema {s} does not exist", .{stmt.name});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         } else {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"Schema {s} does not exist\"}}\n", .{stmt.name});
+            const msg = try std.fmt.allocPrint(allocator, "Schema {s} does not exist", .{stmt.name});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "42704", msg);
         }
     }
 }
@@ -2336,12 +2474,12 @@ fn executeDropSchemaStatement(allocator: std.mem.Allocator, state: *ServerState,
 fn executeCreateGraphStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateGraphStatement) ![]const u8 {
     // Check permission first
     if (!try checkPermission(allocator, state, "graph", Action.create)) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to create graph\"}}\n", .{});
+        return encodeStatusResponse(allocator, "42501", "Permission denied: insufficient privileges to create graph");
     }
 
     // Validate the graph name
     if (stmt.name.len == 0) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid graph name\"}}\n", .{});
+        return encodeStatusResponse(allocator, "22023", "Invalid graph name");
     }
 
     const graph_type = if (stmt.property_graph) "property graph" else "graph";
@@ -2356,9 +2494,13 @@ fn executeCreateGraphStatement(allocator: std.mem.Allocator, state: *ServerState
         // Check if graph already exists
         if (state.catalog_graphs.contains(stmt.name)) {
             if (stmt.if_not_exists) {
-                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} already exists\"}}\n", .{ graph_type, stmt.name });
+                const msg = try std.fmt.allocPrint(allocator, "{s} {s} already exists", .{ graph_type, stmt.name });
+                defer allocator.free(msg);
+                return encodeStatusResponse(allocator, "00000", msg);
             } else {
-                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42P07\",\"message\":\"{s} {s} already exists\"}}\n", .{ graph_type, stmt.name });
+                const msg = try std.fmt.allocPrint(allocator, "{s} {s} already exists", .{ graph_type, stmt.name });
+                defer allocator.free(msg);
+                return encodeStatusResponse(allocator, "42P07", msg);
             }
         }
     }
@@ -2383,25 +2525,31 @@ fn executeCreateGraphStatement(allocator: std.mem.Allocator, state: *ServerState
         // If storage creation fails (e.g., already exists), remove from catalog
         _ = state.catalog_graphs.fetchRemove(stmt.name);
         if (err == error.GraphAlreadyExists) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42P07\",\"message\":\"{s} {s} already exists in storage\"}}\n", .{ graph_type, stmt.name });
+            const msg = try std.fmt.allocPrint(allocator, "{s} {s} already exists in storage", .{ graph_type, stmt.name });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "42P07", msg);
         }
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42000\",\"message\":\"Failed to create graph storage: {s}\"}}\n", .{@errorName(err)});
+        const msg = try std.fmt.allocPrint(allocator, "Failed to create graph storage: {s}", .{@errorName(err)});
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "42000", msg);
     };
 
     const action = if (stmt.or_replace) "replaced" else "created";
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} {s} successfully\"}}\n", .{ graph_type, stmt.name, action });
+    const msg = try std.fmt.allocPrint(allocator, "{s} {s} {s} successfully", .{ graph_type, stmt.name, action });
+    defer allocator.free(msg);
+    return encodeStatusResponse(allocator, "00000", msg);
 }
 
 // Execute DROP GRAPH statement
 fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DropGraphStatement) ![]const u8 {
     // Check permission first
     if (!try checkPermission(allocator, state, "graph", Action.delete)) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to drop graph\"}}\n", .{});
+        return encodeStatusResponse(allocator, "42501", "Permission denied: insufficient privileges to drop graph");
     }
 
     // Validate the graph name
     if (stmt.name.len == 0) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid graph name\"}}\n", .{});
+        return encodeStatusResponse(allocator, "22023", "Invalid graph name");
     }
 
     const graph_type = if (stmt.property_graph) "property graph" else "graph";
@@ -2416,15 +2564,21 @@ fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, 
             log.warn("Failed to drop graph storage", &.{ Attr.string("graph", stmt.name), Attr.string("error", @errorName(err)) });
         };
 
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} dropped successfully\"}}\n", .{ graph_type, stmt.name });
+        const msg = try std.fmt.allocPrint(allocator, "{s} {s} dropped successfully", .{ graph_type, stmt.name });
+        defer allocator.free(msg);
+        return encodeStatusResponse(allocator, "00000", msg);
     } else {
         // Also try to drop from graph storage (might exist there but not in catalog)
         graph_storage_mgr.dropGraphStorage(stmt.name) catch {};
 
         if (stmt.if_exists) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} does not exist\"}}\n", .{ graph_type, stmt.name });
+            const msg = try std.fmt.allocPrint(allocator, "{s} {s} does not exist", .{ graph_type, stmt.name });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         } else {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"{s} {s} does not exist\"}}\n", .{ graph_type, stmt.name });
+            const msg = try std.fmt.allocPrint(allocator, "{s} {s} does not exist", .{ graph_type, stmt.name });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "42704", msg);
         }
     }
 }
@@ -2434,12 +2588,12 @@ fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, 
 fn executeCreateGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateGraphTypeStatement) ![]const u8 {
     // Check permission first
     if (!try checkPermission(allocator, state, "graph", Action.create)) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to create graph type\"}}\n", .{});
+        return encodeStatusResponse(allocator, "42501", "Permission denied: insufficient privileges to create graph type");
     }
 
     // Validate the graph type name
     if (stmt.name.len == 0) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid graph type name\"}}\n", .{});
+        return encodeStatusResponse(allocator, "22023", "Invalid graph type name");
     }
 
     const graph_type_str = if (stmt.property_graph) "property graph type" else "graph type";
@@ -2456,9 +2610,13 @@ fn executeCreateGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerS
     } else if (exists) {
         // Type already exists and not replacing
         if (stmt.if_not_exists) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} already exists (no action taken)\"}}\n", .{ graph_type_str, stmt.name });
+            const msg = try std.fmt.allocPrint(allocator, "{s} {s} already exists (no action taken)", .{ graph_type_str, stmt.name });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         } else {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42710\",\"message\":\"{s} {s} already exists\"}}\n", .{ graph_type_str, stmt.name });
+            const msg = try std.fmt.allocPrint(allocator, "{s} {s} already exists", .{ graph_type_str, stmt.name });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "42710", msg);
         }
     }
 
@@ -2478,7 +2636,9 @@ fn executeCreateGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerS
     try state.graph_types.put(name_key, graph_type_def);
 
     const action = if (stmt.or_replace and exists) "replaced" else "created";
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} {s} successfully\"}}\n", .{ graph_type_str, stmt.name, action });
+    const msg = try std.fmt.allocPrint(allocator, "{s} {s} {s} successfully", .{ graph_type_str, stmt.name, action });
+    defer allocator.free(msg);
+    return encodeStatusResponse(allocator, "00000", msg);
 }
 
 // CANARY: REQ=REQ-GRAPH-TYPE-REGISTRY-001; FEATURE="GraphTypeRegistry"; ASPECT=DropStatement; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-10
@@ -2486,12 +2646,12 @@ fn executeCreateGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerS
 fn executeDropGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DropGraphTypeStatement) ![]const u8 {
     // Check permission first
     if (!try checkPermission(allocator, state, "graph", Action.delete)) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42501\",\"message\":\"Permission denied: insufficient privileges to drop graph type\"}}\n", .{});
+        return encodeStatusResponse(allocator, "42501", "Permission denied: insufficient privileges to drop graph type");
     }
 
     // Validate the graph type name
     if (stmt.name.len == 0) {
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid graph type name\"}}\n", .{});
+        return encodeStatusResponse(allocator, "22023", "Invalid graph type name");
     }
 
     const graph_type_str = if (stmt.property_graph) "property graph type" else "graph type";
@@ -2501,9 +2661,13 @@ fn executeDropGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerSta
 
     if (!exists) {
         if (stmt.if_exists) {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} does not exist (no action taken)\"}}\n", .{ graph_type_str, stmt.name });
+            const msg = try std.fmt.allocPrint(allocator, "{s} {s} does not exist (no action taken)", .{ graph_type_str, stmt.name });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         } else {
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"42704\",\"message\":\"{s} {s} does not exist\"}}\n", .{ graph_type_str, stmt.name });
+            const msg = try std.fmt.allocPrint(allocator, "{s} {s} does not exist", .{ graph_type_str, stmt.name });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "42704", msg);
         }
     }
 
@@ -2514,7 +2678,9 @@ fn executeDropGraphTypeStatement(allocator: std.mem.Allocator, state: *ServerSta
         allocator.free(kv.value.name);
     }
 
-    return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} dropped successfully\"}}\n", .{ graph_type_str, stmt.name });
+    const msg = try std.fmt.allocPrint(allocator, "{s} {s} dropped successfully", .{ graph_type_str, stmt.name });
+    defer allocator.free(msg);
+    return encodeStatusResponse(allocator, "00000", msg);
 }
 
 // Removed: hasAggregationFunction() function (~32 lines) now in query_executor module (M3.3 Phase 3 fourth increment)
@@ -2538,7 +2704,9 @@ fn executeSessionSetStatement(allocator: std.mem.Allocator, state: *ServerState,
                 allocator.free(old_schema);
             }
             session_config.current_schema = try allocator.dupe(u8, schema_ref.name);
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session schema set to '{s}'\"}}\n", .{schema_ref.name});
+            const msg = try std.fmt.allocPrint(allocator, "Session schema set to '{s}'", .{schema_ref.name});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         },
         .Graph => |graph_clause| {
             // Set current graph
@@ -2549,7 +2717,9 @@ fn executeSessionSetStatement(allocator: std.mem.Allocator, state: *ServerState,
             session_config.property_graph_default = graph_clause.property_graph;
 
             const graph_type = if (graph_clause.property_graph) "property graph" else "graph";
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session {s} set to '{s}'\"}}\n", .{ graph_type, graph_clause.expression });
+            const msg = try std.fmt.allocPrint(allocator, "Session {s} set to '{s}'", .{ graph_type, graph_clause.expression });
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         },
         .TimeZone => |tz_clause| {
             // Set time zone
@@ -2557,7 +2727,9 @@ fn executeSessionSetStatement(allocator: std.mem.Allocator, state: *ServerState,
                 allocator.free(old_tz);
             }
             session_config.time_zone = try allocator.dupe(u8, tz_clause.value);
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session time zone set to '{s}'\"}}\n", .{tz_clause.value});
+            const msg = try std.fmt.allocPrint(allocator, "Session time zone set to '{s}'", .{tz_clause.value});
+            defer allocator.free(msg);
+            return encodeStatusResponse(allocator, "00000", msg);
         },
         .Parameter => |param_clause| {
             // Set session parameter
@@ -2581,36 +2753,40 @@ fn executeSessionResetStatement(allocator: std.mem.Allocator, state: *ServerStat
                 switch (all_type) {
                     .Parameters => {
                         session_config.reset(.AllParameters);
-                        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"All session parameters reset\"}}\n", .{});
+                        return encodeStatusResponse(allocator, "00000", "All session parameters reset");
                     },
                     .Characteristics => {
                         session_config.reset(.AllCharacteristics);
-                        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"All session characteristics reset\"}}\n", .{});
+                        return encodeStatusResponse(allocator, "00000", "All session characteristics reset");
                     },
                 }
             },
             .Schema => {
                 session_config.reset(.Schema);
-                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session schema reset\"}}\n", .{});
+                return encodeStatusResponse(allocator, "00000", "Session schema reset");
             },
             .Graph => |property_graph| {
                 session_config.reset(.Graph);
                 const graph_type = if (property_graph) "property graph" else "graph";
-                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session {s} reset\"}}\n", .{graph_type});
+                const msg = try std.fmt.allocPrint(allocator, "Session {s} reset", .{graph_type});
+                defer allocator.free(msg);
+                return encodeStatusResponse(allocator, "00000", msg);
             },
             .TimeZone => {
                 session_config.reset(.TimeZone);
-                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session time zone reset\"}}\n", .{});
+                return encodeStatusResponse(allocator, "00000", "Session time zone reset");
             },
             .Parameter => |param_spec| {
                 session_config.reset(.{ .Parameter = param_spec });
-                return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session parameter '{s}' reset\"}}\n", .{param_spec});
+                const msg = try std.fmt.allocPrint(allocator, "Session parameter '{s}' reset", .{param_spec});
+                defer allocator.free(msg);
+                return encodeStatusResponse(allocator, "00000", msg);
             },
         }
     } else {
         // SESSION RESET without arguments - reset everything
         session_config.reset(.AllParameters);
         session_config.reset(.AllCharacteristics);
-        return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"All session settings reset\"}}\n", .{});
+        return encodeStatusResponse(allocator, "00000", "All session settings reset");
     }
 }

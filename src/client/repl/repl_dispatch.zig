@@ -4,6 +4,15 @@ const repl_errors = @import("repl_errors.zig");
 const repl_render = @import("repl_render.zig");
 const platform = @import("platform.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-063; FEATURE="JSON Library Migration"; ASPECT=ReplDispatch; STATUS=IMPL; OWNER=client; UPDATED=2026-01-25
+const json_lib = @import("json");
+
+// JSON message types for REPL protocol
+const ReplRunGqlMessage = struct {
+    type: []const u8 = "RUN_GQL",
+    text: []const u8,
+};
+
 // CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=ClientSession; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
 
 // Transport interface - implemented by CLI layer to avoid module conflicts
@@ -303,13 +312,18 @@ pub const ClientSession = struct {
     pub fn runGql(self: *ClientSession, gql: []const u8) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
-        // Escape GQL text for JSON
-        const escaped_text = try escapeJsonString(self.allocator, gql);
-        defer self.allocator.free(escaped_text);
+        // Send RUN_GQL message using json library encoding
+        // Note: json_lib.encode handles string escaping automatically
+        const run_msg = ReplRunGqlMessage{ .text = gql };
+        const json_str = try json_lib.encode(self.allocator, run_msg, .{});
+        defer self.allocator.free(json_str);
 
-        // Send RUN_GQL message
-        const msg = try std.fmt.allocPrint(self.allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_text});
+        // Append newline
+        const msg = try self.allocator.alloc(u8, json_str.len + 1);
         defer self.allocator.free(msg);
+        @memcpy(msg[0..json_str.len], json_str);
+        msg[json_str.len] = '\n';
+
         try self.connection.?.writeAll(msg);
 
         // Clear previous response

@@ -6,7 +6,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
-const print = std.debug.print;
 const expect = std.testing.expect;
 
 // Use lib.zig to access other modules properly

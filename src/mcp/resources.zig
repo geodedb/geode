@@ -3,7 +3,21 @@ const std = @import("std");
 // CANARY: REQ=REQ-LIB-MIGRATION-MCP-003; FEATURE="External Library Migration"; ASPECT=MCPResources; STATUS=TESTED; OWNER=core; UPDATED=2026-01-24
 // MCP Resources for Geode - expose graph data, schemas, and query results as resources
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-042; FEATURE="JSON Library Migration"; ASPECT=MCPResources; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
+const json_lib = @import("json");
+
 const GeodeClient = @import("client.zig").GeodeClient;
+
+// MCP Resource Response Types for JSON Library encoding
+const McpResourceResponse = struct {
+    uri: []const u8,
+    mimeType: []const u8,
+    text: []const u8,
+};
+
+const McpResourceError = struct {
+    @"error": []const u8,
+};
 
 /// List available resources
 /// Returns JSON array of resource definitions
@@ -77,74 +91,24 @@ fn readConfigResource(allocator: std.mem.Allocator, endpoint: []const u8) ![]con
 }
 
 /// Format a successful resource response for MCP
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-043; FEATURE="JSON Library Migration"; ASPECT=ResourceResponse; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatResourceResponse(allocator: std.mem.Allocator, uri: []const u8, mime_type: []const u8, content: []const u8) ![]const u8 {
-    // Escape the content for JSON embedding
-    const escaped = try escapeJsonString(allocator, content);
-    defer allocator.free(escaped);
     defer allocator.free(content);
 
-    return try std.fmt.allocPrint(allocator,
-        \\{{"uri": "{s}", "mimeType": "{s}", "text": "{s}"}}
-    , .{ uri, mime_type, escaped });
+    // Build MCP resource response using JSON library (handles escaping automatically)
+    const response = McpResourceResponse{
+        .uri = uri,
+        .mimeType = mime_type,
+        .text = content,
+    };
+    return try json_lib.encode(allocator, response, .{});
 }
 
 /// Format an error response for MCP resource read
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-044; FEATURE="JSON Library Migration"; ASPECT=ResourceError; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatResourceError(allocator: std.mem.Allocator, error_msg: []const u8) ![]const u8 {
-    return try std.fmt.allocPrint(allocator, "{{\"error\": \"{s}\"}}", .{error_msg});
-}
-
-/// Escape a string for safe embedding in JSON
-fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var escape_count: usize = 0;
-    for (input) |c| {
-        switch (c) {
-            '"', '\\', '\n', '\r', '\t' => escape_count += 1,
-            else => {},
-        }
-    }
-
-    if (escape_count == 0) {
-        return allocator.dupe(u8, input);
-    }
-
-    const result = try allocator.alloc(u8, input.len + escape_count);
-    var idx: usize = 0;
-
-    for (input) |c| {
-        switch (c) {
-            '"' => {
-                result[idx] = '\\';
-                result[idx + 1] = '"';
-                idx += 2;
-            },
-            '\\' => {
-                result[idx] = '\\';
-                result[idx + 1] = '\\';
-                idx += 2;
-            },
-            '\n' => {
-                result[idx] = '\\';
-                result[idx + 1] = 'n';
-                idx += 2;
-            },
-            '\r' => {
-                result[idx] = '\\';
-                result[idx + 1] = 'r';
-                idx += 2;
-            },
-            '\t' => {
-                result[idx] = '\\';
-                result[idx + 1] = 't';
-                idx += 2;
-            },
-            else => {
-                result[idx] = c;
-                idx += 1;
-            },
-        }
-    }
-
-    return result;
+    const response = McpResourceError{ .@"error" = error_msg };
+    return try json_lib.encode(allocator, response, .{});
 }
 
 /// List resource templates
@@ -243,16 +207,14 @@ test "listResourceTemplates returns valid JSON" {
     try std.testing.expect(std.mem.startsWith(u8, result, "["));
 }
 
-test "escapeJsonString escapes correctly" {
+test "JSON library handles escaping in resources" {
     const allocator = std.testing.allocator;
 
-    const simple = try escapeJsonString(allocator, "hello");
-    defer allocator.free(simple);
-    try std.testing.expectEqualStrings("hello", simple);
+    // Verify JSON library properly escapes special characters in resources
+    const result = try formatResourceError(allocator, "Error with \"quotes\"");
+    defer allocator.free(result);
 
-    const with_quotes = try escapeJsonString(allocator, "say \"hello\"");
-    defer allocator.free(with_quotes);
-    try std.testing.expectEqualStrings("say \\\"hello\\\"", with_quotes);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\\\"quotes\\\"") != null);
 }
 
 test "formatResourceError formats correctly" {

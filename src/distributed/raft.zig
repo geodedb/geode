@@ -2,6 +2,12 @@
 
 const std = @import("std");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-066; FEATURE="JSON Library Migration"; ASPECT=RaftConsensus; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-25
+const json_lib = @import("json");
+
+// JSON response types for Raft protocol
+const SnapshotResponse = struct { term: u64 };
+
 /// Raft node states
 pub const NodeState = enum {
     follower,
@@ -583,7 +589,8 @@ pub const RaftNode = struct {
 
         // Send response
         if (self.send_message_callback) |send_fn| {
-            const response_json = std.fmt.allocPrint(self.allocator, "{{\"term\":{d}}}", .{self.current_term}) catch return;
+            const response_obj = SnapshotResponse{ .term = self.current_term };
+            const response_json = json_lib.encode(self.allocator, response_obj, .{}) catch return;
             defer self.allocator.free(response_json);
             send_fn(from, .install_snapshot_response, response_json);
         }

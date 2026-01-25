@@ -13,9 +13,73 @@ const fle_integration = @import("../fle_integration.zig");
 const execution = @import("../execution.zig");
 const value_types = @import("../value_types.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-019; FEATURE="JSON Library Migration"; ASPECT=ValueUtilities; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
+const json_lib = @import("json");
+
 // Type aliases
 const ExecutionResult = execution.ExecutionResult;
 const Value = value_types.Value;
+
+/// Write a string with proper RFC 8259 JSON escaping
+/// Handles GQL doubled single quotes ('') -> single quote (')
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-020; FEATURE="JSON Library Migration"; ASPECT=StringEscaping; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
+fn writeJsonEscapedString(writer: anytype, s: []const u8) !void {
+    var i: usize = 0;
+    while (i < s.len) {
+        const c = s[i];
+        switch (c) {
+            '\'' => {
+                // Check for doubled single quote (GQL escape)
+                if (i + 1 < s.len and s[i + 1] == '\'') {
+                    // Skip the second quote - output only one
+                    try writer.writeByte('\'');
+                    i += 2;
+                } else {
+                    // Single quote not doubled
+                    try writer.writeByte('\'');
+                    i += 1;
+                }
+            },
+            '"' => {
+                try writer.writeAll("\\\"");
+                i += 1;
+            },
+            '\\' => {
+                try writer.writeAll("\\\\");
+                i += 1;
+            },
+            '\n' => {
+                try writer.writeAll("\\n");
+                i += 1;
+            },
+            '\r' => {
+                try writer.writeAll("\\r");
+                i += 1;
+            },
+            '\t' => {
+                try writer.writeAll("\\t");
+                i += 1;
+            },
+            0x08 => { // backspace
+                try writer.writeAll("\\b");
+                i += 1;
+            },
+            0x0C => { // form feed
+                try writer.writeAll("\\f");
+                i += 1;
+            },
+            else => {
+                if (c < 0x20) {
+                    // Control characters: escape as \u00XX
+                    try writer.print("\\u{X:0>4}", .{c});
+                } else {
+                    try writer.writeByte(c);
+                }
+                i += 1;
+            },
+        }
+    }
+}
 
 /// Duplicate an ExecutionResult, allocating new memory for all fields
 pub fn duplicateResult(allocator: std.mem.Allocator, original: ExecutionResult) !ExecutionResult {
@@ -81,6 +145,7 @@ pub fn freeValue(allocator: std.mem.Allocator, value: Value) void {
 }
 
 /// P2-3: Now accepts allocator parameter for temporary allocations
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-021; FEATURE="JSON Library Migration"; ASPECT=WriteValue; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
 pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !void {
     switch (value) {
         .Null => try writer.writeAll("null"),
@@ -88,52 +153,8 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .Str => |s| {
             try writer.writeByte('"');
-            // Unescape GQL doubled single quotes ('') to single quotes (')
-            // and escape JSON special characters
-            var i: usize = 0;
-            while (i < s.len) {
-                const c = s[i];
-                switch (c) {
-                    '\'' => {
-                        // Check for doubled single quote (GQL escape)
-                        if (i + 1 < s.len and s[i + 1] == '\'') {
-                            // Skip the second quote - output only one
-                            try writer.writeByte('\'');
-                            i += 2;
-                        } else {
-                            // Single quote not doubled
-                            try writer.writeByte('\'');
-                            i += 1;
-                        }
-                    },
-                    '"' => {
-                        // JSON requires escaping double quotes
-                        try writer.writeAll("\\\"");
-                        i += 1;
-                    },
-                    '\\' => {
-                        // JSON requires escaping backslashes
-                        try writer.writeAll("\\\\");
-                        i += 1;
-                    },
-                    '\n' => {
-                        try writer.writeAll("\\n");
-                        i += 1;
-                    },
-                    '\r' => {
-                        try writer.writeAll("\\r");
-                        i += 1;
-                    },
-                    '\t' => {
-                        try writer.writeAll("\\t");
-                        i += 1;
-                    },
-                    else => {
-                        try writer.writeByte(c);
-                        i += 1;
-                    },
-                }
-            }
+            // Use RFC 8259 compliant JSON string escaping with GQL quote handling
+            try writeJsonEscapedString(writer, s);
             try writer.writeByte('"');
         },
         .Decimal => |d| {
@@ -223,6 +244,32 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),
+                        .Decimal => |d| {
+                            // Format decimal with exact precision
+                            if (d.scale == 0) {
+                                try writer.print("{d}", .{d.coeff});
+                            } else {
+                                var divisor: i128 = 1;
+                                var sc = d.scale;
+                                while (sc > 0) : (sc -= 1) {
+                                    divisor *= 10;
+                                }
+                                const int_part = @divTrunc(d.coeff, divisor);
+                                const frac_part_signed = @rem(d.coeff, divisor);
+                                const frac_part = if (frac_part_signed < 0) -frac_part_signed else frac_part_signed;
+                                // Format with leading zeros for fractional part
+                                var frac_buf: [32]u8 = undefined;
+                                const frac_str = std.fmt.bufPrint(&frac_buf, "{d}", .{frac_part}) catch "0";
+                                try writer.print("{d}.", .{int_part});
+                                // Add leading zeros
+                                const zeros_needed: usize = if (d.scale > frac_str.len) d.scale - @as(u8, @intCast(frac_str.len)) else 0;
+                                var z: usize = 0;
+                                while (z < zeros_needed) : (z += 1) {
+                                    try writer.writeByte('0');
+                                }
+                                try writer.writeAll(frac_str);
+                            }
+                        },
                         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
                         .Null => try writer.writeAll("null"),
                         .ExtValue => try writer.writeAll("\"<ExtValue>\""), // Placeholder for ExtValue serialization
@@ -284,6 +331,32 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),
+                        .Decimal => |d| {
+                            // Format decimal with exact precision
+                            if (d.scale == 0) {
+                                try writer.print("{d}", .{d.coeff});
+                            } else {
+                                var divisor: i128 = 1;
+                                var sc = d.scale;
+                                while (sc > 0) : (sc -= 1) {
+                                    divisor *= 10;
+                                }
+                                const int_part = @divTrunc(d.coeff, divisor);
+                                const frac_part_signed = @rem(d.coeff, divisor);
+                                const frac_part = if (frac_part_signed < 0) -frac_part_signed else frac_part_signed;
+                                // Format with leading zeros for fractional part
+                                var frac_buf: [32]u8 = undefined;
+                                const frac_str = std.fmt.bufPrint(&frac_buf, "{d}", .{frac_part}) catch "0";
+                                try writer.print("{d}.", .{int_part});
+                                // Add leading zeros
+                                const zeros_needed: usize = if (d.scale > frac_str.len) d.scale - @as(u8, @intCast(frac_str.len)) else 0;
+                                var z: usize = 0;
+                                while (z < zeros_needed) : (z += 1) {
+                                    try writer.writeByte('0');
+                                }
+                                try writer.writeAll(frac_str);
+                            }
+                        },
                         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
                         .Null => try writer.writeAll("null"),
                         .ExtValue => try writer.writeAll("\"<ExtValue>\""), // Placeholder for ExtValue serialization
@@ -315,7 +388,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                 .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
                 .Str => |s| {
                     try writer.writeByte('"');
-                    try writer.writeAll(s);
+                    try writeJsonEscapedString(writer, s);
                     try writer.writeByte('"');
                 },
                 .Decimal => |d| {

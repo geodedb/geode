@@ -4,10 +4,45 @@ const std = @import("std");
 // MCP LSP Tools for Geode - GQL validation, completions, and hover information
 // Enables AI/LLM systems to validate and understand GQL queries
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-048; FEATURE="JSON Library Migration"; ASPECT=MCPLSP; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
+const json_lib = @import("json");
+
 const mod = @import("mod.zig");
 const gql_parser = mod.gql_parser;
 const gql_lexer = mod.gql_lexer;
 const language_metadata = mod.language_metadata;
+
+// JSON Response Types for LSP
+const ValidationResponse = struct {
+    isValid: bool,
+    diagnostics: []const DiagnosticJson,
+};
+
+const DiagnosticJson = struct {
+    line: u32,
+    column: u32,
+    endLine: u32,
+    endColumn: u32,
+    severity: []const u8,
+    message: []const u8,
+    source: []const u8,
+};
+
+const CompletionResponse = struct {
+    completions: []const CompletionItemJson,
+};
+
+const CompletionItemJson = struct {
+    label: []const u8,
+    kind: []const u8,
+    detail: ?[]const u8 = null,
+    documentation: ?[]const u8 = null,
+    insertText: ?[]const u8 = null,
+};
+
+const HoverResponse = struct {
+    contents: ?[]const u8,
+};
 
 /// Diagnostic severity levels
 pub const DiagnosticSeverity = enum {
@@ -392,113 +427,65 @@ fn addTypes(allocator: std.mem.Allocator, completions: *std.ArrayList(Completion
 }
 
 // =============================================================================
-// JSON Formatting
+// JSON Formatting - Using JSON Library
 // =============================================================================
 
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-049; FEATURE="JSON Library Migration"; ASPECT=LSPValidation; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatValidationResponse(allocator: std.mem.Allocator, is_valid: bool, diagnostics: []const Diagnostic) ![]const u8 {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 256);
-    defer buf.deinit(allocator);
+    // Convert diagnostics to JSON-friendly format
+    var json_diags = try std.ArrayList(DiagnosticJson).initCapacity(allocator, diagnostics.len);
+    defer json_diags.deinit(allocator);
 
-    try buf.appendSlice(allocator, "{\"isValid\":");
-    try buf.appendSlice(allocator, if (is_valid) "true" else "false");
-    try buf.appendSlice(allocator, ",\"diagnostics\":[");
-
-    for (diagnostics, 0..) |diag, i| {
-        if (i > 0) try buf.append(allocator, ',');
-        try buf.appendSlice(allocator, "{\"line\":");
-        try appendInt(allocator, &buf, diag.line);
-        try buf.appendSlice(allocator, ",\"column\":");
-        try appendInt(allocator, &buf, diag.column);
-        try buf.appendSlice(allocator, ",\"endLine\":");
-        try appendInt(allocator, &buf, diag.end_line);
-        try buf.appendSlice(allocator, ",\"endColumn\":");
-        try appendInt(allocator, &buf, diag.end_column);
-        try buf.appendSlice(allocator, ",\"severity\":\"");
-        try buf.appendSlice(allocator, @tagName(diag.severity));
-        try buf.appendSlice(allocator, "\",\"message\":\"");
-        try appendEscaped(allocator, &buf, diag.message);
-        try buf.appendSlice(allocator, "\",\"source\":\"");
-        try buf.appendSlice(allocator, diag.source);
-        try buf.appendSlice(allocator, "\"}");
+    for (diagnostics) |diag| {
+        try json_diags.append(allocator, DiagnosticJson{
+            .line = diag.line,
+            .column = diag.column,
+            .endLine = diag.end_line,
+            .endColumn = diag.end_column,
+            .severity = @tagName(diag.severity),
+            .message = diag.message,
+            .source = diag.source,
+        });
     }
 
-    try buf.appendSlice(allocator, "]}");
+    const response = ValidationResponse{
+        .isValid = is_valid,
+        .diagnostics = json_diags.items,
+    };
 
-    return buf.toOwnedSlice(allocator);
+    return try json_lib.encode(allocator, response, .{});
 }
 
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-050; FEATURE="JSON Library Migration"; ASPECT=LSPCompletions; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatCompletionResponse(allocator: std.mem.Allocator, completions: []const CompletionItem) ![]const u8 {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 512);
-    defer buf.deinit(allocator);
+    // Convert completions to JSON-friendly format
+    var json_completions = try std.ArrayList(CompletionItemJson).initCapacity(allocator, completions.len);
+    defer json_completions.deinit(allocator);
 
-    try buf.appendSlice(allocator, "{\"completions\":[");
-
-    for (completions, 0..) |item, i| {
-        if (i > 0) try buf.append(allocator, ',');
-        try buf.appendSlice(allocator, "{\"label\":\"");
-        try buf.appendSlice(allocator, item.label);
-        try buf.appendSlice(allocator, "\",\"kind\":\"");
-        try buf.appendSlice(allocator, @tagName(item.kind));
-        try buf.append(allocator, '"');
-
-        if (item.detail) |detail| {
-            try buf.appendSlice(allocator, ",\"detail\":\"");
-            try appendEscaped(allocator, &buf, detail);
-            try buf.append(allocator, '"');
-        }
-
-        if (item.documentation) |doc| {
-            try buf.appendSlice(allocator, ",\"documentation\":\"");
-            try appendEscaped(allocator, &buf, doc);
-            try buf.append(allocator, '"');
-        }
-
-        if (item.insert_text) |insert| {
-            try buf.appendSlice(allocator, ",\"insertText\":\"");
-            try appendEscaped(allocator, &buf, insert);
-            try buf.append(allocator, '"');
-        }
-
-        try buf.append(allocator, '}');
+    for (completions) |item| {
+        try json_completions.append(allocator, CompletionItemJson{
+            .label = item.label,
+            .kind = @tagName(item.kind),
+            .detail = item.detail,
+            .documentation = item.documentation,
+            .insertText = item.insert_text,
+        });
     }
 
-    try buf.appendSlice(allocator, "]}");
+    const response = CompletionResponse{
+        .completions = json_completions.items,
+    };
 
-    return buf.toOwnedSlice(allocator);
+    return try json_lib.encode(allocator, response, .{ .emit_null_optional_fields = false });
 }
 
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-051; FEATURE="JSON Library Migration"; ASPECT=LSPHover; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatHoverResponse(allocator: std.mem.Allocator, hover: ?HoverInfo) ![]const u8 {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 256);
-    defer buf.deinit(allocator);
+    const response = HoverResponse{
+        .contents = if (hover) |h| h.contents else null,
+    };
 
-    if (hover) |h| {
-        try buf.appendSlice(allocator, "{\"contents\":\"");
-        try appendEscaped(allocator, &buf, h.contents);
-        try buf.appendSlice(allocator, "\"}");
-    } else {
-        try buf.appendSlice(allocator, "{\"contents\":null}");
-    }
-
-    return buf.toOwnedSlice(allocator);
-}
-
-fn appendInt(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: u32) !void {
-    var num_buf: [20]u8 = undefined;
-    const str = std.fmt.bufPrint(&num_buf, "{d}", .{value}) catch return;
-    try buf.appendSlice(allocator, str);
-}
-
-fn appendEscaped(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), str: []const u8) !void {
-    for (str) |c| {
-        switch (c) {
-            '"' => try buf.appendSlice(allocator, "\\\""),
-            '\\' => try buf.appendSlice(allocator, "\\\\"),
-            '\n' => try buf.appendSlice(allocator, "\\n"),
-            '\r' => try buf.appendSlice(allocator, "\\r"),
-            '\t' => try buf.appendSlice(allocator, "\\t"),
-            else => try buf.append(allocator, c),
-        }
-    }
+    return try json_lib.encode(allocator, response, .{});
 }
 
 // =============================================================================
@@ -655,13 +642,16 @@ test "formatValidationResponse with diagnostics" {
     try std.testing.expect(std.mem.indexOf(u8, result, "\"message\":\"Syntax error\"") != null);
 }
 
-test "appendEscaped handles special characters" {
+test "JSON library handles special characters in LSP responses" {
     const allocator = std.testing.allocator;
 
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 64);
-    defer buf.deinit(allocator);
+    // Verify JSON library properly escapes special characters
+    const hover = HoverInfo{ .contents = "Hello\n\"World\"\\" };
+    const result = try formatHoverResponse(allocator, hover);
+    defer allocator.free(result);
 
-    try appendEscaped(allocator, &buf, "Hello\n\"World\"\\");
-
-    try std.testing.expectEqualStrings("Hello\\n\\\"World\\\"\\\\", buf.items);
+    // Should contain escaped newline, quotes, and backslash
+    try std.testing.expect(std.mem.indexOf(u8, result, "\\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\\\"World\\\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\\\\") != null);
 }

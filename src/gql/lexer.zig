@@ -259,23 +259,25 @@ pub const Lexer = struct {
         // case-insensitive keyword mapping
         const kind = t.keywordKind(slice);
         // Special handling for typed temporal literals: DATE"..." / DATETIME"..." / TIME"..." / LOCAL DATETIME"..."
-        if (kind == .date_lit or kind == .datetime_lit or kind == .time_lit) {
+        if (kind == .DATE or kind == .DATETIME or kind == .TIME) {
             const save_idx = self.idx;
             const save_line = self.line;
             const save_col = self.col;
             self.skipSeparators();
             if (self.idx < self.src.len and self.src[self.idx] == '"') {
                 const str = self.scanStringAny('"');
-                if (kind == .date_lit and !temporal.isDateStrict(str.lexeme)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
-                if (kind == .datetime_lit and !temporal.isDateTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
-                if (kind == .time_lit and !temporal.isTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
-                return .{ .kind = kind, .lexeme = str.lexeme, .loc = str.loc };
+                if (kind == .DATE and !temporal.isDateStrict(str.lexeme)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                if (kind == .DATETIME and !temporal.isDateTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                if (kind == .TIME and !temporal.isTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                // Return the literal type (not the keyword type) for temporal literals
+                const lit_kind: t.TokenKind = if (kind == .DATE) .date_lit else if (kind == .DATETIME) .datetime_lit else .time_lit;
+                return .{ .kind = lit_kind, .lexeme = str.lexeme, .loc = str.loc };
             }
-            // No following string: not a typed literal; restore and treat as identifier
+            // No following string: not a typed literal; return as keyword
             self.idx = save_idx;
             self.line = save_line;
             self.col = save_col;
-            return .{ .kind = .identifier, .lexeme = slice, .loc = loc };
+            return .{ .kind = kind, .lexeme = slice, .loc = loc };
         }
         if (kind == .LOCAL) {
             // Check for LOCAL DATETIME"..." pattern
@@ -618,10 +620,23 @@ pub const Lexer = struct {
         self.skipSeparators();
         if (self.idx < self.src.len and self.src[self.idx] == '"') {
             const str = self.scanStringAny('"');
-            if (kind == .date_lit) {
+            if (kind == .DATE or kind == .date_lit) {
                 if (!temporal.isDateStrict(str.lexeme)) {
                     return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
                 }
+                return .{ .kind = .date_lit, .lexeme = str.lexeme, .loc = str.loc };
+            }
+            if (kind == .DATETIME or kind == .datetime_lit) {
+                if (!temporal.isDateTimeIso(str.lexeme, true)) {
+                    return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                }
+                return .{ .kind = .datetime_lit, .lexeme = str.lexeme, .loc = str.loc };
+            }
+            if (kind == .TIME or kind == .time_lit) {
+                if (!temporal.isTimeIso(str.lexeme, true)) {
+                    return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
+                }
+                return .{ .kind = .time_lit, .lexeme = str.lexeme, .loc = str.loc };
             }
             return .{ .kind = kind, .lexeme = str.lexeme, .loc = str.loc };
         }

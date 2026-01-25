@@ -85,8 +85,12 @@ REQ-AGG-COLLECT-004,ShellTestVerification,AggregationCollect,TESTED,,,engine,202
 REQ-AGG-SUM-001,AggregationFunctions,Sum,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-AGGREGATION-AVG-001,AvgAggregation,DecimalSupport,TESTED,,,engine,2025-12-23,src/execution/aggregation_evaluation.zig
 REQ-AGGREGATION-AVG-002,AvgAggregation,FloatSupport,TESTED,,,engine,2026-01-09,src/execution/aggregation_evaluation.zig
+REQ-AGGREGATION-AVG-DECIMAL-001,AvgAggregation,DecimalPropertySupport,TESTED,,,engine,2026-01-25,src/execution/aggregation_evaluation.zig
+REQ-AGGREGATION-AVG-DECIMAL-002,AvgAggregation,DecimalPropertySupport,TESTED,,,engine,2026-01-25,src/execution/aggregation_evaluation.zig
 REQ-AGGREGATION-SUM-001,SumAggregation,DecimalSupport,TESTED,,,engine,2025-12-23,src/execution/aggregation_evaluation.zig
 REQ-AGGREGATION-SUM-002,SumAggregation,DecimalSupport,TESTED,,,engine,2025-12-23,src/execution/aggregation_evaluation.zig
+REQ-AGGREGATION-SUM-DECIMAL-001,SumAggregation,DecimalPropertySupport,TESTED,,,engine,2026-01-25,src/execution/aggregation_evaluation.zig
+REQ-AGGREGATION-SUM-DECIMAL-002,SumAggregation,DecimalPropertySupport,TESTED,,,engine,2026-01-25,src/execution/aggregation_evaluation.zig
 REQ-ALG-SIM-001,SimilarityAlgorithms,Cosine,TESTED,,,eval,2025-10-16,src/eval.zig
 REQ-ANALYTICS-001,Real-time Analytics,StreamingIntegration,TESTED,,,analytics,2025-10-05,src/analytics/real_time.zig
 REQ-ANALYTICS-002,Real-time Analytics,MLIntegration,TESTED,,,analytics,2025-10-05,src/analytics/real_time.zig
@@ -1670,6 +1674,11 @@ REQ-GQL-BRIDGES-001,BridgeEdges,Connectivity,TESTED,,,graph,2026-01-03,src/execu
 REQ-GQL-CALL-SUBQUERY,CallSubquery,Basic,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-CALL-SUBQUERY,CallSubquery,Execution,TESTED,,,execution,2025-10-11,src/execution/call_operations.zig
 REQ-GQL-CARTESIAN-PRODUCT-001,CartesianProductMatch,IndependentChains,TESTED,,,engine,2026-01-09,src/execution/match_operations.zig
+REQ-GQL-CAST-001,TypeCasting,Evaluation,TESTED,,,eval,2026-01-25,src/eval.zig
+REQ-GQL-CAST-001,TypeCasting,Parser,TESTED,,,parser,2026-01-25,src/gql/parser.zig
+REQ-GQL-CAST-003,TypeCasting,Validation,TESTED,,,parser,2026-01-25,src/gql/parser.zig
+REQ-GQL-CAST-KEYWORDS-001,CastTypeKeywords,LexerParser,TESTED,,,parser,2026-01-25,geodetestlab/specs/cast_type_keywords.yml
+REQ-GQL-CAST-KEYWORDS-001,CastTypeKeywords,UnitTests,TESTED,,,parser,2026-01-25,src/gql/token.zig
 REQ-GQL-CATALOG-001,Enhanced Catalog Operations,RegressionTesting,TESTED,,,parser,2025-10-04,tests/test_catalog_operations_regression.zig
 REQ-GQL-CATALOG-002,Graph Type Operations,FrameworkTesting,TESTED,,,parser,2025-10-04,tests/test_catalog_operations_regression.zig
 REQ-GQL-CATALOG-003,Catalog,E2E,TESTED,,,server,2026-01-16,tests/test_gap_0193_batch2_testing.zig
@@ -1727,6 +1736,8 @@ REQ-GQL-CTE-003,CTEListParsing,Parser,TESTED,,,parser,2026-01-10,src/gql/parser.
 REQ-GQL-CTE-003,Parser,CTEList,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-GQL-DATASET,DatasetIntegrationTests,Testing,TESTED,,,test-team,2025-09-29,tests/integration/dataset_integration_test.zig
 REQ-GQL-DATASET-E2E,DatasetIntegrationE2E,Testing,TESTED,,,test-team,2025-09-29,tests/e2e_dataset_integration.zig
+REQ-GQL-DECIMAL-001,DecimalPrecision,PropertyStorage,TESTED,,,core,2026-01-25,src/graph_store.zig
+REQ-GQL-DECIMAL-001,DecimalPrecision,UnitTest,TESTED,,,core,2026-01-25,tests/test_decimal_property_precision.zig
 REQ-GQL-DELETE,DELETE in Query,Parser,TESTED,,,parser,2025-10-14,src/gql/parser.zig
 REQ-GQL-DELETE,DELETE in Query,ParserCreateStatement,TESTED,,,parser,2025-10-14,src/gql/parser.zig
 REQ-GQL-DISTINCT-001,DISTINCT,DEDUPLICATION,TESTED,,,execution,2025-12-22,src/execution/match_operations.zig
@@ -2029,6 +2040,7 @@ REQ-GQL-PATH-MODES-002,GQL Path Mode AST,Chain,TESTED,,,parser,2026-01-08,src/gq
 REQ-GQL-PATH-MODES-003,GQL Path Mode Parsing,Parser,TESTED,,,parser,2026-01-08,src/gql/parser.zig
 REQ-GQL-PATH-MODES-003,Parser,PathModes,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-GQL-PATH-MODES-004,GQL Path Mode Execution,PathExpansion,TESTED,,,engine,2026-01-08,src/execution.zig
+REQ-GQL-PATH-NULL-001,ShortestPath,NullHandling,TESTED,,,parser,2026-01-25,src/gql/parser.zig
 REQ-GQL-PATTERN-COUNT,PatternMatching,COUNT,TESTED,,,execution,2025-12-27,src/execution/graph_algorithms.zig
 REQ-GQL-POWER-001,MathFunctions,PowerAlias,TESTED,,,eval,2025-12-24,src/eval.zig
 REQ-GQL-POWER-002,PowerOperator,ParserSupport,TESTED,,,parser,2025-12-27,src/gql/parser.zig
@@ -2197,6 +2209,7 @@ REQ-GQL-UNICODE-014,WTF-8 Lossy Decode,ClientTestZig,TESTED,,,clients,2025-09-27
 REQ-GQL-UNION-001,UNION Property Access,Comprehensive,TESTED,,,claude,2025-01-04,tests/test_union_property_access_comprehensive.zig
 REQ-GQL-UNION-001,UnionPropertyAccess,PropertyEvaluation,TESTED,,,engine,2025-10-04,tests/test_union_property_access.zig
 REQ-GQL-UNION-INTEGRATION-001,UNION Property Access Integration,Integration,TESTED,,,claude,2025-01-04,tests/test_union_property_access_integration.zig
+REQ-GQL-UNWIND-001,UNWIND Clause,Execution,TESTED,,,execution,2026-01-25,src/execution/query_execution.zig
 REQ-GQL-VALUES-MATCH-001,GQL Values Match Chaining,QueryPlanning,TESTED,,,gql,2026-01-15,tests/test_requirement_traceability.zig
 REQ-GQL-VALUES-MATCH-001,ValuesMatchChaining,BindingPropagation,TESTED,,,engine,2026-01-17,docs/VALUES_MATCH_CHAINING_SPEC.md
 REQ-GQL-VAR-LEN-SUBQUERY-001,GQLPaths,VarLenSubquery,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
@@ -2352,11 +2365,91 @@ REQ-LIB-MIGRATION-CLI-001,External Library Migration,CLIFramework,IMPL,,,core,20
 REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,IMPL,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
 REQ-LIB-MIGRATION-CLI-TEST-001,External Library Migration,ShellCompletionTests,TESTED,,,test,2026-01-24,geodetestlab/specs/shell_completion_comprehensive.yml
 REQ-LIB-MIGRATION-CLI-TEST-002,External Library Migration,CLIFlagsTests,TESTED,,,test,2026-01-24,geodetestlab/specs/cli_flags_comprehensive.yml
+REQ-LIB-MIGRATION-CONFIG-001,Config Library Migration,ReplConfigXdg,IMPL,,,client,2026-01-25,src/client/repl/repl_config.zig
 REQ-LIB-MIGRATION-CONFIG-001,External Library Migration,ConfigManagement,IMPL,,,core,2026-01-24,src/server/cli_args.zig
 REQ-LIB-MIGRATION-CONFIG-TEST-001,External Library Migration,ConfigTesting,TESTED,,,test,2026-01-24,tests/test_config_integration.zig
 REQ-LIB-MIGRATION-CONFIG-TEST-002,External Library Migration,ConfigFormatTests,TESTED,,,test,2026-01-24,geodetestlab/specs/config_formats_comprehensive.yml
 REQ-LIB-MIGRATION-DNS-001,External Library Migration,DNSResolution,IMPL,,,core,2026-01-24,src/audit/syslog.zig
-REQ-LIB-MIGRATION-JSON-001,External Library Migration,JSONParsing,IMPL,,,core,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-001,External Library Migration,JSONEncoding,TESTED,,,core,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-001,JSON Library Migration,Protocol,IMPL,,,core,2026-01-24,docs/JSON_MIGRATION.md
+REQ-LIB-MIGRATION-JSON-002,JSON Library Migration,Execution,PENDING,,,execution,2026-01-24,docs/JSON_MIGRATION.md
+REQ-LIB-MIGRATION-JSON-002,JSON Library Migration,SchemaFrame,TESTED,,,protocol,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-003,JSON Library Migration,BindingsFrame,TESTED,,,protocol,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-003,JSON Library Migration,CLI,PENDING,,,cli,2026-01-24,docs/JSON_MIGRATION.md
+REQ-LIB-MIGRATION-JSON-004,JSON Library Migration,ExplainFrame,TESTED,,,protocol,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-004,JSON Library Migration,MCP,PENDING,,,mcp,2026-01-24,docs/JSON_MIGRATION.md
+REQ-LIB-MIGRATION-JSON-005,External Library Migration,AuditLogger,IMPL,,,core,2026-01-24,src/audit/logger.zig
+REQ-LIB-MIGRATION-JSON-005,External Library Migration,ExternalKMS,IMPL,,,core,2026-01-24,src/security/external_kms_client.zig
+REQ-LIB-MIGRATION-JSON-005,External Library Migration,FileSink,IMPL,,,core,2026-01-24,src/audit/file_sink.zig
+REQ-LIB-MIGRATION-JSON-005,External Library Migration,SecurityAudit,IMPL,,,core,2026-01-24,src/security/audit.zig
+REQ-LIB-MIGRATION-JSON-005,External Library Migration,TwoPhaseCommit,IMPL,,,core,2026-01-24,src/distributed/twophase.zig
+REQ-LIB-MIGRATION-JSON-005,JSON Library Migration,ProfileFrame,TESTED,,,protocol,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-005,JSON Library Migration,Streaming,PENDING,,,streaming,2026-01-24,docs/JSON_MIGRATION.md
+REQ-LIB-MIGRATION-JSON-006,JSON Library Migration,Audit,PENDING,,,security,2026-01-24,docs/JSON_MIGRATION.md
+REQ-LIB-MIGRATION-JSON-006,JSON Library Migration,CdcDiagnosticsFrame,TESTED,,,protocol,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-007,JSON Library Migration,CdcControlFrame,TESTED,,,protocol,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-008,JSON Library Migration,ErrorFrame,TESTED,,,protocol,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-009,JSON Library Migration,ErrorFrameWithFlags,TESTED,,,protocol,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-010,JSON Library Migration,ErrorFrameCustomStatus,TESTED,,,protocol,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-JSON-011,JSON Library Migration,QueryExecutor,TESTED,,,server,2026-01-24,src/server/query_executor.zig
+REQ-LIB-MIGRATION-JSON-012,JSON Library Migration,BindingValueRow,TESTED,,,server,2026-01-24,src/server/query_executor.zig
+REQ-LIB-MIGRATION-JSON-013,JSON Library Migration,WriteJsonValue,TESTED,,,server,2026-01-24,src/server/query_executor.zig
+REQ-LIB-MIGRATION-JSON-014,JSON Library Migration,StdioHandler,TESTED,,,server,2026-01-24,src/server/stdio_message_handler.zig
+REQ-LIB-MIGRATION-JSON-015,JSON Library Migration,CrudOperations,TESTED,,,execution,2026-01-24,src/execution/crud_operations.zig
+REQ-LIB-MIGRATION-JSON-016,JSON Library Migration,ValueMapToJson,TESTED,,,crud_operations,2026-01-24,src/execution/crud_operations.zig
+REQ-LIB-MIGRATION-JSON-017,JSON Library Migration,ValueEncoding,TESTED,,,crud_operations,2026-01-24,src/execution/crud_operations.zig
+REQ-LIB-MIGRATION-JSON-018,JSON Library Migration,LegacyCompat,TESTED,,,crud_operations,2026-01-24,src/execution/crud_operations.zig
+REQ-LIB-MIGRATION-JSON-019,JSON Library Migration,ValueUtilities,TESTED,,,execution,2026-01-24,src/execution/value_utilities.zig
+REQ-LIB-MIGRATION-JSON-020,JSON Library Migration,StringEscaping,TESTED,,,execution,2026-01-24,src/execution/value_utilities.zig
+REQ-LIB-MIGRATION-JSON-021,JSON Library Migration,WriteValue,TESTED,,,execution,2026-01-24,src/execution/value_utilities.zig
+REQ-LIB-MIGRATION-JSON-022,JSON Library Migration,Execution,TESTED,,,execution,2026-01-24,src/execution.zig
+REQ-LIB-MIGRATION-JSON-023,JSON Library Migration,ResultSerialization,TESTED,,,execution,2026-01-24,src/execution.zig
+REQ-LIB-MIGRATION-JSON-024,JSON Library Migration,GeoJSON,TESTED,,,spatial,2026-01-24,src/eval_extended.zig
+REQ-LIB-MIGRATION-JSON-025,JSON Library Migration,WkbToGeoJson,TESTED,,,spatial,2026-01-24,src/eval_extended.zig
+REQ-LIB-MIGRATION-JSON-026,JSON Library Migration,CLI,TESTED,,,cli,2026-01-24,src/cli/main.zig
+REQ-LIB-MIGRATION-JSON-027,JSON Library Migration,CLIMessageTypes,TESTED,,,cli,2026-01-24,src/cli/main.zig
+REQ-LIB-MIGRATION-JSON-028,JSON Library Migration,HelloMessage,TESTED,,,cli,2026-01-24,src/cli/main.zig
+REQ-LIB-MIGRATION-JSON-029,JSON Library Migration,RunGqlMessage,TESTED,,,cli,2026-01-24,src/cli/main.zig
+REQ-LIB-MIGRATION-JSON-030,JSON Library Migration,AuthHelloMessage,TESTED,,,cli,2026-01-24,src/cli/main.zig
+REQ-LIB-MIGRATION-JSON-031,JSON Library Migration,BackupCLI,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig
+REQ-LIB-MIGRATION-JSON-032,JSON Library Migration,MigrationScript,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig
+REQ-LIB-MIGRATION-JSON-033,JSON Library Migration,BackupHello,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig
+REQ-LIB-MIGRATION-JSON-034,JSON Library Migration,RestoreHello,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig
+REQ-LIB-MIGRATION-JSON-035,JSON Library Migration,RestoreMessage,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig
+REQ-LIB-MIGRATION-JSON-036,JSON Library Migration,ErrorResponse,TESTED,,,cli,2026-01-24,src/cli/main.zig
+REQ-LIB-MIGRATION-JSON-037,JSON Library Migration,UnknownMsgError,TESTED,,,cli,2026-01-24,src/cli/main.zig
+REQ-LIB-MIGRATION-JSON-038,JSON Library Migration,MCPTools,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig
+REQ-LIB-MIGRATION-JSON-039,JSON Library Migration,MCPResponseTypes,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig
+REQ-LIB-MIGRATION-JSON-040,JSON Library Migration,ToolResult,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig
+REQ-LIB-MIGRATION-JSON-041,JSON Library Migration,ErrorResult,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig
+REQ-LIB-MIGRATION-JSON-042,JSON Library Migration,MCPResources,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig
+REQ-LIB-MIGRATION-JSON-043,JSON Library Migration,ResourceResponse,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig
+REQ-LIB-MIGRATION-JSON-044,JSON Library Migration,ResourceError,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig
+REQ-LIB-MIGRATION-JSON-045,JSON Library Migration,MCPClient,TESTED,,,mcp,2026-01-24,src/mcp/client.zig
+REQ-LIB-MIGRATION-JSON-046,JSON Library Migration,ClientQuery,TESTED,,,mcp,2026-01-24,src/mcp/client.zig
+REQ-LIB-MIGRATION-JSON-047,JSON Library Migration,ClientExplain,TESTED,,,mcp,2026-01-24,src/mcp/client.zig
+REQ-LIB-MIGRATION-JSON-048,JSON Library Migration,MCPLSP,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig
+REQ-LIB-MIGRATION-JSON-049,JSON Library Migration,LSPValidation,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig
+REQ-LIB-MIGRATION-JSON-050,JSON Library Migration,LSPCompletions,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig
+REQ-LIB-MIGRATION-JSON-051,JSON Library Migration,LSPHover,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig
+REQ-LIB-MIGRATION-JSON-052,JSON Library Migration,CDCStreaming,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig
+REQ-LIB-MIGRATION-JSON-053,JSON Library Migration,CDCEventSerialize,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig
+REQ-LIB-MIGRATION-JSON-054,JSON Library Migration,CDCSnapshots,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig
+REQ-LIB-MIGRATION-JSON-055,JSON Library Migration,CDCDiagnostics,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig
+REQ-LIB-MIGRATION-JSON-056,JSON Library Migration,TransactionHandlers,IMPL,,,server,2026-01-24,src/server/transaction_handlers.zig
+REQ-LIB-MIGRATION-JSON-057,JSON Library Migration,QueryExecutorResponses,IMPL,,,server,2026-01-24,src/server/query_executor.zig
+REQ-LIB-MIGRATION-JSON-058,JSON Library Migration,CLIErrorTypes,IMPL,,,cli,2026-01-24,src/cli/main.zig
+REQ-LIB-MIGRATION-JSON-059,JSON Library Migration,UserManagement,IMPL,,,cli,2026-01-25,src/cli/user_management.zig
+REQ-LIB-MIGRATION-JSON-060,JSON Library Migration,UserStorageSimple,IMPL,,,cli,2026-01-25,src/cli/user_storage_simple.zig
+REQ-LIB-MIGRATION-JSON-061,JSON Library Migration,UserStorageSecure,IMPL,,,cli,2026-01-25,src/cli/user_storage_secure.zig
+REQ-LIB-MIGRATION-JSON-062,JSON Library Migration,ClientMain,IMPL,,,client,2026-01-25,src/client/main.zig
+REQ-LIB-MIGRATION-JSON-063,JSON Library Migration,ReplDispatch,IMPL,,,client,2026-01-25,src/client/repl/repl_dispatch.zig
+REQ-LIB-MIGRATION-JSON-064,JSON Library Migration,ServerMain,IMPL,,,server,2026-01-25,src/server/main.zig
+REQ-LIB-MIGRATION-JSON-065,JSON Library Migration,QUICHandler,IMPL,,,server,2026-01-25,src/server/quic_connection_handler.zig
+REQ-LIB-MIGRATION-JSON-066,JSON Library Migration,RaftConsensus,IMPL,,,distributed,2026-01-25,src/distributed/raft.zig
+REQ-LIB-MIGRATION-JSON-068,JSON Library Migration,TestJsonOptimization,IMPL,,,performance,2026-01-25,src/performance/test_json_optimization.zig
+REQ-LIB-MIGRATION-JSON-069,JSON Library Migration,TestHarness,IMPL,,,testing,2026-01-25,src/test_harness.zig
+REQ-LIB-MIGRATION-JSON-COMPAT-001,JSON Library Migration,WireProtocolCompatibility,TESTED,,,protocol,2026-01-24,tests/json_wire_protocol_compatibility.zig
 REQ-LIB-MIGRATION-MCP-001,External Library Migration,MCPIntegration,TESTED,,,core,2026-01-24,src/mcp/server.zig
 REQ-LIB-MIGRATION-MCP-002,External Library Migration,MCPTools,TESTED,,,core,2026-01-24,src/mcp/tools.zig
 REQ-LIB-MIGRATION-MCP-003,External Library Migration,MCPResources,TESTED,,,core,2026-01-24,src/mcp/resources.zig
@@ -2704,6 +2797,8 @@ REQ-METADATA-001,UnifiedLanguageMetadata,SingleSourceOfTruth,TESTED,,,api,2026-0
 REQ-METADATA-LIB-001,MetadataIntegration,LibExport,EXEMPT,,,lib,2026-01-03,src/lib.zig
 REQ-MFA-OUTPUT-001,MFASecureOutput,Security,TESTED,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig
 REQ-MFA-TOGGLE-001,MFAToggleSecure,Security,TESTED,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig
+REQ-MIGRATION-QUIC-STABILITY-001,MigrationQuicStability,HeapAllocation,TESTED,,,cli,2026-01-25,geodetestlab/specs/migration_quic_stability.yml
+REQ-MIGRATION-QUIC-STABILITY-001,MigrationQuicStability,UnitTests,TESTED,,,cli,2026-01-25,src/cli/backup_cli.zig
 REQ-MIGRATION-SCHEMA-001,Migration,SchemaMigration,TESTED,,,admin,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-ML-EMBEDDINGS-001,Graph Embeddings Integration,CoreSystem,TESTED,,,ml,2025-10-05,src/ml/graph_embeddings.zig
 REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Implementation,TESTED,,,ml,2025-10-05,src/ml/graph_embeddings.zig

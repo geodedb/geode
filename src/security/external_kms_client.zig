@@ -5,6 +5,32 @@ const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=ExternalKMS; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// External JSON library for RFC 8259 compliant encoding in KMS API requests
+const json_lib = @import("json");
+
+/// JSON structure for Vault Transit decrypt request
+const VaultDecryptRequest = struct {
+    ciphertext: []const u8,
+};
+
+/// JSON structure for AWS KMS Encrypt request
+const AwsKmsEncryptRequest = struct {
+    KeyId: []const u8,
+    Plaintext: []const u8,
+};
+
+/// JSON structure for AWS KMS Decrypt request
+const AwsKmsDecryptRequest = struct {
+    CiphertextBlob: []const u8,
+};
+
+/// JSON structure for AWS KMS GenerateDataKey request
+const AwsKmsGenerateDataKeyRequest = struct {
+    KeyId: []const u8,
+    KeySpec: []const u8 = "AES_256",
+};
+
 // external_kms_client.zig
 // External KMS client providing abstraction over multiple KMS backends:
 // - LocalSimulated: AES-256-GCM wrapping for development/testing
@@ -222,8 +248,9 @@ pub const VaultTransitClient = struct {
         // In production, the ciphertext would be stored alongside the envelope
         const ciphertext = self.last_ciphertext orelse return error.NoCachedCiphertext;
 
-        // Build request body: {"ciphertext": "vault:v1:..."}
-        const body = try std.fmt.allocPrint(self.allocator, "{{\"ciphertext\":\"{s}\"}}", .{ciphertext});
+        // Build request body using type-safe JSON encoding: {"ciphertext": "vault:v1:..."}
+        const request = VaultDecryptRequest{ .ciphertext = ciphertext };
+        const body = try json_lib.encode(self.allocator, request, .{});
         defer self.allocator.free(body);
 
         // Build URL
@@ -442,11 +469,12 @@ pub const AwsKmsClient = struct {
         var b64_buf: [64]u8 = undefined;
         const b64_plaintext = std.base64.standard.Encoder.encode(&b64_buf, &plaintext);
 
-        // Build request body for Encrypt
-        const body = try std.fmt.allocPrint(self.allocator, "{{\"KeyId\":\"{s}\",\"Plaintext\":\"{s}\"}}", .{
-            self.config.aws_key_id.?,
-            b64_plaintext,
-        });
+        // Build request body for Encrypt using type-safe JSON encoding
+        const request = AwsKmsEncryptRequest{
+            .KeyId = self.config.aws_key_id.?,
+            .Plaintext = b64_plaintext,
+        };
+        const body = try json_lib.encode(self.allocator, request, .{});
         defer self.allocator.free(body);
 
         // Make HTTP request
@@ -512,8 +540,9 @@ pub const AwsKmsClient = struct {
         defer self.allocator.free(b64_buf);
         _ = std.base64.standard.Encoder.encode(b64_buf, ciphertext_blob);
 
-        // Build request body for Decrypt
-        const body = try std.fmt.allocPrint(self.allocator, "{{\"CiphertextBlob\":\"{s}\"}}", .{b64_buf});
+        // Build request body for Decrypt using type-safe JSON encoding
+        const request = AwsKmsDecryptRequest{ .CiphertextBlob = b64_buf };
+        const body = try json_lib.encode(self.allocator, request, .{});
         defer self.allocator.free(body);
 
         // Make HTTP request
@@ -543,10 +572,9 @@ pub const AwsKmsClient = struct {
             return error.InvalidConfiguration;
         }
 
-        // Build request body for GenerateDataKey
-        const body = try std.fmt.allocPrint(self.allocator, "{{\"KeyId\":\"{s}\",\"KeySpec\":\"AES_256\"}}", .{
-            self.config.aws_key_id.?,
-        });
+        // Build request body for GenerateDataKey using type-safe JSON encoding
+        const request = AwsKmsGenerateDataKeyRequest{ .KeyId = self.config.aws_key_id.? };
+        const body = try json_lib.encode(self.allocator, request, .{});
         defer self.allocator.free(body);
 
         // Make HTTP request

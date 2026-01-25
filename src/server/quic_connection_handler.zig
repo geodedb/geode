@@ -31,6 +31,22 @@ const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-065; FEATURE="JSON Library Migration"; ASPECT=QUICHandler; STATUS=IMPL; OWNER=server; UPDATED=2026-01-25
+const json_lib = @import("json");
+
+// JSON row types for SHOW statement results
+const ShowGraphRow = struct { name: []const u8 };
+const ShowIndexRow = struct { name: []const u8, type: []const u8, table: []const u8, columns: []const u8 };
+const ShowConstraintRow = struct { name: []const u8, type: []const u8, table: []const u8, columns: []const u8 };
+const ShowTableRow = struct { name: []const u8, type: []const u8 };
+const ShowFunctionRow = struct { name: []const u8, signature: []const u8, return_type: []const u8 };
+
+// Error response type
+const ErrorResponse = struct {
+    status_class: []const u8 = "58000",
+    @"error": []const u8,
+};
+
 // Import types and functions from query_executor
 const evaluateUnion = query_executor.evaluateUnion;
 const UnionMetrics = query_executor.UnionMetrics;
@@ -80,7 +96,7 @@ pub fn handleQuicConnection(
     // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
     // Use destroyConnection to properly remove from transport list, close, and free resources
     defer transport.destroyConnection(conn);
-    std.debug.print("[QUIC-HANDLER] Entering handleQuicConnection\n", .{});
+    log.debug("Entering handleQuicConnection", &.{});
 
     // Poll the endpoint to process incoming STREAM frames before accepting
     // vendor/quic requires explicit polling to receive packets and populate stream queues
@@ -90,14 +106,17 @@ pub fn handleQuicConnection(
         try transport.poll(50); // Poll for up to 50ms
         if (conn.inner.hasIncomingStreams()) break;
         if (poll_attempts > 0) {
-            std.debug.print("[POLL] Attempt {}/10: No streams yet, retrying...\n", .{poll_attempts + 1});
+            log.debug("No streams yet, retrying", &.{
+                Attr.int("attempt", @intCast(poll_attempts + 1)),
+                Attr.int("max_attempts", 10),
+            });
         }
     }
 
     // Accept a stream for the protocol communication
-    std.debug.print("[QUIC-HANDLER] Attempting to accept stream\n", .{});
+    log.debug("Attempting to accept stream", &.{});
     const stream = try conn.acceptStream();
-    std.debug.print("[QUIC-HANDLER] Stream accepted successfully\n", .{});
+    log.debug("Stream accepted successfully", &.{});
     defer stream.close();
 
     // Initialize WAL
@@ -162,7 +181,9 @@ pub fn handleQuicConnection(
                 return err;
             }
         } else {
-            std.debug.print("[READ] Failed to read after 20 poll attempts\n", .{});
+            log.debug("Failed to read after max poll attempts", &.{
+                Attr.int("max_attempts", 20),
+            });
             return error.Timeout;
         };
         defer gpa.free(line);
@@ -172,8 +193,19 @@ pub fn handleQuicConnection(
         // Process the message and send response
         const response = processMessage(gpa, &state, line, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
             _ = err;
-            const error_msg = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)});
+            const err_response = ErrorResponse{ .@"error" = @errorName(err) };
+            const json_str = json_lib.encode(gpa, err_response, .{}) catch {
+                try stream.writeAll("{\"status_class\":\"58000\",\"error\":\"EncodingFailed\"}\n");
+                continue;
+            };
+            defer gpa.free(json_str);
+            const error_msg = gpa.alloc(u8, json_str.len + 1) catch {
+                try stream.writeAll("{\"status_class\":\"58000\",\"error\":\"AllocFailed\"}\n");
+                continue;
+            };
             defer gpa.free(error_msg);
+            @memcpy(error_msg[0..json_str.len], json_str);
+            error_msg[json_str.len] = '\n';
             try stream.writeAll(error_msg);
             continue;
         };
@@ -346,7 +378,9 @@ pub fn processMessage(
             switch (parse_res) {
                 .Err => |_| return try gpa.dupe(u8, ""),
                 .Ok => |ok| {
-                    std.debug.print("[QUIC-DEBUG] Parsed OK, statements.len={d}\n", .{ok.program.statements.len});
+                    log.debug("Parsed OK", &.{
+                        Attr.int("statements_len", @intCast(ok.program.statements.len)),
+                    });
                     if (ok.program.statements.len == 0) {
                         if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| return line else |_| return try gpa.dupe(u8, "");
                     }
@@ -356,7 +390,9 @@ pub fn processMessage(
                     // First, execute all non-final statements for their side effects (like USE GRAPH)
                     if (ok.program.statements.len > 1) {
                         for (ok.program.statements[0 .. ok.program.statements.len - 1]) |earlier_st| {
-                            std.debug.print("[QUIC] Executing earlier statement: {s}\n", .{@tagName(earlier_st)});
+                            log.debug("Executing earlier statement", &.{
+                                Attr.string("type", @tagName(earlier_st)),
+                            });
                             // Execute side-effect statements (USE GRAPH, CREATE GRAPH, etc.)
                             switch (earlier_st) {
                                 .UseGraph => |ug| {
@@ -399,7 +435,9 @@ pub fn processMessage(
                     }
                     // Now execute the final statement and return its result
                     const st = ok.program.statements[ok.program.statements.len - 1];
-                    std.debug.print("[QUIC] Statement type: {s}\n", .{@tagName(st)});
+                    log.debug("Statement type", &.{
+                        Attr.string("type", @tagName(st)),
+                    });
                     switch (st) {
                         .Union => |u_stmt| {
                             var pn: [][]const u8 = &.{};
@@ -430,12 +468,17 @@ pub fn processMessage(
                             return protocol.buildSchemaLine(gpa, state.last_columns, &.{}, computeBaseFlags(false, state.last_distinct)) catch try gpa.dupe(u8, "");
                         },
                         .Query => |q| {
-                            std.debug.print("[DEBUG .Query] Entering Query statement handler\n", .{});
+                            log.debug("Entering Query statement handler", &.{});
                             var pn: [][]const u8 = &.{};
                             var pr: [][]const eval.Value = &.{};
-                            std.debug.print("[DEBUG] Before parseParams: params_json is {s}\n", .{if (rq.params_json) |p| p else "NULL"});
+                            log.debug("Before parseParams", &.{
+                                Attr.string("params_json", if (rq.params_json) |p| p else "NULL"),
+                            });
                             parseParams(gpa, rq.params_json, &pn, &pr);
-                            std.debug.print("[DEBUG] After parseParams: pn.len={d}, pr.len={d}\n", .{ pn.len, pr.len });
+                            log.debug("After parseParams", &.{
+                                Attr.int("param_names_len", @intCast(pn.len)),
+                                Attr.int("param_values_len", @intCast(pr.len)),
+                            });
                             var ord = false;
                             var oks: [][]const u8 = &.{};
                             var cols: []const protocol.SchemaCol = &.{};
@@ -487,7 +530,10 @@ pub fn processMessage(
                                 // Create SessionState with current graph for multi-graph isolation
                                 var session_state = execution.SessionState.init(gpa);
                                 session_state.graph = state.current_graph;
-                                std.debug.print("[QUIC] Final Query handler: state.current_graph='{s}', session_state.graph='{s}'\n", .{ state.current_graph orelse "NULL", session_state.graph orelse "NULL" });
+                                log.debug("Final Query handler", &.{
+                                    Attr.string("current_graph", state.current_graph orelse "NULL"),
+                                    Attr.string("session_graph", session_state.graph orelse "NULL"),
+                                });
                                 defer {
                                     // Don't deinit the graph since it's owned by state, just cleanup the rest
                                     session_state.graph = null;
@@ -819,7 +865,9 @@ pub fn processMessage(
                         },
                         .DropGraph => |dg| {
                             // Drop graph storage
-                            std.debug.print("[QUIC] DropGraph handler for '{s}'\n", .{dg.name});
+                            log.debug("DropGraph handler", &.{
+                                Attr.string("name", dg.name),
+                            });
                             graph_storage_mgr.dropGraphStorage(dg.name) catch |err| {
                                 if (err == error.GraphNotFound and dg.if_exists) {
                                     // Silently succeed if IF EXISTS
@@ -849,13 +897,16 @@ pub fn processMessage(
                             // CANARY: REQ=REQ-SHOW-STMT-001; FEATURE="SHOW Statement Types"; ASPECT=GQLCompliance; STATUS=IMPL; OWNER=server; UPDATED=2026-01-13
                             switch (sh.show_type) {
                                 .graphs => {
-                                    std.debug.print("[QUIC] SHOW GRAPHS handler\n", .{});
+                                    log.debug("SHOW GRAPHS handler", &.{});
                                     const graph_names = graph_storage_mgr.listGraphNames(gpa) catch &.{};
-                                    std.debug.print("[QUIC] listGraphNames returned {d} graphs\n", .{graph_names.len});
+                                    log.debug("listGraphNames returned", &.{
+                                        Attr.int("count", @intCast(graph_names.len)),
+                                    });
                                     defer gpa.free(graph_names);
                                     var rows = std.ArrayList([]const u8).init(gpa);
                                     for (graph_names) |name| {
-                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\"}}", .{name}) catch continue;
+                                        const row_obj = ShowGraphRow{ .name = name };
+                                        const row = json_lib.encode(gpa, row_obj, .{}) catch continue;
                                         rows.append(gpa, row) catch continue;
                                     }
                                     const cols: []const protocol.SchemaCol = &.{.{ .name = "name", .type = "STRING" }};
@@ -871,7 +922,7 @@ pub fn processMessage(
                                 .indexes => {
                                     // GAP-0140: SHOW INDEXES implementation
                                     // CANARY: REQ=REQ-SHOW-INDEXES-QUIC-001; FEATURE="SHOW INDEXES"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
-                                    std.debug.print("[QUIC] SHOW INDEXES handler\n", .{});
+                                    log.debug("SHOW INDEXES handler", &.{});
                                     const catalog_instance = execution.ensureCatalogInstance(gpa) catch {
                                         return protocol.buildErrorLine(gpa, "CatalogError", "Failed to access catalog", "") catch try gpa.dupe(u8, "");
                                     };
@@ -887,7 +938,8 @@ pub fn processMessage(
                                         }
                                         const columns_joined = cols_str.toOwnedSlice(gpa) catch "";
                                         defer gpa.free(columns_joined);
-                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\",\"type\":\"{s}\",\"table\":\"{s}\",\"columns\":\"{s}\"}}", .{ idx.name, idx.index_type, idx.table_name, columns_joined }) catch continue;
+                                        const row_obj = ShowIndexRow{ .name = idx.name, .type = idx.index_type, .table = idx.table_name, .columns = columns_joined };
+                                        const row = json_lib.encode(gpa, row_obj, .{}) catch continue;
                                         rows.append(gpa, row) catch continue;
                                     }
                                     const cols: []const protocol.SchemaCol = &.{
@@ -908,7 +960,7 @@ pub fn processMessage(
                                 .constraints => {
                                     // GAP-0140: SHOW CONSTRAINTS implementation
                                     // CANARY: REQ=REQ-SHOW-CONSTRAINTS-QUIC-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
-                                    std.debug.print("[QUIC] SHOW CONSTRAINTS handler\n", .{});
+                                    log.debug("SHOW CONSTRAINTS handler", &.{});
                                     const catalog_instance = execution.ensureCatalogInstance(gpa) catch {
                                         return protocol.buildErrorLine(gpa, "CatalogError", "Failed to access catalog", "") catch try gpa.dupe(u8, "");
                                     };
@@ -930,7 +982,8 @@ pub fn processMessage(
                                         }
                                         const props_joined = props_str.toOwnedSlice(gpa) catch "";
                                         defer gpa.free(props_joined);
-                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\",\"type\":\"{s}\",\"table\":\"{s}\",\"columns\":\"{s}\"}}", .{ con.name, type_str, con.label, props_joined }) catch continue;
+                                        const row_obj = ShowConstraintRow{ .name = con.name, .type = type_str, .table = con.label, .columns = props_joined };
+                                        const row = json_lib.encode(gpa, row_obj, .{}) catch continue;
                                         rows.append(gpa, row) catch continue;
                                     }
                                     const cols: []const protocol.SchemaCol = &.{
@@ -952,7 +1005,7 @@ pub fn processMessage(
                                     // GAP-0140: SHOW TABLES implementation
                                     // CANARY: REQ=REQ-SHOW-TABLES-QUIC-001; FEATURE="SHOW TABLES"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
                                     // In graph databases, node labels serve as the equivalent of "tables"
-                                    std.debug.print("[QUIC] SHOW TABLES handler\n", .{});
+                                    log.debug("SHOW TABLES handler", &.{});
                                     const labels = graph_storage_mgr.listNodeLabels(gpa) catch &.{};
                                     defer {
                                         for (labels) |label| gpa.free(label);
@@ -960,7 +1013,8 @@ pub fn processMessage(
                                     }
                                     var rows = std.ArrayList([]const u8).init(gpa);
                                     for (labels) |label| {
-                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\",\"type\":\"NODE\"}}", .{label}) catch continue;
+                                        const row_obj = ShowTableRow{ .name = label, .type = "NODE" };
+                                        const row = json_lib.encode(gpa, row_obj, .{}) catch continue;
                                         rows.append(gpa, row) catch continue;
                                     }
                                     const cols: []const protocol.SchemaCol = &.{
@@ -980,7 +1034,7 @@ pub fn processMessage(
                                     // GAP-0140: SHOW PROCEDURES implementation
                                     // CANARY: REQ=REQ-SHOW-PROCEDURES-QUIC-001; FEATURE="SHOW PROCEDURES"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
                                     // Geode currently has no user-defined stored procedures - returns empty result
-                                    std.debug.print("[QUIC] SHOW PROCEDURES handler\n", .{});
+                                    log.debug("SHOW PROCEDURES handler", &.{});
                                     const cols: []const protocol.SchemaCol = &.{
                                         .{ .name = "name", .type = "STRING" },
                                         .{ .name = "signature", .type = "STRING" },
@@ -997,7 +1051,7 @@ pub fn processMessage(
                                 .functions => {
                                     // GAP-0140: SHOW FUNCTIONS implementation
                                     // CANARY: REQ=REQ-SHOW-FUNCTIONS-QUIC-001; FEATURE="SHOW FUNCTIONS"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=server; UPDATED=2026-01-13
-                                    std.debug.print("[QUIC] SHOW FUNCTIONS handler\n", .{});
+                                    log.debug("SHOW FUNCTIONS handler", &.{});
                                     // Built-in functions list
                                     const builtin_functions = [_]struct { name: []const u8, signature: []const u8, return_type: []const u8 }{
                                         // String functions
@@ -1048,7 +1102,8 @@ pub fn processMessage(
                                     };
                                     var rows = std.ArrayList([]const u8).init(gpa);
                                     for (builtin_functions) |func| {
-                                        const row = std.fmt.allocPrint(gpa, "{{\"name\":\"{s}\",\"signature\":\"{s}\",\"return_type\":\"{s}\"}}", .{ func.name, func.signature, func.return_type }) catch continue;
+                                        const row_obj = ShowFunctionRow{ .name = func.name, .signature = func.signature, .return_type = func.return_type };
+                                        const row = json_lib.encode(gpa, row_obj, .{}) catch continue;
                                         rows.append(gpa, row) catch continue;
                                     }
                                     const cols: []const protocol.SchemaCol = &.{

@@ -6,7 +6,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
-const print = std.debug.print;
 
 // Import core Geode modules
 const geode = @import("../lib.zig");

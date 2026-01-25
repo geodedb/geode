@@ -600,7 +600,10 @@ pub const KeyRegistry = struct {
 
         for (page_ids, 0..) |page_id, i| {
             self.reencryptPage(page_id, ciphertexts[i]) catch |err| {
-                std.debug.print("KEYROT: Failed to re-encrypt page {d}: {}\n", .{ page_id, err });
+                log.warn("KEYROT: Failed to re-encrypt page", &.{
+                    Attr.int("page_id", @intCast(page_id)),
+                    Attr.string("error", @errorName(err)),
+                });
                 continue;
             };
             success_count += 1;

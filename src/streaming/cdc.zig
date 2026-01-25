@@ -473,12 +473,13 @@ pub const CDCEngine = struct {
             log.warn("CDC Webhook: URL missing host", &.{});
             return;
         };
-        // Extract the raw string from the host component
+        // Extract host string from Component union
         const host: []const u8 = switch (host_component) {
-            .raw => |h| h,
-            .percent_encoded => |h| h,
+            .raw => |r| r,
+            .percent_encoded => |p| p,
         };
-        const port: u16 = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) @as(u16, 443) else @as(u16, 80);
+        const scheme = uri.scheme;
+        const port: u16 = uri.port orelse if (std.mem.eql(u8, scheme, "https")) @as(u16, 443) else @as(u16, 80);
 
         const stream = std.net.tcpConnectToHost(self.allocator, host, port) catch |err| {
             log.warn("CDC Webhook: Connection failed", &.{

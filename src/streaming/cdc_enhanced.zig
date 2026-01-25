@@ -10,6 +10,71 @@ const logging = @import("logging");
 const log = logging.scoped("streaming");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-052; FEATURE="JSON Library Migration"; ASPECT=CDCStreaming; STATUS=TESTED; OWNER=streaming; UPDATED=2026-01-24
+const json_lib = @import("json");
+
+// JSON Response Types for CDC
+const MalformedSnapshotEntry = struct {
+    count: u64,
+    ts_ms: i64,
+};
+
+const MalformedHashJsonEntry = struct {
+    count: u64,
+    hash: u64,
+    ts_ms: i64,
+    prefix: []const u8,
+};
+
+const CDCDiagnosticsConfig = struct {
+    enabled: bool,
+    malformed_snapshot_interval: u64,
+    malformed_hash_retain: u32,
+    malformed_warn_pct: f64,
+    malformed_abort_pct: f64,
+    flush_interval_ms: u32,
+    batch_size: u32,
+    pending_backpressure_watermark: u64,
+};
+
+const CDCDiagnosticsEngine = struct {
+    is_running: bool,
+    last_flush_ms: i64,
+    peak_buffer: usize,
+    current_buffer: usize,
+    dynamic_batch_size: u32,
+    batch_adjustments: u32,
+};
+
+const CDCDiagnosticsResponse = struct {
+    malformed_wal_records: u64,
+    total_wal_attempts: u64,
+    malformed_ratio: f64,
+    guardrail_warn_triggered: bool,
+    guardrail_abort_triggered: bool,
+    first_warn_ts_ms: i64,
+    first_abort_ts_ms: i64,
+    guardrail_epoch: u64,
+    uptime_ms: i64,
+    backpressure: bool,
+    config: CDCDiagnosticsConfig,
+    engine: CDCDiagnosticsEngine,
+    malformed_snapshots: []const MalformedSnapshotEntry,
+    malformed_hashes: []const MalformedHashJsonEntry,
+    version: []const u8,
+    timestamp_ms: i64,
+};
+
+const CDCChangeEventJson = struct {
+    timestamp: i64,
+    transaction_id: u64,
+    change_type: []const u8,
+    entity_type: []const u8,
+    entity_id: u64,
+    before: ?[]const u8,
+    after: ?[]const u8,
+};
+
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-11-12
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Lifecycle"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Retention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Retention; OWNER=streaming; UPDATED=2025-09-20
@@ -41,29 +106,7 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=BackpressureAdaptive; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_BackpressureAdaptive; OWNER=streaming; UPDATED=2025-09-20
 const Allocator = std.mem.Allocator;
 
-fn writeInt(w: anytype, value: u64) !void {
-    var buf: [32]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
-    try w.writeAll(s);
-}
-
-fn writeFloat(w: anytype, value: f64) !void {
-    var buf: [64]u8 = undefined;
-    if (@floor(value) == value and value < 9.22e18 and value >= 0) {
-        return writeInt(w, @intFromFloat(value));
-    }
-    const s = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
-    try w.writeAll(s);
-}
-
-fn writeIntSigned(w: anytype, value: i64) !void {
-    if (value < 0) {
-        try w.writeAll("-");
-        const pos: u64 = @intCast(-value);
-        return writeInt(w, pos);
-    }
-    return writeInt(w, @as(u64, @intCast(value)));
-}
+// Manual JSON helpers removed - using json_lib for all JSON encoding
 
 pub const ChangeType = enum {
     insert,
@@ -245,7 +288,7 @@ pub const CDCEngine = struct {
     pub const DiagEvent = enum { start, stop };
 
     pub const MalformedRing = struct {
-        const CAP = 32;
+        pub const CAP = 32;
         counts: [CAP]u64 = [_]u64{0} ** CAP,
         times: [CAP]i64 = [_]i64{0} ** CAP,
         next: usize = 0,
@@ -257,27 +300,7 @@ pub const CDCEngine = struct {
             self.next = (self.next + 1) % CAP;
             if (self.next == 0) self.filled = true;
         }
-
-        pub fn writeJson(self: *MalformedRing, w: anytype) !void {
-            try w.writeAll("[");
-            var first = true;
-            const total = if (self.filled) CAP else self.next;
-            var idx: usize = 0;
-            while (idx < total) : (idx += 1) {
-                const logical = if (self.filled) (self.next + idx) % CAP else idx;
-                if (!first) {
-                    try w.writeAll(",");
-                } else {
-                    first = false;
-                }
-                try w.writeAll("{\"count\":");
-                try writeInt(w, self.counts[logical]);
-                try w.writeAll(",\"ts_ms\":");
-                try writeIntSigned(w, self.times[logical]);
-                try w.writeAll("}");
-            }
-            try w.writeAll("]");
-        }
+        // writeJson removed - using json_lib for JSON encoding
     };
 
     const MalformedHashEntry = struct {
@@ -299,32 +322,11 @@ pub const CDCEngine = struct {
             const ts = std.time.milliTimestamp();
             var prefix_buf: [16]u8 = .{0} ** 16;
             const take = @min(payload.len, prefix_buf.len);
-            if (take > 0) std.mem.copy(u8, prefix_buf[0..take], payload[0..take]);
+            if (take > 0) std.mem.copyForwards(u8, prefix_buf[0..take], payload[0..take]);
             self.entries[idx] = .{ .count = count, .hash = fnv1a64(payload), .ts_ms = ts, .prefix_len = @intCast(take), .prefix = prefix_buf };
             self.used += 1;
         }
-
-        fn writeJson(self: *MalformedHashStore, w: anytype, cfg_limit: u32) !void {
-            try w.writeAll("[");
-            var i: u32 = 0;
-            while (i < self.used and i < cfg_limit) : (i += 1) {
-                if (i > 0) try w.writeAll(",");
-                const e = self.entries[i];
-                try w.writeAll("{\"count\":");
-                try writeInt(w, e.count);
-                try w.writeAll(",\"hash\":");
-                try writeInt(w, e.hash);
-                try w.writeAll(",\"ts_ms\":");
-                try writeInt(w, @as(u64, @bitCast(e.ts_ms)));
-                try w.writeAll(",\"prefix\":\"");
-                const p = e.prefix[0..e.prefix_len];
-                // hex encode prefix bytes
-                var j: usize = 0;
-                while (j < p.len) : (j += 1) try std.fmt.format(w, "{x:0>2}", .{p[j]});
-                try w.writeAll("\"}");
-            }
-            try w.writeAll("]");
-        }
+        // writeJson removed - using json_lib for JSON encoding
     };
 
     fn fnv1a64(data: []const u8) u64 {
@@ -802,94 +804,125 @@ pub const CDCEngine = struct {
     }
 
     /// Serialize malformed ring buffer snapshots to JSON array string.
+    /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-054; FEATURE="JSON Library Migration"; ASPECT=CDCSnapshots; STATUS=TESTED; OWNER=streaming; UPDATED=2026-01-24
     pub fn malformedLogSnapshots(self: *Self, allocator: Allocator) ![]u8 {
         self.mutex.lock();
         defer self.mutex.unlock();
-        var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
-        const writer = buf.writer(allocator);
-        try self.malformed_ring.writeJson(writer);
-        return buf.toOwnedSlice(allocator);
+
+        const snapshots = try self.collectMalformedSnapshots(allocator);
+        defer allocator.free(snapshots);
+
+        return try json_lib.encode(allocator, snapshots, .{});
+    }
+
+    /// Collect malformed ring snapshots into an array
+    fn collectMalformedSnapshots(self: *Self, allocator: Allocator) ![]const MalformedSnapshotEntry {
+        const total = if (self.malformed_ring.filled) MalformedRing.CAP else self.malformed_ring.next;
+        var entries = try std.ArrayList(MalformedSnapshotEntry).initCapacity(allocator, total);
+        defer entries.deinit(allocator);
+
+        var idx: usize = 0;
+        while (idx < total) : (idx += 1) {
+            const logical = if (self.malformed_ring.filled) (self.malformed_ring.next + idx) % MalformedRing.CAP else idx;
+            try entries.append(allocator, MalformedSnapshotEntry{
+                .count = self.malformed_ring.counts[logical],
+                .ts_ms = self.malformed_ring.times[logical],
+            });
+        }
+
+        return try entries.toOwnedSlice(allocator);
+    }
+
+    /// Collect malformed hash entries into an array
+    fn collectMalformedHashes(self: *Self, allocator: Allocator) ![]const MalformedHashJsonEntry {
+        const limit = @min(self.malformed_hashes.used, self.config.malformed_hash_retain);
+        var entries = try std.ArrayList(MalformedHashJsonEntry).initCapacity(allocator, limit);
+        defer entries.deinit(allocator);
+
+        var i: u32 = 0;
+        while (i < limit) : (i += 1) {
+            const e = self.malformed_hashes.entries[i];
+            // Hex encode prefix
+            var hex_buf: [32]u8 = undefined;
+            var hex_len: usize = 0;
+            var j: usize = 0;
+            while (j < e.prefix_len) : (j += 1) {
+                const byte = e.prefix[j];
+                hex_buf[hex_len] = "0123456789abcdef"[byte >> 4];
+                hex_buf[hex_len + 1] = "0123456789abcdef"[byte & 0x0f];
+                hex_len += 2;
+            }
+            const hex_prefix = try allocator.dupe(u8, hex_buf[0..hex_len]);
+
+            try entries.append(allocator, MalformedHashJsonEntry{
+                .count = e.count,
+                .hash = e.hash,
+                .ts_ms = e.ts_ms,
+                .prefix = hex_prefix,
+            });
+        }
+
+        return try entries.toOwnedSlice(allocator);
     }
 
     /// Export a consolidated diagnostics JSON object (string) containing counters and ring snapshots.
+    /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-055; FEATURE="JSON Library Migration"; ASPECT=CDCDiagnostics; STATUS=TESTED; OWNER=streaming; UPDATED=2026-01-24
     pub fn exportDiagnostics(self: *Self, allocator: Allocator) ![]u8 {
         self.mutex.lock();
         defer self.mutex.unlock();
-        var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
-        const w = buf.writer(allocator);
-        try w.writeAll("{");
-        // core counters
-        try w.writeAll("\"malformed_wal_records\":");
-        try std.fmt.format(w, "{d}", .{self.malformed_wal_records});
-        try w.writeAll(",\"total_wal_attempts\":");
-        try std.fmt.format(w, "{d}", .{self.total_wal_attempts});
-        try w.writeAll(",\"malformed_ratio\":");
-        const ratio = if (self.total_wal_attempts == 0) 0.0 else (@as(f64, @floatFromInt(self.malformed_wal_records)) / @as(f64, @floatFromInt(self.total_wal_attempts)));
-        // Simpler float formatting for Zig 0.15 compatibility
-        try std.fmt.format(w, "{d}", .{ratio});
-        // state flags
-        try w.writeAll(",\"guardrail_warn_triggered\":");
-        try w.writeAll(if (self.guardrail_warn_triggered) "true" else "false");
-        try w.writeAll(",\"guardrail_abort_triggered\":");
-        try w.writeAll(if (self.guardrail_abort_triggered) "true" else "false");
-        // first trigger timestamps (0 = not triggered)
-        try w.writeAll(",\"first_warn_ts_ms\":");
-        try std.fmt.format(w, "{d}", .{self.first_warn_ts_ms});
-        try w.writeAll(",\"first_abort_ts_ms\":");
-        try std.fmt.format(w, "{d}", .{self.first_abort_ts_ms});
-        try w.writeAll(",\"guardrail_epoch\":");
-        try std.fmt.format(w, "{d}", .{self.guardrail_epoch});
-        // uptime and backpressure
+
         const now_ms = std.time.milliTimestamp();
         const uptime_ms: i64 = if (self.start_time_ms > 0 and now_ms >= self.start_time_ms) (now_ms - self.start_time_ms) else 0;
-        try w.writeAll(",\"uptime_ms\":");
-        try std.fmt.format(w, "{d}", .{uptime_ms});
         const pending_events: u64 = @intCast(self.event_buffer.items.len);
         const backpressure_active = self.config.pending_backpressure_watermark > 0 and pending_events >= self.config.pending_backpressure_watermark;
-        try w.writeAll(",\"backpressure\":");
-        try w.writeAll(if (backpressure_active) "true" else "false");
-        // configuration echo
-        try w.writeAll(",\"config\":{\"enabled\":");
-        try w.writeAll(if (self.config.enabled) "true" else "false");
-        try w.writeAll(",\"malformed_snapshot_interval\":");
-        try std.fmt.format(w, "{d}", .{self.config.malformed_snapshot_interval});
-        try w.writeAll(",\"malformed_hash_retain\":");
-        try std.fmt.format(w, "{d}", .{self.config.malformed_hash_retain});
-        try w.writeAll(",\"malformed_warn_pct\":");
-        try std.fmt.format(w, "{d}", .{self.config.malformed_warn_pct});
-        try w.writeAll(",\"malformed_abort_pct\":");
-        try std.fmt.format(w, "{d}", .{self.config.malformed_abort_pct});
-        try w.writeAll(",\"flush_interval_ms\":");
-        try std.fmt.format(w, "{d}", .{self.config.flush_interval_ms});
-        try w.writeAll(",\"batch_size\":");
-        try std.fmt.format(w, "{d}", .{self.config.batch_size});
-        try w.writeAll(",\"pending_backpressure_watermark\":");
-        try std.fmt.format(w, "{d}", .{self.config.pending_backpressure_watermark});
-        try w.writeAll("}");
-        // engine runtime state
-        try w.writeAll(",\"engine\":{\"is_running\":");
-        try w.writeAll(if (self.is_running) "true" else "false");
-        try w.writeAll(",\"last_flush_ms\":");
-        try std.fmt.format(w, "{d}", .{self.last_flush});
-        try w.writeAll(",\"peak_buffer\":");
-        try std.fmt.format(w, "{d}", .{self.peak_buffer});
-        try w.writeAll(",\"current_buffer\":");
-        try std.fmt.format(w, "{d}", .{self.event_buffer.items.len});
-        try w.writeAll(",\"dynamic_batch_size\":");
-        try std.fmt.format(w, "{d}", .{self.dynamic_batch_size});
-        try w.writeAll(",\"batch_adjustments\":");
-        try std.fmt.format(w, "{d}", .{self.batch_adjustments});
-        try w.writeAll("}");
-        // snapshots and hashes
-        try w.writeAll(",\"malformed_snapshots\":");
-        try self.malformed_ring.writeJson(w);
-        try w.writeAll(",\"malformed_hashes\":");
-        try self.malformed_hashes.writeJson(w, self.config.malformed_hash_retain);
-        // version & timestamp
-        try w.writeAll(",\"version\":\"v0.15.0\",\"timestamp_ms\":");
-        try std.fmt.format(w, "{d}", .{std.time.milliTimestamp()});
-        try w.writeAll("}");
-        return buf.toOwnedSlice(allocator);
+        const ratio = if (self.total_wal_attempts == 0) 0.0 else (@as(f64, @floatFromInt(self.malformed_wal_records)) / @as(f64, @floatFromInt(self.total_wal_attempts)));
+
+        // Collect snapshots and hashes
+        const snapshots = try self.collectMalformedSnapshots(allocator);
+        defer allocator.free(snapshots);
+
+        const hashes = try self.collectMalformedHashes(allocator);
+        defer {
+            for (hashes) |h| allocator.free(h.prefix);
+            allocator.free(hashes);
+        }
+
+        const response = CDCDiagnosticsResponse{
+            .malformed_wal_records = self.malformed_wal_records,
+            .total_wal_attempts = self.total_wal_attempts,
+            .malformed_ratio = ratio,
+            .guardrail_warn_triggered = self.guardrail_warn_triggered,
+            .guardrail_abort_triggered = self.guardrail_abort_triggered,
+            .first_warn_ts_ms = self.first_warn_ts_ms,
+            .first_abort_ts_ms = self.first_abort_ts_ms,
+            .guardrail_epoch = self.guardrail_epoch,
+            .uptime_ms = uptime_ms,
+            .backpressure = backpressure_active,
+            .config = CDCDiagnosticsConfig{
+                .enabled = self.config.enabled,
+                .malformed_snapshot_interval = self.config.malformed_snapshot_interval,
+                .malformed_hash_retain = self.config.malformed_hash_retain,
+                .malformed_warn_pct = self.config.malformed_warn_pct,
+                .malformed_abort_pct = self.config.malformed_abort_pct,
+                .flush_interval_ms = self.config.flush_interval_ms,
+                .batch_size = self.config.batch_size,
+                .pending_backpressure_watermark = self.config.pending_backpressure_watermark,
+            },
+            .engine = CDCDiagnosticsEngine{
+                .is_running = self.is_running,
+                .last_flush_ms = self.last_flush,
+                .peak_buffer = self.peak_buffer,
+                .current_buffer = self.event_buffer.items.len,
+                .dynamic_batch_size = self.dynamic_batch_size,
+                .batch_adjustments = self.batch_adjustments,
+            },
+            .malformed_snapshots = snapshots,
+            .malformed_hashes = hashes,
+            .version = "v0.15.0",
+            .timestamp_ms = now_ms,
+        };
+
+        return try json_lib.encode(allocator, response, .{});
     }
 };
 
@@ -1182,26 +1215,18 @@ const WindowBucket = struct {
     }
 };
 
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-053; FEATURE="JSON Library Migration"; ASPECT=CDCEventSerialize; STATUS=TESTED; OWNER=streaming; UPDATED=2026-01-24
 fn serializeEvent(allocator: Allocator, event: ChangeEvent) ![]const u8 {
-    return std.fmt.allocPrint(allocator,
-        \\{{
-        \\  "timestamp": {d},
-        \\  "transaction_id": {d},
-        \\  "change_type": "{s}",
-        \\  "entity_type": "{s}",
-        \\  "entity_id": {d},
-        \\  "before": {s},
-        \\  "after": {s}
-        \\}}
-    , .{
-        event.timestamp,
-        event.transaction_id,
-        @tagName(event.change_type),
-        @tagName(event.entity_type),
-        event.entity_id,
-        if (event.before) |b| b else "null",
-        if (event.after) |a| a else "null",
-    });
+    const json_event = CDCChangeEventJson{
+        .timestamp = event.timestamp,
+        .transaction_id = event.transaction_id,
+        .change_type = @tagName(event.change_type),
+        .entity_type = @tagName(event.entity_type),
+        .entity_id = event.entity_id,
+        .before = event.before,
+        .after = event.after,
+    };
+    return try json_lib.encode(allocator, json_event, .{});
 }
 
 // Free all allocations owned by an event (before/after + metadata values + metadata table)

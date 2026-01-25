@@ -1,60 +1,33 @@
 const std = @import("std");
 const builtin = @import("builtin");
+// CANARY: REQ=REQ-LIB-MIGRATION-CONFIG-001; FEATURE="Config Library Migration"; ASPECT=ReplConfigXdg; STATUS=IMPL; OWNER=client; UPDATED=2026-01-25
+const config_lib = @import("config");
 
 pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
-    // Check GEODE_HISTORY environment variable first
+    // Check GEODE_HISTORY environment variable first (user override)
     if (std.process.getEnvVarOwned(allocator, "GEODE_HISTORY")) |path| {
         return path;
     } else |_| {}
 
     // Primary: Try ~/.geode_history as the default preference
-    if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
-        defer allocator.free(home);
+    if (std.posix.getenv("HOME")) |home| {
         return std.fs.path.join(allocator, &[_][]const u8{ home, ".geode_history" });
-    } else |_| {}
-
-    // Secondary: Use platform-specific conventions as fallback
-    if (builtin.os.tag == .windows) {
-        if (std.process.getEnvVarOwned(allocator, "APPDATA")) |appdata| {
-            defer allocator.free(appdata);
-            return std.fs.path.join(allocator, &[_][]const u8{ appdata, "geode", "history" });
-        } else |_| {}
-    } else if (builtin.os.tag == .macos) {
-        if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
-            defer allocator.free(home);
-            return std.fs.path.join(allocator, &[_][]const u8{ home, "Library", "Application Support", "geode", "history" });
-        } else |_| {}
-    } else {
-        // Linux/Unix - use XDG as secondary fallback
-        if (std.process.getEnvVarOwned(allocator, "XDG_DATA_HOME")) |xdg| {
-            defer allocator.free(xdg);
-            return std.fs.path.join(allocator, &[_][]const u8{ xdg, "geode", "history" });
-        } else |_| {
-            if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
-                defer allocator.free(home);
-                return std.fs.path.join(allocator, &[_][]const u8{ home, ".local", "share", "geode", "history" });
-            } else |_| {}
-        }
     }
 
-    // Final fallback
-    return allocator.dupe(u8, ".geode_history");
+    // Secondary: Use XDG-compliant platform-specific data directory
+    const data_dir = config_lib.xdg.getDataDir(allocator, "geode") catch {
+        return allocator.dupe(u8, ".geode_history");
+    };
+    defer allocator.free(data_dir);
+
+    return std.fs.path.join(allocator, &[_][]const u8{ data_dir, "history" });
 }
 
-/// P2-3: Static GPA for env var check
-var color_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-var color_gpa_init = false;
-
 pub fn shouldUseColor() bool {
-    // P2-3: Use static GPA for env var check
-    if (!color_gpa_init) {
-        color_gpa_init = true;
-    }
-    // Check NO_COLOR environment variable
-    if (std.process.getEnvVarOwned(color_gpa.allocator(), "NO_COLOR")) |val| {
-        color_gpa.allocator().free(val);
+    // Check NO_COLOR environment variable (uses non-owning getenv)
+    if (std.posix.getenv("NO_COLOR") != null) {
         return false;
-    } else |_| {}
+    }
 
     // Check if stdout is a TTY
     const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
@@ -144,35 +117,16 @@ pub const Config = struct {
 };
 
 fn getConfigPath(allocator: std.mem.Allocator) ![]u8 {
-    // Check GEODE_CONFIG environment variable
+    // Check GEODE_CONFIG environment variable (user override)
     if (std.process.getEnvVarOwned(allocator, "GEODE_CONFIG")) |path| {
         return path;
     } else |_| {}
 
-    // Use XDG_CONFIG_HOME / macOS / Windows conventions
-    if (builtin.os.tag == .windows) {
-        if (std.process.getEnvVarOwned(allocator, "APPDATA")) |appdata| {
-            defer allocator.free(appdata);
-            return std.fs.path.join(allocator, &[_][]const u8{ appdata, "geode", "config" });
-        } else |_| {}
-    } else if (builtin.os.tag == .macos) {
-        if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
-            defer allocator.free(home);
-            return std.fs.path.join(allocator, &[_][]const u8{ home, "Library", "Preferences", "geode.conf" });
-        } else |_| {}
-    } else {
-        // Linux/Unix - use XDG
-        if (std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME")) |xdg| {
-            defer allocator.free(xdg);
-            return std.fs.path.join(allocator, &[_][]const u8{ xdg, "geode", "config" });
-        } else |_| {
-            if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
-                defer allocator.free(home);
-                return std.fs.path.join(allocator, &[_][]const u8{ home, ".config", "geode", "config" });
-            } else |_| {}
-        }
-    }
+    // Use XDG-compliant platform-specific config directory
+    const config_dir = config_lib.xdg.getConfigDir(allocator, "geode") catch {
+        return allocator.dupe(u8, ".geode_config");
+    };
+    defer allocator.free(config_dir);
 
-    // Fallback
-    return allocator.dupe(u8, ".geode_config");
+    return std.fs.path.join(allocator, &[_][]const u8{ config_dir, "config" });
 }

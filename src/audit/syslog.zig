@@ -175,8 +175,10 @@ pub const SyslogSender = struct {
     fn workerThread(self: *SyslogSender) void {
         while (!self.should_stop.load(.seq_cst)) {
             self.processQueue() catch |err| {
-                // Log error to stderr, but continue processing
-                std.debug.print("Syslog sender error: {}\n", .{err});
+                // Log error and continue processing
+                log.warn("Syslog sender error", &.{
+                    Attr.string("error", @errorName(err)),
+                });
             };
             std.time.sleep(std.time.ns_per_ms * 100); // 100ms sleep
         }
@@ -207,8 +209,10 @@ pub const SyslogSender = struct {
         for (messages[0..count]) |msg| {
             defer self.allocator.free(msg);
             self.sendToSyslog(msg) catch |err| {
-                // On error, just log and continue
-                std.debug.print("Failed to send syslog message: {}\n", .{err});
+                // On error, log and continue
+                log.warn("Failed to send syslog message", &.{
+                    Attr.string("error", @errorName(err)),
+                });
             };
         }
     }

@@ -11,6 +11,10 @@ const time = @import("time.zig");
 // Provides JSON output, secret redaction, network sinks, and metrics export
 const slog = @import("slog");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=AuditLogger; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// External JSON library for RFC 8259 compliant encoding in audit event serialization
+const json_lib = @import("json");
+
 /// Create a structured log attribute from an audit event field
 pub fn auditAttr(name: []const u8, value: anytype) slog.Attr {
     const T = @TypeOf(value);
@@ -196,9 +200,22 @@ pub const AuditLogger = struct {
         return std.json.stringifyAlloc(self.allocator, value, .{});
     }
 
+    /// JSON structure for truncated audit events
+    const TruncatedEventJson = struct {
+        category: []const u8,
+        action: []const u8,
+        actor_id: []const u8,
+        _msg: []const u8 = "...[TRUNCATED]",
+    };
+
     fn truncateEvent(self: *AuditLogger, event: *const events.AuditEvent) ![]const u8 {
-        // Create a truncated version with just essential fields
-        return std.fmt.allocPrint(self.allocator, "{{\"category\":\"{s}\",\"action\":\"{s}\",\"actor_id\":\"{s}\",\"_msg\":\"...{s}\"}}", .{ event.category, event.action, event.actor_id, "[TRUNCATED]" });
+        // Create a truncated version with just essential fields using type-safe JSON encoding
+        const truncated = TruncatedEventJson{
+            .category = event.category,
+            .action = event.action,
+            .actor_id = event.actor_id,
+        };
+        return json_lib.encode(self.allocator, truncated, .{});
     }
 
     fn cloneJsonValue(self: *AuditLogger, value: std.json.Value) !std.json.Value {

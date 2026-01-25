@@ -9,6 +9,58 @@ const logging = @import("logging");
 const log = logging.scoped("cli");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-026; FEATURE="JSON Library Migration"; ASPECT=CLI; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
+const json_lib = @import("json");
+
+// CLI Protocol Message Types for JSON Library encoding
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-027; FEATURE="JSON Library Migration"; ASPECT=CLIMessageTypes; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
+const CliHelloMessage = struct {
+    type: []const u8 = "HELLO",
+    client_name: []const u8 = "geode-cli",
+    client_ver: []const u8 = "0.16.0",
+    wanted_conformance: []const u8 = "GQL/1.0",
+    username: ?[]const u8 = null,
+    password: ?[]const u8 = null,
+};
+
+const CliRunGqlMessage = struct {
+    type: []const u8 = "RUN_GQL",
+    text: []const u8,
+};
+
+const CliErrorResponse = struct {
+    status_class: []const u8 = "58000",
+    @"error": []const u8,
+};
+
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-058; FEATURE="JSON Library Migration"; ASPECT=CLIErrorTypes; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+// Additional error response types for CLI
+const CliStatusError = struct {
+    status_class: []const u8,
+    @"error": []const u8,
+};
+
+const CliTypeError = struct {
+    type: []const u8 = "ERROR",
+    status_class: []const u8,
+    message: []const u8,
+};
+
+const CliResultError = struct {
+    result: ResultError,
+
+    const ResultError = struct {
+        type: []const u8 = "ERROR",
+        code: []const u8,
+        message: []const u8,
+    };
+};
+
+const CliColumnDef = struct {
+    name: []const u8,
+    type: []const u8 = "text",
+};
+
 // C library function for setting environment variables
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 // const auth = @import("../security/auth.zig"); // Not needed for current implementation
@@ -828,7 +880,17 @@ fn processProtocolMessage(
         var mut_ally = allocator;
         const result = geode.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
             // Send error response
-            const error_msg = try std.fmt.allocPrint(allocator, "STATUS: {{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)});
+            // CANARY: REQ=REQ-LIB-MIGRATION-JSON-036; FEATURE="JSON Library Migration"; ASPECT=ErrorResponse; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
+            const err_resp = CliErrorResponse{ .@"error" = @errorName(err) };
+            const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
+                try responder.writeAll("{\"status_class\":\"58000\",\"error\":\"Encoding error\"}\n");
+                return;
+            };
+            defer allocator.free(err_json);
+            const error_msg = std.fmt.allocPrint(allocator, "STATUS: {s}\n", .{err_json}) catch {
+                try responder.writeAll("{\"status_class\":\"58000\",\"error\":\"Encoding error\"}\n");
+                return;
+            };
             defer allocator.free(error_msg);
             try responder.writeAll(error_msg);
             return;
@@ -988,7 +1050,22 @@ fn processProtocolMessage(
         try handleControlStatement(responder, allocator, rollback_stmt, state.authenticated_username, &state.last_result_data);
     } else {
         // Unknown message type
-        const error_msg = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"58000\",\"error\":\"Unknown message type: {s}\"}}\n", .{type_str});
+        // CANARY: REQ=REQ-LIB-MIGRATION-JSON-037; FEATURE="JSON Library Migration"; ASPECT=UnknownMsgError; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
+        const err_msg_str = std.fmt.allocPrint(allocator, "Unknown message type: {s}", .{type_str}) catch {
+            try responder.writeAll("{\"status_class\":\"58000\",\"error\":\"Unknown message type\"}\n");
+            return;
+        };
+        defer allocator.free(err_msg_str);
+        const err_resp = CliErrorResponse{ .@"error" = err_msg_str };
+        const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
+            try responder.writeAll("{\"status_class\":\"58000\",\"error\":\"Encoding error\"}\n");
+            return;
+        };
+        defer allocator.free(err_json);
+        const error_msg = std.fmt.allocPrint(allocator, "{s}\n", .{err_json}) catch {
+            try responder.writeAll("{\"status_class\":\"58000\",\"error\":\"Encoding error\"}\n");
+            return;
+        };
         defer allocator.free(error_msg);
         try responder.writeAll(error_msg);
     }
@@ -1251,9 +1328,15 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             var mut_ally = allocator;
             const result = geode.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
                 // Send error response
-                const error_msg = try std.fmt.allocPrint(allocator, "STATUS: {{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)});
-                defer allocator.free(error_msg);
-                try stream.writeAll(error_msg);
+                const err_resp = CliStatusError{ .status_class = "58000", .@"error" = @errorName(err) };
+                const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
+                    try stream.writeAll("STATUS: {\"status_class\":\"58000\",\"error\":\"encoding_error\"}\n");
+                    continue;
+                };
+                defer allocator.free(err_json);
+                try stream.writeAll("STATUS: ");
+                try stream.writeAll(err_json);
+                try stream.writeAll("\n");
                 continue;
             };
             defer mut_ally.free(result);
@@ -1450,9 +1533,16 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
 
             // Update password
             _ = user_mgmt.setPassword(target_username, new_password) catch |err| {
-                const error_msg = try std.fmt.allocPrint(allocator, "{{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Password update failed: {s}\"}}\n", .{@errorName(err)});
-                defer allocator.free(error_msg);
-                try stream.writeAll(error_msg);
+                const pwd_err_msg = try std.fmt.allocPrint(allocator, "Password update failed: {s}", .{@errorName(err)});
+                defer allocator.free(pwd_err_msg);
+                const err_resp = CliTypeError{ .status_class = "28000", .message = pwd_err_msg };
+                const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
+                    try stream.writeAll("{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"encoding_error\"}\n");
+                    continue;
+                };
+                defer allocator.free(err_json);
+                try stream.writeAll(err_json);
+                try stream.writeAll("\n");
                 continue;
             };
 
@@ -1463,9 +1553,16 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             continue;
         } else {
             // Unknown message type
-            const error_msg = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"58000\",\"error\":\"Unknown message type: {s}\"}}\n", .{type_str});
-            defer allocator.free(error_msg);
-            try stream.writeAll(error_msg);
+            const unknown_type_msg = try std.fmt.allocPrint(allocator, "Unknown message type: {s}", .{type_str});
+            defer allocator.free(unknown_type_msg);
+            const err_resp = CliStatusError{ .status_class = "58000", .@"error" = unknown_type_msg };
+            const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
+                try stream.writeAll("{\"status_class\":\"58000\",\"error\":\"encoding_error\"}\n");
+                continue;
+            };
+            defer allocator.free(err_json);
+            try stream.writeAll(err_json);
+            try stream.writeAll("\n");
         }
     }
 }
@@ -2278,9 +2375,14 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             var mut_ally = allocator;
             const result = geode.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
                 // Send error response
-                const error_resp = try std.fmt.allocPrint(allocator, "{{\"result\":{{\"type\":\"ERROR\",\"code\":\"00000\",\"message\":\"{s}\"}}}}\n", .{@errorName(err)});
-                defer allocator.free(error_resp);
-                _ = try stdout_fd.writeAll(error_resp);
+                const err_resp = CliResultError{ .result = .{ .code = "00000", .message = @errorName(err) } };
+                const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
+                    _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"ERROR\",\"code\":\"00000\",\"message\":\"encoding_error\"}}\n");
+                    continue;
+                };
+                defer allocator.free(err_json);
+                _ = try stdout_fd.writeAll(err_json);
+                _ = try stdout_fd.writeAll("\n");
                 continue;
             };
             defer mut_ally.free(result);
@@ -2296,9 +2398,14 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 if (!std.mem.eql(u8, status_class.string, "00000")) {
                     // This is an error - send ERROR response with the status code
                     const error_msg = if (result_obj.get("message")) |msg| msg.string else "Query error";
-                    const error_resp = try std.fmt.allocPrint(allocator, "{{\"result\":{{\"type\":\"ERROR\",\"code\":\"{s}\",\"message\":\"{s}\"}}}}\n", .{ status_class.string, error_msg });
-                    defer allocator.free(error_resp);
-                    _ = try stdout_fd.writeAll(error_resp);
+                    const err_resp = CliResultError{ .result = .{ .code = status_class.string, .message = error_msg } };
+                    const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
+                        _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"ERROR\",\"code\":\"58000\",\"message\":\"encoding_error\"}}\n");
+                        continue;
+                    };
+                    defer allocator.free(err_json);
+                    _ = try stdout_fd.writeAll(err_json);
+                    _ = try stdout_fd.writeAll("\n");
                     continue;
                 }
             }
@@ -2317,9 +2424,13 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             // Write column definitions
             for (columns.array.items, 0..) |col, idx| {
                 if (idx > 0) _ = try stdout_fd.writeAll(",");
-                const col_str = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col.string});
-                defer allocator.free(col_str);
-                _ = try stdout_fd.writeAll(col_str);
+                const col_def = CliColumnDef{ .name = col.string };
+                const col_json = json_lib.encode(allocator, col_def, .{}) catch {
+                    _ = try stdout_fd.writeAll("{\"name\":\"unknown\",\"type\":\"text\"}");
+                    continue;
+                };
+                defer allocator.free(col_json);
+                _ = try stdout_fd.writeAll(col_json);
             }
 
             _ = try stdout_fd.writeAll("]}}\n");
@@ -2563,14 +2674,14 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             // GAP-0143: Block --disable-auth in production builds
             // CANARY: REQ=REQ-AUTH-GUARD-001; FEATURE="Production Auth Guard"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
             if (builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) {
-                std.log.err("SECURITY ERROR: --disable-auth is blocked in production builds", .{});
-                std.log.err("If this is intentional for testing, use a Debug build or set GEODE_ALLOW_NO_AUTH=1", .{});
+                log.err("SECURITY ERROR: --disable-auth is blocked in production builds", &.{});
+                log.err("If this is intentional for testing, use a Debug build or set GEODE_ALLOW_NO_AUTH=1", &.{});
                 // Check for explicit override environment variable
                 const allow_no_auth = std.process.getEnvVarOwned(allocator, "GEODE_ALLOW_NO_AUTH") catch null;
                 if (allow_no_auth) |v| {
                     allocator.free(v);
                     if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "true")) {
-                        std.log.warn("SECURITY WARNING: Authentication disabled via GEODE_ALLOW_NO_AUTH override!", .{});
+                        log.warn("SECURITY WARNING: Authentication disabled via GEODE_ALLOW_NO_AUTH override!", &.{});
                         enable_auth = false;
                     } else {
                         return error.AuthenticationBypassBlockedInProduction;
@@ -2580,7 +2691,7 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 }
             } else {
                 // Debug builds allow --disable-auth with warning
-                std.log.warn("SECURITY WARNING: Authentication disabled. Do not use in production!", .{});
+                log.warn("SECURITY WARNING: Authentication disabled. Do not use in production!", &.{});
                 enable_auth = false;
             }
         } else if (std.mem.eql(u8, arg, "--enable-auth")) {
@@ -3070,10 +3181,14 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     defer stream.deinit();
 
     // Send HELLO message with authentication credentials
-    const hello_msg = if (username != null and password != null)
-        try std.fmt.allocPrint(allocator, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\",\"username\":\"{s}\",\"password\":\"{s}\"}}\n", .{ username.?, password.? })
-    else
-        try std.fmt.allocPrint(allocator, "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.16.0\",\"wanted_conformance\":\"GQL/1.0\"}}\n", .{});
+    // CANARY: REQ=REQ-LIB-MIGRATION-JSON-028; FEATURE="JSON Library Migration"; ASPECT=HelloMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
+    const hello_struct = CliHelloMessage{
+        .username = username,
+        .password = password,
+    };
+    const hello_json = try json_lib.encode(allocator, hello_struct, .{ .emit_null_optional_fields = false });
+    defer allocator.free(hello_json);
+    const hello_msg = try std.fmt.allocPrint(allocator, "{s}\n", .{hello_json});
     defer allocator.free(hello_msg);
 
     log.debug("Client sending HELLO", &.{Attr.string("message", hello_msg)});
@@ -3096,12 +3211,12 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         std.process.exit(@intFromEnum(ExitCode.auth_error));
     }
 
-    // Escape query text for JSON
-    const escaped_text = try escapeJsonString(allocator, query_text);
-    defer allocator.free(escaped_text);
-
     // Send query using the server's protocol format (RUN_GQL message)
-    const query_msg = try std.fmt.allocPrint(allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_text});
+    // CANARY: REQ=REQ-LIB-MIGRATION-JSON-029; FEATURE="JSON Library Migration"; ASPECT=RunGqlMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
+    const run_gql_struct = CliRunGqlMessage{ .text = query_text };
+    const query_json = try json_lib.encode(allocator, run_gql_struct, .{});
+    defer allocator.free(query_json);
+    const query_msg = try std.fmt.allocPrint(allocator, "{s}\n", .{query_json});
     defer allocator.free(query_msg);
 
     log.debug("Client sending query", &.{Attr.string("message", query_msg)});
@@ -3688,11 +3803,27 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
     defer allocator.free(escaped_password);
 
     // Send authenticated HELLO handshake
-    const hello_msg = std.fmt.allocPrint(
-        allocator,
-        "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"{s}\",\"wanted_conformance\":\"min\",\"username\":\"{s}\",\"password\":\"{s}\"}}\n",
-        .{ VERSION, escaped_username, escaped_password },
-    ) catch |err| {
+    // CANARY: REQ=REQ-LIB-MIGRATION-JSON-030; FEATURE="JSON Library Migration"; ASPECT=AuthHelloMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
+    const AuthHelloMessage = struct {
+        type: []const u8 = "HELLO",
+        client_name: []const u8 = "geode-cli",
+        client_ver: []const u8,
+        wanted_conformance: []const u8 = "min",
+        username: []const u8,
+        password: []const u8,
+    };
+    const hello_struct = AuthHelloMessage{
+        .client_ver = VERSION,
+        .username = username,
+        .password = password,
+    };
+    const hello_json = json_lib.encode(allocator, hello_struct, .{}) catch |err| {
+        client.deinit();
+        allocator.destroy(client);
+        return err;
+    };
+    defer allocator.free(hello_json);
+    const hello_msg = std.fmt.allocPrint(allocator, "{s}\n", .{hello_json}) catch |err| {
         client.deinit();
         allocator.destroy(client);
         return err;

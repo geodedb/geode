@@ -9,6 +9,9 @@ const logging = @import("logging");
 const log = logging.scoped("execution");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-015; FEATURE="JSON Library Migration"; ASPECT=CrudOperations; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
+const json_lib = @import("json");
+
 // CANARY: REQ=REQ-TXN-UNDO-008; FEATURE="TransactionUndoLog"; ASPECT=CrudImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
 // CANARY: REQ=REQ-CONSTRAINT-ENFORCE-001; FEATURE="ConstraintEnforcement"; ASPECT=CatalogImport; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
@@ -54,92 +57,94 @@ fn valueListToExtValueList(allocator: std.mem.Allocator, values: []Value) ![]Ext
 }
 
 // CANARY: REQ=REQ-MAP-PROP-002; FEATURE="MapProperties"; ASPECT=JsonSerialization; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-016; FEATURE="JSON Library Migration"; ASPECT=ValueMapToJson; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-01-24
 /// Convert a Value.Map (std.StringHashMap(Value)) to a JSON string for storage
 fn valueMapToJson(allocator: std.mem.Allocator, map: std.StringHashMap(Value)) ![]const u8 {
-    var json_parts = try std.ArrayList(u8).initCapacity(allocator, 256);
-    defer json_parts.deinit(allocator);
+    var buf = try std.ArrayList(u8).initCapacity(allocator, 256);
+    defer buf.deinit(allocator);
 
-    try json_parts.append(allocator, '{');
+    var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
 
-    var first = true;
+    try encoder.beginObject();
+
     var iter = map.iterator();
     while (iter.next()) |entry| {
-        if (!first) {
-            try json_parts.append(allocator, ',');
-        }
-        first = false;
-
-        // Key (escaped)
-        try json_parts.append(allocator, '"');
-        try json_parts.appendSlice(allocator, entry.key_ptr.*);
-        try json_parts.append(allocator, '"');
-        try json_parts.append(allocator, ':');
-
-        // Value
-        try valueToJsonAppend(allocator, entry.value_ptr.*, &json_parts);
+        try encoder.writeKey(entry.key_ptr.*);
+        try encodeValueToStream(allocator, entry.value_ptr.*, &encoder);
     }
 
-    try json_parts.append(allocator, '}');
-    return try allocator.dupe(u8, json_parts.items);
+    try encoder.endObject();
+    return try allocator.dupe(u8, buf.items);
 }
 
-/// Append a Value as JSON to the output list
-fn valueToJsonAppend(allocator: std.mem.Allocator, value: Value, output: *std.ArrayList(u8)) !void {
+/// Encode a Value to a streaming JSON encoder
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-017; FEATURE="JSON Library Migration"; ASPECT=ValueEncoding; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-01-24
+fn encodeValueToStream(allocator: std.mem.Allocator, value: Value, encoder: anytype) !void {
     switch (value) {
-        .Null => try output.appendSlice(allocator, "null"),
-        .Int => |i| {
-            var buf: [32]u8 = undefined;
-            const formatted = std.fmt.bufPrint(&buf, "{d}", .{i}) catch "0";
-            try output.appendSlice(allocator, formatted);
-        },
-        .Bool => |b| try output.appendSlice(allocator, if (b) "true" else "false"),
-        .Str => |s| {
-            try output.append(allocator, '"');
-            // Simple JSON string escaping
-            for (s) |c| {
-                switch (c) {
-                    '"' => try output.appendSlice(allocator, "\\\""),
-                    '\\' => try output.appendSlice(allocator, "\\\\"),
-                    '\n' => try output.appendSlice(allocator, "\\n"),
-                    '\r' => try output.appendSlice(allocator, "\\r"),
-                    '\t' => try output.appendSlice(allocator, "\\t"),
-                    else => try output.append(allocator, c),
-                }
-            }
-            try output.append(allocator, '"');
-        },
+        .Null => try encoder.writeNull(),
+        .Int => |i| try encoder.writeInt(i),
+        .Bool => |b| try encoder.writeBool(b),
+        .Str => |s| try encoder.writeString(s),
         .Decimal => |d| {
-            // Convert decimal to string representation
-            const float_val = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
-            var buf: [64]u8 = undefined;
-            const formatted = std.fmt.bufPrint(&buf, "{d:.6}", .{float_val}) catch "0";
-            try output.appendSlice(allocator, formatted);
+            // Format decimal with proper precision
+            const decimal_str = try formatDecimalForJson(allocator, d.coeff, d.scale);
+            defer allocator.free(decimal_str);
+            try encoder.writeRaw(decimal_str);
         },
         .List => |list| {
-            try output.append(allocator, '[');
-            for (list, 0..) |item, i| {
-                if (i > 0) try output.append(allocator, ',');
-                try valueToJsonAppend(allocator, item, output);
+            try encoder.beginArray();
+            for (list) |item| {
+                try encodeValueToStream(allocator, item, encoder);
             }
-            try output.append(allocator, ']');
+            try encoder.endArray();
         },
         .Map => |map| {
-            try output.append(allocator, '{');
-            var first = true;
+            try encoder.beginObject();
             var iter = map.iterator();
             while (iter.next()) |entry| {
-                if (!first) try output.append(allocator, ',');
-                first = false;
-                try output.append(allocator, '"');
-                try output.appendSlice(allocator, entry.key_ptr.*);
-                try output.append(allocator, '"');
-                try output.append(allocator, ':');
-                try valueToJsonAppend(allocator, entry.value_ptr.*, output);
+                try encoder.writeKey(entry.key_ptr.*);
+                try encodeValueToStream(allocator, entry.value_ptr.*, encoder);
             }
-            try output.append(allocator, '}');
+            try encoder.endObject();
         },
-        else => try output.appendSlice(allocator, "null"),
+        else => try encoder.writeNull(),
     }
+}
+
+/// Format a decimal value as a JSON number string
+fn formatDecimalForJson(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![]const u8 {
+    if (scale == 0) {
+        return std.fmt.allocPrint(allocator, "{d}", .{coeff});
+    }
+
+    // Calculate properly scaled decimal
+    var pow: i128 = 1;
+    var i: u8 = 0;
+    while (i < scale) : (i += 1) pow *= 10;
+
+    const whole: i128 = @divTrunc(coeff, pow);
+    const abs_coeff: i128 = if (coeff < 0) -coeff else coeff;
+    const frac: i128 = @mod(abs_coeff, pow);
+
+    var fracbuf: [64]u8 = undefined;
+    const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch return error.OutOfMemory;
+
+    if (ftmp.len < scale) {
+        const missing = scale - @as(u8, @intCast(ftmp.len));
+        var pad: [64]u8 = undefined;
+        @memset(pad[0..missing], '0');
+        return std.fmt.allocPrint(allocator, "{d}.{s}{s}", .{ whole, pad[0..missing], ftmp });
+    } else {
+        return std.fmt.allocPrint(allocator, "{d}.{s}", .{ whole, ftmp });
+    }
+}
+
+/// Legacy function for backwards compatibility - appends Value as JSON to ArrayList
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-018; FEATURE="JSON Library Migration"; ASPECT=LegacyCompat; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-01-24
+fn valueToJsonAppend(allocator: std.mem.Allocator, value: Value, output: *std.ArrayList(u8)) !void {
+    // Use streaming encoder to properly encode to the output buffer
+    var encoder = json_lib.streamingEncoder(allocator, output.writer(allocator), .{});
+    try encodeValueToStream(allocator, value, &encoder);
 }
 
 // CANARY: REQ=REQ-CONSTRAINT-ENFORCE-002; FEATURE="ConstraintEnforcement"; ASPECT=Validation; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
@@ -405,7 +410,7 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
@@ -505,7 +510,7 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
@@ -590,7 +595,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
@@ -677,7 +682,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
@@ -777,7 +782,7 @@ pub fn executeCreateQuery(
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
@@ -844,7 +849,7 @@ pub fn executeCreateQuery(
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
@@ -878,7 +883,7 @@ pub fn executeCreateQuery(
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
@@ -909,7 +914,7 @@ pub fn executeCreateQuery(
                     const prop_value = switch (value) {
                         .Str => |s| graph_store.PropertyValue{ .String = s },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         else => graph_store.PropertyValue{ .Null = {} },
                     };
@@ -1053,7 +1058,7 @@ pub fn executeCreateQuery(
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         else => graph_store.PropertyValue{ .Null = {} },
@@ -1124,7 +1129,7 @@ pub fn executeCreateQuery(
                             const prop_value = switch (value) {
                                 .Str => |s| graph_store.PropertyValue{ .String = s },
                                 .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                                 .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                 .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                 else => graph_store.PropertyValue{ .Null = {} },
@@ -1337,7 +1342,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
@@ -1411,7 +1416,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
@@ -1463,7 +1468,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
@@ -1507,7 +1512,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
@@ -1614,7 +1619,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         // CANARY: REQ=REQ-LIST-PROP-001; FEATURE="ListProperties"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
@@ -1688,7 +1693,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
@@ -1740,7 +1745,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
@@ -1784,7 +1789,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                             break :blk graph_store.PropertyValue{ .String = final_value };
                         },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
-                        .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                         .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                         .Null => graph_store.PropertyValue{ .Null = {} },
@@ -1985,7 +1990,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                                         const prop_value = switch (value) {
                                             .Str => |s| graph_store.PropertyValue{ .String = s },
                                             .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                                             .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                             .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                             else => graph_store.PropertyValue{ .Null = {} },
@@ -2091,7 +2096,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                                         const prop_value = switch (value) {
                                             .Str => |s| graph_store.PropertyValue{ .String = s },
                                             .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
                                             .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                                             .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
                                             else => graph_store.PropertyValue{ .Null = {} },

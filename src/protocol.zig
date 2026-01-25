@@ -343,48 +343,49 @@ pub fn buildBindingsLine(allocator: std.mem.Allocator, ordered: bool, order_keys
     errdefer buf.deinit(allocator);
 
     var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+    defer encoder.deinit();
 
     try encoder.beginObject();
 
-    try encoder.field("status_class");
-    try encoder.string("00000");
+    try encoder.writeKey("status_class");
+    try encoder.writeString("00000");
 
-    try encoder.field("result");
+    try encoder.writeKey("result");
     try encoder.beginObject();
 
-    try encoder.field("type");
-    try encoder.string("BINDINGS");
+    try encoder.writeKey("type");
+    try encoder.writeString("BINDINGS");
 
-    try encoder.field("ordered");
-    try encoder.boolean(ordered);
+    try encoder.writeKey("ordered");
+    try encoder.writeBool(ordered);
 
-    try encoder.field("order_keys");
+    try encoder.writeKey("order_keys");
     try encoder.beginArray();
     for (order_keys) |key| {
-        try encoder.string(key);
+        try encoder.writeString(key);
     }
     try encoder.endArray();
 
-    try encoder.field("rows");
-    try encoder.raw(rows_json); // Embed pre-encoded JSON directly
+    try encoder.writeKey("rows");
+    try encoder.writeRaw(rows_json); // Embed pre-encoded JSON directly
 
-    try encoder.field("final");
-    try encoder.boolean(final);
+    try encoder.writeKey("final");
+    try encoder.writeBool(final);
 
     if (additional.len > 0) {
-        try encoder.field("additional_statuses");
+        try encoder.writeKey("additional_statuses");
         try encoder.beginArray();
         for (additional) |status| {
-            try encoder.string(status);
+            try encoder.writeString(status);
         }
         try encoder.endArray();
     }
 
     if (flags.len > 0) {
-        try encoder.field("flagger_findings");
+        try encoder.writeKey("flagger_findings");
         try encoder.beginArray();
         for (flags) |flag| {
-            try encoder.string(flag);
+            try encoder.writeString(flag);
         }
         try encoder.endArray();
     }
@@ -467,26 +468,27 @@ pub fn buildExplainLine(allocator: std.mem.Allocator, json_payload: []const u8, 
     errdefer buf.deinit(allocator);
 
     var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+    defer encoder.deinit();
 
     try encoder.beginObject();
 
-    try encoder.field("status_class");
-    try encoder.string("00000");
+    try encoder.writeKey("status_class");
+    try encoder.writeString("00000");
 
-    try encoder.field("result");
+    try encoder.writeKey("result");
     try encoder.beginObject();
 
-    try encoder.field("type");
-    try encoder.string("EXPLAIN");
+    try encoder.writeKey("type");
+    try encoder.writeString("EXPLAIN");
 
-    try encoder.field("json");
-    try encoder.raw(json_payload); // Embed pre-encoded JSON directly
+    try encoder.writeKey("json");
+    try encoder.writeRaw(json_payload); // Embed pre-encoded JSON directly
 
     if (flags.len > 0) {
-        try encoder.field("flagger_findings");
+        try encoder.writeKey("flagger_findings");
         try encoder.beginArray();
         for (flags) |flag| {
-            try encoder.string(flag);
+            try encoder.writeString(flag);
         }
         try encoder.endArray();
     }
@@ -519,26 +521,27 @@ pub fn buildProfileLine(allocator: std.mem.Allocator, json_payload: []const u8, 
     errdefer buf.deinit(allocator);
 
     var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+    defer encoder.deinit();
 
     try encoder.beginObject();
 
-    try encoder.field("status_class");
-    try encoder.string("00000");
+    try encoder.writeKey("status_class");
+    try encoder.writeString("00000");
 
-    try encoder.field("result");
+    try encoder.writeKey("result");
     try encoder.beginObject();
 
-    try encoder.field("type");
-    try encoder.string("PROFILE");
+    try encoder.writeKey("type");
+    try encoder.writeString("PROFILE");
 
-    try encoder.field("json");
-    try encoder.raw(json_payload); // Embed pre-encoded JSON directly
+    try encoder.writeKey("json");
+    try encoder.writeRaw(json_payload); // Embed pre-encoded JSON directly
 
     if (flags.len > 0) {
-        try encoder.field("flagger_findings");
+        try encoder.writeKey("flagger_findings");
         try encoder.beginArray();
         for (flags) |flag| {
-            try encoder.string(flag);
+            try encoder.writeString(flag);
         }
         try encoder.endArray();
     }
@@ -556,20 +559,21 @@ pub fn buildCdcDiagnosticsLine(allocator: std.mem.Allocator, json_payload: []con
     errdefer buf.deinit(allocator);
 
     var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+    defer encoder.deinit();
 
     try encoder.beginObject();
 
-    try encoder.field("status_class");
-    try encoder.string("00000");
+    try encoder.writeKey("status_class");
+    try encoder.writeString("00000");
 
-    try encoder.field("result");
+    try encoder.writeKey("result");
     try encoder.beginObject();
 
-    try encoder.field("type");
-    try encoder.string("CDC_DIAGNOSTICS");
+    try encoder.writeKey("type");
+    try encoder.writeString("CDC_DIAGNOSTICS");
 
-    try encoder.field("json");
-    try encoder.raw(json_payload);
+    try encoder.writeKey("json");
+    try encoder.writeRaw(json_payload);
 
     try encoder.endObject(); // result
     try encoder.endObject(); // root

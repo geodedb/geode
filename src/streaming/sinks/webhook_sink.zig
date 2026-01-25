@@ -108,14 +108,23 @@ pub const WebhookSink = struct {
     ) !void {
         _ = timeout_ms; // Would be used with proper HTTP client timeout
 
-        // Parse URL to get host, port, and path
+        // Parse URL to get host, port, and path using uri library
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
-        const host_raw = uri.host orelse return error.NoHost;
-        // Handle percent-decoded host
-        const host = if (host_raw.percent_encoded.len > 0) host_raw.percent_encoded else return error.NoHost;
-        const port: u16 = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) @as(u16, 443) else @as(u16, 80);
-        const path = if (uri.path.percent_encoded.len > 0) uri.path.percent_encoded else "/";
+        // Extract host from Component union
+        const host_component = uri.host orelse return error.NoHost;
+        const host: []const u8 = switch (host_component) {
+            .raw => |r| r,
+            .percent_encoded => |p| p,
+        };
+        const scheme = uri.scheme;
+        const port: u16 = uri.port orelse if (std.mem.eql(u8, scheme, "https")) @as(u16, 443) else @as(u16, 80);
+        // Extract path from Component union
+        const path_raw: []const u8 = switch (uri.path) {
+            .raw => |p| p,
+            .percent_encoded => |p| p,
+        };
+        const path = if (path_raw.len > 0) path_raw else "/";
 
         // Connect using tcpConnectToHost
         var stream = std.net.tcpConnectToHost(self.allocator, host, port) catch return error.CannotConnect;

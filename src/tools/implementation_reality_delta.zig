@@ -99,8 +99,11 @@ pub fn main() !void {
     var first = true;
     for (curr_rows) |r| {
         if (!first) try prev_file.writeAll(",\n") else first = false;
-        const line_json = try std.fmt.allocPrint(allocator, "    {{ \"key\": \"{s}/{s}/{s}\", \"status\": \"{s}\" }}", .{ r.id, r.feature, r.aspect, r.status });
+        const key = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ r.id, r.feature, r.aspect });
+        defer allocator.free(key);
+        const line_json = try std.fmt.allocPrint(allocator, "{{\"key\":\"{s}\",\"status\":\"{s}\"}}", .{ key, r.status });
         defer allocator.free(line_json);
+        try prev_file.writeAll("    ");
         try prev_file.writeAll(line_json);
     }
     try prev_file.writeAll("\n  ]\n}\n");

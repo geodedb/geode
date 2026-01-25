@@ -13,6 +13,56 @@ const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-056; FEATURE="JSON Library Migration"; ASPECT=TransactionHandlers; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const json_lib = @import("json");
+
+// JSON response types for transaction operations
+const TxnStateError = struct {
+    status_class: []const u8 = "25000",
+    status_subclass: []const u8 = "TxnState",
+    message: []const u8,
+    additional_statuses: []const AdditionalStatus,
+
+    const AdditionalStatus = struct {
+        code: []const u8 = "TxnState",
+        message: []const u8,
+    };
+};
+
+const SerializationError = struct {
+    status_class: []const u8 = "40001",
+    status_subclass: []const u8 = "SerializationFailure",
+    message: []const u8,
+    additional_statuses: []const AdditionalStatus,
+
+    const AdditionalStatus = struct {
+        code: []const u8 = "SerializationFailure",
+        message: []const u8,
+    };
+};
+
+const CommitError = struct {
+    status_class: []const u8 = "25000",
+    status_subclass: []const u8 = "SerializationFailure",
+    message: []const u8,
+    additional_statuses: []const AdditionalStatus,
+
+    const AdditionalStatus = struct {
+        code: []const u8 = "SerializationFailure",
+        message: []const u8,
+    };
+};
+
+const TxnSuccessResponse = struct {
+    status_class: []const u8 = "00000",
+    result: TxnResult,
+
+    const TxnResult = struct {
+        type: []const u8,
+        txn_id: u64,
+    };
+};
+
 // CANARY: REQ=REQ-SERVER-REFACTOR-009; FEATURE="ServerRefactoring"; ASPECT=TRANSACTION_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - Transaction Message Handlers Module (Fifth Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
@@ -42,7 +92,18 @@ fn getOrCreateMVCCManager(allocator: std.mem.Allocator) *@import("txn/mvcc.zig")
 pub fn handleBegin(allocator: std.mem.Allocator, state: *ServerState) !?[]const u8 {
     if (state.active_txn != null) {
         // Return proper transaction state error with status_class 25000
-        return try std.fmt.allocPrint(allocator, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"Transaction already active\",\"additional_statuses\":[{{\"code\":\"TxnState\",\"message\":\"Cannot BEGIN when transaction is already active\"}}]}}\n", .{});
+        const err_response = TxnStateError{
+            .message = "Transaction already active",
+            .additional_statuses = &[_]TxnStateError.AdditionalStatus{
+                .{ .message = "Cannot BEGIN when transaction is already active" },
+            },
+        };
+        const json_str = try json_lib.encode(allocator, err_response, .{});
+        defer allocator.free(json_str);
+        const result = try allocator.alloc(u8, json_str.len + 1);
+        @memcpy(result[0..json_str.len], json_str);
+        result[json_str.len] = '\n';
+        return result;
     } else {
         const t = state.txn_manager.begin();
         state.active_txn = t;
@@ -63,7 +124,15 @@ pub fn handleBegin(allocator: std.mem.Allocator, state: *ServerState) !?[]const 
         undo_log.begin();
 
         // Return success with status_class 00000
-        return try std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_BEGIN\",\"txn_id\":{}}}}}\n", .{t.id});
+        const success_response = TxnSuccessResponse{
+            .result = .{ .type = "TXN_BEGIN", .txn_id = t.id },
+        };
+        const json_str = try json_lib.encode(allocator, success_response, .{});
+        defer allocator.free(json_str);
+        const result = try allocator.alloc(u8, json_str.len + 1);
+        @memcpy(result[0..json_str.len], json_str);
+        result[json_str.len] = '\n';
+        return result;
     }
 }
 
@@ -72,7 +141,18 @@ pub fn handleBegin(allocator: std.mem.Allocator, state: *ServerState) !?[]const 
 pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_compact_interval: usize) !?[]const u8 {
     if (state.active_txn == null) {
         // Return proper transaction state error with status_class 25000
-        return try std.fmt.allocPrint(allocator, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"No active transaction\",\"additional_statuses\":[{{\"code\":\"TxnState\",\"message\":\"Cannot COMMIT without active transaction\"}}]}}\n", .{});
+        const err_response = TxnStateError{
+            .message = "No active transaction",
+            .additional_statuses = &[_]TxnStateError.AdditionalStatus{
+                .{ .message = "Cannot COMMIT without active transaction" },
+            },
+        };
+        const json_str = try json_lib.encode(allocator, err_response, .{});
+        defer allocator.free(json_str);
+        const result = try allocator.alloc(u8, json_str.len + 1);
+        @memcpy(result[0..json_str.len], json_str);
+        result[json_str.len] = '\n';
+        return result;
     } else {
         var tx = state.active_txn.?;
 
@@ -86,7 +166,17 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
                     error.SerializationFailure => "Write-write conflict detected",
                     else => "Transaction commit failed",
                 };
-                const err_json = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"40001\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction rolled back due to concurrent update\"}}]}}\n", .{err_msg});
+                const ser_error = SerializationError{
+                    .message = err_msg,
+                    .additional_statuses = &[_]SerializationError.AdditionalStatus{
+                        .{ .message = "Transaction rolled back due to concurrent update" },
+                    },
+                };
+                const json_str = try json_lib.encode(allocator, ser_error, .{});
+                defer allocator.free(json_str);
+                const err_json = try allocator.alloc(u8, json_str.len + 1);
+                @memcpy(err_json[0..json_str.len], json_str);
+                err_json[json_str.len] = '\n';
 
                 // Clean up transaction state
                 state.current_mvcc_txn = null;
@@ -103,7 +193,18 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
 
         state.txn_manager.commit(&tx) catch |err| {
             // Handle commit failure (e.g., serialization failure)
-            return try std.fmt.allocPrint(allocator, "{{\"status_class\":\"25000\",\"status_subclass\":\"SerializationFailure\",\"message\":\"{s}\",\"additional_statuses\":[{{\"code\":\"SerializationFailure\",\"message\":\"Transaction commit failed due to conflicts\"}}]}}\n", .{@errorName(err)});
+            const commit_error = CommitError{
+                .message = @errorName(err),
+                .additional_statuses = &[_]CommitError.AdditionalStatus{
+                    .{ .message = "Transaction commit failed due to conflicts" },
+                },
+            };
+            const json_str = try json_lib.encode(allocator, commit_error, .{});
+            defer allocator.free(json_str);
+            const result = try allocator.alloc(u8, json_str.len + 1);
+            @memcpy(result[0..json_str.len], json_str);
+            result[json_str.len] = '\n';
+            return result;
         };
 
         // Assign commit timestamp to newly committed records from this txn
@@ -140,7 +241,14 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
         undo_log.commit();
 
         // Return success with status_class 00000
-        const success_json = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_COMMIT\",\"txn_id\":{}}}}}\n", .{tx.id});
+        const success_response = TxnSuccessResponse{
+            .result = .{ .type = "TXN_COMMIT", .txn_id = tx.id },
+        };
+        const json_str = try json_lib.encode(allocator, success_response, .{});
+        defer allocator.free(json_str);
+        const success_json = try allocator.alloc(u8, json_str.len + 1);
+        @memcpy(success_json[0..json_str.len], json_str);
+        success_json[json_str.len] = '\n';
 
         // Perform checkpoint if needed (after returning success)
         if (do_checkpoint) {
@@ -164,7 +272,18 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
 pub fn handleRollback(allocator: std.mem.Allocator, state: *ServerState) !?[]const u8 {
     if (state.active_txn == null) {
         // Return proper transaction state error with status_class 25000
-        return try std.fmt.allocPrint(allocator, "{{\"status_class\":\"25000\",\"status_subclass\":\"TxnState\",\"message\":\"No active transaction\",\"additional_statuses\":[{{\"code\":\"TxnState\",\"message\":\"Cannot ROLLBACK without active transaction\"}}]}}\n", .{});
+        const err_response = TxnStateError{
+            .message = "No active transaction",
+            .additional_statuses = &[_]TxnStateError.AdditionalStatus{
+                .{ .message = "Cannot ROLLBACK without active transaction" },
+            },
+        };
+        const json_str = try json_lib.encode(allocator, err_response, .{});
+        defer allocator.free(json_str);
+        const result = try allocator.alloc(u8, json_str.len + 1);
+        @memcpy(result[0..json_str.len], json_str);
+        result[json_str.len] = '\n';
+        return result;
     } else {
         var tx2 = state.active_txn.?;
 
@@ -194,6 +313,14 @@ pub fn handleRollback(allocator: std.mem.Allocator, state: *ServerState) !?[]con
         state.in_txn = false;
 
         // Return success with status_class 00000
-        return try std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"result\":{{\"type\":\"TXN_ROLLBACK\",\"txn_id\":{}}}}}\n", .{tx2.id});
+        const success_response = TxnSuccessResponse{
+            .result = .{ .type = "TXN_ROLLBACK", .txn_id = tx2.id },
+        };
+        const json_str = try json_lib.encode(allocator, success_response, .{});
+        defer allocator.free(json_str);
+        const result = try allocator.alloc(u8, json_str.len + 1);
+        @memcpy(result[0..json_str.len], json_str);
+        result[json_str.len] = '\n';
+        return result;
     }
 }

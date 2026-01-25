@@ -196,6 +196,17 @@ pub const TokenKind = enum {
     BINDINGS,
     ONLY,
 
+    // Type keywords for CAST expressions
+    DECIMAL,
+    INTEGER,
+    FLOAT,
+    STRING,
+    BOOLEAN,
+    TIMESTAMP,
+    DATETIME,
+    DATE,
+    TIME,
+
     eof,
     invalid,
 };
@@ -395,10 +406,16 @@ const KeywordMap = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "WRITE", .WRITE },
     .{ "NO", .NO },
     .{ "ONLY", .ONLY },
-    // Temporal type keywords (map to literal types for parsing)
-    .{ "DATE", .date_lit },
-    .{ "DATETIME", .datetime_lit },
-    .{ "TIME", .time_lit },
+    // Type keywords for CAST expressions
+    .{ "DECIMAL", .DECIMAL },
+    .{ "INTEGER", .INTEGER },
+    .{ "FLOAT", .FLOAT },
+    .{ "STRING", .STRING },
+    .{ "BOOLEAN", .BOOLEAN },
+    .{ "TIMESTAMP", .TIMESTAMP },
+    .{ "DATETIME", .DATETIME },
+    .{ "DATE", .DATE },
+    .{ "TIME", .TIME },
 });
 
 // Export keyword checking to lexer using comptime-generated map
@@ -425,4 +442,102 @@ pub fn isKeywordInMetadata(name: []const u8) bool {
 /// Get keyword metadata for documentation/completion
 pub fn getKeywordMetadata(name: []const u8) ?language_metadata.KeywordInfo {
     return language_metadata.findKeyword(name);
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+// CANARY: REQ=REQ-GQL-CAST-KEYWORDS-001; FEATURE="CastTypeKeywords"; ASPECT=UnitTests; STATUS=TESTED; TEST=self; OWNER=parser; UPDATED=2026-01-25
+
+test "keywordKind recognizes DECIMAL type keyword" {
+    try std.testing.expectEqual(TokenKind.DECIMAL, keywordKind("DECIMAL"));
+    try std.testing.expectEqual(TokenKind.DECIMAL, keywordKind("decimal"));
+    try std.testing.expectEqual(TokenKind.DECIMAL, keywordKind("Decimal"));
+}
+
+test "keywordKind recognizes INTEGER type keyword" {
+    try std.testing.expectEqual(TokenKind.INTEGER, keywordKind("INTEGER"));
+    try std.testing.expectEqual(TokenKind.INTEGER, keywordKind("integer"));
+    try std.testing.expectEqual(TokenKind.INTEGER, keywordKind("Integer"));
+}
+
+test "keywordKind recognizes FLOAT type keyword" {
+    try std.testing.expectEqual(TokenKind.FLOAT, keywordKind("FLOAT"));
+    try std.testing.expectEqual(TokenKind.FLOAT, keywordKind("float"));
+    try std.testing.expectEqual(TokenKind.FLOAT, keywordKind("Float"));
+}
+
+test "keywordKind recognizes STRING type keyword" {
+    try std.testing.expectEqual(TokenKind.STRING, keywordKind("STRING"));
+    try std.testing.expectEqual(TokenKind.STRING, keywordKind("string"));
+    try std.testing.expectEqual(TokenKind.STRING, keywordKind("String"));
+}
+
+test "keywordKind recognizes BOOLEAN type keyword" {
+    try std.testing.expectEqual(TokenKind.BOOLEAN, keywordKind("BOOLEAN"));
+    try std.testing.expectEqual(TokenKind.BOOLEAN, keywordKind("boolean"));
+    try std.testing.expectEqual(TokenKind.BOOLEAN, keywordKind("Boolean"));
+}
+
+test "keywordKind recognizes TIMESTAMP type keyword" {
+    try std.testing.expectEqual(TokenKind.TIMESTAMP, keywordKind("TIMESTAMP"));
+    try std.testing.expectEqual(TokenKind.TIMESTAMP, keywordKind("timestamp"));
+    try std.testing.expectEqual(TokenKind.TIMESTAMP, keywordKind("Timestamp"));
+}
+
+test "keywordKind recognizes DATETIME type keyword" {
+    try std.testing.expectEqual(TokenKind.DATETIME, keywordKind("DATETIME"));
+    try std.testing.expectEqual(TokenKind.DATETIME, keywordKind("datetime"));
+    try std.testing.expectEqual(TokenKind.DATETIME, keywordKind("DateTime"));
+}
+
+test "keywordKind recognizes DATE type keyword" {
+    try std.testing.expectEqual(TokenKind.DATE, keywordKind("DATE"));
+    try std.testing.expectEqual(TokenKind.DATE, keywordKind("date"));
+    try std.testing.expectEqual(TokenKind.DATE, keywordKind("Date"));
+}
+
+test "keywordKind recognizes TIME type keyword" {
+    try std.testing.expectEqual(TokenKind.TIME, keywordKind("TIME"));
+    try std.testing.expectEqual(TokenKind.TIME, keywordKind("time"));
+    try std.testing.expectEqual(TokenKind.TIME, keywordKind("Time"));
+}
+
+test "keywordKind returns identifier for unknown words" {
+    try std.testing.expectEqual(TokenKind.identifier, keywordKind("unknown"));
+    try std.testing.expectEqual(TokenKind.identifier, keywordKind("foo"));
+    try std.testing.expectEqual(TokenKind.identifier, keywordKind("myVariable"));
+}
+
+test "keywordKind handles CAST keyword" {
+    try std.testing.expectEqual(TokenKind.CAST, keywordKind("CAST"));
+    try std.testing.expectEqual(TokenKind.CAST, keywordKind("cast"));
+    try std.testing.expectEqual(TokenKind.CAST, keywordKind("Cast"));
+}
+
+test "keywordKind handles AS keyword" {
+    try std.testing.expectEqual(TokenKind.AS, keywordKind("AS"));
+    try std.testing.expectEqual(TokenKind.AS, keywordKind("as"));
+    try std.testing.expectEqual(TokenKind.AS, keywordKind("As"));
+}
+
+test "TokenKind has all required type keywords" {
+    // Verify type keywords exist in the enum
+    _ = TokenKind.DECIMAL;
+    _ = TokenKind.INTEGER;
+    _ = TokenKind.FLOAT;
+    _ = TokenKind.STRING;
+    _ = TokenKind.BOOLEAN;
+    _ = TokenKind.TIMESTAMP;
+    _ = TokenKind.DATETIME;
+    _ = TokenKind.DATE;
+    _ = TokenKind.TIME;
+}
+
+test "keywordKind handles words exceeding buffer length" {
+    // Words longer than 64 characters should return identifier
+    const long_word = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnop";
+    try std.testing.expect(long_word.len > 64);
+    try std.testing.expectEqual(TokenKind.identifier, keywordKind(long_word));
 }

@@ -6,6 +6,36 @@ const logging = @import("logging");
 const log = logging.scoped("twophase");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=TwoPhaseCommit; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// External JSON library for RFC 8259 compliant encoding in distributed transaction messages
+const json_lib = @import("json");
+
+/// JSON structure for two-phase commit message (without operations for streaming)
+const TwoPhaseMessageHeader = struct {
+    msg_type: []const u8,
+    txn_id: []const u8,
+    coord_id: []const u8,
+    ts: i64,
+};
+
+/// JSON structure for node operations
+const NodeOpJson = struct {
+    type: []const u8,
+    node_id: u64,
+    label: []const u8,
+    props: []const u8,
+};
+
+/// JSON structure for edge operations
+const EdgeOpJson = struct {
+    @"type": []const u8,
+    edge_id: u64,
+    src: u64,
+    tgt: u64,
+    edge_type: []const u8,
+    props: []const u8,
+};
+
 /// Two-Phase Commit transaction states
 pub const TransactionState = enum {
     active,
@@ -302,79 +332,128 @@ pub fn deinitTransport() void {
     }
 }
 
-/// Serialize TwoPhaseMessage to JSON (newline-terminated)
+/// Serialize TwoPhaseMessage to JSON (newline-terminated) using type-safe encoding
 fn serializeTwoPhaseMessage(allocator: Allocator, msg: TwoPhaseMessage) ![]u8 {
     var buffer = std.ArrayList(u8).init(allocator);
     errdefer buffer.deinit();
 
     const writer = buffer.writer();
-    try writer.print("{{\"msg_type\":\"{s}\",\"txn_id\":\"{s}\",\"coord_id\":\"{s}\",\"ts\":{d},\"ops\":[", .{
-        @tagName(msg.msg_type),
-        msg.transaction_id,
-        msg.coordinator_id,
-        msg.timestamp,
-    });
+
+    // Use streaming encoder for the message header and operations array
+    var encoder = json_lib.streamingEncoder(allocator, writer, .{});
+    defer encoder.deinit();
+
+    try encoder.beginObject();
+    try encoder.writeKey("msg_type");
+    try encoder.writeString(@tagName(msg.msg_type));
+    try encoder.writeKey("txn_id");
+    try encoder.writeString(msg.transaction_id);
+    try encoder.writeKey("coord_id");
+    try encoder.writeString(msg.coordinator_id);
+    try encoder.writeKey("ts");
+    try encoder.writeInt(msg.timestamp);
+    try encoder.writeKey("ops");
+    try encoder.beginArray();
 
     // Serialize operations
-    for (msg.operations, 0..) |op, i| {
-        if (i > 0) try writer.writeAll(",");
-        try serializeOperation(writer, op);
+    for (msg.operations) |op| {
+        try serializeOperation(&encoder, op);
     }
 
-    try writer.writeAll("]}\n");
+    try encoder.endArray();
+    try encoder.endObject();
+    // Note: No finish() needed - streaming encoder writes immediately
+
+    try writer.writeAll("\n");
     return buffer.toOwnedSlice();
 }
 
-/// Serialize a single operation to JSON
-fn serializeOperation(writer: anytype, op: Operation) !void {
+/// Serialize a single operation to JSON using streaming encoder
+fn serializeOperation(encoder: anytype, op: Operation) !void {
     switch (op) {
         .create_node => |node_op| {
-            try writer.print("{{\"type\":\"create_node\",\"node_id\":{d},\"label\":\"{s}\",\"props\":\"{s}\"}}", .{
-                node_op.node_id,
-                node_op.label,
-                node_op.properties,
-            });
+            try encoder.beginObject();
+            try encoder.writeKey("type");
+            try encoder.writeString("create_node");
+            try encoder.writeKey("node_id");
+            try encoder.writeInt(node_op.node_id);
+            try encoder.writeKey("label");
+            try encoder.writeString(node_op.label);
+            try encoder.writeKey("props");
+            try encoder.writeString(node_op.properties);
+            try encoder.endObject();
         },
         .update_node => |node_op| {
-            try writer.print("{{\"type\":\"update_node\",\"node_id\":{d},\"label\":\"{s}\",\"props\":\"{s}\"}}", .{
-                node_op.node_id,
-                node_op.label,
-                node_op.properties,
-            });
+            try encoder.beginObject();
+            try encoder.writeKey("type");
+            try encoder.writeString("update_node");
+            try encoder.writeKey("node_id");
+            try encoder.writeInt(node_op.node_id);
+            try encoder.writeKey("label");
+            try encoder.writeString(node_op.label);
+            try encoder.writeKey("props");
+            try encoder.writeString(node_op.properties);
+            try encoder.endObject();
         },
         .delete_node => |node_op| {
-            try writer.print("{{\"type\":\"delete_node\",\"node_id\":{d},\"label\":\"{s}\",\"props\":\"{s}\"}}", .{
-                node_op.node_id,
-                node_op.label,
-                node_op.properties,
-            });
+            try encoder.beginObject();
+            try encoder.writeKey("type");
+            try encoder.writeString("delete_node");
+            try encoder.writeKey("node_id");
+            try encoder.writeInt(node_op.node_id);
+            try encoder.writeKey("label");
+            try encoder.writeString(node_op.label);
+            try encoder.writeKey("props");
+            try encoder.writeString(node_op.properties);
+            try encoder.endObject();
         },
         .create_edge => |edge_op| {
-            try writer.print("{{\"type\":\"create_edge\",\"edge_id\":{d},\"src\":{d},\"tgt\":{d},\"type\":\"{s}\",\"props\":\"{s}\"}}", .{
-                edge_op.edge_id,
-                edge_op.source_id,
-                edge_op.target_id,
-                edge_op.edge_type,
-                edge_op.properties,
-            });
+            try encoder.beginObject();
+            try encoder.writeKey("type");
+            try encoder.writeString("create_edge");
+            try encoder.writeKey("edge_id");
+            try encoder.writeInt(edge_op.edge_id);
+            try encoder.writeKey("src");
+            try encoder.writeInt(edge_op.source_id);
+            try encoder.writeKey("tgt");
+            try encoder.writeInt(edge_op.target_id);
+            try encoder.writeKey("edge_type");
+            try encoder.writeString(edge_op.edge_type);
+            try encoder.writeKey("props");
+            try encoder.writeString(edge_op.properties);
+            try encoder.endObject();
         },
         .update_edge => |edge_op| {
-            try writer.print("{{\"type\":\"update_edge\",\"edge_id\":{d},\"src\":{d},\"tgt\":{d},\"type\":\"{s}\",\"props\":\"{s}\"}}", .{
-                edge_op.edge_id,
-                edge_op.source_id,
-                edge_op.target_id,
-                edge_op.edge_type,
-                edge_op.properties,
-            });
+            try encoder.beginObject();
+            try encoder.writeKey("type");
+            try encoder.writeString("update_edge");
+            try encoder.writeKey("edge_id");
+            try encoder.writeInt(edge_op.edge_id);
+            try encoder.writeKey("src");
+            try encoder.writeInt(edge_op.source_id);
+            try encoder.writeKey("tgt");
+            try encoder.writeInt(edge_op.target_id);
+            try encoder.writeKey("edge_type");
+            try encoder.writeString(edge_op.edge_type);
+            try encoder.writeKey("props");
+            try encoder.writeString(edge_op.properties);
+            try encoder.endObject();
         },
         .delete_edge => |edge_op| {
-            try writer.print("{{\"type\":\"delete_edge\",\"edge_id\":{d},\"src\":{d},\"tgt\":{d},\"type\":\"{s}\",\"props\":\"{s}\"}}", .{
-                edge_op.edge_id,
-                edge_op.source_id,
-                edge_op.target_id,
-                edge_op.edge_type,
-                edge_op.properties,
-            });
+            try encoder.beginObject();
+            try encoder.writeKey("type");
+            try encoder.writeString("delete_edge");
+            try encoder.writeKey("edge_id");
+            try encoder.writeInt(edge_op.edge_id);
+            try encoder.writeKey("src");
+            try encoder.writeInt(edge_op.source_id);
+            try encoder.writeKey("tgt");
+            try encoder.writeInt(edge_op.target_id);
+            try encoder.writeKey("edge_type");
+            try encoder.writeString(edge_op.edge_type);
+            try encoder.writeKey("props");
+            try encoder.writeString(edge_op.properties);
+            try encoder.endObject();
         },
     }
 }

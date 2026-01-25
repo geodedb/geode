@@ -124,6 +124,51 @@ tests:
       stdout_contains: ["10", "20"]
     tags: ["spatial", "geojson"]
 
+  - name: "st-asgeojson-negative-coords"
+    description: "Test ST_AsGeoJson handles negative coordinates"
+    args: ["query", "-"]
+    stdin: "RETURN ST_AsGeoJson(ST_Point(-122.4194, 37.7749)) AS geojson"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Point", "coordinates", "-122"]
+    tags: ["spatial", "geojson", "negative"]
+
+  - name: "st-asgeojson-polygon"
+    description: "Test ST_AsGeoJson converts polygon to GeoJSON"
+    args: ["query", "-"]
+    stdin: "RETURN ST_AsGeoJson(GeometryFromText('POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))')) AS geojson"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Polygon", "coordinates"]
+    tags: ["spatial", "geojson", "polygon"]
+
+  - name: "st-asgeojson-polygon-values"
+    description: "Test ST_AsGeoJson polygon preserves coordinate values"
+    args: ["query", "-"]
+    stdin: "RETURN ST_AsGeoJson(GeometryFromText('POLYGON((1 2, 3 4, 5 6, 1 2))')) AS geojson"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Polygon", "1", "2", "3", "4", "5", "6"]
+    tags: ["spatial", "geojson", "polygon"]
+
+  - name: "st-asgeojson-polygon-negative"
+    description: "Test ST_AsGeoJson polygon with negative coordinates"
+    args: ["query", "-"]
+    stdin: "RETURN ST_AsGeoJson(GeometryFromText('POLYGON((-10 -20, 10 -20, 10 20, -10 20, -10 -20))')) AS geojson"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Polygon", "-10", "-20"]
+    tags: ["spatial", "geojson", "polygon", "negative"]
+
+  - name: "st-asgeojson-origin-point"
+    description: "Test ST_AsGeoJson with point at origin"
+    args: ["query", "-"]
+    stdin: "RETURN ST_AsGeoJson(ST_Point(0, 0)) AS geojson"
+    expect:
+      exit_code: 0
+      stdout_contains: ["Point", "coordinates", "0"]
+    tags: ["spatial", "geojson", "origin"]
+
   # ============================================
   # ST_X and ST_Y Tests
   # ============================================

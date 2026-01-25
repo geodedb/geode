@@ -14,6 +14,9 @@ const xml = @import("types/xml.zig");
 const bitstring = @import("types/bitstring.zig");
 const range = @import("types/range.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-024; FEATURE="JSON Library Migration"; ASPECT=GeoJSON; STATUS=TESTED; OWNER=spatial; UPDATED=2026-01-24
+const json_lib = @import("json");
+
 // CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ADAPTER_CACHE; STATUS=TESTED; TEST=tests/canary_extended_builtins.zig; OWNER=engine; UPDATED=2025-09-26
 
 // Adapter registry caching: avoid rebuilding extf registry for every bridged call.
@@ -1710,6 +1713,7 @@ fn stAsGeoJson(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     return .{ .Str = json };
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-025; FEATURE="JSON Library Migration"; ASPECT=WkbToGeoJson; STATUS=TESTED; OWNER=spatial; UPDATED=2026-01-24
 fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
     if (wkb.len < 5) return error.InvalidWkb;
 
@@ -1717,6 +1721,12 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
     const byte_order: std.builtin.Endian = if (wkb[0] == 0x00) .big else .little;
 
     const geom_type = std.mem.readInt(u32, wkb[1..5][0..4], byte_order);
+
+    var buf = try std.ArrayList(u8).initCapacity(allocator, 128);
+    defer buf.deinit(allocator);  // Always clean up - we dupe the result before returning
+
+    var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+    defer encoder.deinit();
 
     if (geom_type == 1) { // Point
         if (wkb.len < 21) return error.InvalidWkb;
@@ -1726,7 +1736,18 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
         const x: f64 = @bitCast(x_bits);
         const y: f64 = @bitCast(y_bits);
 
-        return try std.fmt.allocPrint(allocator, "{{\"type\":\"Point\",\"coordinates\":[{d},{d}]}}", .{ x, y });
+        // Build GeoJSON Point: {"type":"Point","coordinates":[x,y]}
+        try encoder.beginObject();
+        try encoder.writeKey("type");
+        try encoder.writeString("Point");
+        try encoder.writeKey("coordinates");
+        try encoder.beginArray();
+        try encoder.writeFloat(x);
+        try encoder.writeFloat(y);
+        try encoder.endArray();
+        try encoder.endObject();
+
+        return try allocator.dupe(u8, buf.items);
     }
 
     if (geom_type == 3) { // Polygon
@@ -1741,32 +1762,34 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
         const expected_len = 13 + num_points * 16;
         if (wkb.len < expected_len) return error.InvalidWkb;
 
-        // Build coordinate array string
-        var coords = std.ArrayListUnmanaged(u8){};
-        defer coords.deinit(allocator);
-
-        try coords.appendSlice(allocator, "{\"type\":\"Polygon\",\"coordinates\":[[");
+        // Build GeoJSON Polygon: {"type":"Polygon","coordinates":[[[x1,y1],[x2,y2],...]]}
+        try encoder.beginObject();
+        try encoder.writeKey("type");
+        try encoder.writeString("Polygon");
+        try encoder.writeKey("coordinates");
+        try encoder.beginArray(); // outer array for rings
+        try encoder.beginArray(); // first ring
 
         var offset: usize = 13;
-        for (0..num_points) |i| {
+        for (0..num_points) |_| {
             const x_bits = std.mem.readInt(u64, wkb[offset..][0..8], byte_order);
             const y_bits = std.mem.readInt(u64, wkb[offset + 8 ..][0..8], byte_order);
             const x: f64 = @bitCast(x_bits);
             const y: f64 = @bitCast(y_bits);
 
-            if (i > 0) {
-                try coords.appendSlice(allocator, ",");
-            }
-            const coord_str = try std.fmt.allocPrint(allocator, "[{d},{d}]", .{ x, y });
-            defer allocator.free(coord_str);
-            try coords.appendSlice(allocator, coord_str);
+            try encoder.beginArray();
+            try encoder.writeFloat(x);
+            try encoder.writeFloat(y);
+            try encoder.endArray();
 
             offset += 16;
         }
 
-        try coords.appendSlice(allocator, "]]}");
+        try encoder.endArray(); // end first ring
+        try encoder.endArray(); // end coordinates
+        try encoder.endObject();
 
-        return try allocator.dupe(u8, coords.items);
+        return try allocator.dupe(u8, buf.items);
     }
 
     return error.UnsupportedGeometry;
@@ -2519,5 +2542,179 @@ test "wkbToGeoJson rejects invalid WKB (too short)" {
 
     const short_wkb = [_]u8{ 0x00, 0x00, 0x00, 0x00 }; // Only 4 bytes
     const result = wkbToGeoJson(allocator, &short_wkb);
+    try testing.expectError(error.InvalidWkb, result);
+}
+
+// Helper to create WKB Polygon data (simple triangle for testing)
+fn createWkbPolygon(byte_order: u8, points: []const [2]f64) ![]u8 {
+    const allocator = testing.allocator;
+    const num_points: u32 = @intCast(points.len);
+    const data_len: usize = 13 + num_points * 16; // header + points
+    var result = try allocator.alloc(u8, data_len);
+
+    result[0] = byte_order;
+
+    if (byte_order == 0x00) { // Big endian
+        // Geometry type = 3 (Polygon)
+        result[1] = 0x00;
+        result[2] = 0x00;
+        result[3] = 0x00;
+        result[4] = 0x03;
+        // Number of rings = 1
+        result[5] = 0x00;
+        result[6] = 0x00;
+        result[7] = 0x00;
+        result[8] = 0x01;
+        // Number of points
+        std.mem.writeInt(u32, result[9..13][0..4], num_points, .big);
+
+        var offset: usize = 13;
+        for (points) |pt| {
+            const x_bits: u64 = @bitCast(pt[0]);
+            const y_bits: u64 = @bitCast(pt[1]);
+            std.mem.writeInt(u64, result[offset..][0..8], x_bits, .big);
+            std.mem.writeInt(u64, result[offset + 8 ..][0..8], y_bits, .big);
+            offset += 16;
+        }
+    } else { // Little endian
+        // Geometry type = 3 (Polygon)
+        result[1] = 0x03;
+        result[2] = 0x00;
+        result[3] = 0x00;
+        result[4] = 0x00;
+        // Number of rings = 1
+        result[5] = 0x01;
+        result[6] = 0x00;
+        result[7] = 0x00;
+        result[8] = 0x00;
+        // Number of points
+        std.mem.writeInt(u32, result[9..13][0..4], num_points, .little);
+
+        var offset: usize = 13;
+        for (points) |pt| {
+            const x_bits: u64 = @bitCast(pt[0]);
+            const y_bits: u64 = @bitCast(pt[1]);
+            std.mem.writeInt(u64, result[offset..][0..8], x_bits, .little);
+            std.mem.writeInt(u64, result[offset + 8 ..][0..8], y_bits, .little);
+            offset += 16;
+        }
+    }
+
+    return result;
+}
+
+test "wkbToGeoJson parses Polygon correctly" {
+    const allocator = testing.allocator;
+
+    // Create a simple square polygon (closed ring)
+    const points = [_][2]f64{
+        .{ 0.0, 0.0 },
+        .{ 10.0, 0.0 },
+        .{ 10.0, 10.0 },
+        .{ 0.0, 10.0 },
+        .{ 0.0, 0.0 }, // Close the ring
+    };
+
+    const wkb = try createWkbPolygon(0x01, &points);
+    defer allocator.free(wkb);
+
+    const json = try wkbToGeoJson(allocator, wkb);
+    defer allocator.free(json);
+
+    // Should be valid GeoJSON Polygon
+    try testing.expect(std.mem.indexOf(u8, json, "\"type\":\"Polygon\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"coordinates\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "10") != null);
+}
+
+test "wkbToGeoJson parses Polygon with negative coordinates" {
+    const allocator = testing.allocator;
+
+    // Create polygon with negative coordinates
+    const points = [_][2]f64{
+        .{ -10.0, -20.0 },
+        .{ 10.0, -20.0 },
+        .{ 10.0, 20.0 },
+        .{ -10.0, 20.0 },
+        .{ -10.0, -20.0 },
+    };
+
+    const wkb = try createWkbPolygon(0x01, &points);
+    defer allocator.free(wkb);
+
+    const json = try wkbToGeoJson(allocator, wkb);
+    defer allocator.free(json);
+
+    // Should contain negative coordinates
+    try testing.expect(std.mem.indexOf(u8, json, "\"type\":\"Polygon\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "-10") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "-20") != null);
+}
+
+test "wkbToGeoJson Polygon big endian and little endian produce same result" {
+    const allocator = testing.allocator;
+
+    const points = [_][2]f64{
+        .{ 1.0, 2.0 },
+        .{ 3.0, 4.0 },
+        .{ 5.0, 6.0 },
+        .{ 1.0, 2.0 },
+    };
+
+    const wkb_le = try createWkbPolygon(0x01, &points);
+    defer allocator.free(wkb_le);
+
+    const wkb_be = try createWkbPolygon(0x00, &points);
+    defer allocator.free(wkb_be);
+
+    const json_le = try wkbToGeoJson(allocator, wkb_le);
+    defer allocator.free(json_le);
+
+    const json_be = try wkbToGeoJson(allocator, wkb_be);
+    defer allocator.free(json_be);
+
+    // Both should produce the same GeoJSON output
+    try testing.expectEqualStrings(json_le, json_be);
+}
+
+test "wkbToGeoJson rejects unsupported geometry type" {
+    const allocator = testing.allocator;
+
+    // Create WKB with LineString type (geom_type = 2), which is unsupported
+    var wkb: [21]u8 = undefined;
+    wkb[0] = 0x01; // Little endian
+    wkb[1] = 0x02; // LineString type
+    wkb[2] = 0x00;
+    wkb[3] = 0x00;
+    wkb[4] = 0x00;
+    // Fill rest with zeros
+    @memset(wkb[5..], 0);
+
+    const result = wkbToGeoJson(allocator, &wkb);
+    try testing.expectError(error.UnsupportedGeometry, result);
+}
+
+test "wkbToGeoJson rejects Polygon with invalid length" {
+    const allocator = testing.allocator;
+
+    // Create WKB Polygon header but with insufficient data for claimed points
+    var wkb: [13]u8 = undefined;
+    wkb[0] = 0x01; // Little endian
+    wkb[1] = 0x03; // Polygon type
+    wkb[2] = 0x00;
+    wkb[3] = 0x00;
+    wkb[4] = 0x00;
+    // Number of rings = 1
+    wkb[5] = 0x01;
+    wkb[6] = 0x00;
+    wkb[7] = 0x00;
+    wkb[8] = 0x00;
+    // Number of points = 10 (but no actual point data provided)
+    wkb[9] = 0x0A;
+    wkb[10] = 0x00;
+    wkb[11] = 0x00;
+    wkb[12] = 0x00;
+
+    const result = wkbToGeoJson(allocator, &wkb);
     try testing.expectError(error.InvalidWkb, result);
 }

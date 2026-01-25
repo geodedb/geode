@@ -68,7 +68,8 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                             .String => |s| Value{ .Str = s },
                                             .Int => |ii| Value{ .Int = ii },
                                             .Bool => |b| Value{ .Bool = b },
-                                            .Float => Value{ .Null = {} },
+                                            .Float => |f| Value{ .Double = f },
+                                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                             .Null => Value{ .Null = {} },
                                             .ExtValue => |ext| Value{ .ExtValue = ext },
                                         };
@@ -276,7 +277,8 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                                         .String => |s| Value{ .Str = s },
                                                         .Int => |ii| Value{ .Int = ii },
                                                         .Bool => |b| Value{ .Bool = b },
-                                                        .Float => Value{ .Null = {} },
+                                                        .Float => |f| Value{ .Double = f },
+                                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                                         .Null => Value{ .Null = {} },
                                                         .ExtValue => |ext| Value{ .ExtValue = ext },
                                                     };
@@ -389,6 +391,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                                 .Int => |i| Value{ .Int = i },
                                 .Bool => |b| Value{ .Bool = b },
                                 .Float => |f| Value{ .Double = f }, // GAP-0120: Map Float (f64) to Double
+                                .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                                 .Null => Value{ .Null = {} },
                                 .ExtValue => |ext| Value{ .ExtValue = ext },
                             };
@@ -652,7 +655,8 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                             .String => |s| Value{ .Str = s },
                             .Int => |i| Value{ .Int = i },
                             .Bool => |b| Value{ .Bool = b },
-                            .Float => Value{ .Null = {} },
+                            .Float => |f| Value{ .Double = f },
+                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                             .Null => Value{ .Null = {} },
                             .ExtValue => |ext| Value{ .ExtValue = ext },
                         };
@@ -703,7 +707,8 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                             .String => |s| Value{ .Str = s },
                             .Int => |i| Value{ .Int = i },
                             .Bool => |b| Value{ .Bool = b },
-                            .Float => Value{ .Null = {} },
+                            .Float => |f| Value{ .Double = f },
+                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
                             .Null => Value{ .Null = {} },
                             .ExtValue => |ext| Value{ .ExtValue = ext },
                         };

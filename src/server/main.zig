@@ -64,6 +64,15 @@ const quic_connection_handler = @import("quic_connection_handler.zig");
 const stdio_message_handler = @import("stdio_message_handler.zig");
 // Import server utilities (M3.3 Phase 3 server utilities extraction)
 const server_utilities = @import("server_utilities.zig");
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-064; FEATURE="JSON Library Migration"; ASPECT=ServerMain; STATUS=IMPL; OWNER=server; UPDATED=2026-01-25
+const json_lib = @import("json");
+
+// JSON response types for session parameter operations
+const SessionParamResponse = struct {
+    status_class: []const u8 = "00000",
+    message: []const u8,
+};
+
 const executeCreateIndexStatement = query_executor.executeCreateIndexStatement;
 const executeDropIndexStatement = query_executor.executeDropIndexStatement;
 const executeBackupStatement = query_executor.executeBackupStatement;
@@ -303,8 +312,11 @@ pub fn main() !void {
     // Try to generate certificates if using QUIC
     if (listen_quic != null) {
         cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path) catch |err| {
-            std.debug.print("Warning: Could not generate certificates: {s}\n", .{@errorName(err)});
-            std.debug.print("Using fallback paths in /tmp\n", .{});
+            log.warn("Could not generate certificates, using fallback paths", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.string("fallback_cert", "/tmp/geode-server.crt"),
+                Attr.string("fallback_key", "/tmp/geode-server.key"),
+            });
             cert_path = "/tmp/geode-server.crt";
             key_path = "/tmp/geode-server.key";
             try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
@@ -358,9 +370,15 @@ pub fn main() !void {
     const metrics_port: ?u16 = if (metrics_port_env) |p| std.fmt.parseInt(u16, p, 10) catch 9090 else null;
     if (metrics_port) |port| {
         _ = metrics_server.initGlobalMetrics(gpa, port) catch |err| {
-            std.debug.print("Warning: Failed to initialize metrics server on port {d}: {s}\n", .{ port, @errorName(err) });
+            log.warn("Failed to initialize metrics server", &.{
+                Attr.int("port", port),
+                Attr.string("error", @errorName(err)),
+            });
         };
-        std.debug.print("Prometheus metrics server listening on http://0.0.0.0:{d}/metrics\n", .{port});
+        log.info("Prometheus metrics server started", &.{
+            Attr.int("port", port),
+            Attr.string("endpoint", "/metrics"),
+        });
     }
     defer metrics_server.shutdownGlobalMetrics(gpa);
 
@@ -399,13 +417,19 @@ pub fn main() !void {
         }
 
         try transport.listen();
-        std.debug.print("QUIC server listening on {s}:{d} with TLS 1.3\n", .{ address_str, port });
+        log.info("QUIC server started", &.{
+            Attr.string("address", address_str),
+            Attr.int("port", port),
+            Attr.string("tls", "1.3"),
+        });
 
         if (test_exit_after_first) {
             // For testing: handle a single connection without blocking on second accept
             log.debug("Test mode enabled - calling transport.accept() ONCE", .{});
             const conn = transport.accept() catch |err| {
-                std.debug.print("Failed to accept QUIC connection: {}\n", .{err});
+                log.err("Failed to accept QUIC connection", &.{
+                    Attr.string("error", @errorName(err)),
+                });
                 return;
             };
 
@@ -415,13 +439,17 @@ pub fn main() !void {
             // CANARY: REQ=REQ-ABAC-WIRE-015; FEATURE="ABAC Enforcement"; ASPECT=QUICCall; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
             // GAP-0165: Pass SecurityManager to handleQuicConnection for ABAC enforcement
             quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err| {
-                std.debug.print("Error handling QUIC connection: {}\n", .{err});
+                log.err("Error handling QUIC connection", &.{
+                    Attr.string("error", @errorName(err)),
+                });
             };
         } else {
             // Production mode: accept connections in a loop
             while (true) {
                 const conn = transport.accept() catch |err| {
-                    std.debug.print("Failed to accept QUIC connection: {}\n", .{err});
+                    log.warn("Failed to accept QUIC connection", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
                     continue;
                 };
 
@@ -431,7 +459,9 @@ pub fn main() !void {
                 // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
                 // GAP-0165: Pass SecurityManager to handleQuicConnection in production loop
                 quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err| {
-                    std.debug.print("Error handling QUIC connection: {}\n", .{err});
+                    log.err("Error handling QUIC connection", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
                 };
             }
         }
@@ -554,7 +584,10 @@ pub fn main() !void {
         if (raw.len == 0) continue; // ignore
         if (DEBUG_PROFILE and raw.len > 0) {
             const preview_len = if (raw.len < 120) raw.len else 120;
-            std.debug.print("[debug] received line len={d} head='{s}'\n", .{ raw.len, raw[0..preview_len] });
+            log.debug("Received line", &.{
+                Attr.int("len", @intCast(raw.len)),
+                Attr.string("head", raw[0..preview_len]),
+            });
         }
         // Parse client message
         var arena = std.heap.ArenaAllocator.init(gpa);
@@ -610,7 +643,15 @@ fn executeSessionParameterSet(allocator: std.mem.Allocator, session_config: *Ses
                 SessionParameterValue{ .Value = try allocator.dupe(u8, "") };
 
             try session_config.setParameter(param_name, value);
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session value parameter '{s}' set\"}}\n", .{param_name});
+            const msg = try std.fmt.allocPrint(allocator, "Session value parameter '{s}' set", .{param_name});
+            defer allocator.free(msg);
+            const response = SessionParamResponse{ .message = msg };
+            const json_str = try json_lib.encode(allocator, response, .{});
+            defer allocator.free(json_str);
+            const result = try allocator.alloc(u8, json_str.len + 1);
+            @memcpy(result[0..json_str.len], json_str);
+            result[json_str.len] = '\n';
+            return result;
         },
         .GraphParam => |graph_param| {
             const param_name = graph_param.parameter_name.specification;
@@ -621,7 +662,15 @@ fn executeSessionParameterSet(allocator: std.mem.Allocator, session_config: *Ses
 
             try session_config.setParameter(param_name, value);
             const graph_type = if (graph_param.property_graph) "property graph" else "graph";
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session {s} parameter '{s}' set\"}}\n", .{ graph_type, param_name });
+            const msg = try std.fmt.allocPrint(allocator, "Session {s} parameter '{s}' set", .{ graph_type, param_name });
+            defer allocator.free(msg);
+            const response = SessionParamResponse{ .message = msg };
+            const json_str = try json_lib.encode(allocator, response, .{});
+            defer allocator.free(json_str);
+            const result = try allocator.alloc(u8, json_str.len + 1);
+            @memcpy(result[0..json_str.len], json_str);
+            result[json_str.len] = '\n';
+            return result;
         },
         .BindingTableParam => |binding_param| {
             const param_name = binding_param.parameter_name.specification;
@@ -631,7 +680,15 @@ fn executeSessionParameterSet(allocator: std.mem.Allocator, session_config: *Ses
                 SessionParameterValue{ .BindingTable = try allocator.dupe(u8, "") };
 
             try session_config.setParameter(param_name, value);
-            return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Session binding table parameter '{s}' set\"}}\n", .{param_name});
+            const msg = try std.fmt.allocPrint(allocator, "Session binding table parameter '{s}' set", .{param_name});
+            defer allocator.free(msg);
+            const response = SessionParamResponse{ .message = msg };
+            const json_str = try json_lib.encode(allocator, response, .{});
+            defer allocator.free(json_str);
+            const result = try allocator.alloc(u8, json_str.len + 1);
+            @memcpy(result[0..json_str.len], json_str);
+            result[json_str.len] = '\n';
+            return result;
         },
     }
 }

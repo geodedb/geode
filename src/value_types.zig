@@ -266,6 +266,16 @@ pub fn toDec(v: Value) Dec {
     };
 }
 
+/// Convert a Value to f64 for Double arithmetic operations
+pub fn toDouble(v: Value) ?f64 {
+    return switch (v) {
+        .Double => |d| d,
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale))),
+        else => null,
+    };
+}
+
 // CANARY: REQ=REQ-M5.2-VALUE-TYPES-009; FEATURE="Value Helpers"; ASPECT=Equality; STATUS=EXEMPT; OWNER=value_types; UPDATED=2025-11-13
 /// Compare two values for equality (deep comparison for lists and paths)
 pub fn eqVals(a: Value, b: Value) bool {

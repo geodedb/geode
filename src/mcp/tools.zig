@@ -4,8 +4,28 @@ const std = @import("std");
 // MCP Tools for Geode - GQL query execution, schema introspection, graph operations, and LSP features
 const mcp = @import("mcp");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-038; FEATURE="JSON Library Migration"; ASPECT=MCPTools; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
+const json_lib = @import("json");
+
 const GeodeClient = @import("client.zig").GeodeClient;
 const lsp = @import("lsp.zig");
+
+// MCP Tool Response Types for JSON Library encoding
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-039; FEATURE="JSON Library Migration"; ASPECT=MCPResponseTypes; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
+const McpToolContent = struct {
+    type: []const u8 = "text",
+    text: []const u8,
+};
+
+const McpToolResult = struct {
+    content: []const McpToolContent,
+    isError: bool = false,
+};
+
+const McpErrorResult = struct {
+    content: []const McpToolContent,
+    isError: bool = true,
+};
 
 /// List available Geode MCP tools
 /// Returns JSON array of tool definitions
@@ -229,65 +249,31 @@ const LspPositionArgs = struct {
 };
 
 /// Format a successful tool result for MCP response
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-040; FEATURE="JSON Library Migration"; ASPECT=ToolResult; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatToolResult(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
-    // Escape the content for JSON embedding
-    var escape_count: usize = 0;
-    for (content) |c| {
-        switch (c) {
-            '"', '\\', '\n', '\r', '\t' => escape_count += 1,
-            else => {},
-        }
-    }
-
-    var escaped: []u8 = undefined;
-    if (escape_count == 0) {
-        escaped = try allocator.dupe(u8, content);
-    } else {
-        escaped = try allocator.alloc(u8, content.len + escape_count);
-        var idx: usize = 0;
-        for (content) |c| {
-            switch (c) {
-                '"' => {
-                    escaped[idx] = '\\';
-                    escaped[idx + 1] = '"';
-                    idx += 2;
-                },
-                '\\' => {
-                    escaped[idx] = '\\';
-                    escaped[idx + 1] = '\\';
-                    idx += 2;
-                },
-                '\n' => {
-                    escaped[idx] = '\\';
-                    escaped[idx + 1] = 'n';
-                    idx += 2;
-                },
-                '\r' => {
-                    escaped[idx] = '\\';
-                    escaped[idx + 1] = 'r';
-                    idx += 2;
-                },
-                '\t' => {
-                    escaped[idx] = '\\';
-                    escaped[idx + 1] = 't';
-                    idx += 2;
-                },
-                else => {
-                    escaped[idx] = c;
-                    idx += 1;
-                },
-            }
-        }
-    }
-    defer allocator.free(escaped);
     defer allocator.free(content);
 
-    return try std.fmt.allocPrint(allocator, "{{\"content\":[{{\"type\":\"text\",\"text\":\"{s}\"}}]}}", .{escaped});
+    // Build MCP tool result using JSON library (handles escaping automatically)
+    const content_items = [_]McpToolContent{.{ .text = content }};
+    const result = McpToolResult{
+        .content = &content_items,
+        .isError = false,
+    };
+    return try json_lib.encode(allocator, result, .{});
 }
 
 /// Format an error response for MCP
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-041; FEATURE="JSON Library Migration"; ASPECT=ErrorResult; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatErrorResponse(allocator: std.mem.Allocator, error_msg: []const u8) ![]const u8 {
-    return try std.fmt.allocPrint(allocator, "{{\"content\":[{{\"type\":\"text\",\"text\":\"Error: {s}\"}}],\"isError\":true}}", .{error_msg});
+    // Build error message with "Error: " prefix
+    const error_text = try std.fmt.allocPrint(allocator, "Error: {s}", .{error_msg});
+    defer allocator.free(error_text);
+
+    const content_items = [_]McpToolContent{.{ .text = error_text }};
+    const result = McpErrorResult{
+        .content = &content_items,
+    };
+    return try json_lib.encode(allocator, result, .{});
 }
 
 const QueryArgs = struct {

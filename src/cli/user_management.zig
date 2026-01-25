@@ -1,5 +1,7 @@
 const std = @import("std");
-const json = std.json;
+
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-059; FEATURE="JSON Library Migration"; ASPECT=UserManagement; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-25
+const json_lib = @import("json");
 
 pub const User = struct {
     username: []const u8,
@@ -8,6 +10,16 @@ pub const User = struct {
     roles: []const []const u8 = &.{},
     created_at: i64,
     updated_at: i64,
+};
+
+// JSON struct for unmarshaling - matches the User struct for direct parsing
+const JsonUser = struct {
+    username: []const u8,
+    email: ?[]const u8 = null,
+    status: []const u8 = "active",
+    roles: []const []const u8 = &.{},
+    created_at: i64 = 0,
+    updated_at: i64 = 0,
 };
 
 pub const UserStore = struct {
@@ -90,41 +102,29 @@ pub const UserStore = struct {
         defer self.allocator.free(contents);
         _ = try file.read(contents);
 
-        // Parse JSON
-        const parsed = try json.parseFromSlice(json.Value, self.allocator, contents, .{});
-        defer parsed.deinit();
+        // Parse JSON using json library unmarshal
+        var json_users = json_lib.unmarshal([]JsonUser, self.allocator, contents) catch |err| {
+            // If unmarshal fails, try to recover gracefully
+            _ = err;
+            return;
+        };
+        defer json_lib.free([]JsonUser, self.allocator, &json_users);
 
-        if (parsed.value != .array) return;
-
-        for (parsed.value.array.items) |item| {
-            if (item != .object) continue;
-
-            const obj = item.object;
-            const username = obj.get("username") orelse continue;
-            if (username != .string) continue;
-
+        // Copy users with owned memory
+        for (json_users) |json_user| {
             const user = User{
-                .username = try self.allocator.dupe(u8, username.string),
-                .email = if (obj.get("email")) |e| if (e == .string) try self.allocator.dupe(u8, e.string) else null else null,
-                .status = if (obj.get("status")) |s| if (s == .string) try self.allocator.dupe(u8, s.string) else try self.allocator.dupe(u8, "active") else try self.allocator.dupe(u8, "active"),
+                .username = try self.allocator.dupe(u8, json_user.username),
+                .email = if (json_user.email) |e| try self.allocator.dupe(u8, e) else null,
+                .status = try self.allocator.dupe(u8, json_user.status),
                 .roles = blk: {
-                    if (obj.get("roles")) |r| {
-                        if (r == .array) {
-                            var roles = try self.allocator.alloc([]const u8, r.array.items.len);
-                            for (r.array.items, 0..) |role_item, i| {
-                                if (role_item == .string) {
-                                    roles[i] = try self.allocator.dupe(u8, role_item.string);
-                                } else {
-                                    roles[i] = try self.allocator.dupe(u8, "user");
-                                }
-                            }
-                            break :blk roles;
-                        }
+                    var roles = try self.allocator.alloc([]const u8, json_user.roles.len);
+                    for (json_user.roles, 0..) |role, i| {
+                        roles[i] = try self.allocator.dupe(u8, role);
                     }
-                    break :blk try self.allocator.dupe([]const u8, &[_][]const u8{});
+                    break :blk roles;
                 },
-                .created_at = if (obj.get("created_at")) |c| if (c == .integer) c.integer else std.time.timestamp() else std.time.timestamp(),
-                .updated_at = if (obj.get("updated_at")) |u| if (u == .integer) u.integer else std.time.timestamp() else std.time.timestamp(),
+                .created_at = if (json_user.created_at == 0) std.time.timestamp() else json_user.created_at,
+                .updated_at = if (json_user.updated_at == 0) std.time.timestamp() else json_user.updated_at,
             };
 
             try self.users.append(self.allocator, user);
@@ -135,38 +135,12 @@ pub const UserStore = struct {
         const file = try std.fs.createFileAbsolute(self.file_path, .{});
         defer file.close();
 
-        const writer = file.writer();
+        // Encode users to JSON using json library
+        const json_str = try json_lib.encode(self.allocator, self.users.items, .{ .pretty = true });
+        defer self.allocator.free(json_str);
 
-        try writer.writeByte('[');
-        for (self.users.items, 0..) |user, i| {
-            if (i > 0) {
-                try writer.writeAll(",\n  ");
-            } else {
-                try writer.writeAll("\n  ");
-            }
-
-            try writer.writeAll("{");
-            try writer.print("\"username\":\"{s}\"", .{user.username});
-
-            if (user.email) |email| {
-                try writer.print(",\"email\":\"{s}\"", .{email});
-            }
-
-            try writer.print(",\"status\":\"{s}\"", .{user.status});
-
-            try writer.writeAll(",\"roles\":[");
-            for (user.roles, 0..) |role, j| {
-                if (j > 0) try writer.writeByte(',');
-                try writer.print("\"{s}\"", .{role});
-            }
-            try writer.writeAll("]");
-
-            try writer.print(",\"created_at\":{}", .{user.created_at});
-            try writer.print(",\"updated_at\":{}", .{user.updated_at});
-            try writer.writeByte('}');
-        }
-        if (self.users.items.len > 0) try writer.writeByte('\n');
-        try writer.writeAll("]\n");
+        try file.writeAll(json_str);
+        try file.writeAll("\n");
     }
 
     pub fn createUser(self: *UserStore, username: []const u8, email: ?[]const u8, roles: ?[]const []const u8) !void {

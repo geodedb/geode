@@ -10,6 +10,30 @@ const storage_inmemory = @import("storage/inmemory.zig");
 const storage_interface = @import("interface");
 const value_types = @import("value_types.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-069; FEATURE="JSON Library Migration"; ASPECT=TestHarness; STATUS=IMPL; OWNER=testing; UPDATED=2026-01-25
+const json_lib = @import("json");
+
+// JSON error response types for test harness
+const TestErrorResponse = struct {
+    status_class: []const u8,
+    message: ?[]const u8 = null,
+    @"error": ?[]const u8 = null,
+    additional_statuses: []const AdditionalStatus = &.{},
+
+    const AdditionalStatus = struct {};
+};
+
+/// Helper to build test error response JSON
+fn buildTestErrorResponse(allocator: *std.mem.Allocator, status_class: []const u8, message: ?[]const u8, err: ?[]const u8) ![]u8 {
+    const response = TestErrorResponse{
+        .status_class = status_class,
+        .message = message,
+        .@"error" = err,
+    };
+    const json_str = try json_lib.encode(allocator.*, response, .{ .emit_null_optional_fields = false });
+    return json_str;
+}
+
 // Cleanup function for test catalog - called at end of tests
 pub fn cleanupTestCatalog() void {
     // Clean up the global catalog instance to avoid memory leaks

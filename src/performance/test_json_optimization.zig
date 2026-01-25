@@ -2,6 +2,19 @@ const std = @import("std");
 const testing = std.testing;
 const json_opt = @import("json_optimized_fixed.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-068; FEATURE="JSON Library Migration"; ASPECT=TestJsonOptimization; STATUS=IMPL; OWNER=performance; UPDATED=2026-01-25
+const json_lib = @import("json");
+
+// Test data structs for JSON encoding
+const IterationData = struct { iteration: u32, data: []const u8 };
+const UserRow = struct {
+    user_id: u32,
+    username: []const u8,
+    email: []const u8,
+    active: bool,
+    last_login: []const u8,
+};
+
 // CANARY: REQ=REQ-PERF-JSON-001; FEATURE="OptimizedJSON"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_OptimizedJSON; OWNER=performance; UPDATED=2025-10-04
 
 test "OptimizedJsonProcessor basic functionality" {
@@ -248,7 +261,8 @@ test "Memory usage optimization validation" {
 
     // Test arena allocation efficiency
     for (0..100) |i| {
-        const test_json = try std.fmt.allocPrint(allocator, "{{\"iteration\":{d},\"data\":\"test_value\"}}", .{i});
+        const iter_data = IterationData{ .iteration = @intCast(i), .data = "test_value" };
+        const test_json = try json_lib.encode(allocator, iter_data, .{});
         defer allocator.free(test_json);
 
         const parsed = try processor.parseJsonValue(test_json);
@@ -288,7 +302,18 @@ test "CANARY: REQ=REQ-PERF-JSON-001" {
 
     // Generate test data
     for (0..50) |i| {
-        const row = try std.fmt.allocPrint(allocator, "{{\"user_id\":{d},\"username\":\"user{d}\",\"email\":\"user{d}@example.com\",\"active\":{s},\"last_login\":\"2025-10-04T10:30:00Z\"}}", .{ i, i, i, if (i % 2 == 0) "true" else "false" });
+        const username = try std.fmt.allocPrint(allocator, "user{d}", .{i});
+        defer allocator.free(username);
+        const email = try std.fmt.allocPrint(allocator, "user{d}@example.com", .{i});
+        defer allocator.free(email);
+        const user_data = UserRow{
+            .user_id = @intCast(i),
+            .username = username,
+            .email = email,
+            .active = (i % 2 == 0),
+            .last_login = "2025-10-04T10:30:00Z",
+        };
+        const row = try json_lib.encode(allocator, user_data, .{});
         try rows.append(allocator, row);
     }
 

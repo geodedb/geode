@@ -4,6 +4,31 @@ const quic_transport = @import("transport/quic");
 const logger = @import("log/logger.zig");
 const geode = @import("geode");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-062; FEATURE="JSON Library Migration"; ASPECT=ClientMain; STATUS=IMPL; OWNER=client; UPDATED=2026-01-25
+const json_lib = @import("json");
+
+// JSON message types for client protocol
+const RunGqlMessage = struct {
+    type: []const u8 = "RUN_GQL",
+    text: []const u8,
+};
+
+const PullMessage = struct {
+    type: []const u8 = "PULL",
+    request_id: u32 = 1,
+    page_size: u32,
+};
+
+/// Helper to encode a message struct and append newline
+fn encodeMessageWithNewline(allocator: std.mem.Allocator, msg: anytype) ![]u8 {
+    const json_str = try json_lib.encode(allocator, msg, .{});
+    defer allocator.free(json_str);
+    const result = try allocator.alloc(u8, json_str.len + 1);
+    @memcpy(result[0..json_str.len], json_str);
+    result[json_str.len] = '\n';
+    return result;
+}
+
 /// Escape a string for safe embedding in JSON
 fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     // Count how many characters need escaping to allocate correct size
@@ -504,12 +529,15 @@ pub fn main() !void {
             defer gpa.free(escaped_text);
 
             if (param_name) |pn| {
+                // Parameterized query - need manual construction to embed raw JSON params
                 const pj = param_json orelse "{}";
                 const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{{\"{s}\":{s}}}}}\n", .{ escaped_text, pn, pj });
                 defer gpa.free(msg);
                 try stream.writeAll(msg);
             } else {
-                const msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_text});
+                // Simple query - use json_lib encoding
+                const run_msg = RunGqlMessage{ .text = escaped_text };
+                const msg = try encodeMessageWithNewline(gpa, run_msg);
                 defer gpa.free(msg);
                 try stream.writeAll(msg);
             }
@@ -574,7 +602,8 @@ pub fn main() !void {
 
             // Always request one page (mirror stdio behavior)
             if (!fmt_txt) {
-                const pull_msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"PULL\",\"request_id\":1,\"page_size\":{d}}}\n", .{page_size});
+                const pull_struct = PullMessage{ .page_size = @intCast(page_size) };
+                const pull_msg = try encodeMessageWithNewline(gpa, pull_struct);
                 defer gpa.free(pull_msg);
                 try stream.writeAll(pull_msg);
                 const response = try stream.readLine(1 << 16);
@@ -585,7 +614,8 @@ pub fn main() !void {
                 if (pull_all) {
                     var keep = std.mem.indexOf(u8, response, "\"final\":false") != null;
                     while (keep) {
-                        const pull_more = try std.fmt.allocPrint(gpa, "{{\"type\":\"PULL\",\"request_id\":1,\"page_size\":{d}}}\n", .{page_size});
+                        const pull_more_struct = PullMessage{ .page_size = @intCast(page_size) };
+                        const pull_more = try encodeMessageWithNewline(gpa, pull_more_struct);
                         defer gpa.free(pull_more);
                         try stream.writeAll(pull_more);
                         const more = try stream.readLine(1 << 16);
@@ -596,7 +626,8 @@ pub fn main() !void {
                     }
                 }
             } else {
-                const pull_msg = try std.fmt.allocPrint(gpa, "{{\"type\":\"PULL\",\"request_id\":1,\"page_size\":{d}}}\n", .{page_size});
+                const pull_struct = PullMessage{ .page_size = @intCast(page_size) };
+                const pull_msg = try encodeMessageWithNewline(gpa, pull_struct);
                 defer gpa.free(pull_msg);
                 try stream.writeAll(pull_msg);
                 const response = try stream.readLine(1 << 16);

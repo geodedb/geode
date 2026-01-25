@@ -9,6 +9,36 @@ const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=SecurityAudit; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// External JSON library for RFC 8259 compliant encoding in security audit reports
+const json_lib = @import("json");
+
+/// JSON structure for compliance reports
+const ComplianceReportJson = struct {
+    report_date: i64,
+    start_time: i64,
+    end_time: i64,
+    total_events: u64,
+    violations: u64,
+    compliant: u64,
+    compliance_rate: f64,
+};
+
+/// JSON structure for forensic package metadata
+const ForensicMetadataJson = struct {
+    timestamp: i64,
+    system: []const u8 = "geode",
+    version: []const u8 = "1.0.0",
+    audit_enabled: bool,
+};
+
+/// JSON structure for export event records
+const ExportEventJson = struct {
+    timestamp: i64,
+    event_type: []const u8 = "access_granted",
+    user_id: u64,
+};
+
 // Use AuditEvent from RLS to ensure consistency and access the new fields
 pub const AuditEvent = rls.AuditLogger.AuditEvent;
 pub const AuditEventType = rls.AuditLogger.AuditEvent.EventType;
@@ -422,7 +452,10 @@ pub const AuditLogger = struct {
                     .exclusive = false,
                 });
 
-                std.debug.print("AUDIT_ROTATED old_file={s} new_file={s}\n", .{ new_path, self.config.file_path });
+                log.info("Audit log rotated", &.{
+                    Attr.string("old_file", new_path),
+                    Attr.string("new_file", self.config.file_path),
+                });
             }
         }
     }
@@ -456,7 +489,10 @@ pub const AuditLogger = struct {
                     files_deleted += 1;
                     bytes_freed += stat.size;
 
-                    std.debug.print("AUDIT_CLEANUP deleted={s} size={d}\n", .{ entry.name, stat.size });
+                    log.info("Audit log cleaned up", &.{
+                        Attr.string("deleted", entry.name),
+                        Attr.int("size", @intCast(stat.size)),
+                    });
                 }
             }
         }
@@ -520,7 +556,10 @@ pub const AuditLogger = struct {
         self.config.rotation_size_mb = rotation_size_mb;
         self.config.retention_days = retention_days;
 
-        std.debug.print("AUDIT_CONFIG rotation_size_mb={d} retention_days={d}\n", .{ rotation_size_mb, retention_days });
+        log.info("Audit config updated", &.{
+            Attr.int("rotation_size_mb", @intCast(rotation_size_mb)),
+            Attr.int("retention_days", @intCast(retention_days)),
+        });
     }
 
     // Platform-specific output formatters moved to audit_formatter.zig
@@ -1488,17 +1527,20 @@ pub const AuditLogger = struct {
         const report_file = try std.fs.cwd().createFile(report_path, .{});
         defer report_file.close();
 
-        // Write JSON report
-        const writer = report_file.writer();
-        try writer.print("{{\n", .{});
-        try writer.print("  \"report_date\": {},\n", .{current_time});
-        try writer.print("  \"start_time\": {},\n", .{start_time});
-        try writer.print("  \"end_time\": {},\n", .{end_time});
-        try writer.print("  \"total_events\": {},\n", .{event_count});
-        try writer.print("  \"violations\": {},\n", .{violation_count});
-        try writer.print("  \"compliant\": {},\n", .{compliant_count});
-        try writer.print("  \"compliance_rate\": {d:.2}\n", .{if (event_count > 0) @as(f64, @floatFromInt(compliant_count)) * 100.0 / @as(f64, @floatFromInt(event_count)) else 100.0});
-        try writer.print("}}\n", .{});
+        // Write JSON report using type-safe encoding
+        const report = ComplianceReportJson{
+            .report_date = current_time,
+            .start_time = start_time,
+            .end_time = end_time,
+            .total_events = event_count,
+            .violations = violation_count,
+            .compliant = compliant_count,
+            .compliance_rate = if (event_count > 0) @as(f64, @floatFromInt(compliant_count)) * 100.0 / @as(f64, @floatFromInt(event_count)) else 100.0,
+        };
+        const json_str = try json_lib.encode(allocator, report, .{});
+        defer allocator.free(json_str);
+        try report_file.writeAll(json_str);
+        try report_file.writeAll("\n");
 
         return .{
             .total_events = event_count,
@@ -1529,17 +1571,18 @@ pub const AuditLogger = struct {
             entry_count += 1;
         }
 
-        // Add additional forensic data
+        // Add additional forensic data using type-safe JSON encoding
         const forensic_file = try std.fs.cwd().createFile("forensic_metadata.json", .{});
         defer forensic_file.close();
 
-        const writer = forensic_file.writer();
-        try writer.print("{{\n", .{});
-        try writer.print("  \"timestamp\": {},\n", .{std.time.milliTimestamp()});
-        try writer.print("  \"system\": \"geode\",\n", .{});
-        try writer.print("  \"version\": \"1.0.0\",\n", .{});
-        try writer.print("  \"audit_enabled\": {}\n", .{self.enabled});
-        try writer.print("}}\n", .{});
+        const metadata = ForensicMetadataJson{
+            .timestamp = std.time.milliTimestamp(),
+            .audit_enabled = self.enabled,
+        };
+        const json_str = try json_lib.encode(allocator, metadata, .{});
+        defer allocator.free(json_str);
+        try forensic_file.writeAll(json_str);
+        try forensic_file.writeAll("\n");
 
         total_size += 256; // Metadata size estimate
         entry_count += 1;
@@ -1607,16 +1650,18 @@ pub const AuditLogger = struct {
 
             try writer.print("</audit_export>\n", .{});
         } else {
-            // JSON format (default)
+            // JSON format (default) - using type-safe encoding
             try writer.print("[\n", .{});
 
             for (0..100) |i| {
                 if (i > 0) try writer.print(",\n", .{});
-                try writer.print("  {{", .{});
-                try writer.print("\"timestamp\": {}, ", .{std.time.milliTimestamp() + @as(i64, @intCast(i))});
-                try writer.print("\"event_type\": \"access_granted\", ", .{});
-                try writer.print("\"user_id\": {}", .{i % 10});
-                try writer.print("}}", .{});
+                const event = ExportEventJson{
+                    .timestamp = std.time.milliTimestamp() + @as(i64, @intCast(i)),
+                    .user_id = i % 10,
+                };
+                const event_json = try json_lib.encode(allocator, event, .{});
+                defer allocator.free(event_json);
+                try writer.print("  {s}", .{event_json});
                 records_exported += 1;
             }
 

@@ -3,8 +3,24 @@ const std = @import("std");
 // CANARY: REQ=REQ-LIB-MIGRATION-MCP-008; FEATURE="External Library Migration"; ASPECT=MCPClient; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
 // GeodeClient - QUIC connection management for MCP server integration
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-045; FEATURE="JSON Library Migration"; ASPECT=MCPClient; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
+const json_lib = @import("json");
+
 // Import quic_transport through the parent module to ensure module resolution
 const quic_transport = @import("mod.zig").quic_transport;
+
+// MCP Client Protocol Message Types
+const ClientRunGqlMessage = struct {
+    type: []const u8 = "RUN_GQL",
+    text: []const u8,
+    params: ?[]const u8 = null,
+};
+
+// For raw params embedding (pre-formatted JSON string)
+const ClientRunGqlWithParams = struct {
+    type: []const u8 = "RUN_GQL",
+    text: []const u8,
+};
 
 pub const GeodeClientError = error{
     ConnectionFailed,
@@ -151,21 +167,39 @@ pub const GeodeClient = struct {
     }
 
     /// Execute a GQL query and return the JSON response
+    /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-046; FEATURE="JSON Library Migration"; ASPECT=ClientQuery; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
     pub fn query(self: *Self, gql: []const u8, params: ?[]const u8) ![]u8 {
         try self.ensureConnected();
 
         const stream = self.stream orelse return GeodeClientError.NotConnected;
 
-        // Escape the query for JSON embedding
-        const escaped_gql = try escapeJsonString(self.allocator, gql);
-        defer self.allocator.free(escaped_gql);
-
-        // Build RUN_GQL message
+        // Build RUN_GQL message using JSON library (handles escaping automatically)
         var msg: []u8 = undefined;
         if (params) |p| {
-            msg = try std.fmt.allocPrint(self.allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\",\"params\":{s}}}\n", .{ escaped_gql, p });
+            // Use streaming encoder for raw JSON params embedding
+            var buf = try std.ArrayList(u8).initCapacity(self.allocator, 256);
+            defer buf.deinit(self.allocator);
+            var encoder = json_lib.streamingEncoder(self.allocator, buf.writer(self.allocator), .{});
+            defer encoder.deinit();
+
+            try encoder.beginObject();
+            try encoder.writeKey("type");
+            try encoder.writeString("RUN_GQL");
+            try encoder.writeKey("text");
+            try encoder.writeString(gql);
+            try encoder.writeKey("params");
+            try encoder.writeRaw(p);
+            try encoder.endObject();
+
+            // Add newline for line protocol
+            try buf.append(self.allocator, '\n');
+            msg = try buf.toOwnedSlice(self.allocator);
         } else {
-            msg = try std.fmt.allocPrint(self.allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_gql});
+            // Use struct encoding for simple case
+            const message = ClientRunGqlMessage{ .text = gql };
+            const json_bytes = try json_lib.encode(self.allocator, message, .{});
+            defer self.allocator.free(json_bytes);
+            msg = try std.fmt.allocPrint(self.allocator, "{s}\n", .{json_bytes});
         }
         defer self.allocator.free(msg);
 
@@ -227,23 +261,20 @@ pub const GeodeClient = struct {
     }
 
     /// Explain a GQL query plan
+    /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-047; FEATURE="JSON Library Migration"; ASPECT=ClientExplain; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
     pub fn explain(self: *Self, gql: []const u8) ![]u8 {
         try self.ensureConnected();
 
         const stream = self.stream orelse return GeodeClientError.NotConnected;
 
-        // Escape the query for JSON embedding
-        const escaped_gql = try escapeJsonString(self.allocator, gql);
-        defer self.allocator.free(escaped_gql);
-
-        // Build RUN_GQL message with EXPLAIN prefix
+        // Build RUN_GQL message with EXPLAIN prefix using JSON library
         const explain_query = try std.fmt.allocPrint(self.allocator, "EXPLAIN {s}", .{gql});
         defer self.allocator.free(explain_query);
 
-        const escaped_explain = try escapeJsonString(self.allocator, explain_query);
-        defer self.allocator.free(escaped_explain);
-
-        const msg = try std.fmt.allocPrint(self.allocator, "{{\"type\":\"RUN_GQL\",\"text\":\"{s}\"}}\n", .{escaped_explain});
+        const message = ClientRunGqlMessage{ .text = explain_query };
+        const json_bytes = try json_lib.encode(self.allocator, message, .{});
+        defer self.allocator.free(json_bytes);
+        const msg = try std.fmt.allocPrint(self.allocator, "{s}\n", .{json_bytes});
         defer self.allocator.free(msg);
 
         stream.writeAll(msg) catch |err| {
@@ -317,59 +348,7 @@ pub const GeodeClient = struct {
     }
 };
 
-/// Escape a string for safe embedding in JSON
-fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var escape_count: usize = 0;
-    for (input) |c| {
-        switch (c) {
-            '"', '\\', '\n', '\r', '\t' => escape_count += 1,
-            else => {},
-        }
-    }
-
-    if (escape_count == 0) {
-        return allocator.dupe(u8, input);
-    }
-
-    const result = try allocator.alloc(u8, input.len + escape_count);
-    var write_idx: usize = 0;
-
-    for (input) |c| {
-        switch (c) {
-            '"' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '"';
-                write_idx += 2;
-            },
-            '\\' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '\\';
-                write_idx += 2;
-            },
-            '\n' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'n';
-                write_idx += 2;
-            },
-            '\r' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'r';
-                write_idx += 2;
-            },
-            '\t' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 't';
-                write_idx += 2;
-            },
-            else => {
-                result[write_idx] = c;
-                write_idx += 1;
-            },
-        }
-    }
-
-    return result;
-}
+// escapeJsonString removed - JSON library handles escaping automatically
 
 // =============================================================================
 // Tests
@@ -402,44 +381,18 @@ test "GeodeClient endpoint parsing" {
     try std.testing.expectEqual(@as(u16, 3141), client2.port);
 }
 
-test "escapeJsonString" {
+test "JSON library handles escaping" {
     const allocator = std.testing.allocator;
 
-    const simple = try escapeJsonString(allocator, "hello");
-    defer allocator.free(simple);
-    try std.testing.expectEqualStrings("hello", simple);
+    // Verify JSON library properly escapes special characters
+    const TestMessage = struct { text: []const u8 };
+    const message = TestMessage{ .text = "say \"hello\"\nworld" };
+    const result = try json_lib.encode(allocator, message, .{});
+    defer allocator.free(result);
 
-    const with_quotes = try escapeJsonString(allocator, "say \"hello\"");
-    defer allocator.free(with_quotes);
-    try std.testing.expectEqualStrings("say \\\"hello\\\"", with_quotes);
-
-    const with_newline = try escapeJsonString(allocator, "line1\nline2");
-    defer allocator.free(with_newline);
-    try std.testing.expectEqualStrings("line1\\nline2", with_newline);
-}
-
-test "escapeJsonString with all escape characters" {
-    const allocator = std.testing.allocator;
-
-    // Test backslash
-    const with_backslash = try escapeJsonString(allocator, "path\\to\\file");
-    defer allocator.free(with_backslash);
-    try std.testing.expectEqualStrings("path\\\\to\\\\file", with_backslash);
-
-    // Test carriage return
-    const with_cr = try escapeJsonString(allocator, "line1\rline2");
-    defer allocator.free(with_cr);
-    try std.testing.expectEqualStrings("line1\\rline2", with_cr);
-
-    // Test tab
-    const with_tab = try escapeJsonString(allocator, "col1\tcol2");
-    defer allocator.free(with_tab);
-    try std.testing.expectEqualStrings("col1\\tcol2", with_tab);
-
-    // Test combined
-    const combined = try escapeJsonString(allocator, "\"hello\"\n\tworld\\");
-    defer allocator.free(combined);
-    try std.testing.expectEqualStrings("\\\"hello\\\"\\n\\tworld\\\\", combined);
+    // Should contain escaped quotes and newline
+    try std.testing.expect(std.mem.indexOf(u8, result, "\\\"hello\\\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\\n") != null);
 }
 
 test "GeodeClient endpoint parsing with IPv6" {
@@ -476,19 +429,15 @@ test "GeodeClient getConfig returns valid JSON" {
     try std.testing.expect(std.mem.indexOf(u8, config, "QUIC+TLS") != null);
 }
 
-test "escapeJsonString empty string" {
+test "JSON library unicode passthrough" {
     const allocator = std.testing.allocator;
 
-    const empty = try escapeJsonString(allocator, "");
-    defer allocator.free(empty);
-    try std.testing.expectEqualStrings("", empty);
-}
+    // Verify JSON library handles unicode correctly
+    const TestMessage = struct { text: []const u8 };
+    const message = TestMessage{ .text = "Hello 世界 🌍" };
+    const result = try json_lib.encode(allocator, message, .{});
+    defer allocator.free(result);
 
-test "escapeJsonString unicode passthrough" {
-    const allocator = std.testing.allocator;
-
-    // Unicode should pass through unchanged (only ASCII control chars are escaped)
-    const unicode = try escapeJsonString(allocator, "Hello 世界 🌍");
-    defer allocator.free(unicode);
-    try std.testing.expectEqualStrings("Hello 世界 🌍", unicode);
+    // Unicode should be present in output
+    try std.testing.expect(std.mem.indexOf(u8, result, "Hello 世界 🌍") != null);
 }

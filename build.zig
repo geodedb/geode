@@ -409,6 +409,8 @@ pub fn build(b: *std.Build) void {
     mcp_cli_mod.addImport("transport/quic", transport_quic_mod);
     // LSP tools access GQL through the main geode module
     mcp_cli_mod.addImport("geode", root_mod);
+    // JSON library for MCP response encoding
+    mcp_cli_mod.addImport("json", json_mod);
     geode_exe.root_module.addImport("geode_mcp", mcp_cli_mod);
 
     // M12: Add storage/stress_test module for CLI
@@ -560,6 +562,7 @@ pub fn build(b: *std.Build) void {
 
     const lib_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize }) });
     lib_unit_tests.root_module.addImport("geode", root_mod);
+    lib_unit_tests.root_module.addImport("json", json_mod);
     lib_unit_tests.root_module.addOptions("build_options", build_opts);
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
@@ -571,10 +574,12 @@ pub fn build(b: *std.Build) void {
 
     const exe_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }) });
     exe_unit_tests.root_module.addImport("geode", root_mod);
+    exe_unit_tests.root_module.addImport("json", json_mod);
     exe_unit_tests.root_module.addOptions("build_options", build_opts);
 
     const gql_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/gql.zig"), .target = target, .optimize = optimize }) });
     gql_unit_tests.root_module.addImport("geode", root_mod);
+    gql_unit_tests.root_module.addImport("json", json_mod);
     gql_unit_tests.root_module.addOptions("build_options", build_opts);
     // Don't add gql module import here to avoid duplicate module ownership
 
@@ -583,27 +588,33 @@ pub fn build(b: *std.Build) void {
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    custom_tests.root_module.addImport("json", json_mod);
 
     // New unit tests for recent implementations
     const math_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_math_functions.zig"), .target = target, .optimize = optimize }) });
     math_func_tests.root_module.addImport("geode", root_mod);
+    math_func_tests.root_module.addImport("json", json_mod);
     const run_math_func_tests = b.addRunArtifact(math_func_tests);
 
     const string_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_string_functions.zig"), .target = target, .optimize = optimize }) });
     string_func_tests.root_module.addImport("geode", root_mod);
+    string_func_tests.root_module.addImport("json", json_mod);
     const run_string_func_tests = b.addRunArtifact(string_func_tests);
 
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("geode", root_mod);
     graph_algo_tests.root_module.addImport("logging", logging_mod);
+    graph_algo_tests.root_module.addImport("json", json_mod);
     const run_graph_algo_tests = b.addRunArtifact(graph_algo_tests);
 
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
     match_call_tests.root_module.addImport("geode", root_mod);
+    match_call_tests.root_module.addImport("json", json_mod);
     const run_match_call_tests = b.addRunArtifact(match_call_tests);
 
     const decimal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_decimal_handling.zig"), .target = target, .optimize = optimize }) });
     decimal_tests.root_module.addImport("geode", root_mod);
+    decimal_tests.root_module.addImport("json", json_mod);
     const run_decimal_tests = b.addRunArtifact(decimal_tests);
 
     // REPL advanced feature coverage (syntax highlighting, fuzzy search, pager, session state)
@@ -616,6 +627,7 @@ pub fn build(b: *std.Build) void {
 
     const integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_integration.zig"), .target = target, .optimize = optimize }) });
     integration_tests.root_module.addImport("geode", root_mod);
+    integration_tests.root_module.addImport("json", json_mod);
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
     // Compile Vulkan shaders to SPIR-V (Phase 2)
@@ -810,8 +822,16 @@ pub fn build(b: *std.Build) void {
     // CLI integration tests
     const cli_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/cli_test.zig"), .target = target, .optimize = optimize }) });
     cli_tests.root_module.addImport("geode", root_mod);
+    cli_tests.root_module.addImport("json", json_mod);
     const run_cli_tests = b.addRunArtifact(cli_tests);
     test_step.dependOn(&run_cli_tests.step);
+
+    // JSON wire protocol compatibility tests (Phase 6 validation)
+    const json_wire_protocol_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/json_wire_protocol_compatibility.zig"), .target = target, .optimize = optimize }) });
+    json_wire_protocol_tests.root_module.addImport("geode", root_mod);
+    json_wire_protocol_tests.root_module.addImport("json", json_mod);
+    const run_json_wire_protocol_tests = b.addRunArtifact(json_wire_protocol_tests);
+    test_step.dependOn(&run_json_wire_protocol_tests.step);
 
     // Config integration tests (YAML, TOML, JSON format support)
     const config_integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_config_integration.zig"), .target = target, .optimize = optimize }) });
@@ -1176,6 +1196,7 @@ pub fn build(b: *std.Build) void {
     const audit_security_mod = b.createModule(.{ .root_source_file = b.path("src/security/audit.zig"), .target = target, .optimize = optimize });
     audit_security_mod.addImport("rls", rls_mod);
     audit_security_mod.addImport("logging", logging_mod);
+    audit_security_mod.addImport("json", json_mod);
 
     const storage_interface_mod = b.createModule(.{ .root_source_file = b.path("src/storage/interface.zig"), .target = target, .optimize = optimize });
 
@@ -1194,6 +1215,7 @@ pub fn build(b: *std.Build) void {
     test_harness_mod.addImport("transport/quic", transport_quic_mod);
     test_harness_mod.addImport("vendor_quic", quic_ext_mod);
     test_harness_mod.addImport("logging", logging_mod);
+    test_harness_mod.addImport("json", json_mod);
 
     // Add interface to page manager module
     storage_page_manager_shared.addImport("interface", storage_interface_mod);

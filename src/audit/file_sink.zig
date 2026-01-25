@@ -3,6 +3,17 @@ const events = @import("events.zig");
 const config = @import("config.zig");
 const time = @import("time.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=FileSink; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// External JSON library for RFC 8259 compliant encoding in audit file output
+const json_lib = @import("json");
+
+/// JSON structure for error log entries
+const ErrorLogJson = struct {
+    ts: []const u8,
+    level: []const u8 = "ERROR",
+    msg: []const u8,
+};
+
 pub const FileSink = struct {
     allocator: std.mem.Allocator,
     config: config.FileSinkConfig,
@@ -61,7 +72,12 @@ pub const FileSink = struct {
         var ts_buf: [64]u8 = undefined;
         const timestamp = self.clock.nowRfc3339(&ts_buf);
 
-        const error_obj = try std.fmt.allocPrint(self.allocator, "{{\"ts\":\"{s}\",\"level\":\"ERROR\",\"msg\":\"{s}\"}}", .{ timestamp, error_msg });
+        // Use type-safe JSON encoding for error log entries
+        const error_entry = ErrorLogJson{
+            .ts = timestamp,
+            .msg = error_msg,
+        };
+        const error_obj = try json_lib.encode(self.allocator, error_entry, .{});
         defer self.allocator.free(error_obj);
 
         self.mutex.lock();

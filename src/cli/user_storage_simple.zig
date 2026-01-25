@@ -1,6 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-060; FEATURE="JSON Library Migration"; ASPECT=UserStorageSimple; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-25
+const json_lib = @import("json");
+
 // CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLIUserManagement"; ASPECT=FileStorage; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth.yml; OWNER=cli; UPDATED=2025-10-26
 // Simple file-based user storage for CLI commands
 // Stores users in a JSON file that the server can also read
@@ -24,6 +27,17 @@ pub const User = struct {
         }
         allocator.free(self.roles);
     }
+};
+
+// JSON struct for unmarshaling - matches User struct for direct parsing
+const JsonUser = struct {
+    username: []const u8,
+    email: []const u8,
+    password_hash: []const u8,
+    salt: []const u8,
+    roles: []const []const u8 = &.{},
+    created_at: i64 = 0,
+    is_active: bool = true,
 };
 
 pub const UserStorage = struct {
@@ -66,53 +80,31 @@ pub const UserStorage = struct {
 
         if (content.len == 0) return self.allocator.alloc(User, 0);
 
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, content, .{});
-        defer parsed.deinit();
+        // Parse JSON using json library unmarshal
+        var json_users = json_lib.unmarshal([]JsonUser, self.allocator, content) catch {
+            // If unmarshal fails, return empty list
+            return self.allocator.alloc(User, 0);
+        };
+        defer json_lib.free([]JsonUser, self.allocator, &json_users);
 
-        if (parsed.value != .array) return error.InvalidFormat;
-
-        const users_array = parsed.value.array.items;
-        var users = try self.allocator.alloc(User, users_array.len);
+        var users = try self.allocator.alloc(User, json_users.len);
         var user_count: usize = 0;
 
-        for (users_array) |user_val| {
-            if (user_val != .object) continue;
-
-            const obj = user_val.object;
-
-            const username = obj.get("username") orelse continue;
-            const email = obj.get("email") orelse continue;
-            const password_hash = obj.get("password_hash") orelse continue;
-            const salt = obj.get("salt") orelse continue;
-            const roles_val = obj.get("roles") orelse continue;
-            const created_at = obj.get("created_at") orelse continue;
-            const is_active_val = obj.get("is_active");
-
-            if (username != .string or email != .string or password_hash != .string or
-                salt != .string or roles_val != .array or created_at != .integer)
-            {
-                continue;
-            }
-
+        for (json_users) |json_user| {
             // Allocate roles
-            var roles = try self.allocator.alloc([]const u8, roles_val.array.items.len);
-            var role_count: usize = 0;
-            for (roles_val.array.items) |role_val| {
-                if (role_val == .string) {
-                    roles[role_count] = try self.allocator.dupe(u8, role_val.string);
-                    role_count += 1;
-                }
+            var roles = try self.allocator.alloc([]const u8, json_user.roles.len);
+            for (json_user.roles, 0..) |role, i| {
+                roles[i] = try self.allocator.dupe(u8, role);
             }
-            roles = roles[0..role_count]; // Trim to actual count
 
             users[user_count] = User{
-                .username = try self.allocator.dupe(u8, username.string),
-                .email = try self.allocator.dupe(u8, email.string),
-                .password_hash = try self.allocator.dupe(u8, password_hash.string),
-                .salt = try self.allocator.dupe(u8, salt.string),
+                .username = try self.allocator.dupe(u8, json_user.username),
+                .email = try self.allocator.dupe(u8, json_user.email),
+                .password_hash = try self.allocator.dupe(u8, json_user.password_hash),
+                .salt = try self.allocator.dupe(u8, json_user.salt),
                 .roles = roles,
-                .created_at = created_at.integer,
-                .is_active = if (is_active_val) |v| if (v == .bool) v.bool else true else true,
+                .created_at = json_user.created_at,
+                .is_active = json_user.is_active,
             };
             user_count += 1;
         }
@@ -131,51 +123,12 @@ pub const UserStorage = struct {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
 
-        // Write JSON directly to file
-        try file.writeAll("[\n");
+        // Encode users to JSON using json library
+        const json_str = try json_lib.encode(self.allocator, users, .{ .pretty = true });
+        defer self.allocator.free(json_str);
 
-        for (users, 0..) |user, i| {
-            if (i > 0) try file.writeAll(",\n");
-
-            try file.writeAll("  {\n");
-            const line1 = try std.fmt.allocPrint(self.allocator, "    \"username\": \"{s}\",\n", .{user.username});
-            defer self.allocator.free(line1);
-            try file.writeAll(line1);
-
-            const line2 = try std.fmt.allocPrint(self.allocator, "    \"email\": \"{s}\",\n", .{user.email});
-            defer self.allocator.free(line2);
-            try file.writeAll(line2);
-
-            const line3 = try std.fmt.allocPrint(self.allocator, "    \"password_hash\": \"{s}\",\n", .{user.password_hash});
-            defer self.allocator.free(line3);
-            try file.writeAll(line3);
-
-            const line4 = try std.fmt.allocPrint(self.allocator, "    \"salt\": \"{s}\",\n", .{user.salt});
-            defer self.allocator.free(line4);
-            try file.writeAll(line4);
-
-            try file.writeAll("    \"roles\": [");
-
-            for (user.roles, 0..) |role, j| {
-                if (j > 0) try file.writeAll(", ");
-                const role_str = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{role});
-                defer self.allocator.free(role_str);
-                try file.writeAll(role_str);
-            }
-
-            try file.writeAll("],\n");
-            const line5 = try std.fmt.allocPrint(self.allocator, "    \"created_at\": {d},\n", .{user.created_at});
-            defer self.allocator.free(line5);
-            try file.writeAll(line5);
-
-            const line6 = try std.fmt.allocPrint(self.allocator, "    \"is_active\": {}\n", .{user.is_active});
-            defer self.allocator.free(line6);
-            try file.writeAll(line6);
-
-            try file.writeAll("  }");
-        }
-
-        try file.writeAll("\n]\n");
+        try file.writeAll(json_str);
+        try file.writeAll("\n");
 
         // Atomic rename
         try std.fs.cwd().rename(tmp_path, file_path);

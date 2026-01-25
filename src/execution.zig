@@ -49,6 +49,9 @@ const graph_storage_manager = @import("server/graph_storage_manager.zig");
 // CANARY: REQ=REQ-TXN-UNDO-004; FEATURE="TransactionUndoLog"; ASPECT=ExecutionImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("txn_undo_log.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-022; FEATURE="JSON Library Migration"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
+const json_lib = @import("json");
+
 // Re-export catalog functionality for backward compatibility
 // Using direct aliases instead of usingnamespace for Zig 0.15.1 compatibility
 pub const IndexInfo = catalog_mod.IndexInfo;
@@ -447,47 +450,57 @@ pub const ExecutionResult = struct {
         return toJsonWithFlags(self, allocator, &.{});
     }
 
+    // CANARY: REQ=REQ-LIB-MIGRATION-JSON-023; FEATURE="JSON Library Migration"; ASPECT=ResultSerialization; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
     pub fn toJsonWithFlags(self: ExecutionResult, allocator: std.mem.Allocator, external_flags: []const []const u8) ![]u8 {
-        var result = try std.ArrayList(u8).initCapacity(allocator, 0);
-        const writer = result.writer(allocator);
+        var result = try std.ArrayList(u8).initCapacity(allocator, 256);
+        errdefer result.deinit(allocator);
 
-        // Include status_class for successful execution
-        try writer.writeAll("{\"status_class\":\"00000\",\"columns\":[");
-        for (self.columns, 0..) |col, i| {
-            if (i > 0) try writer.writeAll(",");
-            try writer.writeByte('"');
-            try writer.writeAll(col);
-            try writer.writeByte('"');
+        var encoder = json_lib.streamingEncoder(allocator, result.writer(allocator), .{});
+        defer encoder.deinit();
+
+        // Build JSON object: {"status_class":"00000","columns":[...],"rows":[...],"flagger_findings":[...]}
+        try encoder.beginObject();
+
+        // status_class field
+        try encoder.writeKey("status_class");
+        try encoder.writeString("00000");
+
+        // columns array
+        try encoder.writeKey("columns");
+        try encoder.beginArray();
+        for (self.columns) |col| {
+            try encoder.writeString(col);
         }
-        try writer.writeAll("],\"rows\":[");
+        try encoder.endArray();
 
-        for (self.rows, 0..) |row, i| {
-            if (i > 0) try writer.writeAll(",");
-            try writer.writeByte('[');
-            for (row, 0..) |val, j| {
-                if (j > 0) try writer.writeAll(",");
-                try writeValue(allocator, writer, val);
+        // rows array - each row is an array of values
+        try encoder.writeKey("rows");
+        try encoder.beginArray();
+        for (self.rows) |row| {
+            try encoder.beginArray();
+            for (row) |val| {
+                // Use writeValue to get JSON for this value, then write it raw
+                var val_buf = try std.ArrayList(u8).initCapacity(allocator, 64);
+                defer val_buf.deinit(allocator);
+                try writeValue(allocator, val_buf.writer(allocator), val);
+                try encoder.writeRaw(val_buf.items);
             }
-            try writer.writeByte(']');
+            try encoder.endArray();
         }
-        // Add flagger_findings (combine internal and external flags)
-        try writer.writeAll("],\"flagger_findings\":[");
-        var flag_idx: usize = 0;
+        try encoder.endArray();
+
+        // flagger_findings array - combine internal and external flags
+        try encoder.writeKey("flagger_findings");
+        try encoder.beginArray();
         for (self.flags.items) |flag| {
-            if (flag_idx > 0) try writer.writeAll(",");
-            try writer.writeByte('"');
-            try writer.writeAll(flag);
-            try writer.writeByte('"');
-            flag_idx += 1;
+            try encoder.writeString(flag);
         }
         for (external_flags) |flag| {
-            if (flag_idx > 0) try writer.writeAll(",");
-            try writer.writeByte('"');
-            try writer.writeAll(flag);
-            try writer.writeByte('"');
-            flag_idx += 1;
+            try encoder.writeString(flag);
         }
-        try writer.writeAll("]}");
+        try encoder.endArray();
+
+        try encoder.endObject();
 
         return result.toOwnedSlice(allocator);
     }
