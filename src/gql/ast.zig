@@ -54,11 +54,19 @@ pub const Statement = union(enum) {
     Values: ValuesStatement,
 };
 
+/// UNWIND clause: transforms a list into multiple rows
+/// UNWIND list_expr AS variable
+pub const UnwindClause = struct {
+    list_expr: Expr,
+    variable: []const u8,
+};
+
 pub const Query = struct {
     let_bindings: []LetBinding = &.{}, // LET $var = expr bindings (before MATCH)
     inline_let_bindings: []LetBinding = &.{}, // LET var = expr bindings (after MATCH)
     optional_match: bool,
     match: GraphPattern,
+    unwind_clause: ?UnwindClause = null, // UNWIND list AS var
     create_pattern: ?GraphPattern = null, // Support CREATE in queries
     where_clause: ?Expr,
     filter_clause: ?Expr = null, // FILTER clause (ISO/IEC 39075:2024)

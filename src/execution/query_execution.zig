@@ -1666,6 +1666,87 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         return result;
     }
 
+    // CANARY: REQ=REQ-GQL-UNWIND-001; FEATURE="UNWIND Clause"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2026-01-25
+    // Handle UNWIND clause: transforms a list into multiple rows
+    // UNWIND [1, 2, 3] AS x RETURN x  =>  rows with x=1, x=2, x=3
+    if (q.unwind_clause) |unwind| {
+        // Evaluate the list expression in an empty environment
+        const empty_env = Env{
+            .names = &.{},
+            .values = &.{},
+            .param_names = param_names.items,
+            .param_values = param_values.items,
+            .allocator = allocator,
+        };
+
+        const list_value = try eval.evalExpr(allocator, unwind.list_expr, empty_env);
+
+        // Extract list elements
+        const elements: []const Value = switch (list_value) {
+            .List => |l| l,
+            else => return error.UnwindRequiresList,
+        };
+
+        // Create result rows - one row per list element
+        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, elements.len);
+        defer final_rows.deinit(allocator);
+
+        for (elements) |elem| {
+            // Create environment with the unwound variable
+            const unwind_names = [_][]const u8{unwind.variable};
+            const unwind_values = [_]Value{elem};
+            const unwind_env = Env{
+                .names = &unwind_names,
+                .values = &unwind_values,
+                .param_names = param_names.items,
+                .param_values = param_values.items,
+                .allocator = allocator,
+            };
+
+            // Evaluate RETURN items for this row
+            var return_row = try allocator.alloc(Value, q.ret.items.len);
+            for (q.ret.items, 0..) |item, i| {
+                return_row[i] = try eval.evalExpr(allocator, item.expr, unwind_env);
+            }
+            try final_rows.append(allocator, return_row);
+        }
+
+        // Get column names from RETURN clause
+        var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
+        defer col_name_strings.deinit(allocator);
+
+        for (q.ret.items) |item| {
+            const col_name = item.alias orelse switch (item.expr) {
+                .Ident => |ident| ident.orig,
+                else => "column",
+            };
+            try col_name_strings.append(allocator, col_name);
+        }
+
+        const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
+
+        var result = ExecutionResult{
+            .columns = col_result.columns,
+            .rows = try final_rows.toOwnedSlice(allocator),
+            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .column_buffer = col_result.buffer,
+        };
+
+        // Apply ORDER BY if present
+        if (q.order_by) |order| {
+            try sortRows(allocator, &result, order);
+        }
+
+        // Apply LIMIT if present
+        if (q.limit) |lim| {
+            if (result.rows.len > lim) {
+                result.rows = result.rows[0..lim];
+            }
+        }
+
+        return result;
+    }
+
     // Otherwise just execute the return clause
     var result = try executeReturnClauseWithParams(allocator, q.ret, context, param_names.items, param_values.items);
 

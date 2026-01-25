@@ -17,7 +17,10 @@ cli:
     format: "json"
 
 setup:
-  - "query \"CREATE (alice:Person {name: 'Alice', age: 30, city: 'New York'}), (bob:Person {name: 'Bob', age: 25, city: 'San Francisco'}), (carol:Person {name: 'Carol', age: 35, city: 'London'}), (company:Company {name: 'TechCorp', founded: 2010, employees: 100}), (product:Product {name: 'Database', version: '1.0', price: 999.99}), (alice)-[:WORKS_FOR {since: 2020, role: 'Engineer'}]->(company), (bob)-[:WORKS_FOR {since: 2021, role: 'Designer'}]->(company), (carol)-[:MANAGES {since: 2019}]->(alice), (alice)-[:DEVELOPED {start_date: '2022-01-01'}]->(product), (company)-[:OWNS {acquired: 2022}]->(product)\""
+  - args: ["query", "-"]
+    stdin: "CREATE (alice:Person {name: 'Alice', age: 30, city: 'New York'}), (bob:Person {name: 'Bob', age: 25, city: 'San Francisco'}), (carol:Person {name: 'Carol', age: 35, city: 'London'}), (company:Company {name: 'TechCorp', founded: 2010, employees: 100}), (product:Product {name: 'Database', version: '1.0', price: 999.99}), (alice)-[:WORKS_FOR {since: 2020, role: 'Engineer'}]->(company), (bob)-[:WORKS_FOR {since: 2021, role: 'Designer'}]->(company), (carol)-[:MANAGES {since: 2019}]->(alice), (alice)-[:DEVELOPED {start_date: '2022-01-01'}]->(product), (company)-[:OWNS {acquired: 2022}]->(product)"
+    expect:
+      exit_code: 0
 
 tests:
   # ===============================

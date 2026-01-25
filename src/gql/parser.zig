@@ -1733,6 +1733,19 @@ pub const Parser = struct {
             // Continue parsing - SELECT acts like WITH, making variables available to RETURN
         }
 
+        // Check for UNWIND clause
+        // UNWIND list_expr AS variable
+        var unwind_clause: ?ast.UnwindClause = null;
+        if (self.cur.kind == .UNWIND) {
+            self.advance();
+            const list_expr = try self.parseOrExpr();
+            _ = try self.expect(.AS);
+            if (self.cur.kind != .identifier) return self.unexpected("expected identifier after UNWIND ... AS");
+            const var_name = self.cur.lexeme;
+            self.advance();
+            unwind_clause = .{ .list_expr = list_expr, .variable = var_name };
+        }
+
         // Check for CALL { subquery } at the beginning
         var initial_call_subquery: ?*ast.Query = null;
         if (self.cur.kind == .CALL) {
@@ -2454,6 +2467,7 @@ pub const Parser = struct {
             .call_clause = call_clause,
             .next_query = next_query_ptr, // Query chaining support
             .initial_call_subquery = initial_call_subquery,
+            .unwind_clause = unwind_clause,
         };
     }
     fn isValidOrdinal(self: *Parser, n: i64, items_len: usize) bool {
