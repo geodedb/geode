@@ -1,6 +1,11 @@
 const std = @import("std");
 const cdc = @import("core.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CDC; STATUS=IMPL; OWNER=cdc; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("cdc");
+const Attr = logging.Attr;
+
 /// Webhook sink configuration
 pub const WebhookConfig = struct {
     endpoint: []const u8,
@@ -372,7 +377,9 @@ const HttpClient = struct {
     ) !HttpResponse {
         // Parse the URL
         const uri = std.Uri.parse(url) catch {
-            std.log.err("CDC webhook: Invalid URL: {s}", .{url});
+            log.err("CDC webhook: Invalid URL", &.{
+                Attr.string("url", url),
+            });
             return HttpResponse{ .status = 400, .body = "Invalid URL" };
         };
 
@@ -402,7 +409,10 @@ const HttpClient = struct {
 
         // Open request
         var request_obj = client.open(http_method, uri, extra_headers, .{}) catch |err| {
-            std.log.err("CDC webhook: Failed to open connection to {s}: {any}", .{ url, err });
+            log.err("CDC webhook: Failed to open connection", &.{
+                Attr.string("url", url),
+                Attr.err("error", err),
+            });
             return HttpResponse{ .status = 503, .body = "Connection failed" };
         };
         defer request_obj.deinit();
@@ -410,26 +420,36 @@ const HttpClient = struct {
         // Write body
         if (body.len > 0) {
             request_obj.write(body) catch |err| {
-                std.log.err("CDC webhook: Failed to write body: {any}", .{err});
+                log.err("CDC webhook: Failed to write body", &.{
+                    Attr.err("error", err),
+                });
                 return HttpResponse{ .status = 500, .body = "Write failed" };
             };
         }
 
         // Finish and read response
         request_obj.finish() catch |err| {
-            std.log.err("CDC webhook: Failed to finish request: {any}", .{err});
+            log.err("CDC webhook: Failed to finish request", &.{
+                Attr.err("error", err),
+            });
             return HttpResponse{ .status = 500, .body = "Request failed" };
         };
 
         // Wait for response
         request_obj.wait() catch |err| {
-            std.log.err("CDC webhook: Failed to get response: {any}", .{err});
+            log.err("CDC webhook: Failed to get response", &.{
+                Attr.err("error", err),
+            });
             return HttpResponse{ .status = 504, .body = "Timeout" };
         };
 
         const status = @intFromEnum(request_obj.response.status);
 
-        std.log.debug("CDC webhook: {s} {s} -> {d}", .{ @tagName(method), url, status });
+        log.debug("CDC webhook request completed", &.{
+            Attr.string("method", @tagName(method)),
+            Attr.string("url", url),
+            Attr.int("status", status),
+        });
 
         return HttpResponse{
             .status = status,

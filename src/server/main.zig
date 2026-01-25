@@ -22,6 +22,10 @@ const cert_gen = @import("../tools/cert_gen.zig");
 
 // Import real logger for proper log level handling
 const logger = @import("../log/logger.zig");
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-010; FEATURE="Structured Logging"; ASPECT=ServerMain; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("server");
+const Attr = logging.Attr;
 const audit = @import("../security/audit.zig");
 // CANARY: REQ=REQ-PROMETHEUS-WIRE-003; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerImport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
 // GAP-0166: Import metrics server for Prometheus endpoint
@@ -286,7 +290,7 @@ pub fn main() !void {
     if (log_level_arg) |lla| {
         logger.setLevel(logger.parseLevel(lla));
     }
-    std.log.info("server.start", .{.{ .key = "level", .value = log_level_arg orelse "info" }});
+    log.info("server.start", &.{Attr.string("level", log_level_arg orelse "info")});
 
     if (config.match_max_results_override) |mmr| g_match_max_results_override = mmr;
     if (config.match_max_frontier_override) |mfr| g_match_max_frontier_override = mfr;
@@ -451,10 +455,10 @@ pub fn main() !void {
             var sinks_arr = [_]@import("cdc_enhanced").CDCSink{.memory};
             const cfg = @import("cdc_enhanced").CDCConfig{ .enabled = true, .sinks = sinks_arr[0..] };
             cdc_engine_storage = @import("cdc_enhanced").CDCEngine.init(gpa, cfg) catch blk: {
-                std.log.err("Failed to init CDC engine", .{});
+                log.err("Failed to init CDC engine", &.{});
                 break :blk undefined;
             };
-            cdc_engine_storage.start() catch std.log.err("CDC engine start failed", .{});
+            cdc_engine_storage.start() catch log.err("CDC engine start failed", &.{});
             state.cdc_engine = &cdc_engine_storage;
             cdc_inited = true;
         }
@@ -583,7 +587,7 @@ pub fn main() !void {
             if (catalog_inited) {
                 catalog.saveGraphMetadata(@intCast(gg.nodes.count()), @intCast(gg.edges.items.len), 0, // max_node_id - would need to calculate
                     if (gg.edges.items.len > 0) gg.edges.items.len - 1 else 0) catch |err| {
-                    std.log.warn("Failed to save graph metadata to catalog: {}", .{err});
+                    log.warn("Failed to save graph metadata to catalog", &.{Attr.string("error", @errorName(err))});
                 };
             }
         }

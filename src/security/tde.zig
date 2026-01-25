@@ -3,6 +3,9 @@ const crypto = std.crypto;
 const flags_mod = @import("../util/feature_flags.zig");
 const key_manager = @import("tde_key_manager.zig");
 const nonce_gen = @import("tde_nonce_gen.zig");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // Transparent Data Encryption (TDE) minimal AES-256-GCM implementation.
 // Runtime gated by GEODE_ENABLE_TDE or test override via enableForTests().
@@ -369,7 +372,9 @@ pub fn configureKeyProvider(allocator: std.mem.Allocator, provider: []const u8) 
 
     // Wrap a test key
     const wrapped = encrypt(allocator, &test_key, test_context) catch |err| {
-        std.log.err("KMS connection test failed: wrap operation error: {}", .{err});
+        log.err("KMS connection test failed: wrap operation error", &.{
+            Attr.string("error", @errorName(err)),
+        });
         allocator.free(provider_type);
         return error.KmsConnectionFailed;
     };
@@ -377,7 +382,9 @@ pub fn configureKeyProvider(allocator: std.mem.Allocator, provider: []const u8) 
 
     // Unwrap the test key and verify it matches
     const unwrapped = decrypt(allocator, wrapped, test_context) catch |err| {
-        std.log.err("KMS connection test failed: unwrap operation error: {}", .{err});
+        log.err("KMS connection test failed: unwrap operation error", &.{
+            Attr.string("error", @errorName(err)),
+        });
         allocator.free(provider_type);
         return error.KmsConnectionFailed;
     };
@@ -385,7 +392,7 @@ pub fn configureKeyProvider(allocator: std.mem.Allocator, provider: []const u8) 
 
     // Verify cryptographic round-trip integrity
     if (!std.mem.eql(u8, &test_key, unwrapped)) {
-        std.log.err("KMS connection test failed: data integrity check failed", .{});
+        log.err("KMS connection test failed: data integrity check failed", &.{});
         allocator.free(provider_type);
         return error.KmsIntegrityCheckFailed;
     }
@@ -394,9 +401,9 @@ pub fn configureKeyProvider(allocator: std.mem.Allocator, provider: []const u8) 
     connection_tested = true;
     const latency_ms: u32 = @intCast(std.time.milliTimestamp() - start);
 
-    std.log.info("KMS connection test passed: provider={s} latency={}ms", .{
-        provider_type,
-        latency_ms,
+    log.info("KMS connection test passed", &.{
+        Attr.string("provider", provider_type),
+        Attr.int("latency_ms", @intCast(latency_ms)),
     });
 
     return .{
@@ -1222,11 +1229,12 @@ pub fn testPrivilegedUnwrap(allocator: std.mem.Allocator) !struct {
     }
 
     // GAP-0213 FIX: Log audit event for privileged operation
-    // Using std.log.info for audit trail (compatible across all modules)
-    std.log.info("TDE_AUDIT: user_id={} operation=key_unwrap permission_check={s} unwrap_result={s}", .{
-        test_user_id,
-        if (access_granted) "GRANTED" else "DENIED",
-        if (unwrap_ok) "SUCCESS" else "FAILED",
+    // Using structured logging for audit trail (compatible across all modules)
+    log.info("TDE audit: privileged key unwrap operation", &.{
+        Attr.int("user_id", @intCast(test_user_id)),
+        Attr.string("operation", "key_unwrap"),
+        Attr.string("permission_check", if (access_granted) "GRANTED" else "DENIED"),
+        Attr.string("unwrap_result", if (unwrap_ok) "SUCCESS" else "FAILED"),
     });
     const audit_logged = true;
 

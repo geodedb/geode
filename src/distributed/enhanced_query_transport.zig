@@ -11,7 +11,9 @@ const query_coordinator = @import("query_coordinator.zig");
 const raft_consensus = @import("raft_consensus.zig");
 const txn_coordinator = @import("txn_coordinator.zig");
 
-const log = std.log.scoped(.enhanced_query_transport);
+const logging = @import("logging");
+const log = logging.scoped("enhanced_query_transport");
+const Attr = logging.Attr;
 
 /// Enhanced query message types for distributed execution
 pub const QueryMessageType = enum(u8) {
@@ -158,7 +160,10 @@ pub const EnhancedQueryTransport = struct {
         const query_id = self.generateQueryId();
         _ = std.time.milliTimestamp(); // Query start time for logging
 
-        log.info("Executing distributed query {} across {} shards", .{ query_id, target_shards.len });
+        log.info("Executing distributed query across shards", &.{
+            Attr.uint("query_id", query_id),
+            Attr.uint("shard_count", target_shards.len),
+        });
 
         // Create query execution plan
         const execution_plan = try self.createExecutionPlan(query_text, parameters, target_shards);
@@ -210,7 +215,10 @@ pub const EnhancedQueryTransport = struct {
 
     /// Execute query fragments across shards
     fn executeQueryFragments(self: *EnhancedQueryTransport, query_id: u64, plan: *const ExecutionPlan) !void {
-        log.info("Executing {} fragments for query {}", .{ plan.fragments.len, query_id });
+        log.info("Executing fragments for query", &.{
+            Attr.uint("fragment_count", plan.fragments.len),
+            Attr.uint("query_id", query_id),
+        });
 
         // Send fragments to shards in parallel
         for (plan.fragments) |fragment| {
@@ -247,7 +255,11 @@ pub const EnhancedQueryTransport = struct {
         // Send via network transport with retry logic
         try self.sendWithRetry(shard.node_id, cluster_msg);
 
-        log.debug("Sent fragment {} to shard {} (node {})", .{ fragment.fragment_id, fragment.shard_id, shard.node_id });
+        log.debug("Sent fragment to shard", &.{
+            Attr.uint("fragment_id", fragment.fragment_id),
+            Attr.uint("shard_id", fragment.shard_id),
+            Attr.uint("node_id", @as(u64, shard.node_id)),
+        });
     }
 
     /// Send message with retry logic and error handling
@@ -267,7 +279,10 @@ pub const EnhancedQueryTransport = struct {
                     continue;
                 }
 
-                log.err("Failed to send message to node {} after {} attempts: {}", .{ node_id, max_attempts, err });
+                log.err("Failed to send message to node after retries", &.{
+                    Attr.uint("node_id", @as(u64, node_id)),
+                    Attr.uint("max_attempts", @as(u64, max_attempts)),
+                });
                 return err;
             };
 
@@ -281,7 +296,9 @@ pub const EnhancedQueryTransport = struct {
     /// Handle incoming query results from shards
     pub fn handleQueryResult(self: *EnhancedQueryTransport, result: QueryResult) !void {
         const query_tracker = self.getQueryTracker(result.query_id) orelse {
-            log.warn("Received result for unknown query {}", .{result.query_id});
+            log.warn("Received result for unknown query", &.{
+                Attr.uint("query_id", result.query_id),
+            });
             return;
         };
 
@@ -296,14 +313,21 @@ pub const EnhancedQueryTransport = struct {
         // Update shard utilization statistics
         try self.updateShardUtilization(result.shard_id, result.execution_time_ms);
 
-        log.debug("Processed result for query {} fragment {} from shard {}", .{ result.query_id, result.fragment_id, result.shard_id });
+        log.debug("Processed result for query fragment from shard", &.{
+            Attr.uint("query_id", result.query_id),
+            Attr.uint("fragment_id", result.fragment_id),
+            Attr.uint("shard_id", result.shard_id),
+        });
     }
 
     /// Finalize distributed query by merging results
     fn finalizeDistributedQuery(self: *EnhancedQueryTransport, query_id: u64) !void {
         const query_tracker = self.getQueryTracker(query_id) orelse return;
 
-        log.info("Finalizing distributed query {} with {} fragments", .{ query_id, query_tracker.fragment_results.count() });
+        log.info("Finalizing distributed query", &.{
+            Attr.uint("query_id", query_id),
+            Attr.uint("fragment_count", query_tracker.fragment_results.count()),
+        });
 
         // Collect all fragment results
         var results = std.ArrayList(QueryResult).init(self.allocator);
@@ -397,7 +421,12 @@ pub const EnhancedQueryTransport = struct {
             .error_rate = 0.0,
         });
 
-        log.info("Registered shard {} on node {} at {}:{}", .{ shard.shard_id, shard.node_id, shard.endpoint, shard.port });
+        log.info("Registered shard on node", &.{
+            Attr.uint("shard_id", shard.shard_id),
+            Attr.uint("node_id", @as(u64, shard.node_id)),
+            Attr.string("endpoint", shard.endpoint),
+            Attr.uint("port", @as(u64, shard.port)),
+        });
     }
 
     /// Get transport statistics
@@ -547,7 +576,10 @@ pub const EnhancedQueryTransport = struct {
         // Store in active trackers map
         try self.active_trackers.put(query_id, tracker);
 
-        log.debug("Tracking query {d} with {d} fragments", .{ query_id, plan.fragments.len });
+        log.debug("Tracking query with fragments", &.{
+            Attr.uint("query_id", query_id),
+            Attr.uint("fragment_count", plan.fragments.len),
+        });
     }
 
     /// Get the tracker for an active query
@@ -567,7 +599,9 @@ pub const EnhancedQueryTransport = struct {
             tracker.fragment_results.deinit();
             // Deallocate tracker
             self.allocator.destroy(tracker);
-            log.debug("Removed tracker for query {d}", .{query_id});
+            log.debug("Removed tracker for query", &.{
+                Attr.uint("query_id", query_id),
+            });
         }
     }
 
@@ -875,61 +909,61 @@ fn handleNetworkMessage(transport: *NetworkTransport, message: *const ClusterMes
 fn handleExecuteFragment(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling execute fragment message", .{});
+    log.debug("Handling execute fragment message", &.{});
 }
 
 fn handleFragmentResult(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling fragment result message", .{});
+    log.debug("Handling fragment result message", &.{});
 }
 
 fn handleQueryCancel(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling query cancel message", .{});
+    log.debug("Handling query cancel message", &.{});
 }
 
 fn handleShardHeartbeat(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling shard heartbeat message", .{});
+    log.debug("Handling shard heartbeat message", &.{});
 }
 
 fn handleShardRegistration(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling shard registration message", .{});
+    log.debug("Handling shard registration message", &.{});
 }
 
 fn handleQueryPlanRequest(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling query plan request message", .{});
+    log.debug("Handling query plan request message", &.{});
 }
 
 fn handleQueryPlanResponse(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling query plan response message", .{});
+    log.debug("Handling query plan response message", &.{});
 }
 
 fn handleCrossShardJoin(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling cross-shard join message", .{});
+    log.debug("Handling cross-shard join message", &.{});
 }
 
 fn handleAggregatePartial(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling aggregate partial message", .{});
+    log.debug("Handling aggregate partial message", &.{});
 }
 
 fn handleCoordinatorMerge(transport: *EnhancedQueryTransport, message: *const QueryMessage) void {
     _ = transport;
     _ = message;
-    log.debug("Handling coordinator merge message", .{});
+    log.debug("Handling coordinator merge message", &.{});
 }
 
 // Unit tests for fragment serialization

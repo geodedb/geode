@@ -1,4 +1,7 @@
 const std = @import("std");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // Key Provider abstraction (skeleton) enabling pluggable key sources (static env, future KMS/HSM).
 // CANARY: REQ=REQ-GQL-TDE-003; FEATURE="Key provider abstraction"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_003_KeyProviderStatic; OWNER=security; UPDATED=2026-01-15
@@ -51,7 +54,9 @@ fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
     var i: usize = 0;
     while (i < 32) : (i += 1) {
         master[i] = std.fmt.parseInt(u8, hex[i * 2 .. i * 2 + 2], 16) catch {
-            std.log.err("Invalid hex encoding in GEODE_DISK_KEY_HEX at position {d}", .{i * 2});
+            log.err("Invalid hex encoding in GEODE_DISK_KEY_HEX", &.{
+                Attr.int("position", @intCast(i * 2)),
+            });
             return error.InvalidKeyHex;
         };
     }

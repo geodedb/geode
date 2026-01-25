@@ -2,7 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const txn_coordinator = @import("txn_coordinator.zig");
 
-const log = std.log.scoped(.raft);
+const logging = @import("logging");
+const log = logging.scoped("raft");
+const Attr = logging.Attr;
 
 // Type aliases
 pub const TxnCoordinator = txn_coordinator.TxnCoordinator;
@@ -342,8 +344,10 @@ pub const PersistentStorage = struct {
             _ = res;
             const line = std.mem.trim(u8, line_buf.items, " \r\n\t");
             if (line.len == 0) continue;
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch |err| {
-                log.warn("Skipping invalid log line: {s} err={}", .{ line, err });
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch {
+                log.warn("Skipping invalid log line", &.{
+                    Attr.string("line", line),
+                });
                 continue;
             };
             defer parsed.deinit();
@@ -800,13 +804,17 @@ pub const RaftNode = struct {
         switch (self.state) {
             .follower => {
                 if (now > self.election_timer) {
-                    log.info("Election timeout, starting election (node {})", .{self.id});
+                    log.info("Election timeout, starting election", &.{
+                        Attr.uint("node_id", self.id),
+                    });
                     try self.startElection();
                 }
             },
             .candidate => {
                 if (now > self.election_timer) {
-                    log.info("Election timeout in candidate state, restarting election (node {})", .{self.id});
+                    log.info("Election timeout in candidate state, restarting election", &.{
+                        Attr.uint("node_id", self.id),
+                    });
                     try self.startElection();
                 }
             },
@@ -822,7 +830,9 @@ pub const RaftNode = struct {
                     if (peer.id == self.id) continue;
                     if (now - peer.last_contact > @as(i64, @intCast(self.election_timeout_ms * 2))) {
                         if (peer.alive) {
-                            log.warn("Peer {} appears to be dead", .{peer.id});
+                            log.warn("Peer appears to be dead", &.{
+                                Attr.uint("peer_id", peer.id),
+                            });
                             peer.alive = false;
                         }
                     }
@@ -859,7 +869,11 @@ pub const RaftNode = struct {
             try storage.saveVotedFor(self.voted_for);
         }
 
-        log.info("Node {} starting election for term {} (round {})", .{ self.id, self.current_term, self.election_round });
+        log.info("Node starting election", &.{
+            Attr.uint("node_id", self.id),
+            Attr.uint("term", self.current_term),
+            Attr.uint("round", self.election_round),
+        });
 
         self.stats.elections_called += 1;
 
@@ -891,7 +905,7 @@ pub const RaftNode = struct {
         // Check if we already have majority (single node cluster)
         const alive_peers = self.countAlivePeers();
         if (alive_peers == 1) {
-            log.info("Single node cluster, becoming leader immediately", .{});
+            log.info("Single node cluster, becoming leader immediately", &.{});
             try self.becomeLeader();
         }
     }
@@ -905,7 +919,10 @@ pub const RaftNode = struct {
     }
 
     fn becomeLeader(self: *RaftNode) !void {
-        log.info("Node {} became leader for term {}", .{ self.id, self.current_term });
+        log.info("Node became leader", &.{
+            Attr.uint("node_id", self.id),
+            Attr.uint("term", self.current_term),
+        });
 
         self.state = .leader;
         self.stats.elections_won += 1;
@@ -1010,12 +1027,12 @@ pub const RaftNode = struct {
             reason = "already voted";
         }
 
-        log.debug("Node {} vote request from {} term {} - granted: {} ({s})", .{
-            self.id,
-            from,
-            rv.term,
-            vote_granted,
-            reason,
+        log.debug("Vote request processed", &.{
+            Attr.uint("node_id", self.id),
+            Attr.uint("from", from),
+            Attr.uint("term", rv.term),
+            Attr.boolean("vote_granted", vote_granted),
+            Attr.string("reason", reason),
         });
 
         const response = Message{
@@ -1061,10 +1078,10 @@ pub const RaftNode = struct {
             const alive_peers = self.countAlivePeers();
             const majority = (alive_peers / 2) + 1;
 
-            log.debug("Node {} has {} votes out of {} needed for majority", .{
-                self.id,
-                votes,
-                majority,
+            log.debug("Vote count for majority", &.{
+                Attr.uint("node_id", self.id),
+                Attr.uint("votes", votes),
+                Attr.uint("majority_needed", majority),
             });
 
             if (votes >= majority) {
@@ -1388,7 +1405,9 @@ pub const RaftNode = struct {
             }
 
             self.stats.entries_applied += 1;
-            log.info("Applied entry with index {}", .{self.last_applied});
+            log.info("Applied entry", &.{
+                Attr.uint("index", self.last_applied),
+            });
         }
     }
 
@@ -1414,8 +1433,10 @@ pub const RaftNode = struct {
         const line = try encodeRaftFrame(self.allocator, self.id, self.current_term, msg);
         defer self.allocator.free(line);
         if (self.transport) |transport| {
-            transport.send(peer, line) catch |err| {
-                log.warn("Failed to send raft frame to peer {}: {}", .{ peer.id, err });
+            transport.send(peer, line) catch {
+                log.warn("Failed to send raft frame to peer", &.{
+                    Attr.uint("peer_id", peer.id),
+                });
             };
         } else if (peer.rpc_client) |client| {
             // Wrap client to send newline-delimited frame

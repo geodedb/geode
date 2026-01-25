@@ -1,6 +1,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Streaming; STATUS=IMPL; OWNER=streaming; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("streaming");
+const Attr = logging.Attr;
+
 pub const ChangeType = enum {
     insert,
     update,
@@ -265,12 +270,16 @@ pub const CDCEngine = struct {
         while (self.is_running.load(.acquire)) {
             // Process events
             self.processEvents() catch |err| {
-                std.log.err("CDC worker error: {}", .{err});
+                log.err("CDC worker error", &.{
+                    Attr.err("error", err),
+                });
             };
 
             // Clean up old events
             self.cleanupOldEvents() catch |err| {
-                std.log.err("CDC cleanup error: {}", .{err});
+                log.err("CDC cleanup error", &.{
+                    Attr.err("error", err),
+                });
             };
 
             std.Thread.sleep(100 * std.time.ns_per_ms);
@@ -332,16 +341,25 @@ pub const CDCEngine = struct {
 
         // Attempt TCP connection to Kafka broker
         const stream = std.net.tcpConnectToHost(self.allocator, host, port) catch |err| {
-            std.log.warn("CDC Kafka: Failed to connect to {s}:{d}: {}", .{ host, port, err });
+            log.warn("CDC Kafka: Failed to connect", &.{
+                Attr.string("host", host),
+                Attr.int("port", port),
+                Attr.err("error", err),
+            });
             // Log events locally as fallback
-            std.log.info("CDC Kafka: {d} events queued for topic '{s}'", .{ batch_size, kafka_config.topic });
+            log.info("CDC Kafka: events queued", &.{
+                Attr.int("batch_size", @intCast(batch_size)),
+                Attr.string("topic", kafka_config.topic),
+            });
             return;
         };
         defer stream.close();
 
         // Send batch (simplified - real implementation needs Kafka protocol)
         _ = stream.write(batch_buffer.items) catch |err| {
-            std.log.warn("CDC Kafka: Write failed: {}", .{err});
+            log.warn("CDC Kafka: Write failed", &.{
+                Attr.err("error", err),
+            });
             return;
         };
 
@@ -351,7 +369,10 @@ pub const CDCEngine = struct {
             _ = self.event_queue.orderedRemove(0);
         }
 
-        std.log.info("CDC Kafka: Sent {d} events to topic '{s}'", .{ batch_size, kafka_config.topic });
+        log.info("CDC Kafka: Sent events", &.{
+            Attr.int("batch_size", @intCast(batch_size)),
+            Attr.string("topic", kafka_config.topic),
+        });
     }
 
     // CANARY: REQ=REQ-CDC-FILE-001; FEATURE="CDC File Sink"; ASPECT=Streaming; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=streaming; UPDATED=2026-01-09
@@ -365,12 +386,18 @@ pub const CDCEngine = struct {
             if (err == error.FileNotFound) {
                 // Create file if it doesn't exist
                 const new_file = std.fs.cwd().createFile(file_path, .{}) catch |create_err| {
-                    std.log.warn("CDC File: Failed to create {s}: {}", .{ file_path, create_err });
+                    log.warn("CDC File: Failed to create", &.{
+                        Attr.string("path", file_path),
+                        Attr.err("error", create_err),
+                    });
                     return;
                 };
                 return self.writeEventsToFile(new_file);
             }
-            std.log.warn("CDC File: Failed to open {s}: {}", .{ file_path, err });
+            log.warn("CDC File: Failed to open", &.{
+                Attr.string("path", file_path),
+                Attr.err("error", err),
+            });
             return;
         };
         defer file.close();
@@ -393,7 +420,9 @@ pub const CDCEngine = struct {
 
             // Write directly using file.write
             _ = file.write(json_buffer.items) catch |err| {
-                std.log.warn("CDC File: Write error: {}", .{err});
+                log.warn("CDC File: Write error", &.{
+                    Attr.err("error", err),
+                });
                 break;
             };
             _ = file.write("\n") catch {};
@@ -406,7 +435,9 @@ pub const CDCEngine = struct {
             _ = self.event_queue.orderedRemove(0);
         }
 
-        std.log.debug("CDC File: Wrote {d} events", .{events_written});
+        log.debug("CDC File: Wrote events", &.{
+            Attr.int("events_written", @intCast(events_written)),
+        });
     }
 
     // CANARY: REQ=REQ-CDC-WEBHOOK-001; FEATURE="CDC Webhook Sink"; ASPECT=Streaming; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=streaming; UPDATED=2026-01-09
@@ -430,13 +461,16 @@ pub const CDCEngine = struct {
 
         // Parse webhook URL
         const uri = std.Uri.parse(webhook_url) catch |err| {
-            std.log.warn("CDC Webhook: Invalid URL '{s}': {}", .{ webhook_url, err });
+            log.warn("CDC Webhook: Invalid URL", &.{
+                Attr.string("url", webhook_url),
+                Attr.err("error", err),
+            });
             return;
         };
 
         // Make HTTP request using TCP socket
         const host_component = uri.host orelse {
-            std.log.warn("CDC Webhook: URL missing host", .{});
+            log.warn("CDC Webhook: URL missing host", &.{});
             return;
         };
         // Extract the raw string from the host component
@@ -447,7 +481,11 @@ pub const CDCEngine = struct {
         const port: u16 = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) @as(u16, 443) else @as(u16, 80);
 
         const stream = std.net.tcpConnectToHost(self.allocator, host, port) catch |err| {
-            std.log.warn("CDC Webhook: Connection failed to {s}:{d}: {}", .{ host, port, err });
+            log.warn("CDC Webhook: Connection failed", &.{
+                Attr.string("host", host),
+                Attr.int("port", port),
+                Attr.err("error", err),
+            });
             return;
         };
         defer stream.close();
@@ -472,19 +510,23 @@ pub const CDCEngine = struct {
             "POST {s} HTTP/1.1\r\nHost: {s}\r\nContent-Type: application/json\r\nContent-Length: {d}\r\n{s}\r\n",
             .{ path, host, json_buffer.items.len, auth_header },
         ) catch {
-            std.log.warn("CDC Webhook: Request buffer overflow", .{});
+            log.warn("CDC Webhook: Request buffer overflow", &.{});
             return;
         };
 
         // Send request headers
         _ = stream.write(request) catch |err| {
-            std.log.warn("CDC Webhook: Header write failed: {}", .{err});
+            log.warn("CDC Webhook: Header write failed", &.{
+                Attr.err("error", err),
+            });
             return;
         };
 
         // Send body
         _ = stream.write(json_buffer.items) catch |err| {
-            std.log.warn("CDC Webhook: Body write failed: {}", .{err});
+            log.warn("CDC Webhook: Body write failed", &.{
+                Attr.err("error", err),
+            });
             return;
         };
 
@@ -500,9 +542,12 @@ pub const CDCEngine = struct {
                 while (i < batch_size) : (i += 1) {
                     _ = self.event_queue.orderedRemove(0);
                 }
-                std.log.info("CDC Webhook: Sent {d} events to '{s}'", .{ batch_size, webhook_url });
+                log.info("CDC Webhook: Sent events", &.{
+                    Attr.int("batch_size", @intCast(batch_size)),
+                    Attr.string("url", webhook_url),
+                });
             } else {
-                std.log.warn("CDC Webhook: Server returned non-2xx status", .{});
+                log.warn("CDC Webhook: Server returned non-2xx status", &.{});
             }
         }
     }
@@ -744,7 +789,11 @@ pub const CDCStatus = struct {
 };
 
 fn defaultEventHandler(event: ChangeEvent) anyerror!void {
-    std.log.info("CDC Event: {} on {} {}", .{ event.change_type, event.object_type, event.object_id });
+    log.info("CDC Event", &.{
+        Attr.string("change_type", @tagName(event.change_type)),
+        Attr.string("object_type", @tagName(event.object_type)),
+        Attr.int("object_id", @intCast(event.object_id)),
+    });
 }
 
 test "CDC engine basic operations" {

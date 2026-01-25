@@ -15,10 +15,22 @@ const query_executor = @import("query_executor.zig");
 // Phase 3 M3.3 - Stdio Message Handler Module (Twelfth Increment)
 // Unified message processing for stdio mode, delegating to existing handlers and eliminating duplication
 
-const log = std.log.scoped(.server);
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-015; FEATURE="Structured Logging"; ASPECT=StdioHandler; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("server");
+const Attr = logging.Attr;
+
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-014; FEATURE="JSON Library Migration"; ASPECT=StdioHandler; STATUS=TESTED; OWNER=server; UPDATED=2026-01-24
+const json_lib = @import("json");
 
 const computeBaseFlags = server_flags.computeBaseFlags;
 const writeBindingsAdaptive = query_executor.writeBindingsAdaptive;
+
+/// Error response type for stdio message handling
+const StdioErrorResponse = struct {
+    status_class: []const u8 = "58000",
+    @"error": []const u8,
+};
 
 /// Process a parsed protocol message in stdio mode and write the response to stdout
 /// This is a wrapper around the existing quic_connection_handler.processMessage that
@@ -112,10 +124,14 @@ pub fn processStdioMessage(
                 compact_profile,
                 memcurve_profile,
             ) catch |err| {
-                // Write error to stdout
-                const error_msg = std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)}) catch return true;
-                defer gpa.free(error_msg);
-                _ = stdout_file.write(error_msg) catch {};
+                // Write error to stdout using JSON library for proper encoding
+                const err_response = StdioErrorResponse{ .@"error" = @errorName(err) };
+                const json_str = json_lib.encode(gpa, err_response, .{}) catch return true;
+                defer gpa.free(json_str);
+
+                // Write JSON with newline
+                _ = stdout_file.write(json_str) catch {};
+                _ = stdout_file.write("\n") catch {};
                 return true;
             };
             defer if (response.len > 0) gpa.free(response);

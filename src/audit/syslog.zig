@@ -4,8 +4,54 @@ const config = @import("config.zig");
 const cef = @import("cef.zig");
 const time = @import("time.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Audit; STATUS=IMPL; OWNER=audit; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("audit");
+const Attr = logging.Attr;
+
+// CANARY: REQ=REQ-LIB-MIGRATION-DNS-001; FEATURE="External Library Migration"; ASPECT=DNSResolution; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// External DNS library for RFC 1035 compliant host resolution with caching and DoT/DoH/DoQ support
+const dns = @import("dns");
+
 const QUEUE_SIZE = 10000;
 const MAX_POOL_SIZE = 16;
+
+/// Resolve a hostname to an IPv4 address using the external DNS library.
+/// Falls back to std.net.Address.parseIp4 if the host is already an IP address.
+/// Supports both hostname resolution and direct IP address parsing.
+fn resolveHostToAddress(allocator: std.mem.Allocator, host: []const u8, port: u16) !std.net.Address {
+    // First, try to parse as a direct IP address (faster path)
+    if (std.net.Address.parseIp4(host, port)) |addr| {
+        return addr;
+    } else |_| {
+        // Not a valid IP address, try DNS resolution
+        var client = dns.Client.init(allocator) catch {
+            // If DNS client fails to initialize, propagate the error
+            return error.DnsInitFailed;
+        };
+        defer client.deinit();
+
+        // Attempt A record resolution
+        var result = client.resolveA(host) catch {
+            // DNS resolution failed
+            return error.DnsResolutionFailed;
+        };
+        defer result.deinit(allocator);
+
+        // Use the first resolved address
+        if (result.addresses.len > 0) {
+            // Convert the IPv4 bytes to a string and parse to Address
+            const addr_bytes = result.addresses[0];
+            var ip_buf: [16]u8 = undefined;
+            const ip_str = std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{
+                addr_bytes[0], addr_bytes[1], addr_bytes[2], addr_bytes[3],
+            }) catch return error.FormatError;
+            return std.net.Address.parseIp4(ip_str, port) catch error.InvalidAddress;
+        }
+
+        return error.NoAddressFound;
+    }
+}
 
 // CANARY: REQ=REQ-AUDIT-TLS-POOL-001; FEATURE="SyslogTLSConnectionPool"; ASPECT=PERFORMANCE; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-12
 // Connection pool entry for TLS connections
@@ -184,7 +230,8 @@ pub const SyslogSender = struct {
         const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0);
         defer std.posix.close(socket);
 
-        const addr = try std.net.Address.parseIp4(self.config.host, self.config.port);
+        // Use DNS resolution for hostname support (falls back to IP parsing)
+        const addr = try resolveHostToAddress(self.allocator, self.config.host, self.config.port);
         _ = try std.posix.sendto(socket, message, 0, &addr.any, addr.getOsSockLen());
     }
 
@@ -192,7 +239,8 @@ pub const SyslogSender = struct {
         const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
         defer std.posix.close(socket);
 
-        const addr = try std.net.Address.parseIp4(self.config.host, self.config.port);
+        // Use DNS resolution for hostname support (falls back to IP parsing)
+        const addr = try resolveHostToAddress(self.allocator, self.config.host, self.config.port);
         try std.posix.connect(socket, &addr.any, addr.getOsSockLen());
 
         // TCP syslog typically uses length-prefixed messages
@@ -246,7 +294,8 @@ pub const SyslogSender = struct {
             const new_socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
             errdefer std.posix.close(new_socket);
 
-            const addr = try std.net.Address.parseIp4(self.config.host, self.config.port);
+            // Use DNS resolution for hostname support (falls back to IP parsing)
+            const addr = try resolveHostToAddress(self.allocator, self.config.host, self.config.port);
             try std.posix.connect(new_socket, &addr.any, addr.getOsSockLen());
             break :blk new_socket;
         };
@@ -260,7 +309,11 @@ pub const SyslogSender = struct {
         }) catch |err| {
             self.releasePooledConnection(pool_index, true);
             if (pooled_socket == null) std.posix.close(socket);
-            std.log.err("TLS handshake failed for syslog connection to {s}:{d}: {}", .{ self.config.host, self.config.port, err });
+            log.err("TLS handshake failed for syslog connection", &.{
+                Attr.string("host", self.config.host),
+                Attr.int("port", self.config.port),
+                Attr.err("error", err),
+            });
             return error.TlsHandshakeFailed;
         };
 
@@ -271,7 +324,10 @@ pub const SyslogSender = struct {
                 tls_client.close() catch {};
                 self.releasePooledConnection(pool_index, true);
                 if (pooled_socket == null) std.posix.close(socket);
-                std.log.err("Certificate pinning verification failed for syslog TLS connection to {s}:{d}", .{ self.config.host, self.config.port });
+                log.err("Certificate pinning verification failed for syslog TLS connection", &.{
+                    Attr.string("host", self.config.host),
+                    Attr.int("port", self.config.port),
+                });
                 return error.CertificatePinningFailed;
             }
         }
@@ -284,13 +340,17 @@ pub const SyslogSender = struct {
         _ = tls_client.write(length_prefix) catch |err| {
             tls_client.close() catch {};
             self.releasePooledConnection(pool_index, true);
-            std.log.err("TLS write failed for syslog: {}", .{err});
+            log.err("TLS write failed for syslog", &.{
+                Attr.err("error", err),
+            });
             return error.TlsWriteFailed;
         };
         _ = tls_client.write(message) catch |err| {
             tls_client.close() catch {};
             self.releasePooledConnection(pool_index, true);
-            std.log.err("TLS write failed for syslog: {}", .{err});
+            log.err("TLS write failed for syslog", &.{
+                Attr.err("error", err),
+            });
             return error.TlsWriteFailed;
         };
 
@@ -356,7 +416,10 @@ pub const SyslogSender = struct {
 
         // Validate expected hash is 64 hex characters (SHA-256 = 32 bytes = 64 hex chars)
         if (expected_hash.len != 64) {
-            std.log.err("Invalid pinned certificate hash length: expected 64 hex chars, got {d}", .{expected_hash.len});
+            log.err("Invalid pinned certificate hash length", &.{
+                Attr.int("expected", 64),
+                Attr.int("got", @intCast(expected_hash.len)),
+            });
             return false;
         }
 
@@ -364,7 +427,7 @@ pub const SyslogSender = struct {
         for (expected_hash) |c| {
             const valid = (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
             if (!valid) {
-                std.log.err("Invalid hex character in pinned certificate hash: '{c}'", .{c});
+                log.err("Invalid hex character in pinned certificate hash", &.{});
                 return false;
             }
         }
@@ -373,7 +436,7 @@ pub const SyslogSender = struct {
         // TLS session's peer certificate, which std.crypto.tls.Client doesn't directly expose.
         // In production, this would use OpenSSL/BoringSSL bindings or a custom TLS implementation.
         // For now, we accept valid-format pins and log a warning about limited verification.
-        std.log.warn("Certificate pinning configured but full verification requires TLS library extension", .{});
+        log.warn("Certificate pinning configured but full verification requires TLS library extension", &.{});
         return true;
     }
 };

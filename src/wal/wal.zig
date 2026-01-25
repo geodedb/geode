@@ -6,6 +6,11 @@ const storage = @import("storage_page_manager");
 const fsync_util = @import("fs_fsync");
 const commit_coord = @import("commit_coordinator");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=WAL; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("wal");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-WAL-HEX-001; FEATURE="SecureWalHexKeyParsing"; ASPECT=SECURITY; STATUS=TESTED; TEST=test_parseWalHexKey_valid|test_parseWalHexKey_invalid_char|test_parseWalHexKey_wrong_length; OWNER=security; UPDATED=2026-01-15
 // GAP-0155 SECURITY FIX: Proper error handling for WAL encryption key hex parsing instead of silent catch 0
 
@@ -15,7 +20,10 @@ const commit_coord = @import("commit_coordinator");
 /// Returns error.InvalidWalKeyHex if any character is not a valid hex digit.
 pub fn parseWalHexKey(hex_str: []const u8) ![32]u8 {
     if (hex_str.len != 64) {
-        std.log.err("SECURITY ERROR: GEODE_DISK_KEY_HEX must be exactly 64 hex characters (32 bytes), got {d}", .{hex_str.len});
+        log.err("SECURITY: GEODE_DISK_KEY_HEX must be exactly 64 hex characters", &.{
+            Attr.uint("expected_len", 64),
+            Attr.uint("actual_len", @intCast(hex_str.len)),
+        });
         return error.InvalidWalKeyLength;
     }
 
@@ -23,11 +31,15 @@ pub fn parseWalHexKey(hex_str: []const u8) ![32]u8 {
     var i: usize = 0;
     while (i < 32) : (i += 1) {
         const hi = std.fmt.charToDigit(hex_str[i * 2], 16) catch {
-            std.log.err("SECURITY ERROR: Invalid hex character '{c}' at position {d} in GEODE_DISK_KEY_HEX", .{ hex_str[i * 2], i * 2 });
+            log.err("SECURITY: Invalid hex character in GEODE_DISK_KEY_HEX", &.{
+                Attr.uint("position", i * 2),
+            });
             return error.InvalidWalKeyHex;
         };
         const lo = std.fmt.charToDigit(hex_str[i * 2 + 1], 16) catch {
-            std.log.err("SECURITY ERROR: Invalid hex character '{c}' at position {d} in GEODE_DISK_KEY_HEX", .{ hex_str[i * 2 + 1], i * 2 + 1 });
+            log.err("SECURITY: Invalid hex character in GEODE_DISK_KEY_HEX", &.{
+                Attr.uint("position", i * 2 + 1),
+            });
             return error.InvalidWalKeyHex;
         };
         key[i] = @as(u8, @intCast(hi * 16 + lo));
@@ -166,7 +178,9 @@ pub const Wal = struct {
         if (self.enc_enabled) {
             const hex = std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_KEY_HEX") catch null;
             if (hex == null) {
-                std.log.err("SECURITY ERROR: GEODE_DISK_KEY_HEX not set but encryption enabled. Disabling WAL encryption.", .{});
+                log.err("SECURITY: GEODE_DISK_KEY_HEX not set but encryption enabled", &.{
+                    Attr.string("action", "disabling_encryption"),
+                });
                 self.enc_enabled = false;
                 return;
             }
@@ -174,7 +188,10 @@ pub const Wal = struct {
 
             // GAP-0155 FIX: Use parseWalHexKey with proper error handling instead of catch 0
             const master = parseWalHexKey(hex.?) catch |err| {
-                std.log.err("SECURITY ERROR: Failed to parse GEODE_DISK_KEY_HEX: {any}. Disabling WAL encryption.", .{err});
+                log.err("SECURITY: Failed to parse GEODE_DISK_KEY_HEX", &.{
+                    Attr.err("error", err),
+                    Attr.string("action", "disabling_encryption"),
+                });
                 self.enc_enabled = false;
                 return;
             };
@@ -194,7 +211,11 @@ pub const Wal = struct {
         self.file = try dir.createFile(path, .{ .read = true, .truncate = false, .exclusive = false, .mode = 0o600 });
         self.segment_bytes = 0;
         fsync_util.fsyncParent(path) catch |err| {
-            std.log.err("CRITICAL: Failed to fsync WAL parent directory  '{s}': {any} (durability at risk)", .{ path, err });
+            log.err("Failed to fsync WAL parent directory", &.{
+                Attr.string("path", path),
+                Attr.err("error", err),
+                Attr.string("risk", "durability"),
+            });
         };
     }
 
@@ -226,7 +247,10 @@ pub const Wal = struct {
         defer map.deinit();
         for (self.buf.items) |r| if (r.typ == .Commit) {
             map.put(r.txn_id, {}) catch |err| {
-                std.log.warn("Failed to track committed txn {} in count (OOM): {any}", .{ r.txn_id, err });
+                log.warn("Failed to track committed txn in count", &.{
+                    Attr.uint("txn_id", r.txn_id),
+                    Attr.err("error", err),
+                });
             };
         };
         return self.recovered_committed + map.count();
@@ -256,7 +280,10 @@ pub const Wal = struct {
                 if (typ == .Commit) {
                     const txn_id = std.mem.readInt(u64, buf[1..9], .little);
                     _ = seen.put(txn_id, {}) catch |err| {
-                        std.log.warn("Failed to track txn {} in scan (OOM): {any}", .{ txn_id, err });
+                        log.warn("Failed to track txn in scan", &.{
+                            Attr.uint("txn_id", txn_id),
+                            Attr.err("error", err),
+                        });
                     };
                 }
                 const plen = std.mem.readInt(u32, buf[9..13], .little);
@@ -391,10 +418,14 @@ pub const Wal = struct {
             var cs_buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch @panic("OOM");
             defer cs_buf.deinit(self.allocator);
             cs_buf.appendSlice(self.allocator, header[0..]) catch |err| {
-                std.log.err("CRITICAL: Failed to append header to checksum buffer: {any}", .{err});
+                log.err("Failed to append header to checksum buffer", &.{
+                    Attr.err("error", err),
+                });
             };
             cs_buf.appendSlice(self.allocator, payload_buf) catch |err| {
-                std.log.err("CRITICAL: Failed to append payload to checksum buffer: {any}", .{err});
+                log.err("Failed to append payload to checksum buffer", &.{
+                    Attr.err("error", err),
+                });
             };
             const cs = adler32(cs_buf.items);
             std.mem.writeInt(u32, header[29..33], cs, .little);
@@ -427,7 +458,10 @@ pub const Wal = struct {
             self.commits_since_checkpoint += 1;
             if (self.commits_since_checkpoint >= self.checkpoint_interval) {
                 _ = self.writeCheckpoint() catch |err| {
-                    std.log.err("CRITICAL: Failed to write WAL checkpoint (recovery may be slow): {any}", .{err});
+                    log.err("Failed to write WAL checkpoint", &.{
+                        Attr.err("error", err),
+                        Attr.string("risk", "slow_recovery"),
+                    });
                 };
                 self.commits_since_checkpoint = 0;
                 self.checkpoints_since_compaction += 1;
@@ -435,7 +469,10 @@ pub const Wal = struct {
                 if (self.checkpoints_since_compaction >= self.compaction_interval) {
                     // Use current LSN as durable horizon for compaction
                     self.compact(lsn_val) catch |err| {
-                        std.log.err("CRITICAL: Failed to compact WAL (disk space may fill): {any}", .{err});
+                        log.err("Failed to compact WAL", &.{
+                            Attr.err("error", err),
+                            Attr.string("risk", "disk_space"),
+                        });
                     };
                     self.checkpoints_since_compaction = 0;
                 }
@@ -742,7 +779,12 @@ pub const Wal = struct {
                         if (p.lsn() >= rec.lsn.value) continue; // already applied
                         if (ins.slot >= p.slotCount()) {
                             _ = p.insert(ins.data) catch |err| {
-                                std.log.err("CRITICAL: Failed to insert during WAL replay (page={}, slot={}, LSN={}): {any}", .{ ins.page, ins.slot, rec.lsn.value, err });
+                                log.err("Failed to insert during WAL replay", &.{
+                                    Attr.uint("page", ins.page),
+                                    Attr.uint("slot", ins.slot),
+                                    Attr.uint("lsn", rec.lsn.value),
+                                    Attr.err("error", err),
+                                });
                             };
                         }
                         p.setLsn(rec.lsn.value);
@@ -755,7 +797,12 @@ pub const Wal = struct {
                             var p = pm.asPage(del.page);
                             if (p.lsn() >= rec.lsn.value) continue;
                             p.tombstone(del.slot) catch |err| {
-                                std.log.err("CRITICAL: Failed to tombstone during WAL replay (page={}, slot={}, LSN={}): {any}", .{ del.page, del.slot, rec.lsn.value, err });
+                                log.err("Failed to tombstone during WAL replay", &.{
+                                    Attr.uint("page", del.page),
+                                    Attr.uint("slot", del.slot),
+                                    Attr.uint("lsn", rec.lsn.value),
+                                    Attr.err("error", err),
+                                });
                             };
                             p.setLsn(rec.lsn.value);
                             applied += 1;
@@ -784,7 +831,12 @@ pub const Wal = struct {
                         if (page < pm.pages.items.len) {
                             var p = pm.asPage(page);
                             p.tombstone(slot) catch |err| {
-                                std.log.err("CRITICAL: Failed to tombstone during WAL UNDO (page={}, slot={}, txn={}): {any}", .{ page, slot, rec.txn_id, err });
+                                log.err("Failed to tombstone during WAL UNDO", &.{
+                                    Attr.uint("page", page),
+                                    Attr.uint("slot", slot),
+                                    Attr.uint("txn_id", rec.txn_id),
+                                    Attr.err("error", err),
+                                });
                             };
                         }
                         if (self.file != null) {
@@ -800,7 +852,12 @@ pub const Wal = struct {
                         var p = pm.asPage(delb.page);
                         if (delb.slot >= p.slotCount()) {
                             _ = p.insert(delb.data) catch |err| {
-                                std.log.err("CRITICAL: Failed to insert during WAL UNDO (page={}, slot={}, txn={}): {any}", .{ delb.page, delb.slot, rec.txn_id, err });
+                                log.err("Failed to insert during WAL UNDO", &.{
+                                    Attr.uint("page", delb.page),
+                                    Attr.uint("slot", delb.slot),
+                                    Attr.uint("txn_id", rec.txn_id),
+                                    Attr.err("error", err),
+                                });
                             };
                         } else {
                             const slot_meta = p.readSlot(delb.slot);
@@ -809,7 +866,12 @@ pub const Wal = struct {
                                 p.writeSlot(delb.slot, slot_meta.off, delb.len);
                             } else if (slot_meta.sz == 0) {
                                 _ = p.insert(delb.data) catch |err| {
-                                    std.log.err("CRITICAL: Failed to insert during WAL UNDO (page={}, slot={}, txn={}): {any}", .{ delb.page, delb.slot, rec.txn_id, err });
+                                    log.err("Failed to insert during WAL UNDO", &.{
+                                        Attr.uint("page", delb.page),
+                                        Attr.uint("slot", delb.slot),
+                                        Attr.uint("txn_id", rec.txn_id),
+                                        Attr.err("error", err),
+                                    });
                                 };
                             }
                         }

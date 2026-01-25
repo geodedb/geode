@@ -1,5 +1,10 @@
 const std = @import("std");
 const iface = @import("interface");
+
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("storage");
+const Attr = logging.Attr;
 // Access TDE functions via lazy import to avoid module duplication when page_manager is also imported through root module.
 const have_tde = true; // placeholder (TDE accessed via higher layer)
 // We can't reference tde symbol directly if not present; functions wrapped below.
@@ -266,20 +271,27 @@ pub const PageManager = struct {
                 var i: usize = 0;
                 while (i < 32) : (i += 1) {
                     const hi = std.fmt.charToDigit(raw[i * 2], 16) catch {
-                        std.log.err("ERROR: GEODE_TDE_KEY contains invalid hex characters.", .{});
+                        log.err("GEODE_TDE_KEY contains invalid hex characters", &.{
+                            Attr.uint("position", i * 2),
+                        });
                         self.enc_enabled = false;
                         return;
                     };
                     const lo = std.fmt.charToDigit(raw[i * 2 + 1], 16) catch {
-                        std.log.err("ERROR: GEODE_TDE_KEY contains invalid hex characters.", .{});
+                        log.err("GEODE_TDE_KEY contains invalid hex characters", &.{
+                            Attr.uint("position", i * 2 + 1),
+                        });
                         self.enc_enabled = false;
                         return;
                     };
                     self.enc_key[i] = @as(u8, @intCast(hi * 16 + lo));
                 }
-                std.log.info("TDE enabled with AES-256-GCM encryption.", .{});
+                log.info("TDE enabled with AES-256-GCM encryption", &.{});
             } else {
-                std.log.err("ERROR: GEODE_TDE_KEY must be exactly 64 hex characters (32 bytes). Got {} chars.", .{raw.len});
+                log.err("GEODE_TDE_KEY must be exactly 64 hex characters (32 bytes)", &.{
+                    Attr.uint("expected_len", 64),
+                    Attr.uint("actual_len", @intCast(raw.len)),
+                });
             }
         }
 
@@ -287,20 +299,18 @@ pub const PageManager = struct {
         if (std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_ENCRYPTION")) |v| {
             defer self.allocator.free(v);
             if (std.mem.eql(u8, v, "on")) {
-                std.log.err("ERROR: GEODE_DISK_ENCRYPTION is deprecated and has been removed. " ++
-                    "Use GEODE_TDE_KEY (64 hex chars) for AES-256-GCM encryption instead.", .{});
+                log.err("GEODE_DISK_ENCRYPTION is deprecated and has been removed. Use GEODE_TDE_KEY for AES-256-GCM encryption", &.{});
             }
         } else |_| {}
 
         if (std.process.getEnvVarOwned(self.allocator, "GEODE_LEGACY_XOR")) |v| {
             defer self.allocator.free(v);
-            std.log.err("ERROR: GEODE_LEGACY_XOR is deprecated. Legacy XOR encryption has been removed. " ++
-                "Use GEODE_TDE_KEY (64 hex chars) for AES-256-GCM encryption instead.", .{});
+            log.err("GEODE_LEGACY_XOR is deprecated. Legacy XOR encryption has been removed. Use GEODE_TDE_KEY for AES-256-GCM encryption", &.{});
         } else |_| {}
 
         if (std.process.getEnvVarOwned(self.allocator, "GEODE_DISK_KEY_HEX")) |v| {
             defer self.allocator.free(v);
-            std.log.err("ERROR: GEODE_DISK_KEY_HEX is deprecated. Use GEODE_TDE_KEY instead.", .{});
+            log.err("GEODE_DISK_KEY_HEX is deprecated. Use GEODE_TDE_KEY instead", &.{});
         } else |_| {}
     }
 
@@ -324,7 +334,9 @@ pub const PageManager = struct {
     pub fn deinit(self: *PageManager) void {
         // Phase 2 optimization: Flush any remaining dirty pages before cleanup
         self.flushDirtyPages() catch |err| {
-            std.log.err("CRITICAL: Failed to flush dirty pages on deinit (unflushed writes lost): {any}", .{err});
+            log.err("CRITICAL: Failed to flush dirty pages on deinit (unflushed writes lost)", &.{
+                Attr.err("error", err),
+            });
         };
         for (self.pages.items) |p| self.allocator.free(p);
         self.pages.deinit(self.allocator);
@@ -430,7 +442,10 @@ pub const PageManager = struct {
         var p = self.asPage(page_index);
         p.setLsn(lsn);
         if (self.base_path) |bp| self.writePage(bp, page_index) catch |err| {
-            std.log.err("CRITICAL: Failed to persist page LSN update (durability compromised, page={}): {any}", .{ page_index, err });
+            log.err("CRITICAL: Failed to persist page LSN update (durability compromised)", &.{
+                Attr.uint("page", @intCast(page_index)),
+                Attr.err("error", err),
+            });
         };
     }
 
@@ -439,7 +454,10 @@ pub const PageManager = struct {
         var p = self.asPage(i);
         if (p.insert(bytes)) |slot| {
             if (self.base_path) |bp| self.writePage(bp, i) catch |err| {
-                std.log.err("CRITICAL: Failed to persist page after insert (data loss, page={}): {any}", .{ i, err });
+                log.err("CRITICAL: Failed to persist page after insert (data loss)", &.{
+                    Attr.uint("page", @intCast(i)),
+                    Attr.err("error", err),
+                });
             };
             return .{ .page = @intCast(i), .slot = slot };
         } else |e| switch (e) {
@@ -449,7 +467,10 @@ pub const PageManager = struct {
                 var p2 = self.asPage(i);
                 const s2 = try p2.insert(bytes);
                 if (self.base_path) |bp| self.writePage(bp, i) catch |err| {
-                    std.log.err("CRITICAL: Failed to persist new page after insert (data loss, page={}): {any}", .{ i, err });
+                    log.err("CRITICAL: Failed to persist new page after insert (data loss)", &.{
+                        Attr.uint("page", @intCast(i)),
+                        Attr.err("error", err),
+                    });
                 };
                 return .{ .page = @intCast(i), .slot = s2 };
             },
@@ -531,9 +552,16 @@ pub const PageManager = struct {
         if (!p.verifyChecksum()) {
             const stored_checksum = p.storedChecksum();
             const calculated_checksum = p.calculateChecksum();
-            std.log.err("Page checksum mismatch in {s}: stored=0x{X:0>8}, calculated=0x{X:0>8}, page_size={d}", .{ path, stored_checksum, calculated_checksum, self.page_size });
+            log.err("Page checksum mismatch", &.{
+                Attr.string("path", path),
+                Attr.uint("stored_checksum", stored_checksum),
+                Attr.uint("calculated_checksum", calculated_checksum),
+                Attr.uint("page_size", @intCast(self.page_size)),
+            });
             const corruption_ratio = self.analyzeCorruption(&p);
-            std.log.err("Corruption analysis: {d:.2}% of page appears corrupted", .{corruption_ratio * 100.0});
+            log.err("Corruption analysis", &.{
+                Attr.float("corruption_percent", corruption_ratio * 100.0),
+            });
             // Free buffer before error to avoid leak
             self.allocator.free(final_page_buf);
             return error.PageChecksumMismatch;

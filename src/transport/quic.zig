@@ -9,7 +9,7 @@ const std = @import("std");
 // Import the QUIC modules through the vendor API which re-exports them
 const api = @import("vendor_quic");
 const Endpoint = api.QuicEndpoint;
-const Connection = api.Connection;
+const Connection = api.QuicConnection;
 const VendorQuicConfig = api.QuicConfig;
 
 // Re-export core types

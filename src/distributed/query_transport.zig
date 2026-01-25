@@ -7,6 +7,10 @@ const quic = @import("../transport/quic.zig");
 const federation = @import("federation.zig");
 const network_transport = @import("network_transport.zig");
 
+const logging = @import("logging");
+const log = logging.scoped("query_transport");
+const Attr = logging.Attr;
+
 /// Query-specific transport for distributed execution
 pub const QueryTransport = struct {
     allocator: std.mem.Allocator,
@@ -339,7 +343,7 @@ const Connection = struct {
             if (env) |v| {
                 defer self.allocator.free(v);
                 if (std.mem.eql(u8, v, "1")) {
-                    std.log.warn("SECURITY WARNING: Inter-node TLS verification disabled via GEODE_CLUSTER_INSECURE", .{});
+                    log.warn("SECURITY WARNING: Inter-node TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
                     break :blk true;
                 }
             }
@@ -349,7 +353,12 @@ const Connection = struct {
         // Connect with TLS verification by default (skip_verify=false)
         self.quic_client.?.connectInsecure(node_info.host, node_info.port, allow_insecure) catch |err| {
             // Log connection failure
-            std.log.err("Failed to connect to node {d} at {s}:{d}: {}", .{ self.node_id, node_info.host, node_info.port, err });
+            log.err("Failed to connect to node", &.{
+                Attr.uint("node_id", self.node_id),
+                Attr.string("host", node_info.host),
+                Attr.uint("port", node_info.port),
+                Attr.string("error", @errorName(err)),
+            });
             return error.ConnectionFailed;
         };
 

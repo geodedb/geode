@@ -2348,6 +2348,71 @@ REQ-KMS-TLS-SAFETY-001,KMS TLS Production Guard,Security,TESTED,,,security,2026-
 REQ-LABEL-TAXONOMY-001,GitLab Label Setup,Core,IMPL,,,ci,2026-01-14,tools/setup_gitlab_labels.sh
 REQ-LEXER-METADATA-001,MetadataIntegration,KeywordLookup,EXEMPT,,,lexer,2026-01-03,src/gql/token.zig
 REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,EXEMPT,,,lexer,2026-01-03,src/gql/token.zig
+REQ-LIB-MIGRATION-CLI-001,External Library Migration,CLIFramework,IMPL,,,core,2026-01-24,src/cli/cli_dispatcher.zig
+REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,IMPL,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
+REQ-LIB-MIGRATION-CLI-TEST-001,External Library Migration,ShellCompletionTests,TESTED,,,test,2026-01-24,geodetestlab/specs/shell_completion_comprehensive.yml
+REQ-LIB-MIGRATION-CLI-TEST-002,External Library Migration,CLIFlagsTests,TESTED,,,test,2026-01-24,geodetestlab/specs/cli_flags_comprehensive.yml
+REQ-LIB-MIGRATION-CONFIG-001,External Library Migration,ConfigManagement,IMPL,,,core,2026-01-24,src/server/cli_args.zig
+REQ-LIB-MIGRATION-CONFIG-TEST-001,External Library Migration,ConfigTesting,TESTED,,,test,2026-01-24,tests/test_config_integration.zig
+REQ-LIB-MIGRATION-CONFIG-TEST-002,External Library Migration,ConfigFormatTests,TESTED,,,test,2026-01-24,geodetestlab/specs/config_formats_comprehensive.yml
+REQ-LIB-MIGRATION-DNS-001,External Library Migration,DNSResolution,IMPL,,,core,2026-01-24,src/audit/syslog.zig
+REQ-LIB-MIGRATION-JSON-001,External Library Migration,JSONParsing,IMPL,,,core,2026-01-24,src/protocol.zig
+REQ-LIB-MIGRATION-MCP-001,External Library Migration,MCPIntegration,TESTED,,,core,2026-01-24,src/mcp/server.zig
+REQ-LIB-MIGRATION-MCP-002,External Library Migration,MCPTools,TESTED,,,core,2026-01-24,src/mcp/tools.zig
+REQ-LIB-MIGRATION-MCP-003,External Library Migration,MCPResources,TESTED,,,core,2026-01-24,src/mcp/resources.zig
+REQ-LIB-MIGRATION-MCP-004,External Library Migration,MCPPrompts,TESTED,,,core,2026-01-24,src/mcp/prompts.zig
+REQ-LIB-MIGRATION-MCP-005,External Library Migration,MCPModule,TESTED,,,core,2026-01-24,src/mcp/mod.zig
+REQ-LIB-MIGRATION-MCP-006,External Library Migration,MCPCommand,IMPL,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
+REQ-LIB-MIGRATION-MCP-006,External Library Migration,MCPModule,IMPL,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
+REQ-LIB-MIGRATION-MCP-007,External Library Migration,MCPCommandHandler,IMPL,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
+REQ-LIB-MIGRATION-MCP-008,External Library Migration,MCPClient,IMPL,,,core,2026-01-24,src/mcp/client.zig
+REQ-LIB-MIGRATION-MCP-009,External Library Migration,MCPIntegrationTests,IMPL,,,testing,2026-01-24,geodetestlab/specs/mcp_integration.yml
+REQ-LIB-MIGRATION-MCP-010,External Library Migration,MCPLSPTools,TESTED,,,core,2026-01-24,src/mcp/lsp.zig
+REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,IMPL,,,core,2026-01-24,src/audit/logger.zig
+REQ-LIB-MIGRATION-SLOG-002,Centralized Structured Logging,Infrastructure,IMPL,,,core,2026-01-24,src/logging/logger.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Analytics,IMPL,,,analytics,2026-01-24,src/analytics/real_time.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Audit,IMPL,,,audit,2026-01-24,src/audit/syslog.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CDC,IMPL,,,cdc,2026-01-24,src/cdc/webhook_sink.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,IMPL,,,cli,2026-01-24,src/cli/backup_cli.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,IMPL,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,IMPL,,,cli,2026-01-24,src/cli/main.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,IMPL,,,execution,2026-01-24,src/exec.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,IMPL,,,execution,2026-01-24,src/execution.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,IMPL,,,execution,2026-01-24,src/execution/crud_operations.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,IMPL,,,execution,2026-01-24,src/execution/procedure_registry.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,IMPL,,,execution,2026-01-24,src/execution/statement_dispatcher.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,ML,IMPL,,,ml,2026-01-24,src/ml/graph_embeddings.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Memory,IMPL,,,memory,2026-01-24,src/sentinel.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Planner,IMPL,,,planner,2026-01-24,src/planner/adaptive.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Schema,IMPL,,,schema,2026-01-24,src/schema/catalog.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Schema,IMPL,,,schema,2026-01-24,src/schema/fle_catalog.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,IMPL,,,storage,2026-01-24,src/graph_store.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,IMPL,,,storage,2026-01-24,src/storage/backup.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,IMPL,,,storage,2026-01-24,src/storage/crypto.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,IMPL,,,storage,2026-01-24,src/storage/crypto_simple.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,IMPL,,,storage,2026-01-24,src/storage/inmemory.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,IMPL,,,storage,2026-01-24,src/storage/page_manager.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,IMPL,,,storage,2026-01-24,src/storage/wal_compaction_pipeline.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,IMPL,,,storage,2026-01-24,src/storage/wal_compactor.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Streaming,IMPL,,,streaming,2026-01-24,src/streaming/cdc.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Streaming,IMPL,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Tools,IMPL,,,tools,2026-01-24,src/tools/bench_regress.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Tools,IMPL,,,tools,2026-01-24,src/tools/fed_latency_governance.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,ValueTypes,IMPL,,,value_types,2026-01-24,src/value_types.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,WAL,IMPL,,,storage,2026-01-24,src/wal/wal.zig
+REQ-LIB-MIGRATION-SLOG-004,Centralized Structured Logging,BuildConfig,IMPL,,,core,2026-01-24,build.zig
+REQ-LIB-MIGRATION-SLOG-010,Structured Logging,ServerMain,IMPL,,,server,2026-01-24,src/server/main.zig
+REQ-LIB-MIGRATION-SLOG-011,Structured Logging,MessageHandlers,IMPL,,,server,2026-01-24,src/server/message_handlers.zig
+REQ-LIB-MIGRATION-SLOG-012,Structured Logging,QUICHandler,IMPL,,,server,2026-01-24,src/server/quic_connection_handler.zig
+REQ-LIB-MIGRATION-SLOG-013,Structured Logging,GraphStorageManager,IMPL,,,server,2026-01-24,src/server/graph_storage_manager.zig
+REQ-LIB-MIGRATION-SLOG-014,Structured Logging,ServerInit,IMPL,,,server,2026-01-24,src/server/server_init.zig
+REQ-LIB-MIGRATION-SLOG-015,Structured Logging,StdioHandler,IMPL,,,server,2026-01-24,src/server/stdio_message_handler.zig
+REQ-LIB-MIGRATION-SLOG-016,Structured Logging,TransactionHandlers,IMPL,,,server,2026-01-24,src/server/transaction_handlers.zig
+REQ-LIB-MIGRATION-SLOG-017,Structured Logging,IsolationIntegration,IMPL,,,server,2026-01-24,src/server/txn/isolation_integration.zig
+REQ-LIB-MIGRATION-SLOG-018,Structured Logging,QueryExecutor,IMPL,,,server,2026-01-24,src/server/query_executor.zig
+REQ-LIB-MIGRATION-STRINGS-001,External Library Migration,StringsFuzzySearch,IMPL,,,core,2026-01-24,src/client/repl/fuzzy_search.zig
+REQ-LIB-MIGRATION-VULKAN-001,External Library Migration,VulkanCompute,IMPL,,,core,2026-01-24,src/gpu/vulkan_compute.zig
+REQ-LIB-MIGRATION-YAML-001,External Library Migration,YAMLParsing,IMPL,,,core,2026-01-24,src/util/yaml.zig
 REQ-LIBRARY-EMBEDDING-001,LibraryModeEmbedding,ML,TESTED,,,library,2026-01-12,src/lib.zig
 REQ-LIST-001,ListProperties,ListCreation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-LIST-002,ListProperties,ListAccess,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig

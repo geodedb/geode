@@ -2,6 +2,11 @@ const std = @import("std");
 const crypto = std.crypto;
 const Allocator = std.mem.Allocator;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("storage");
+const Attr = logging.Attr;
+
 pub const EncryptionAlgorithm = enum {
     none,
     aes_256_gcm,
@@ -402,7 +407,9 @@ pub const KMSClient = struct {
 
         const key_hex = std.process.getEnvVarOwned(self.allocator, env_var_name) catch |err| switch (err) {
             error.EnvironmentVariableNotFound => {
-                std.log.warn("AWS KMS key not found in environment. Set {s} with 64-char hex key for development.", .{env_var_name});
+                log.warn("AWS KMS key not found in environment", &.{
+                    Attr.string("env_var", env_var_name),
+                });
                 return error.KMSKeyNotConfigured;
             },
             else => return err,
@@ -420,7 +427,9 @@ pub const KMSClient = struct {
 
         const key_hex = std.process.getEnvVarOwned(self.allocator, env_var_name) catch |err| switch (err) {
             error.EnvironmentVariableNotFound => {
-                std.log.warn("Azure Key Vault key not found in environment. Set {s} with 64-char hex key for development.", .{env_var_name});
+                log.warn("Azure Key Vault key not found in environment", &.{
+                    Attr.string("env_var", env_var_name),
+                });
                 return error.KMSKeyNotConfigured;
             },
             else => return err,
@@ -438,7 +447,9 @@ pub const KMSClient = struct {
 
         const key_hex = std.process.getEnvVarOwned(self.allocator, env_var_name) catch |err| switch (err) {
             error.EnvironmentVariableNotFound => {
-                std.log.warn("Hashicorp Vault key not found in environment. Set {s} with 64-char hex key for development.", .{env_var_name});
+                log.warn("Hashicorp Vault key not found in environment", &.{
+                    Attr.string("env_var", env_var_name),
+                });
                 return error.KMSKeyNotConfigured;
             },
             else => return err,
@@ -456,7 +467,9 @@ pub const KMSClient = struct {
 
         const key_hex = std.process.getEnvVarOwned(self.allocator, env_var_name) catch |err| switch (err) {
             error.EnvironmentVariableNotFound => {
-                std.log.warn("Google Cloud KMS key not found in environment. Set {s} with 64-char hex key for development.", .{env_var_name});
+                log.warn("Google Cloud KMS key not found in environment", &.{
+                    Attr.string("env_var", env_var_name),
+                });
                 return error.KMSKeyNotConfigured;
             },
             else => return err,
@@ -468,7 +481,10 @@ pub const KMSClient = struct {
 
     fn keyFromHex(self: *Self, key_hex: []const u8, provider: KMSProvider) !EncryptionKey {
         if (key_hex.len != 64) {
-            std.log.err("KMS key must be 64 hex characters (32 bytes). Got {d} characters.", .{key_hex.len});
+            log.err("KMS key must be 64 hex characters (32 bytes)", &.{
+                Attr.uint("expected_len", 64),
+                Attr.uint("actual_len", @intCast(key_hex.len)),
+            });
             return error.InvalidKeyLength;
         }
 

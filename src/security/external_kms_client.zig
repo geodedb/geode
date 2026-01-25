@@ -1,6 +1,9 @@
 const std = @import("std");
 const crypto = std.crypto;
 const builtin = @import("builtin");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // external_kms_client.zig
 // External KMS client providing abstraction over multiple KMS backends:
@@ -75,17 +78,17 @@ pub const KmsConfig = struct {
         if (self.tls_skip_verify) {
             // In release/production builds, block insecure TLS configuration
             if (builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSmall) {
-                std.log.err("SECURITY ERROR: tls_skip_verify=true is not allowed in production builds", .{});
+                log.err("tls_skip_verify=true is not allowed in production builds", &.{});
                 return error.InsecureTlsConfigurationBlocked;
             } else {
                 // In debug builds, emit a warning
-                std.log.warn("SECURITY WARNING: tls_skip_verify=true is enabled - TLS MITM attacks are possible", .{});
+                log.warn("tls_skip_verify=true is enabled - TLS MITM attacks are possible", &.{});
             }
         }
 
         if (self.backend == .LocalSimulated) {
             if (builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSmall) {
-                std.log.err("SECURITY ERROR: LocalSimulated KMS backend is not allowed in production builds", .{});
+                log.err("LocalSimulated KMS backend is not allowed in production builds", &.{});
                 return error.InsecureKmsBackendBlocked;
             }
         }
@@ -241,7 +244,9 @@ pub const VaultTransitClient = struct {
         // Base64 decode
         var out: [32]u8 = undefined;
         _ = std.base64.standard.Decoder.decode(&out, b64_plaintext) catch |e| {
-            std.log.err("Base64 decode failed: {any}", .{e});
+            log.err("Vault Transit base64 decode failed", &.{
+                Attr.string("error", @errorName(e)),
+            });
             return error.InvalidBase64;
         };
 
@@ -291,7 +296,9 @@ pub const VaultTransitClient = struct {
 
         // Open request
         var request = client.open(.POST, uri, headers, .{}) catch |err| {
-            std.log.err("Vault HTTP open failed: {any}", .{err});
+            log.err("Vault HTTP open failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return error.ConnectionFailed;
         };
         defer request.deinit();
@@ -302,23 +309,31 @@ pub const VaultTransitClient = struct {
         // Send body
         request.transfer_encoding = .{ .content_length = body.len };
         request.write(body) catch |err| {
-            std.log.err("Vault HTTP write failed: {any}", .{err});
+            log.err("Vault HTTP write failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return error.WriteFailed;
         };
 
         request.finish() catch |err| {
-            std.log.err("Vault HTTP finish failed: {any}", .{err});
+            log.err("Vault HTTP finish failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return error.RequestFailed;
         };
 
         request.wait() catch |err| {
-            std.log.err("Vault HTTP wait failed: {any}", .{err});
+            log.err("Vault HTTP wait failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return error.Timeout;
         };
 
         // Check status
         if (request.response.status != .ok) {
-            std.log.err("Vault HTTP status: {d}", .{@intFromEnum(request.response.status)});
+            log.err("Vault HTTP status error", &.{
+                Attr.int("status_code", @intCast(@intFromEnum(request.response.status))),
+            });
             return error.HttpError;
         }
 
@@ -447,7 +462,9 @@ pub const AwsKmsClient = struct {
         const decoded_blob = try self.allocator.alloc(u8, decoded_size);
         _ = std.base64.standard.Decoder.decode(decoded_blob, ciphertext_blob) catch |e| {
             self.allocator.free(decoded_blob);
-            std.log.err("Base64 decode of ciphertext failed: {any}", .{e});
+            log.err("Base64 decode of ciphertext failed", &.{
+                Attr.string("error", @errorName(e)),
+            });
             return error.InvalidBase64;
         };
 
@@ -510,7 +527,9 @@ pub const AwsKmsClient = struct {
         // Base64 decode
         var out: [32]u8 = undefined;
         _ = std.base64.standard.Decoder.decode(&out, b64_plaintext) catch |e| {
-            std.log.err("Base64 decode failed: {any}", .{e});
+            log.err("AWS KMS base64 decode failed", &.{
+                Attr.string("error", @errorName(e)),
+            });
             return error.InvalidBase64;
         };
 
@@ -557,7 +576,9 @@ pub const AwsKmsClient = struct {
         // Base64 decode the plaintext
         var out: [32]u8 = undefined;
         _ = std.base64.standard.Decoder.decode(&out, b64_plaintext) catch |e| {
-            std.log.err("Base64 decode failed: {any}", .{e});
+            log.err("AWS KMS GenerateDataKey base64 decode failed", &.{
+                Attr.string("error", @errorName(e)),
+            });
             return error.InvalidBase64;
         };
 
@@ -594,7 +615,9 @@ pub const AwsKmsClient = struct {
 
         // Open request
         var request = client.open(.POST, uri, headers, .{}) catch |err| {
-            std.log.err("AWS KMS HTTP open failed: {any}", .{err});
+            log.err("AWS KMS HTTP open failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return error.ConnectionFailed;
         };
         defer request.deinit();
@@ -605,23 +628,31 @@ pub const AwsKmsClient = struct {
         // Send body
         request.transfer_encoding = .{ .content_length = body.len };
         request.write(body) catch |err| {
-            std.log.err("AWS KMS HTTP write failed: {any}", .{err});
+            log.err("AWS KMS HTTP write failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return error.WriteFailed;
         };
 
         request.finish() catch |err| {
-            std.log.err("AWS KMS HTTP finish failed: {any}", .{err});
+            log.err("AWS KMS HTTP finish failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return error.RequestFailed;
         };
 
         request.wait() catch |err| {
-            std.log.err("AWS KMS HTTP wait failed: {any}", .{err});
+            log.err("AWS KMS HTTP wait failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return error.Timeout;
         };
 
         // Check status
         if (request.response.status != .ok) {
-            std.log.err("AWS KMS HTTP status: {d}", .{@intFromEnum(request.response.status)});
+            log.err("AWS KMS HTTP status error", &.{
+                Attr.int("status_code", @intCast(@intFromEnum(request.response.status))),
+            });
             return error.HttpError;
         }
 
@@ -783,11 +814,13 @@ pub const Client = struct {
         if (is_production_build) {
             // Check for explicit override via environment variable
             if (std.posix.getenv("GEODE_ALLOW_LOCAL_KMS")) |_| {
-                std.log.warn("SECURITY WARNING: LocalSimulated KMS allowed in production via GEODE_ALLOW_LOCAL_KMS. " ++
-                    "This is NOT secure. Configure VaultTransit or AwsKms for production.", .{});
+                log.warn("LocalSimulated KMS allowed in production via GEODE_ALLOW_LOCAL_KMS - NOT secure", &.{
+                    Attr.string("recommendation", "Configure VaultTransit or AwsKms for production"),
+                });
             } else {
-                std.log.err("SECURITY ERROR: LocalSimulated KMS cannot be used in production builds. " ++
-                    "Set GEODE_ALLOW_LOCAL_KMS=1 to override (NOT RECOMMENDED) or configure VaultTransit/AwsKms.", .{});
+                log.err("LocalSimulated KMS cannot be used in production builds", &.{
+                    Attr.string("action", "Set GEODE_ALLOW_LOCAL_KMS=1 to override (NOT RECOMMENDED) or configure VaultTransit/AwsKms"),
+                });
                 return error.InsecureKmsInProduction;
             }
         }
@@ -803,8 +836,9 @@ pub const Client = struct {
     /// GAP-0116 SECURITY FIX: Block LocalSimulated KMS in production builds
     pub fn initSecure(allocator: std.mem.Allocator) !Client {
         if (is_production_build) {
-            std.log.err("SECURITY ERROR: LocalSimulated KMS cannot be used in production builds. " ++
-                "Configure VaultTransit or AwsKms for production.", .{});
+            log.err("LocalSimulated KMS cannot be used in production builds", &.{
+                Attr.string("recommendation", "Configure VaultTransit or AwsKms for production"),
+            });
             return error.InsecureKmsInProduction;
         }
 

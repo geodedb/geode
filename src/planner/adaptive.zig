@@ -4,6 +4,11 @@ const ast = @import("../ast.zig");
 const planner = @import("../planner.zig");
 const exec = @import("../exec.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Planner; STATUS=IMPL; OWNER=planner; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("planner");
+const Attr = logging.Attr;
+
 // Adaptive Query Execution with runtime statistics and plan caching
 pub const AdaptiveQueryExecutor = struct {
     allocator: Allocator,
@@ -477,7 +482,7 @@ pub const AdaptiveQueryExecutor = struct {
             const should_reoptimize = try self.checkReoptimizationTriggers(monitor);
 
             if (should_reoptimize) {
-                std.log.info("Triggering runtime reoptimization", .{});
+                log.info("Triggering runtime reoptimization", &.{});
 
                 // Generate new plan based on actual statistics
                 const new_plan = try self.reoptimizeWithActualStats(plan, monitor);

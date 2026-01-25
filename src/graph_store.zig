@@ -2,6 +2,11 @@ const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
 const uuid = @import("uuid.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("storage");
+const Attr = logging.Attr;
+
 /// Generate a time-based unique 64-bit ID (UUIDv7-compatible lower 64 bits)
 /// Structure: 48-bit timestamp (ms) | 16-bit random
 /// This provides time-sortable, unique IDs without changing the NodeId type
@@ -55,7 +60,10 @@ fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
 
     // Try to create the directory - if it fails, fall back to temp directory
     std.fs.cwd().makePath(data_dir) catch |err| {
-        std.log.warn("Failed to create graph store directory '{s}', using temp directory instead: {any}", .{ data_dir, err });
+        log.warn("Failed to create graph store directory, using temp directory instead", &.{
+            Attr.string("data_dir", data_dir),
+            Attr.err("error", err),
+        });
         return try getFallbackPath(allocator);
     };
 
@@ -65,7 +73,10 @@ fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
     defer allocator.free(test_path);
 
     const test_file = std.fs.cwd().createFile(test_path, .{}) catch |err| {
-        std.log.warn("Cannot write to graph store directory '{s}', using temp directory instead: {any}", .{ data_dir, err });
+        log.warn("Cannot write to graph store directory, using temp directory instead", &.{
+            Attr.string("data_dir", data_dir),
+            Attr.err("error", err),
+        });
         return try getFallbackPath(allocator);
     };
     test_file.close();
@@ -340,7 +351,10 @@ pub const GraphStore = struct {
 
             // Save to persistent storage
             self.saveToFile() catch |err| {
-                std.log.err("CRITICAL: Failed to persist graph after node property set (node={}): {any}", .{ node_id, err });
+                log.err("CRITICAL: Failed to persist graph after node property set", &.{
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.err("error", err),
+                });
             };
         }
     }
@@ -395,7 +409,10 @@ pub const GraphStore = struct {
             _ = node.properties.remove(key);
             // Save to persistent storage
             self.saveToFile() catch |err| {
-                std.log.err("CRITICAL: Failed to persist graph after node property removal (node={}): {any}", .{ node_id, err });
+                log.err("CRITICAL: Failed to persist graph after node property removal", &.{
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.err("error", err),
+                });
             };
         }
     }
@@ -424,7 +441,9 @@ pub const GraphStore = struct {
 
             // Save to persistent storage
             self.saveToFile() catch |err| {
-                std.log.err("CRITICAL: Failed to persist graph store: {any}", .{err});
+                log.err("CRITICAL: Failed to persist graph store", &.{
+                    Attr.err("error", err),
+                });
             };
         }
     }
@@ -460,7 +479,9 @@ pub const GraphStore = struct {
 
                 // Save to persistent storage
                 self.saveToFile() catch |err| {
-                    std.log.err("CRITICAL: Failed to persist graph store: {any}", .{err});
+                    log.err("CRITICAL: Failed to persist graph store", &.{
+                    Attr.err("error", err),
+                });
                 };
             }
         }
@@ -503,7 +524,9 @@ pub const GraphStore = struct {
 
         // Save to persistent storage
         self.saveToFile() catch |err| {
-            std.log.err("CRITICAL: Failed to persist graph store: {any}", .{err});
+            log.err("CRITICAL: Failed to persist graph store", &.{
+                    Attr.err("error", err),
+                });
         };
 
         return id;
@@ -539,7 +562,9 @@ pub const GraphStore = struct {
 
             // Save to persistent storage
             self.saveToFile() catch |err| {
-                std.log.err("CRITICAL: Failed to persist graph store: {any}", .{err});
+                log.err("CRITICAL: Failed to persist graph store", &.{
+                    Attr.err("error", err),
+                });
             };
         }
     }
@@ -1839,7 +1864,9 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         global_store = GraphStore.init(global_arena.?.allocator());
         // Try to load existing data from the new location
         global_store.?.loadFromFile() catch |err| {
-            std.log.warn("Failed to load graph store from file (starting fresh): {any}", .{err});
+            log.warn("Failed to load graph store from file (starting fresh)", &.{
+                Attr.err("error", err),
+            });
         };
         initialized = true;
     }

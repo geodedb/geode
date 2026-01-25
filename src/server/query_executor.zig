@@ -14,6 +14,14 @@ const union_advanced = geode.union_advanced;
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-010; FEATURE="TransactionUndoLog"; ASPECT=QueryExecutorImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-018; FEATURE="Structured Logging"; ASPECT=QueryExecutor; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("server");
+const Attr = logging.Attr;
+
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-011; FEATURE="JSON Library Migration"; ASPECT=QueryExecutor; STATUS=TESTED; OWNER=server; UPDATED=2026-01-24
+const json_lib = @import("json");
+
 // CANARY: REQ=REQ-SERVER-REFACTOR-006; FEATURE="ServerRefactoring"; ASPECT=QUERY_EXECUTOR; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.3 - Query Executor Module (Incremental Extraction - Eighth Increment)
 // Extracted query utility, diagnostic, AST analysis, and query evaluation functions from server/main.zig for better separation of concerns
@@ -126,80 +134,93 @@ pub inline fn bindingValueTypeName(v: anytype) []const u8 {
 
 /// Serialize a single aggregation BindingValue row to JSON using provided column metadata
 /// (names only used; types informational)
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-012; FEATURE="JSON Library Migration"; ASPECT=BindingValueRow; STATUS=TESTED; OWNER=server; UPDATED=2026-01-24
 pub fn bindingValueRowToJson(allocator: std.mem.Allocator, cols: []const protocol.SchemaCol, brow: []const exec.BindingValue) []const u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return &.{};
-    const w = buf.writer(allocator);
-    w.writeAll("{") catch {};
+    var buf = std.ArrayList(u8).init(allocator);
+    var encoder = json_lib.streamingEncoder(allocator, buf.writer(), .{});
+
+    encoder.beginObject() catch return &.{};
+
     var i: usize = 0;
     while (i < cols.len and i < brow.len) : (i += 1) {
-        if (i > 0) w.writeAll(",") catch {};
         const name = cols[i].name;
-        w.print("\"{s}\":", .{name}) catch {};
+        encoder.field(name) catch continue;
+
         const v = brow[i];
         switch (v) {
-            .Null => w.writeAll("null") catch {},
-            .Int => |n| w.print("{d}", .{n}) catch {},
-            .Bool => |b| w.writeAll(if (b) "true" else "false") catch {},
-            .Str => |s| blk: {
-                w.writeAll("\"") catch {};
-                w.writeAll(s) catch {};
-                w.writeAll("\"") catch {};
-                break :blk;
-            },
-            .Decimal => |d| blkdec: {
-                const coeff = d.coeff;
-                const scale = d.scale;
-                if (scale == 0) {
-                    w.print("{d}", .{coeff}) catch {};
-                    break :blkdec;
-                }
-                var pow: i128 = 1;
-                var si: u8 = 0;
-                while (si < scale) : (si += 1) pow *= 10;
-                const whole: i128 = @divTrunc(coeff, pow);
-                const frac: i128 = @mod(if (coeff < 0) -coeff else coeff, pow);
-                var fracbuf: [32]u8 = undefined;
-                const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch "0";
-                if (ftmp.len < scale) {
-                    const missing = scale - @as(u8, @intCast(ftmp.len));
-                    var pad: [32]u8 = undefined;
-                    @memset(pad[0..missing], '0');
-                    w.print("{d}.{s}{s}", .{ whole, pad[0..missing], ftmp }) catch {};
-                } else {
-                    w.print("{d}.{s}", .{ whole, ftmp }) catch {};
-                }
+            .Null => encoder.null() catch {},
+            .Int => |n| encoder.number(n) catch {},
+            .Bool => |b| encoder.boolean(b) catch {},
+            .Str => |s| encoder.string(s) catch {},
+            .Decimal => |d| {
+                // Format decimal as string for precise representation
+                const decimal_str = formatDecimalValue(allocator, d.coeff, d.scale) catch {
+                    encoder.number(0) catch {};
+                    continue;
+                };
+                defer allocator.free(decimal_str);
+                // Write as raw number (not quoted string) for JSON numeric compatibility
+                encoder.raw(decimal_str) catch {};
             },
         }
     }
-    w.writeAll("}") catch {};
-    return buf.toOwnedSlice(allocator) catch &.{};
+
+    encoder.endObject() catch {};
+    return buf.toOwnedSlice() catch &.{};
+}
+
+/// Helper to format decimal values with proper scale handling
+fn formatDecimalValue(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![]const u8 {
+    if (scale == 0) {
+        return std.fmt.allocPrint(allocator, "{d}", .{coeff});
+    }
+
+    var pow: i128 = 1;
+    var si: u8 = 0;
+    while (si < scale) : (si += 1) pow *= 10;
+
+    const whole: i128 = @divTrunc(coeff, pow);
+    const abs_coeff: i128 = if (coeff < 0) -coeff else coeff;
+    const frac: i128 = @mod(abs_coeff, pow);
+
+    var fracbuf: [32]u8 = undefined;
+    const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch return error.OutOfMemory;
+
+    if (ftmp.len < scale) {
+        const missing = scale - @as(u8, @intCast(ftmp.len));
+        var pad: [32]u8 = undefined;
+        @memset(pad[0..missing], '0');
+        return std.fmt.allocPrint(allocator, "{d}.{s}{s}", .{ whole, pad[0..missing], ftmp });
+    } else {
+        return std.fmt.allocPrint(allocator, "{d}.{s}", .{ whole, ftmp });
+    }
 }
 
 /// Write eval.Value to JSON writer with proper type formatting
+/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-013; FEATURE="JSON Library Migration"; ASPECT=WriteJsonValue; STATUS=TESTED; OWNER=server; UPDATED=2026-01-24
 pub fn writeJsonValue(w: anytype, v: eval.Value) !void {
     switch (v) {
         .Int => |iv| try w.print("{d}", .{iv}),
         .Bool => |bv| try w.writeAll(if (bv) "true" else "false"),
-        .Str => |s| blk: {
+        .Str => |s| {
             try w.writeAll("\"");
-            try w.writeAll(s);
+            try writeEscapedJsonString(w, s);
             try w.writeAll("\"");
-            break :blk;
         },
         .Null => try w.writeAll("null"),
-        .Decimal => |d| blkdec: {
+        .Decimal => |d| {
             // If original literal representation preserved, emit it directly for fidelity.
             if (d.orig_repr) |orig| {
                 try w.writeAll(orig);
-                break :blkdec;
+                return;
             }
             var buf: [64]u8 = undefined;
             const coeff = d.coeff;
             const scale = d.scale;
             if (scale == 0) {
-                const s = std.fmt.bufPrint(&buf, "{d}", .{coeff}) catch "0";
-                try w.writeAll(s);
-                break :blkdec;
+                const str = std.fmt.bufPrint(&buf, "{d}", .{coeff}) catch "0";
+                try w.writeAll(str);
+                return;
             }
             // Use exact scale (no trimming) because orig_repr absent (computed value); show full precision.
             var pow: i128 = 1;
@@ -215,13 +236,36 @@ pub fn writeJsonValue(w: anytype, v: eval.Value) !void {
                 const missing = scale - @as(u8, @intCast(ftmp.len));
                 var pad: [32]u8 = undefined;
                 @memset(pad[0..missing], '0');
-                const s = std.fmt.bufPrint(&buf, "{d}.{s}{s}", .{ whole, pad[0..missing], ftmp }) catch "0";
-                try w.writeAll(s);
+                const str = std.fmt.bufPrint(&buf, "{d}.{s}{s}", .{ whole, pad[0..missing], ftmp }) catch "0";
+                try w.writeAll(str);
             } else {
-                const s = std.fmt.bufPrint(&buf, "{d}.{s}", .{ whole, ftmp }) catch "0";
-                try w.writeAll(s);
+                const str = std.fmt.bufPrint(&buf, "{d}.{s}", .{ whole, ftmp }) catch "0";
+                try w.writeAll(str);
             }
         },
+    }
+}
+
+/// Write a string with proper JSON escaping (RFC 8259 compliant)
+fn writeEscapedJsonString(w: anytype, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try w.writeAll("\\\""),
+            '\\' => try w.writeAll("\\\\"),
+            '\n' => try w.writeAll("\\n"),
+            '\r' => try w.writeAll("\\r"),
+            '\t' => try w.writeAll("\\t"),
+            0x08 => try w.writeAll("\\b"), // backspace
+            0x0C => try w.writeAll("\\f"), // form feed
+            else => {
+                if (c < 0x20) {
+                    // Control characters: escape as \u00XX
+                    try w.print("\\u{X:0>4}", .{c});
+                } else {
+                    try w.writeByte(c);
+                }
+            },
+        }
     }
 }
 
@@ -232,30 +276,30 @@ const JSON_MAX_SIZE: usize = 10 * 1024 * 1024; // 10 MB max
 const JSON_MAX_DEPTH: usize = 32; // 32 levels max nesting
 
 pub fn parseParams(allocator: std.mem.Allocator, params_json: ?[]const u8, out_names: *[][]const u8, out_rows: *[][]const eval.Value) void {
-    std.log.err("[parseParams ENTRY] params_json is {s}", .{if (params_json) |p| p else "NULL"});
+    log.debug("parseParams ENTRY", &.{Attr.string("params_json", if (params_json) |p| p else "NULL")});
     if (params_json == null) {
-        std.log.err("[parseParams] Returning early - params_json is null", .{});
+        log.debug("parseParams returning early - params_json is null", &.{});
         return;
     }
     const src = params_json.?;
 
     // GAP-0117 SECURITY FIX: Validate JSON size before parsing
     if (src.len > JSON_MAX_SIZE) {
-        std.log.err("[parseParams] JSON too large: {d} bytes (max: {d})", .{ src.len, JSON_MAX_SIZE });
+        log.err("parseParams JSON too large", &.{ Attr.int("size", @intCast(src.len)), Attr.int("max_size", @intCast(JSON_MAX_SIZE)) });
         return;
     }
 
-    std.log.err("[parseParams] Will parse: {s}", .{src});
+    log.debug("parseParams will parse", &.{Attr.string("src", src)});
     // GAP-0117: Use max_depth option to prevent stack exhaustion
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, src, .{
         .max_depth = JSON_MAX_DEPTH,
     }) catch |err| {
-        std.log.err("[parseParams] JSON parse FAILED: {}", .{err});
+        log.err("parseParams JSON parse FAILED", &.{Attr.string("error", @errorName(err))});
         return;
     };
     defer parsed.deinit();
     if (parsed.value != .object) {
-        std.log.err("[parseParams] Parsed value is NOT AN OBJECT, type: {s}", .{@tagName(parsed.value)});
+        log.err("parseParams parsed value is NOT AN OBJECT", &.{Attr.string("type", @tagName(parsed.value))});
         return;
     }
 
@@ -263,9 +307,9 @@ pub fn parseParams(allocator: std.mem.Allocator, params_json: ?[]const u8, out_n
     var count: usize = 0;
     var it = parsed.value.object.iterator();
     while (it.next()) |_| count += 1;
-    std.log.err("[parseParams] Found {d} parameters", .{count});
+    log.debug("parseParams found parameters", &.{Attr.int("count", @intCast(count))});
     if (count == 0) {
-        std.log.err("[parseParams] NO PARAMETERS found in object", .{});
+        log.err("parseParams NO PARAMETERS found in object", &.{});
         return;
     }
 
@@ -812,7 +856,7 @@ pub fn evalExprToPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !gr
 
             if (registry.get(lowercase_name)) |func| {
                 const result = func(allocator, args) catch |err| {
-                    std.log.err("Function {s} failed with error: {}", .{ function_name, err });
+                    log.err("Function failed", &.{ Attr.string("function", function_name), Attr.string("error", @errorName(err)) });
                     break :blk_call .{ .Null = {} };
                 };
 
@@ -828,7 +872,7 @@ pub fn evalExprToPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !gr
                 };
             }
 
-            std.log.err("Function {s} (lowercase: {s}) not found in registry", .{ function_name, lowercase_name });
+            log.err("Function not found in registry", &.{ Attr.string("function", function_name), Attr.string("lowercase", lowercase_name) });
             break :blk_call .{ .Null = {} };
         },
         else => .{ .Null = {} }, // Default for unsupported expressions
@@ -1470,11 +1514,11 @@ fn detectVectorDimension(allocator: std.mem.Allocator, state: *server_state.Serv
             if (node.properties.get(property_name)) |prop_value| {
                 switch (prop_value) {
                     .VectorF32 => |vector| {
-                        std.log.info("Detected VectorF32 dimension: {d} from existing data", .{vector.dim});
+                        log.info("Detected VectorF32 dimension from existing data", &.{Attr.int("dimension", @intCast(vector.dim))});
                         return vector.dim;
                     },
                     .VectorI32 => |vector| {
-                        std.log.info("Detected VectorI32 dimension: {d} from existing data", .{vector.dim});
+                        log.info("Detected VectorI32 dimension from existing data", &.{Attr.int("dimension", @intCast(vector.dim))});
                         return vector.dim;
                     },
                     else => continue,
@@ -1534,7 +1578,7 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
         .vector_f32 => {
             // Vector indexes require dimension parameter - detect from existing data
             const dimension = detectVectorDimension(allocator, state, stmt.label, stmt.properties[0]) catch 128; // Default to 128 if detection fails
-            std.log.info("Creating vector index with detected dimension: {d}", .{dimension});
+            log.info("Creating vector index with detected dimension", &.{Attr.int("dimension", @intCast(dimension))});
             try index_manager.createAdvancedVectorIndex(stmt.name, dimension, .l2);
         },
         .spatial_geographic => {
@@ -1618,22 +1662,22 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
                                     if (index_type == .vector_f32) {
                                         // Use advanced vector index for vector_f32 type
                                         _ = index_manager.insertIntoAdvancedVectorIndex(stmt.name, vector, node_id) catch |err| {
-                                            std.log.warn("Failed to insert vector into advanced index {s}: {}", .{ stmt.name, err });
+                                            log.warn("Failed to insert vector into advanced index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
                                         };
                                     } else {
                                         // Use regular vector index for backward compatibility
                                         _ = index_manager.insertIntoVectorIndex(stmt.name, vector.data, node_id) catch |err| {
-                                            std.log.warn("Failed to insert vector into index {s}: {}", .{ stmt.name, err });
+                                            log.warn("Failed to insert vector into index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
                                         };
                                     }
                                     population_count += 1;
-                                    std.log.info("Added VectorF32 property to vector index: dim={d}, data_len={d}", .{ vector.dim, vector.data.len });
+                                    log.info("Added VectorF32 property to vector index", &.{ Attr.int("dim", @intCast(vector.dim)), Attr.int("data_len", @intCast(vector.data.len)) });
                                 },
                                 .VectorI32 => |vector| {
                                     // Convert VectorI32 to VectorF32 for HNSW indexing
                                     const vector_types = @import("../types/vector.zig");
                                     const f32_data = allocator.alloc(f32, vector.dim) catch |err| {
-                                        std.log.warn("Failed to allocate memory for VectorI32 conversion: {}", .{err});
+                                        log.warn("Failed to allocate memory for VectorI32 conversion", &.{Attr.string("error", @errorName(err))});
                                         continue;
                                     };
                                     defer allocator.free(f32_data);
@@ -1646,16 +1690,16 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
                                         // Convert to VectorF32 for advanced vector index
                                         const f32_vector = vector_types.VectorF32.fromSlice(f32_data);
                                         _ = index_manager.insertIntoAdvancedVectorIndex(stmt.name, f32_vector, node_id) catch |err| {
-                                            std.log.warn("Failed to insert converted VectorI32 into advanced index {s}: {}", .{ stmt.name, err });
+                                            log.warn("Failed to insert converted VectorI32 into advanced index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
                                         };
                                     } else {
                                         // Use regular vector index for backward compatibility
                                         _ = index_manager.insertIntoVectorIndex(stmt.name, f32_data, node_id) catch |err| {
-                                            std.log.warn("Failed to insert converted VectorI32 into index {s}: {}", .{ stmt.name, err });
+                                            log.warn("Failed to insert converted VectorI32 into index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
                                         };
                                     }
                                     population_count += 1;
-                                    std.log.info("Added VectorI32 property to vector index: dim={d}, data_len={d}", .{ vector.dim, vector.data.len });
+                                    log.info("Added VectorI32 property to vector index", &.{ Attr.int("dim", @intCast(vector.dim)), Attr.int("data_len", @intCast(vector.data.len)) });
                                 },
                                 else => {
                                     // Property is not a vector type, skip
@@ -1688,7 +1732,7 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
     // Create statistics entry for the new index
     stats_manager.createIndexStatistics(stmt.name, stats_index_type, stmt.label, stmt.properties) catch |err| {
         // Log error but don't fail index creation
-        std.log.warn("Failed to create index statistics for {s}: {}", .{ stmt.name, err });
+        log.warn("Failed to create index statistics", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
     };
 
     // Record initial population entries in statistics
@@ -2369,7 +2413,7 @@ fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, 
 
         // Also remove from graph storage manager
         graph_storage_mgr.dropGraphStorage(stmt.name) catch |err| {
-            std.log.warn("Failed to drop graph storage for '{s}': {s}", .{ stmt.name, @errorName(err) });
+            log.warn("Failed to drop graph storage", &.{ Attr.string("graph", stmt.name), Attr.string("error", @errorName(err)) });
         };
 
         return std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"{s} {s} dropped successfully\"}}\n", .{ graph_type, stmt.name });

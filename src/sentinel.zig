@@ -1,5 +1,10 @@
 const std = @import("std");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Memory; STATUS=IMPL; OWNER=memory; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("memory");
+const Attr = logging.Attr;
+
 /// GAP-0218 FIX: Real Sentinel Allocator Implementation
 /// Wraps an allocator with guard bytes to detect buffer overflows/underflows
 /// CANARY: REQ=REQ-MEM-SENTINEL-001; FEATURE="RealSentinelAllocator"; ASPECT=MemorySafety; STATUS=TESTED; TEST=test_gap_0218_sentinel_alloc; OWNER=memory; UPDATED=2026-01-16
@@ -65,7 +70,7 @@ pub const SentinelAllocator = struct {
         // Verify prefix guard is intact
         for (raw_ptr[0..PREFIX_GUARD_SIZE]) |byte| {
             if (byte != SENTINEL_PATTERN) {
-                std.log.err("SENTINEL: Buffer underflow detected at {*}", .{memory.ptr});
+                log.err("SENTINEL: Buffer underflow detected", &.{});
                 @panic("Buffer underflow detected by sentinel allocator");
             }
         }
@@ -73,7 +78,7 @@ pub const SentinelAllocator = struct {
         // Verify suffix guard is intact
         for ((raw_ptr + PREFIX_GUARD_SIZE + old_len)[0..SUFFIX_GUARD_SIZE]) |byte| {
             if (byte != SENTINEL_PATTERN) {
-                std.log.err("SENTINEL: Buffer overflow detected at {*}", .{memory.ptr});
+                log.err("SENTINEL: Buffer overflow detected", &.{});
                 @panic("Buffer overflow detected by sentinel allocator");
             }
         }
@@ -117,7 +122,7 @@ pub const SentinelAllocator = struct {
         }
 
         if (prefix_corrupted) {
-            std.log.err("SENTINEL: Buffer underflow detected at {*} during free", .{memory.ptr});
+            log.err("SENTINEL: Buffer underflow detected during free", &.{});
             @panic("Buffer underflow detected by sentinel allocator");
         }
 
@@ -131,7 +136,9 @@ pub const SentinelAllocator = struct {
         }
 
         if (suffix_corrupted) {
-            std.log.err("SENTINEL: Buffer overflow detected at {*}+{} during free", .{ memory.ptr, len });
+            log.err("SENTINEL: Buffer overflow detected during free", &.{
+                Attr.int("len", @intCast(len)),
+            });
             @panic("Buffer overflow detected by sentinel allocator");
         }
 

@@ -4,6 +4,11 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("execution");
+const Attr = logging.Attr;
+
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
@@ -419,7 +424,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 try cat.indexes.put(stored_key, index_info);
                 // Save catalog to disk after creating index
                 cat.save() catch |err| {
-                    std.log.err("CRITICAL: Failed to persist catalog after index creation  '{s}': {any}", .{ index_name, err });
+                    log.err("CRITICAL: Failed to persist catalog after index creation", &.{
+                        Attr.string("index_name", index_name),
+                        Attr.err("error", err),
+                    });
                 };
             }
 
@@ -499,7 +507,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Persist catalog
             cat.save() catch |err| {
-                std.log.err("CRITICAL: Failed to persist catalog after constraint creation '{s}': {any}", .{ cc.name, err });
+                log.err("CRITICAL: Failed to persist catalog after constraint creation", &.{
+                    Attr.string("constraint_name", cc.name),
+                    Attr.err("error", err),
+                });
             };
 
             return ExecutionResult{
@@ -548,7 +559,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 }
                 // Save catalog after dropping index
                 cat.save() catch |err| {
-                    std.log.err("CRITICAL: Failed to persist catalog after index drop  '{s}': {any}", .{ index_name, err });
+                    log.err("CRITICAL: Failed to persist catalog after index drop", &.{
+                        Attr.string("index_name", index_name),
+                        Attr.err("error", err),
+                    });
                 };
             } else if (!di.if_exists) {
                 return error.IndexNotFound;
@@ -597,7 +611,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 }
                 // Save catalog after dropping constraint
                 cat.save() catch |err| {
-                    std.log.err("CRITICAL: Failed to persist catalog after constraint drop '{s}': {any}", .{ dc.name, err });
+                    log.err("CRITICAL: Failed to persist catalog after constraint drop", &.{
+                        Attr.string("constraint_name", dc.name),
+                        Attr.err("error", err),
+                    });
                 };
             } else if (!dc.if_exists) {
                 return error.ConstraintNotFound;
@@ -663,7 +680,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const graph_name = cg.name;
 
             // DEBUG: Log IF NOT EXISTS flag
-            std.log.debug("CREATE GRAPH: name='{s}', if_not_exists={}, or_replace={}", .{ graph_name, cg.if_not_exists, cg.or_replace });
+            log.debug("CREATE GRAPH", &.{
+                Attr.string("name", graph_name),
+                Attr.bool("if_not_exists", cg.if_not_exists),
+                Attr.bool("or_replace", cg.or_replace),
+            });
 
             // Phase 3: Write lock for CREATE GRAPH
             cat.rwlock.lock();
@@ -681,18 +702,20 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             } else {
                 // Check if graph already exists
                 const graph_exists = cat.graphs.contains(graph_name);
-                std.log.debug("Graph exists check: exists={}", .{graph_exists});
+                log.debug("Graph exists check", &.{
+                    Attr.bool("exists", graph_exists),
+                });
                 if (graph_exists) {
                     // If IF NOT EXISTS is specified, silently succeed
                     if (cg.if_not_exists) {
-                        std.log.debug("IF NOT EXISTS specified, returning success", .{});
+                        log.debug("IF NOT EXISTS specified, returning success", &.{});
                         return ExecutionResult{
                             .columns = try allocator.alloc([]const u8, 0),
                             .rows = try allocator.alloc([]Value, 0),
                             .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
                         };
                     }
-                    std.log.debug("IF NOT EXISTS not specified, returning DuplicateGraph error", .{});
+                    log.debug("IF NOT EXISTS not specified, returning DuplicateGraph error", &.{});
                     return error.DuplicateGraph;
                 }
             }
@@ -703,7 +726,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Create actual graph storage for this graph
             _ = graph_storage_manager.createGraphStorage(allocator, graph_name) catch |err| {
-                std.log.err("Failed to create graph storage for '{s}': {any}", .{ graph_name, err });
+                log.err("Failed to create graph storage", &.{
+                    Attr.string("graph_name", graph_name),
+                    Attr.err("error", err),
+                });
                 // Remove from catalog on failure
                 _ = cat.graphs.remove(graph_name);
                 return err;
@@ -711,7 +737,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Save catalog to disk after creating graph
             cat.save() catch |err| {
-                std.log.err("CRITICAL: Failed to persist catalog after graph creation  '{s}': {any}", .{ graph_name, err });
+                log.err("CRITICAL: Failed to persist catalog after graph creation", &.{
+                    Attr.string("graph_name", graph_name),
+                    Attr.err("error", err),
+                });
             };
 
             return ExecutionResult{
@@ -766,7 +795,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Save FLE catalog to disk
             fle_catalog.saveCatalog(fle_cat) catch |err| {
-                std.log.err("CRITICAL: Failed to persist FLE catalog after type creation  '{s}': {any}", .{ cgt.name, err });
+                log.err("CRITICAL: Failed to persist FLE catalog after type creation", &.{
+                    Attr.string("type_name", cgt.name),
+                    Attr.err("error", err),
+                });
             };
 
             return ExecutionResult{
@@ -802,7 +834,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // This ensures SHOW GRAPHS no longer lists this graph
             graph_storage_manager.dropGraphStorage(graph_name) catch |err| {
                 // Log but don't fail - graph might only exist in one place
-                std.log.warn("dropGraphStorage for '{s}': {s}", .{ graph_name, @errorName(err) });
+                log.warn("dropGraphStorage failed", &.{
+                    Attr.string("graph_name", graph_name),
+                    Attr.err("error", err),
+                });
             };
 
             return ExecutionResult{
@@ -843,7 +878,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 try cat.schemas.put(try cat.allocator.dupe(u8, schema_name), {});
                 // Save catalog to disk after creating schema
                 cat.save() catch |err| {
-                    std.log.err("CRITICAL: Failed to persist catalog after schema creation  '{s}': {any}", .{ schema_name, err });
+                    log.err("CRITICAL: Failed to persist catalog after schema creation", &.{
+                        Attr.string("schema_name", schema_name),
+                        Attr.err("error", err),
+                    });
                 };
             }
 

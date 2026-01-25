@@ -1,6 +1,8 @@
 const std = @import("std");
+const strings = @import("strings");
 
 // CANARY: REQ=REQ-REPL-FUZZY-001; FEATURE="REPL Fuzzy Search"; ASPECT=Implementation; STATUS=TESTED; TEST=test_fuzzy_search; OWNER=repl; UPDATED=2025-11-17
+// CANARY: REQ=REQ-LIB-MIGRATION-STRINGS-001; FEATURE="External Library Migration"; ASPECT=StringsFuzzySearch; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
 
 /// Result of a fuzzy search match
 pub const FuzzyMatch = struct {
@@ -15,40 +17,18 @@ pub const FuzzyMatch = struct {
 };
 
 /// Calculate Levenshtein distance between two strings
+/// Delegates to external strings library for optimized implementation
 pub fn levenshteinDistance(allocator: std.mem.Allocator, s1: []const u8, s2: []const u8) !usize {
-    if (s1.len == 0) return s2.len;
-    if (s2.len == 0) return s1.len;
-
-    // Create matrix
-    const rows = s1.len + 1;
-    const cols = s2.len + 1;
-    var matrix = try allocator.alloc(usize, rows * cols);
-    defer allocator.free(matrix);
-
-    // Initialize first column and row
-    for (0..rows) |i| {
-        matrix[i * cols] = i;
+    // Use external library - no allocator needed for strings under 1024 chars
+    if (s1.len < 1024 and s2.len < 1024) {
+        return strings.fuzzy.levenshtein(s1, s2);
     }
-    for (0..cols) |j| {
-        matrix[j] = j;
-    }
-
-    // Fill matrix
-    for (1..rows) |i| {
-        for (1..cols) |j| {
-            const cost: usize = if (s1[i - 1] == s2[j - 1]) 0 else 1;
-            const deletion = matrix[(i - 1) * cols + j] + 1;
-            const insertion = matrix[i * cols + (j - 1)] + 1;
-            const substitution = matrix[(i - 1) * cols + (j - 1)] + cost;
-
-            matrix[i * cols + j] = @min(@min(deletion, insertion), substitution);
-        }
-    }
-
-    return matrix[(rows - 1) * cols + (cols - 1)];
+    // For large strings, use allocating version
+    return strings.fuzzy.levenshteinAlloc(allocator, s1, s2);
 }
 
 /// Calculate fuzzy match score (higher is better)
+/// Uses external strings library for Jaro-Winkler similarity with custom scoring adjustments
 pub fn fuzzyScore(allocator: std.mem.Allocator, query: []const u8, text: []const u8) !i32 {
     if (query.len == 0) return 0;
     if (text.len == 0) return -1000;
@@ -72,6 +52,10 @@ pub fn fuzzyScore(allocator: std.mem.Allocator, query: []const u8, text: []const
     if (std.mem.eql(u8, query_lower, text_lower)) {
         return 5000;
     }
+
+    // Use Jaro-Winkler similarity from external library (0.0 to 1.0)
+    const jw_similarity = strings.fuzzy.jaroWinkler(query_lower, text_lower);
+    score += @as(i32, @intFromFloat(jw_similarity * 1000.0));
 
     // Starts with bonus
     if (std.mem.startsWith(u8, text_lower, query_lower)) {
@@ -114,7 +98,7 @@ pub fn fuzzyScore(allocator: std.mem.Allocator, query: []const u8, text: []const
         score -= @as(i32, @intCast((query_lower.len - query_idx) * 50));
     }
 
-    // Levenshtein distance penalty
+    // Levenshtein distance penalty (using external library)
     const distance = try levenshteinDistance(allocator, query_lower, text_lower);
     score -= @as(i32, @intCast(distance)) * 10;
 

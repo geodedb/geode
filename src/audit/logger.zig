@@ -6,6 +6,32 @@ const syslog = @import("syslog.zig");
 const file_sink = @import("file_sink.zig");
 const time = @import("time.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-001; FEATURE="External Library Migration"; ASPECT=StructuredLogging; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// External structured logging library - slog-style logging with multiple handlers
+// Provides JSON output, secret redaction, network sinks, and metrics export
+const slog = @import("slog");
+
+/// Create a structured log attribute from an audit event field
+pub fn auditAttr(name: []const u8, value: anytype) slog.Attr {
+    const T = @TypeOf(value);
+    return switch (@typeInfo(T)) {
+        .int, .comptime_int => slog.Attr.int(name, @intCast(value)),
+        .pointer => |ptr| blk: {
+            if (ptr.size == .Slice and ptr.child == u8) {
+                break :blk slog.Attr.string(name, value);
+            }
+            break :blk slog.Attr.string(name, "unknown");
+        },
+        .optional => blk: {
+            if (value) |v| {
+                break :blk auditAttr(name, v);
+            }
+            break :blk slog.Attr.string(name, "null");
+        },
+        else => slog.Attr.string(name, "unknown"),
+    };
+}
+
 pub const AuditLogger = struct {
     allocator: std.mem.Allocator,
     config: config.Config,

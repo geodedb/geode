@@ -13,6 +13,11 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("execution");
+const Attr = logging.Attr;
+
 // Import from parent execution module
 const execution = @import("../execution.zig");
 const execution_helpers = @import("execution_helpers.zig"); // added for extractNodeId
@@ -4256,7 +4261,9 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else {
         // Unknown procedure - return error
-        std.log.warn("Unknown procedure: {s}", .{proc_name});
+        log.warn("Unknown procedure", &.{
+            Attr.string("procedure", proc_name),
+        });
         return ExecutionError.UnknownProcedure;
     }
 }

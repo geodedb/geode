@@ -2,6 +2,11 @@ const std = @import("std");
 const graph_exec = @import("graph/exec.zig");
 const audit = @import("../security/audit.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-013; FEATURE="Structured Logging"; ASPECT=GraphStorageManager; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("server");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-SERVER-REFACTOR-005; FEATURE="ServerRefactoring"; ASPECT=GRAPH_STORAGE; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=PerGraphStorage; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
 // Phase 3 M3.1 - Graph Storage Management Module (Incremental Extraction)
@@ -30,24 +35,24 @@ pub fn setAuditLogger(logger: *audit.AuditLogger) void {
 /// Attempts to load from persistent storage if data directory is set
 /// Falls back to creating new graph with sample data
 pub fn getOrCreateGraphStorage(allocator: std.mem.Allocator) *graph_exec.GraphStorage {
-    std.log.err("DEBUG: getOrCreateGraphStorage called, g_graph_storage is {s}", .{if (g_graph_storage == null) "null" else "set"});
+    log.debug("getOrCreateGraphStorage called", &.{Attr.string("g_graph_storage", if (g_graph_storage == null) "null" else "set")});
     if (g_graph_storage) |graph| {
-        std.log.err("DEBUG: Returning existing graph with {} nodes", .{graph.nodes.count()});
+        log.debug("Returning existing graph", &.{Attr.int("nodes", @intCast(graph.nodes.count()))});
         return graph;
     }
 
     // Try to load from persistent data first if data directory is available
     if (g_data_dir) |data_dir| {
         if (tryLoadGraphFromDir(allocator, data_dir)) |loaded_graph| {
-            std.log.err("DEBUG: Loaded graph from persistent data: {} nodes, {} edges", .{ loaded_graph.nodes.count(), loaded_graph.edges.items.len });
+            log.debug("Loaded graph from persistent data", &.{ Attr.int("nodes", @intCast(loaded_graph.nodes.count())), Attr.int("edges", @intCast(loaded_graph.edges.items.len)) });
             g_graph_storage = loaded_graph;
             return loaded_graph;
         } else |err| {
-            std.log.err("DEBUG: Failed to load graph from persistent data: {}", .{err});
+            log.debug("Failed to load graph from persistent data", &.{Attr.string("error", @errorName(err))});
             // Loading failed, continue to create new graph
         }
     } else {
-        std.log.err("DEBUG: No data directory available for persistence", .{});
+        log.debug("No data directory available for persistence", &.{});
     }
 
     // Create new graph and initialize with sample data if no persistent data
@@ -92,7 +97,7 @@ pub fn tryLoadGraphFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !
             const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{
                 .max_depth = json_max_depth,
             }) catch |err| {
-                std.log.warn("graph_storage: JSON parse error in nodes.jsonl: {}", .{err});
+                log.warn("JSON parse error in nodes.jsonl", &.{Attr.string("error", @errorName(err))});
                 continue;
             };
             defer parsed.deinit();
@@ -186,19 +191,19 @@ pub fn tryLoadGraphFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !
 pub fn saveGraphToDir(allocator: std.mem.Allocator, g: *const graph_exec.GraphStorage, dir_path: []const u8) void {
     // Create directory with error handling
     std.fs.cwd().makePath(dir_path) catch |err| {
-        std.log.warn("Failed to create directory {s}: {}", .{ dir_path, err });
+        log.warn("Failed to create directory", &.{ Attr.string("path", dir_path), Attr.string("error", @errorName(err)) });
         return;
     };
 
     // Save nodes with comprehensive error handling
     const nodes_path = std.mem.concat(allocator, u8, &.{ dir_path, "/nodes.jsonl" }) catch {
-        std.log.warn("Failed to allocate nodes path", .{});
+        log.warn("Failed to allocate nodes path", &.{});
         return;
     };
     defer allocator.free(nodes_path);
 
     var nodes_content = std.ArrayList(u8).initCapacity(allocator, 0) catch {
-        std.log.warn("Failed to allocate nodes content buffer", .{});
+        log.warn("Failed to allocate nodes content buffer", &.{});
         return;
     };
     defer nodes_content.deinit(allocator);
@@ -211,7 +216,7 @@ pub fn saveGraphToDir(allocator: std.mem.Allocator, g: *const graph_exec.GraphSt
 
         // Validate node structure before processing
         if (node_count > 10000) {
-            std.log.warn("Too many nodes, stopping save at {}", .{node_count});
+            log.warn("Too many nodes, stopping save", &.{Attr.int("node_count", @intCast(node_count))});
             break;
         }
 

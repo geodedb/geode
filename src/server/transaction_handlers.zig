@@ -8,6 +8,11 @@ const graph_store = @import("../graph_store.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const graph_exec = @import("graph/exec.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-016; FEATURE="Structured Logging"; ASPECT=TransactionHandlers; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("server");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-SERVER-REFACTOR-009; FEATURE="ServerRefactoring"; ASPECT=TRANSACTION_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - Transaction Message Handlers Module (Fifth Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
@@ -146,7 +151,7 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
                 const durable = wck.next_lsn;
                 wck.compact(durable) catch {};
                 // Log compaction for observability
-                std.log.info("WAL compaction triggered after {} commits, durable LSN: {}", .{ env_wal_compact_interval, durable });
+                log.info("WAL compaction triggered", &.{ Attr.int("commits_interval", @intCast(env_wal_compact_interval)), Attr.int("durable_lsn", @intCast(durable)) });
             }
         }
 

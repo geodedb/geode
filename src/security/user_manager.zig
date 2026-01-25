@@ -4,6 +4,9 @@ const auth = @import("geode_auth");
 const rls = @import("rls");
 const storage = @import("interface");
 const user_storage = @import("user_storage");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // User Management CLI and API
 pub const UserManager = struct {
@@ -101,7 +104,7 @@ pub const UserManager = struct {
         if (request.metadata) |_| {
             // Metadata field was removed from auth.User schema
             // Return error to inform callers that metadata is no longer supported
-            std.log.warn("User metadata field is deprecated and not supported", .{});
+            log.warn("User metadata field is deprecated and not supported", &.{});
             return error.MetadataFieldDeprecated;
         }
 

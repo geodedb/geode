@@ -1,6 +1,11 @@
 const std = @import("std");
 const iface = @import("interface");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("storage");
+const Attr = logging.Attr;
+
 // PERF: PHASE5_NEIGHBORS_LAZY_SORT - Lazy sorting for neighbors() to avoid O(n²) repeated sorts
 // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="GraphOptimization"; ASPECT=LAZY_SORT; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-11-16
 
@@ -69,7 +74,10 @@ pub const InMemory = struct {
 
                 // Mark as sorted (ignore errors - worst case is re-sorting)
                 self.adj_sorted.put(src, true) catch |err| {
-                    std.log.debug("Failed to mark adjacency list as sorted (performance impact only, src={}): {any}", .{ src, err });
+                    log.debug("Failed to mark adjacency list as sorted (performance impact only)", &.{
+                        Attr.uint("src", src),
+                        Attr.err("error", err),
+                    });
                 };
             }
 
@@ -93,7 +101,11 @@ pub const InMemory = struct {
             var tmp = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return .{ .items = &.{} };
             for (lst.items) |nid| {
                 if (self.hasLabel(nid, label)) tmp.append(self.allocator, nid) catch |err| {
-                    std.log.warn("Failed to append labeled neighbor (query results truncated, src={}, label={s}): {any}", .{ src, label, err });
+                    log.warn("Failed to append labeled neighbor (query results truncated)", &.{
+                        Attr.uint("src", src),
+                        Attr.string("label", label),
+                        Attr.err("error", err),
+                    });
                 };
             }
             std.mem.sort(u64, tmp.items, {}, std.sort.asc(u64));
@@ -111,7 +123,10 @@ pub const InMemory = struct {
         defer next.deinit(self.allocator);
         defer visited.deinit();
         frontier.append(self.allocator, seed) catch |err| {
-            std.log.err("CRITICAL: Failed to initialize n-hop traversal (query will fail, seed={}): {any}", .{ seed, err });
+            log.err("CRITICAL: Failed to initialize n-hop traversal (query will fail)", &.{
+                Attr.uint("seed", seed),
+                Attr.err("error", err),
+            });
         };
         var h: u32 = 0;
         while (h < hops) : (h += 1) {
@@ -125,10 +140,16 @@ pub const InMemory = struct {
                     const nid = it.items[j];
                     if (visited.get(nid) == null) {
                         visited.put(nid, {}) catch |err| {
-                            std.log.warn("Failed to track visited node (infinite loop possible if OOM, nid={}): {any}", .{ nid, err });
+                            log.warn("Failed to track visited node (infinite loop possible if OOM)", &.{
+                                Attr.uint("nid", nid),
+                                Attr.err("error", err),
+                            });
                         };
                         next.append(self.allocator, nid) catch |err| {
-                            std.log.warn("Failed to append to n-hop frontier (traversal truncated, nid={}): {any}", .{ nid, err });
+                            log.warn("Failed to append to n-hop frontier (traversal truncated)", &.{
+                                Attr.uint("nid", nid),
+                                Attr.err("error", err),
+                            });
                         };
                     }
                 }

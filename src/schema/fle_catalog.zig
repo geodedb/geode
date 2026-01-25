@@ -1,6 +1,11 @@
 const std = @import("std");
 const annotations = @import("annotations.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Schema; STATUS=IMPL; OWNER=schema; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("schema");
+const Attr = logging.Attr;
+
 // Global Schema Metadata Catalog
 // CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=SCHEMA; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
@@ -180,7 +185,9 @@ pub const SchemaCatalog = struct {
 
         // Save catalog after grant
         saveCatalog(self) catch |err| {
-            std.log.err("CRITICAL: Failed to persist catalog after plaintext access grant (security config lost on restart): {any}", .{err});
+            log.err("CRITICAL: Failed to persist catalog after plaintext access grant (security config lost on restart)", &.{
+                Attr.err("error", err),
+            });
         };
     }
 
@@ -238,7 +245,9 @@ pub const SchemaCatalog = struct {
 
         // Save catalog after revoke
         saveCatalog(self) catch |err| {
-            std.log.err("CRITICAL: Failed to persist catalog after plaintext access revoke (security config lost on restart): {any}", .{err});
+            log.err("CRITICAL: Failed to persist catalog after plaintext access revoke (security config lost on restart)", &.{
+                Attr.err("error", err),
+            });
         };
     }
 
@@ -267,7 +276,9 @@ pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
 
         // Load persisted catalog if it exists
         loadCatalog(catalog) catch |err| {
-            std.log.warn("Failed to load persisted catalog (starting with empty catalog): {any}", .{err});
+            log.warn("Failed to load persisted catalog (starting with empty catalog)", &.{
+                Attr.err("error", err),
+            });
         };
 
         global_catalog = catalog;

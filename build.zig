@@ -109,13 +109,154 @@ pub fn build(b: *std.Build) void {
     // Get version from git tags
     const version = getGitVersion(b);
 
+    // ==========================================================================
+    // Phase 1 External Library Dependencies (from build.zig.zon)
+    // ==========================================================================
+
+    // URI/URL parsing library (RFC 3986)
+    const uri_dep = b.dependency("uri", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const uri_mod = uri_dep.module("uri");
+
+    // YAML 1.2.2 parser/emitter
+    const yaml_dep = b.dependency("yaml", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const yaml_mod = yaml_dep.module("yaml");
+
+    // TOML v1.1.0 parser
+    const toml_dep = b.dependency("toml", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const toml_mod = toml_dep.module("toml");
+
+    // Unicode string library with SIMD acceleration
+    const strings_dep = b.dependency("strings", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const strings_mod = strings_dep.module("strings");
+
+    // REPL library with Emacs/Vi keybindings
+    const repl_dep = b.dependency("repl", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const repl_mod = repl_dep.module("repl");
+
+    // Data structures and graph algorithms library
+    const ds_dep = b.dependency("ds", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const ds_mod = ds_dep.module("ds");
+
+    // Vulkan compute library
+    const vulkan_dep = b.dependency("vulkan", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const vulkan_mod = vulkan_dep.module("vulkan");
+
+    // CUDA compute library
+    const cuda_dep = b.dependency("cuda", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const cuda_mod = cuda_dep.module("cuda");
+
+    // ==========================================================================
+    // Phase 2 External Library Dependencies (Core Libraries)
+    // ==========================================================================
+
+    // JSON parser/encoder - RFC 8259 compliant with JSON Schema 2020-12
+    const json_dep = b.dependency("json", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const json_mod = json_dep.module("json");
+
+    // TLS 1.3 implementation (ztls is the main public API module)
+    const tls_dep = b.dependency("tls", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const tls_mod = tls_dep.module("ztls");
+
+    // QUIC v1/v2 protocol - RFC 9000
+    const quic_ext_dep = b.dependency("quic", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const quic_ext_mod = quic_ext_dep.module("quic");
+
+    // ==========================================================================
+    // Phase 3 External Library Dependencies (Integration Libraries)
+    // ==========================================================================
+
+    // Structured logging - slog-style logging with multiple handlers
+    const slog_dep = b.dependency("slog", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const slog_mod = slog_dep.module("slogz");
+
+    // Configuration management - XDG compliant, multi-format support
+    const config_dep = b.dependency("config", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const config_mod = config_dep.module("config");
+
+    // ==========================================================================
+    // Phase 4 External Library Dependencies (Application Libraries)
+    // ==========================================================================
+
+    // CLI framework - Cobra/Viper-class command-line interface
+    const cli_dep = b.dependency("cli", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const cli_mod = cli_dep.module("zig_cli");
+
+    // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
+    const dns_dep = b.dependency("dns", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const dns_mod = dns_dep.module("dns");
+
+    // ==========================================================================
+    // Phase 5 External Library Dependencies (Optional Enhancements)
+    // ==========================================================================
+
+    // Model Context Protocol (MCP) - AI/LLM integration
+    const mcp_dep = b.dependency("mcp", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const mcp_mod = mcp_dep.module("mcp");
+
     // Modules - Level 0 (No dependencies on other internal modules)
     const fs_fsync_mod = b.createModule(.{ .root_source_file = b.path("src/storage/fs_fsync.zig") });
     const fsm_mod = b.createModule(.{ .root_source_file = b.path("src/storage/free_space_map.zig") });
     const commit_coord_mod = b.createModule(.{ .root_source_file = b.path("src/transactions/commit_coordinator.zig") });
+    // Storage page manager module - created early, imports added after logging_mod is defined
     const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
     const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
+
+    // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-004; FEATURE="Centralized Structured Logging"; ASPECT=BuildConfig; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+    // Centralized logging module using external slog library
+    const logging_mod = b.createModule(.{ .root_source_file = b.path("src/logging/logger.zig"), .target = target, .optimize = optimize });
+    logging_mod.addImport("slog", slog_mod);
+
+    // Add logging to storage_page_manager_shared (defined earlier in Level 0)
+    storage_page_manager_shared.addImport("logging", logging_mod);
 
     // Modules - Level 1 (Depends on Level 0)
 
@@ -126,6 +267,7 @@ pub fn build(b: *std.Build) void {
     wal_mod.addImport("key_provider", key_provider_mod);
     wal_mod.addImport("fs_fsync", fs_fsync_mod);
     wal_mod.addImport("commit_coordinator", commit_coord_mod);
+    wal_mod.addImport("logging", logging_mod);
 
     // Modules - Level 2 (Depends on Level 1)
 
@@ -133,13 +275,10 @@ pub fn build(b: *std.Build) void {
     const vacuum_mod = b.createModule(.{ .root_source_file = b.path("src/storage/page_vacuum.zig") });
     vacuum_mod.addImport("wal", wal_mod);
 
-    // Setup vendor/quic modules
-    const quic_vendor_setup = @import("vendor/quic/vendor_setup.zig");
-    const quic_modules = quic_vendor_setup.setupModules(b, "vendor/quic", target, optimize);
-
-    // Create transport/quic module early for global use (avoid duplicate module conflicts)
+    // QUIC Transport Module - Uses external QUIC library (Phase 2 migration complete)
+    // The external quic library provides the same API as the vendored version
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
-    transport_quic_mod.addImport("vendor_quic", quic_modules.quic_api);
+    transport_quic_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
 
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
@@ -163,7 +302,34 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("storage_page_manager", storage_page_manager_shared);
     // Transport/QUIC for kms_remote dependency chain (lib -> execution -> procedure_registry -> kms -> kms_remote)
     root_mod.addImport("transport/quic", transport_quic_mod);
-    root_mod.addImport("vendor_quic", quic_modules.quic_api);
+    root_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
+
+    // Phase 1 External Library Imports (foundation libraries)
+    root_mod.addImport("uri", uri_mod);
+    root_mod.addImport("yaml", yaml_mod);
+    root_mod.addImport("toml", toml_mod);
+    root_mod.addImport("strings", strings_mod);
+    root_mod.addImport("repl", repl_mod);
+    root_mod.addImport("ds", ds_mod);
+    root_mod.addImport("vulkan", vulkan_mod);
+    root_mod.addImport("cuda", cuda_mod);
+
+    // Phase 2 External Library Imports (core libraries)
+    root_mod.addImport("json", json_mod);
+    root_mod.addImport("tls", tls_mod);
+    root_mod.addImport("quic_ext", quic_ext_mod);
+
+    // Phase 3 External Library Imports (integration libraries)
+    root_mod.addImport("slog", slog_mod);
+    root_mod.addImport("config", config_mod);
+    root_mod.addImport("logging", logging_mod);
+
+    // Phase 4 External Library Imports (application libraries)
+    root_mod.addImport("cli", cli_mod);
+    root_mod.addImport("dns", dns_mod);
+
+    // Phase 5 External Library Imports (optional enhancements)
+    root_mod.addImport("mcp", mcp_mod);
 
     // Main unified CLI binary with server and client capabilities
     const geode_exe = b.addExecutable(.{
@@ -177,7 +343,37 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("page_vacuum", vacuum_mod);
     geode_exe.root_module.addImport("commit_coord", commit_coord_mod);
 
-    // Link with OpenSSL for vendor/quic crypto operations
+    // Phase 1 External Library Imports for CLI
+    geode_exe.root_module.addImport("uri", uri_mod);
+    geode_exe.root_module.addImport("yaml", yaml_mod);
+    geode_exe.root_module.addImport("toml", toml_mod);
+    geode_exe.root_module.addImport("strings", strings_mod);
+    geode_exe.root_module.addImport("repl", repl_mod);
+    geode_exe.root_module.addImport("ds", ds_mod);
+    geode_exe.root_module.addImport("vulkan", vulkan_mod);
+    geode_exe.root_module.addImport("cuda", cuda_mod);
+
+    // Phase 2 External Library Imports for CLI (core libraries)
+    geode_exe.root_module.addImport("json", json_mod);
+    // NOTE: TLS and QUIC imports disabled until external library build issues are resolved
+    // geode_exe.root_module.addImport("tls", tls_mod);
+    // geode_exe.root_module.addImport("quic_ext", quic_ext_mod);
+
+    // Phase 3 External Library Imports for CLI (integration libraries)
+    geode_exe.root_module.addImport("slog", slog_mod);
+    geode_exe.root_module.addImport("config", config_mod);
+
+    // Phase 4 External Library Imports for CLI (application libraries)
+    geode_exe.root_module.addImport("cli", cli_mod);
+    geode_exe.root_module.addImport("dns", dns_mod);
+
+    // Phase 5 External Library Imports for CLI (optional enhancements)
+    geode_exe.root_module.addImport("mcp", mcp_mod);
+
+    // Add centralized logging module for CLI
+    geode_exe.root_module.addImport("logging", logging_mod);
+
+    // Link with OpenSSL for QUIC/TLS crypto operations (external library)
     // Only link system libraries for native builds (not cross-compilation)
     geode_exe.linkLibC();
     const is_native = target.query.isNative();
@@ -193,16 +389,27 @@ pub fn build(b: *std.Build) void {
     // Note: transport_quic_mod is defined later after vendor_quic_mod is available
 
     const protocol_mod = b.createModule(.{ .root_source_file = b.path("src/protocol.zig"), .target = target, .optimize = optimize });
+    // Add external JSON library for RFC 8259 compliant parsing in protocol module
+    protocol_mod.addImport("json", json_mod);
     geode_exe.root_module.addImport("protocol", protocol_mod);
 
     // M11: Add storage/backup module for CLI to eliminate BackupConfig duplication
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
     storage_backup_mod.addImport("wal", wal_mod);
+    storage_backup_mod.addImport("logging", logging_mod);
     geode_exe.root_module.addImport("storage/backup", storage_backup_mod);
 
     // M11a: Add migration module for CLI migrate commands
     const migration_mod_cli = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
     geode_exe.root_module.addImport("migration", migration_mod_cli);
+
+    // Phase 5: Add MCP module for CLI mcp commands
+    const mcp_cli_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/mod.zig"), .target = target, .optimize = optimize });
+    mcp_cli_mod.addImport("mcp", mcp_mod);
+    mcp_cli_mod.addImport("transport/quic", transport_quic_mod);
+    // LSP tools access GQL through the main geode module
+    mcp_cli_mod.addImport("geode", root_mod);
+    geode_exe.root_module.addImport("geode_mcp", mcp_cli_mod);
 
     // M12: Add storage/stress_test module for CLI
     const storage_stress_mod = b.createModule(.{ .root_source_file = b.path("src/storage/stress_test.zig"), .target = target, .optimize = optimize });
@@ -346,6 +553,7 @@ pub fn build(b: *std.Build) void {
     // Real path encryption benchmark skeleton (invokes placeholder hashing until wired to encryptPage)
     const tde_encrypt_pages_exe = b.addExecutable(.{ .name = "benchmark_tde_encrypt_pages", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_encrypt_pages.zig"), .target = target, .optimize = optimize }) });
     const storage_crypto_mod = b.createModule(.{ .root_source_file = b.path("src/storage/crypto.zig"), .target = target, .optimize = optimize });
+    storage_crypto_mod.addImport("logging", logging_mod);
     tde_encrypt_pages_exe.root_module.addImport("storage_crypto", storage_crypto_mod);
     const run_tde_encrypt_pages = b.addRunArtifact(tde_encrypt_pages_exe);
     bench_step.dependOn(&run_tde_encrypt_pages.step);
@@ -387,6 +595,7 @@ pub fn build(b: *std.Build) void {
 
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("geode", root_mod);
+    graph_algo_tests.root_module.addImport("logging", logging_mod);
     const run_graph_algo_tests = b.addRunArtifact(graph_algo_tests);
 
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
@@ -401,6 +610,8 @@ pub fn build(b: *std.Build) void {
     const repl_advanced_tests = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/client/repl/test_repl_advanced_features.zig"), .target = target, .optimize = optimize }),
     });
+    // Add external library imports for fuzzy search module
+    repl_advanced_tests.root_module.addImport("strings", strings_mod);
     const run_repl_advanced_tests = b.addRunArtifact(repl_advanced_tests);
 
     const integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_integration.zig"), .target = target, .optimize = optimize }) });
@@ -435,6 +646,8 @@ pub fn build(b: *std.Build) void {
     // Create vulkan_compute module with vulkan_loader as dependency
     const vulkan_compute_mod = b.createModule(.{ .root_source_file = b.path("src/gpu/vulkan_compute.zig"), .target = target, .optimize = optimize });
     vulkan_compute_mod.addImport("vulkan_loader.zig", vulkan_loader_mod);
+    // Add external vulkan library for availability checking and future migration
+    vulkan_compute_mod.addImport("vulkan", vulkan_mod);
 
     const vulkan_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gpu/test_vulkan_basic.zig"), .target = target, .optimize = optimize }) });
     vulkan_tests.root_module.addImport("vulkan_compute", vulkan_compute_mod);
@@ -456,8 +669,8 @@ pub fn build(b: *std.Build) void {
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("migration", migration_mod);
-    // Logging module shared
-    const logging_mod = b.createModule(.{ .root_source_file = b.path("src/log/logger.zig"), .target = target, .optimize = optimize });
+    // Logging module shared (uses centralized slog-based logging)
+    custom_tests.root_module.addImport("logging", logging_mod);
     custom_tests.root_module.addImport("log/logger.zig", logging_mod);
     // Provide WAL module for recovery optimization benchmarks
     // Use the global wal_mod defined earlier
@@ -485,11 +698,13 @@ pub fn build(b: *std.Build) void {
     storage_backup_mod_tests.addImport("wal", wal_mod);
     storage_backup_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
     storage_backup_mod_tests.addImport("storage_catalog", storage_catalog_mod_tests);
+    storage_backup_mod_tests.addImport("logging", logging_mod);
     custom_tests.root_module.addImport("storage_backup", storage_backup_mod_tests);
 
     // WAL compaction pipeline module (checkpoint selection / compaction orchestration / archival hook)
     const wal_compaction_pipeline_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/wal_compaction_pipeline.zig"), .target = target, .optimize = optimize });
     wal_compaction_pipeline_mod_tests.addImport("wal", wal_mod);
+    wal_compaction_pipeline_mod_tests.addImport("logging", logging_mod);
     custom_tests.root_module.addImport("storage/wal_compaction_pipeline.zig", wal_compaction_pipeline_mod_tests);
 
     // Selectivity estimator module (frequency sampler + adaptive feedback)
@@ -597,6 +812,12 @@ pub fn build(b: *std.Build) void {
     cli_tests.root_module.addImport("geode", root_mod);
     const run_cli_tests = b.addRunArtifact(cli_tests);
     test_step.dependOn(&run_cli_tests.step);
+
+    // Config integration tests (YAML, TOML, JSON format support)
+    const config_integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_config_integration.zig"), .target = target, .optimize = optimize }) });
+    config_integration_tests.root_module.addImport("config", config_mod);
+    const run_config_integration_tests = b.addRunArtifact(config_integration_tests);
+    test_step.dependOn(&run_config_integration_tests.step);
 
     // LSP implementation tests
     const lsp_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/test_runner.zig"), .target = target, .optimize = optimize }) });
@@ -813,7 +1034,7 @@ pub fn build(b: *std.Build) void {
     // transport_quic_mod is defined early (line ~141) and shared across all modules
     // Add transport modules to unified geode binary
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
-    geode_exe.root_module.addImport("vendor_quic", quic_modules.quic_api);
+    geode_exe.root_module.addImport("vendor_quic", quic_ext_mod);
 
     // Add audit CLI module for verification functionality
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
@@ -822,7 +1043,7 @@ pub fn build(b: *std.Build) void {
     // Remote KMS CANARY tests (generate, attest, privileged unwrap). Reuse transport/vendored QUIC modules.
     const remote_kms_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms.zig"), .target = target, .optimize = optimize }) });
     remote_kms_tests.root_module.addImport("transport/quic", transport_quic_mod);
-    remote_kms_tests.root_module.addImport("vendor_quic", quic_modules.quic_api);
+    remote_kms_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     // Expose kms_remote server/client module under alias security/kms_remote
     const kms_remote_mod = b.createModule(.{ .root_source_file = b.path("src/security/kms_remote.zig"), .target = target, .optimize = optimize });
     // kms_remote depends on transport/quic
@@ -836,7 +1057,7 @@ pub fn build(b: *std.Build) void {
     // Remote KMS hardening tests (negative auth matrix, expired attestation, concurrency stress & variance bench)
     const remote_kms_hardening_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms_hardening.zig"), .target = target, .optimize = optimize }) });
     remote_kms_hardening_tests.root_module.addImport("transport/quic", transport_quic_mod);
-    remote_kms_hardening_tests.root_module.addImport("vendor_quic", quic_modules.quic_api);
+    remote_kms_hardening_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     remote_kms_hardening_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     if (target.result.os.tag == .windows) {
         remote_kms_hardening_tests.linkLibC();
@@ -846,7 +1067,7 @@ pub fn build(b: *std.Build) void {
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
     const remote_kms_concurrency_bench = b.addExecutable(.{ .name = "bench_remote_kms_unwrap_concurrency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_remote_kms_unwrap_concurrency.zig"), .target = target, .optimize = optimize }) });
     remote_kms_concurrency_bench.root_module.addImport("transport/quic", transport_quic_mod);
-    remote_kms_concurrency_bench.root_module.addImport("vendor_quic", quic_modules.quic_api);
+    remote_kms_concurrency_bench.root_module.addImport("vendor_quic", quic_ext_mod);
     remote_kms_concurrency_bench.root_module.addImport("security/kms_remote", kms_remote_mod);
     if (target.result.os.tag == .windows) {
         remote_kms_concurrency_bench.linkLibC();
@@ -943,15 +1164,18 @@ pub fn build(b: *std.Build) void {
     const mfa_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa.zig"), .target = target, .optimize = optimize });
     const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/geode_auth_lib.zig"), .target = target, .optimize = optimize });
     auth_mod.addImport("mfa", mfa_mod);
+    auth_mod.addImport("logging", logging_mod);
     root_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("mfa", mfa_mod);
 
     const rls_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls_core.zig"), .target = target, .optimize = optimize });
     rls_mod.addImport("geode_auth", auth_mod);
+    rls_mod.addImport("logging", logging_mod);
     root_mod.addImport("rls", rls_mod);
 
     const audit_security_mod = b.createModule(.{ .root_source_file = b.path("src/security/audit.zig"), .target = target, .optimize = optimize });
     audit_security_mod.addImport("rls", rls_mod);
+    audit_security_mod.addImport("logging", logging_mod);
 
     const storage_interface_mod = b.createModule(.{ .root_source_file = b.path("src/storage/interface.zig"), .target = target, .optimize = optimize });
 
@@ -968,7 +1192,8 @@ pub fn build(b: *std.Build) void {
     test_harness_mod.addImport("fle_annotations", fle_annotations_mod);
     // Transport/QUIC for kms_remote dependency chain (test_harness -> execution -> procedure_registry -> kms -> kms_remote)
     test_harness_mod.addImport("transport/quic", transport_quic_mod);
-    test_harness_mod.addImport("vendor_quic", quic_modules.quic_api);
+    test_harness_mod.addImport("vendor_quic", quic_ext_mod);
+    test_harness_mod.addImport("logging", logging_mod);
 
     // Add interface to page manager module
     storage_page_manager_shared.addImport("interface", storage_interface_mod);
@@ -983,10 +1208,12 @@ pub fn build(b: *std.Build) void {
     user_manager_mod.addImport("rls", rls_mod);
     user_manager_mod.addImport("interface", storage_interface_mod);
     user_manager_mod.addImport("user_storage", user_storage_mod);
+    user_manager_mod.addImport("logging", logging_mod);
 
     // Create a new inmemory storage module that imports interface
     const storage_inmemory_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
     storage_inmemory_mod.addImport("interface", storage_interface_mod);
+    storage_inmemory_mod.addImport("logging", logging_mod);
 
     user_auth_exe.root_module.addImport("geode_auth", auth_mod);
     user_auth_exe.root_module.addImport("rls", rls_mod);
@@ -1113,6 +1340,7 @@ pub fn build(b: *std.Build) void {
         .name = "bench_regress",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/bench_regress.zig"), .target = target, .optimize = optimize }),
     });
+    bench_regress_exe.root_module.addImport("logging", logging_mod);
     b.installArtifact(bench_regress_exe);
     tools_step.dependOn(&bench_regress_exe.step);
 
@@ -1145,6 +1373,7 @@ pub fn build(b: *std.Build) void {
         .name = "fed_latency_governance",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_governance.zig"), .target = target, .optimize = optimize }),
     });
+    fed_latency_governance_exe.root_module.addImport("logging", logging_mod);
     b.installArtifact(fed_latency_governance_exe);
     tools_step.dependOn(&fed_latency_governance_exe.step);
 
@@ -1187,6 +1416,7 @@ pub fn build(b: *std.Build) void {
     wal_scan_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
     wal_scan_mod.addImport("storage_page_manager", storage_page_manager_shared);
     wal_scan_mod.addImport("key_provider", key_provider_mod);
+    wal_scan_mod.addImport("logging", logging_mod);
     wal_compact_exe.root_module.addImport("wal", wal_scan_mod);
     wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     b.installArtifact(wal_compact_exe);
@@ -1204,6 +1434,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/key_rotate.zig"), .target = target, .optimize = optimize }),
     });
     const crypto_mod = b.createModule(.{ .root_source_file = b.path("src/storage/crypto_simple.zig"), .target = target, .optimize = optimize });
+    crypto_mod.addImport("logging", logging_mod);
     key_rotate_exe.root_module.addImport("crypto", crypto_mod);
     b.installArtifact(key_rotate_exe);
     tools_step.dependOn(&key_rotate_exe.step);
@@ -1255,6 +1486,7 @@ pub fn build(b: *std.Build) void {
     const crypto_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/storage/crypto.zig"), .target = target, .optimize = optimize }),
     });
+    crypto_test.root_module.addImport("logging", logging_mod);
     test_step.dependOn(&crypto_test.step);
 
     const ml_test = b.addTest(.{
@@ -1265,6 +1497,7 @@ pub fn build(b: *std.Build) void {
     const streaming_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc.zig"), .target = target, .optimize = optimize }),
     });
+    streaming_test.root_module.addImport("logging", logging_mod);
     test_step.dependOn(&streaming_test.step);
 
     const temporal_test = b.addTest(.{

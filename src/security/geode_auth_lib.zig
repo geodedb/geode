@@ -5,6 +5,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
 const mfa = @import("mfa");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 // Note: hash_module import will need to be configured via build.zig module system
 // For now, use std.crypto.pwhash.argon2 directly
 
@@ -428,7 +431,10 @@ pub const SecurityManager = struct {
                     if (u.attributes.get("risk_score")) |rs| {
                         risk_score = std.fmt.parseInt(u8, rs, 10) catch blk: {
                             // GAP-0149: Invalid risk_score treated as HIGH risk (fail-secure)
-                            std.log.warn("SECURITY WARNING: Invalid risk_score attribute '{s}' for user {d} - treating as max risk", .{ rs, u.id });
+                            log.warn("Invalid risk_score attribute - treating as max risk (fail-secure)", &.{
+                                Attr.string("risk_score_value", rs),
+                                Attr.int("user_id", @intCast(u.id)),
+                            });
                             break :blk 255; // Max risk = always require MFA
                         };
                     } else risk_score = 0;
@@ -706,7 +712,9 @@ pub const SecurityManager = struct {
             argon2_params,
             .argon2id,
         ) catch |err| {
-            std.log.err("Argon2id hashing failed: {}", .{err});
+            log.err("Argon2id hashing failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return error.HashingFailed;
         };
 
@@ -762,12 +770,15 @@ pub const SecurityManager = struct {
 
         // Legacy Blake2b format (64 hex chars) - for migration only
         if (stored_hash.len == 64 and isHexString(stored_hash)) {
-            std.log.warn("Legacy Blake2b hash detected - recommend password reset for Argon2id upgrade", .{});
+            log.warn("Legacy Blake2b hash detected - recommend password reset for Argon2id upgrade", &.{});
             return self.verifyBlake2bLegacy(password, stored_hash);
         }
 
         // Unknown format
-        std.log.err("Unrecognized password hash format (len={}, prefix={s})", .{ stored_hash.len, stored_hash[0..@min(10, stored_hash.len)] });
+        log.err("Unrecognized password hash format", &.{
+            Attr.int("hash_length", @intCast(stored_hash.len)),
+            Attr.string("prefix", stored_hash[0..@min(10, stored_hash.len)]),
+        });
         return error.InvalidHashFormat;
     }
 
@@ -1020,9 +1031,10 @@ pub const SecurityManager = struct {
                 // Production: Generate random 32-byte password (hex encoded to 64 chars)
                 std.crypto.random.bytes(&generated_password_buf);
                 generated_password_hex = std.fmt.bytesToHex(generated_password_buf, .lower);
-                std.log.warn("SECURITY: Generated random admin password (REQUIRES IMMEDIATE CHANGE):", .{});
-                std.log.warn("ADMIN_PASSWORD={s}", .{generated_password_hex[0..32]}); // Only first 32 chars
-                std.log.warn("Set GEODE_DEFAULT_PASSWORD env var to use a custom password.", .{});
+                log.warn("Generated random admin password (REQUIRES IMMEDIATE CHANGE)", &.{
+                    Attr.string("password_hint", generated_password_hex[0..32]),
+                    Attr.string("action", "Set GEODE_DEFAULT_PASSWORD env var to use a custom password"),
+                });
                 break :blk generated_password_hex[0..32];
             }
             // Debug builds: Use "geodesic" for testing convenience
@@ -1068,7 +1080,9 @@ pub const SecurityManager = struct {
         try self.audit_log.append(.user_created, id, "DEFAULT_USER_CREATED username={s} password_source={s} REQUIRES_IMMEDIATE_RESET", .{ admin_username, password_source });
 
         if (password_from_env) {
-            std.log.warn("Default user created with env password. SECURITY: Ensure GEODE_DEFAULT_PASSWORD is not in git/logs. Password reset required on first login.", .{});
+            log.warn("Default user created with env password - password reset required on first login", &.{
+                Attr.string("warning", "Ensure GEODE_DEFAULT_PASSWORD is not in git/logs"),
+            });
         }
     }
 

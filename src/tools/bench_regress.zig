@@ -1,6 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Tools; STATUS=IMPL; OWNER=tools; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("tools");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-GQL-010; FEATURE="Benchmark Regression Check"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BenchRegressionCompare; OWNER=engine; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-010; FEATURE="Benchmark Regression JSON Summary"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BenchRegressionJsonSummary; OWNER=engine; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-010; FEATURE="Benchmark Baseline Refresh"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BenchBaselineRefresh; OWNER=engine; UPDATED=2025-09-20
@@ -18,7 +23,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
     if (args.len < 3) {
-        std.log.err("usage: bench_regress <baseline.jsonl> <current.jsonl> [tolerance_pct=15] [--write-baseline <out.jsonl>] [--force]", .{});
+        log.err("usage: bench_regress <baseline.jsonl> <current.jsonl> [tolerance_pct=15] [--write-baseline <out.jsonl>] [--force]", &.{});
         return error.InvalidArgs;
     }
     const baseline_path = args[1];
@@ -44,7 +49,9 @@ pub fn main() !void {
             const parsed = std.fmt.parseFloat(f64, a) catch null;
             if (parsed) |v| tolerance_pct = v;
         } else {
-            std.log.warn("unrecognized arg: {s}", .{a});
+            log.warn("unrecognized arg", &.{
+                Attr.string("arg", a),
+            });
         }
     }
 
@@ -73,19 +80,27 @@ pub fn main() !void {
                         failures += 1;
                         const msg = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ kind, metric_name });
                         try regression_list.append(allocator, msg);
-                        std.log.err("REGRESSION kind={s} metric={s} baseline={d} current={d} tol_pct={d:.2}", .{ kind, metric_name, base_val, cur_val, tolerance_pct });
+                        log.err("REGRESSION detected", &.{
+                            Attr.string("kind", kind),
+                            Attr.string("metric", metric_name),
+                            Attr.int("baseline", @intCast(base_val)),
+                            Attr.int("current", @intCast(cur_val)),
+                            Attr.float("tol_pct", tolerance_pct),
+                        });
                     }
                 }
             }
         } else {
-            std.log.warn("Missing current metrics for kind={s}", .{kind});
+            log.warn("Missing current metrics", &.{
+                Attr.string("kind", kind),
+            });
         }
     }
 
     // Write baseline if requested and allowed
     if (write_baseline) |out_path| {
         if (failures > 0 and !force) {
-            std.log.err("Refusing to write new baseline due to regressions (use --force)", .{});
+            log.err("Refusing to write new baseline due to regressions (use --force)", &.{});
             return error.RegressionDetected;
         }
         try writeBaseline(out_path, &current_map);

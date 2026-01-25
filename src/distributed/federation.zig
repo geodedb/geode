@@ -5,6 +5,10 @@ const exec = @import("../exec.zig");
 const raft = @import("raft.zig");
 const quic = @import("../transport/quic.zig");
 
+const logging = @import("logging");
+const log = logging.scoped("federation");
+const Attr = logging.Attr;
+
 /// Federation configuration
 pub const FederationConfig = struct {
     /// Enable distributed query federation
@@ -185,7 +189,7 @@ pub const Connection = struct {
             if (env) |v| {
                 defer self.allocator.free(v);
                 if (std.mem.eql(u8, v, "1")) {
-                    std.log.warn("SECURITY WARNING: Federation TLS verification disabled via GEODE_FEDERATION_INSECURE", .{});
+                    log.warn("SECURITY WARNING: Federation TLS verification disabled via GEODE_FEDERATION_INSECURE", &.{});
                     break :blk true;
                 }
             }

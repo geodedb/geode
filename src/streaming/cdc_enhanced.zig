@@ -5,6 +5,11 @@ const FileSink = cdc_sinks.FileSink;
 const WebhookSink = @import("sinks/webhook_sink.zig").WebhookSink;
 const KafkaSink = @import("sinks/kafka_sink.zig").KafkaSink;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Streaming; STATUS=IMPL; OWNER=streaming; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("streaming");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-11-12
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Lifecycle"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Retention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Retention; OWNER=streaming; UPDATED=2025-09-20
@@ -561,13 +566,17 @@ pub const CDCEngine = struct {
             const now = std.time.milliTimestamp();
             if (now - self.last_flush >= self.config.flush_interval_ms) {
                 self.flush() catch |err| {
-                    std.log.err("CDC flush failed: {}", .{err});
+                    log.err("CDC flush failed", &.{
+                        Attr.err("error", err),
+                    });
                 };
             }
 
             // Clean up old events
             self.cleanupOldEvents() catch |err| {
-                std.log.err("CDC cleanup failed: {}", .{err});
+                log.err("CDC cleanup failed", &.{
+                    Attr.err("error", err),
+                });
             };
         }
     }
@@ -734,18 +743,26 @@ pub const CDCEngine = struct {
             if (!self.guardrail_warn_triggered and ratio >= self.config.malformed_warn_pct) {
                 self.guardrail_warn_triggered = true;
                 self.first_warn_ts_ms = std.time.milliTimestamp();
-                std.log.warn("CDC malformed WAL warn threshold triggered ratio={d:.3}", .{ratio});
-                std.log.warn("CDCMalformedWarn ratio={d:.3} ts_ms={d}", .{ ratio, self.first_warn_ts_ms });
+                log.warn("CDC malformed WAL warn threshold triggered", &.{
+                    Attr.float("ratio", ratio),
+                    Attr.int("ts_ms", self.first_warn_ts_ms),
+                });
             }
             if (!self.guardrail_abort_triggered and ratio >= self.config.malformed_abort_pct) {
                 self.guardrail_abort_triggered = true;
                 self.first_abort_ts_ms = std.time.milliTimestamp();
-                std.log.err("CDC malformed WAL abort threshold triggered ratio={d:.3}", .{ratio});
-                std.log.err("CDCMalformedAbort ratio={d:.3} ts_ms={d}", .{ ratio, self.first_abort_ts_ms });
+                log.err("CDC malformed WAL abort threshold triggered", &.{
+                    Attr.float("ratio", ratio),
+                    Attr.int("ts_ms", self.first_abort_ts_ms),
+                });
             }
             self.mutex.unlock();
             if (count == 1 or (count % self.config.malformed_snapshot_interval == 0)) {
-                std.log.warn("CDC malformed WAL record count={} attempts={} ratio={d:.3}", .{ count, attempt, @as(f64, @floatFromInt(self.malformed_wal_records)) / @as(f64, @floatFromInt(self.total_wal_attempts)) });
+                log.warn("CDC malformed WAL record", &.{
+                    Attr.int("count", @intCast(count)),
+                    Attr.int("attempts", @intCast(attempt)),
+                    Attr.float("ratio", @as(f64, @floatFromInt(self.malformed_wal_records)) / @as(f64, @floatFromInt(self.total_wal_attempts))),
+                });
             }
             return; // counted & dropped
         }
@@ -1084,7 +1101,9 @@ pub const StreamingEngine = struct {
         while (self.is_running) {
             // Process events from CDC
             self.processEvents() catch |err| {
-                std.log.err("Stream processing error: {}", .{err});
+                log.err("Stream processing error", &.{
+                    Attr.err("error", err),
+                });
             };
 
             if (@hasDecl(std.time, "sleep")) {

@@ -1,5 +1,8 @@
 const std = @import("std");
 const crypto = std.crypto;
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // CANARY: REQ=REQ-AUTH-001; FEATURE="UserManagement"; ASPECT=Authentication; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 // User management system with bcrypt password hashing and role-based access control
@@ -366,9 +369,10 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
 
         // Log if password was generated (only on first startup)
         if (generated_password) {
-            std.log.warn("SECURITY: Generated initial admin password. Set GEODE_ADMIN_PASSWORD environment variable for production.", .{});
-            std.log.warn("SECURITY: Initial admin username: {s}", .{admin_user});
-            // Note: In production, this should be written to a secure file, not logged
+            log.warn("Generated initial admin password - Set GEODE_ADMIN_PASSWORD environment variable for production", &.{
+                Attr.string("admin_username", admin_user),
+                Attr.string("note", "In production, password should be written to a secure file, not logged"),
+            });
         }
     }
 }

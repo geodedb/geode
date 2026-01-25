@@ -22,6 +22,11 @@ const arrays = @import("types/arrays.zig");
 const bitstring = @import("types/bitstring.zig");
 const range = @import("types/range.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=ValueTypes; STATUS=IMPL; OWNER=value_types; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("value_types");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-M5.2-VALUE-TYPES-002; FEATURE="Error Handling"; ASPECT=EvalError; STATUS=TESTED; TEST=geodetestlab/specs/geode_edge_cases_errors.yml; OWNER=value_types; UPDATED=2025-11-13
 /// Evaluation errors that can occur during expression evaluation and query execution
 pub const EvalError = error{
@@ -167,7 +172,11 @@ pub const Env = struct {
         while (i < self.param_names.len) : (i += 1) {
             if (std.mem.eql(u8, self.param_names[i], name)) {
                 if (i >= self.param_values.len) {
-                    std.log.err("Env.get mismatch: param_names.len={d}, param_values.len={d}, i={d}", .{ self.param_names.len, self.param_values.len, i });
+                    log.err("Env.get mismatch", &.{
+                        Attr.int("param_names_len", @intCast(self.param_names.len)),
+                        Attr.int("param_values_len", @intCast(self.param_values.len)),
+                        Attr.int("i", @intCast(i)),
+                    });
                     return null;
                 }
                 return self.param_values[i];

@@ -2,6 +2,110 @@ const std = @import("std");
 const GqlLexer = @import("gql/lexer.zig");
 const GqlParser = @import("gql/parser.zig");
 const heap = @import("storage/heap.zig");
+
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-001; FEATURE="External Library Migration"; ASPECT=JSONEncoding; STATUS=TESTED; OWNER=core; UPDATED=2026-01-24
+// External JSON library - RFC 8259 compliant with JSON Schema 2020-12 support
+// Provides enhanced parsing, schema validation, SIMD acceleration, and type-safe encoding
+const json_lib = @import("json");
+
+// ============================================================================
+// PROTOCOL RESPONSE TYPES - Type-safe JSON encoding for wire protocol frames
+// ============================================================================
+
+/// SCHEMA response frame - sent when query returns column metadata
+pub const SchemaResponse = struct {
+    status_class: []const u8 = "00000",
+    result: SchemaResult,
+
+    pub const SchemaResult = struct {
+        type: []const u8 = "SCHEMA",
+        columns: []const SchemaCol,
+        additional_statuses: ?[]const []const u8 = null,
+        flagger_findings: ?[]const []const u8 = null,
+    };
+};
+
+/// BINDINGS response frame - sent when query returns row data
+/// Note: The 'rows' field contains pre-encoded JSON and must be handled specially
+pub const BindingsResponse = struct {
+    status_class: []const u8 = "00000",
+    result: BindingsResult,
+
+    pub const BindingsResult = struct {
+        type: []const u8 = "BINDINGS",
+        ordered: bool,
+        order_keys: []const []const u8,
+        // rows is handled separately as raw JSON
+        final: bool,
+        additional_statuses: ?[]const []const u8 = null,
+        flagger_findings: ?[]const []const u8 = null,
+    };
+};
+
+/// EXPLAIN response frame - sent for EXPLAIN queries
+pub const ExplainResponse = struct {
+    status_class: []const u8 = "00000",
+    result: ExplainResult,
+
+    pub const ExplainResult = struct {
+        type: []const u8 = "EXPLAIN",
+        // json payload is handled separately as raw JSON
+        flagger_findings: ?[]const []const u8 = null,
+    };
+};
+
+/// PROFILE response frame - sent for PROFILE queries
+pub const ProfileResponse = struct {
+    status_class: []const u8 = "00000",
+    result: ProfileResult,
+
+    pub const ProfileResult = struct {
+        type: []const u8 = "PROFILE",
+        // json payload is handled separately as raw JSON
+        flagger_findings: ?[]const []const u8 = null,
+    };
+};
+
+/// CDC_DIAGNOSTICS response frame
+pub const CdcDiagnosticsResponse = struct {
+    status_class: []const u8 = "00000",
+    result: CdcDiagnosticsResult,
+
+    pub const CdcDiagnosticsResult = struct {
+        type: []const u8 = "CDC_DIAGNOSTICS",
+        // json payload is handled separately as raw JSON
+    };
+};
+
+/// CDC_CONTROL response frame
+pub const CdcControlResponse = struct {
+    status_class: []const u8 = "00000",
+    result: CdcControlResult,
+
+    pub const CdcControlResult = struct {
+        type: []const u8 = "CDC_CONTROL",
+        action: []const u8,
+        status: []const u8,
+        guardrail_epoch: u64,
+    };
+};
+
+/// ERROR response frame
+pub const ErrorResponse = struct {
+    status_class: []const u8,
+    status_subclass: ?[]const u8 = null,
+    result: ErrorResult,
+
+    pub const ErrorResult = struct {
+        type: []const u8 = "ERROR",
+        code: []const u8,
+        message: []const u8,
+        anchor: []const u8,
+        additional_statuses: ?[]const []const u8 = null,
+        flagger_findings: ?[]const []const u8 = null,
+    };
+};
+
 // CANARY: REQ=REQ-GQL-005; FEATURE="Binary Protocol Core"; ASPECT=Wire; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_005_HelloRoundTrip; OWNER=wire; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCDiagnosticsProtocol; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsProtocol; OWNER=wire; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCControlProtocol; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=wire; UPDATED=2025-09-20
@@ -212,88 +316,84 @@ pub fn compareBindingRows(
     return .eq;
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-002; FEATURE="JSON Library Migration"; ASPECT=SchemaFrame; STATUS=TESTED; OWNER=protocol; UPDATED=2026-01-24
 pub fn buildSchemaLine(allocator: std.mem.Allocator, cols: []const SchemaCol, additional: []const []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 16) catch return error.OutOfMemory;
-    errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
-    try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
-    var i: usize = 0;
-    while (i < cols.len) : (i += 1) {
-        if (i > 0) try w.writeAll(",");
-        try w.writeAll("{\"name\":\"");
-        try w.writeAll(cols[i].name);
-        try w.writeAll("\",\"type\":\"");
-        try w.writeAll(cols[i].type);
-        try w.writeAll("\"}");
-    }
-    try w.writeAll("]");
-    if (additional.len > 0) {
-        try w.writeAll(",\"additional_statuses\":[");
-        var ai: usize = 0;
-        while (ai < additional.len) : (ai += 1) {
-            if (ai > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(additional[ai]);
-            try w.writeAll("\"");
-        }
-        try w.writeAll("]");
-    }
-    if (flags.len > 0) {
-        try w.writeAll(",\"flagger_findings\":[");
-        var fi: usize = 0;
-        while (fi < flags.len) : (fi += 1) {
-            if (fi > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(flags[fi]);
-            try w.writeAll("\"");
-        }
-        try w.writeAll("]");
-    }
-    try w.writeAll("}}\n");
-    return buf.toOwnedSlice(allocator);
+    const response = SchemaResponse{
+        .result = .{
+            .columns = cols,
+            .additional_statuses = if (additional.len > 0) additional else null,
+            .flagger_findings = if (flags.len > 0) flags else null,
+        },
+    };
+
+    const json_str = try json_lib.encode(allocator, response, .{});
+    defer allocator.free(json_str);
+
+    // Append newline for wire protocol
+    const result = try allocator.alloc(u8, json_str.len + 1);
+    @memcpy(result[0..json_str.len], json_str);
+    result[json_str.len] = '\n';
+    return result;
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-003; FEATURE="JSON Library Migration"; ASPECT=BindingsFrame; STATUS=TESTED; OWNER=protocol; UPDATED=2026-01-24
 pub fn buildBindingsLine(allocator: std.mem.Allocator, ordered: bool, order_keys: []const []const u8, rows_json: []const u8, final: bool, additional: []const []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
+    // Use streaming encoder to handle raw JSON embedding for rows field
+    var buf = std.ArrayList(u8).initCapacity(allocator, 256) catch return error.OutOfMemory;
     errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
-    try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":");
-    try w.writeAll(if (ordered) "true" else "false");
-    try w.writeAll(",\"order_keys\":[");
-    var i: usize = 0;
-    while (i < order_keys.len) : (i += 1) {
-        if (i > 0) try w.writeAll(",");
-        try w.writeAll("\"");
-        try w.writeAll(order_keys[i]);
-        try w.writeAll("\"");
+
+    var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+
+    try encoder.beginObject();
+
+    try encoder.field("status_class");
+    try encoder.string("00000");
+
+    try encoder.field("result");
+    try encoder.beginObject();
+
+    try encoder.field("type");
+    try encoder.string("BINDINGS");
+
+    try encoder.field("ordered");
+    try encoder.boolean(ordered);
+
+    try encoder.field("order_keys");
+    try encoder.beginArray();
+    for (order_keys) |key| {
+        try encoder.string(key);
     }
-    try w.writeAll("],\"rows\":");
-    try w.writeAll(rows_json);
-    try w.writeAll(",\"final\":");
-    try w.writeAll(if (final) "true" else "false");
+    try encoder.endArray();
+
+    try encoder.field("rows");
+    try encoder.raw(rows_json); // Embed pre-encoded JSON directly
+
+    try encoder.field("final");
+    try encoder.boolean(final);
+
     if (additional.len > 0) {
-        try w.writeAll(",\"additional_statuses\":[");
-        var ai: usize = 0;
-        while (ai < additional.len) : (ai += 1) {
-            if (ai > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(additional[ai]);
-            try w.writeAll("\"");
+        try encoder.field("additional_statuses");
+        try encoder.beginArray();
+        for (additional) |status| {
+            try encoder.string(status);
         }
-        try w.writeAll("]");
+        try encoder.endArray();
     }
+
     if (flags.len > 0) {
-        try w.writeAll(",\"flagger_findings\":[");
-        var fi: usize = 0;
-        while (fi < flags.len) : (fi += 1) {
-            if (fi > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(flags[fi]);
-            try w.writeAll("\"");
+        try encoder.field("flagger_findings");
+        try encoder.beginArray();
+        for (flags) |flag| {
+            try encoder.string(flag);
         }
-        try w.writeAll("]");
+        try encoder.endArray();
     }
-    try w.writeAll("}}\n");
+
+    try encoder.endObject(); // result
+    try encoder.endObject(); // root
+
+    // Append newline for wire protocol
+    try buf.append(allocator, '\n');
     return buf.toOwnedSlice(allocator);
 }
 
@@ -361,218 +461,213 @@ test "TestCANARY_REQ_GQL_005_ProtocolImplementationFlagsEnumeration" {
     try std.testing.expect(found_illegal and found_tiebreak and found_collation);
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-004; FEATURE="JSON Library Migration"; ASPECT=ExplainFrame; STATUS=TESTED; OWNER=protocol; UPDATED=2026-01-24
 pub fn buildExplainLine(allocator: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).initCapacity(allocator, 256) catch return error.OutOfMemory;
     errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
-    try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"EXPLAIN\",\"json\":");
-    try w.writeAll(json_payload);
+
+    var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+
+    try encoder.beginObject();
+
+    try encoder.field("status_class");
+    try encoder.string("00000");
+
+    try encoder.field("result");
+    try encoder.beginObject();
+
+    try encoder.field("type");
+    try encoder.string("EXPLAIN");
+
+    try encoder.field("json");
+    try encoder.raw(json_payload); // Embed pre-encoded JSON directly
+
     if (flags.len > 0) {
-        try w.writeAll(",\"flagger_findings\":[");
-        var fi: usize = 0;
-        while (fi < flags.len) : (fi += 1) {
-            if (fi > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(flags[fi]);
-            try w.writeAll("\"");
+        try encoder.field("flagger_findings");
+        try encoder.beginArray();
+        for (flags) |flag| {
+            try encoder.string(flag);
         }
-        try w.writeAll("]");
+        try encoder.endArray();
     }
-    try w.writeAll("}}\n");
+
+    try encoder.endObject(); // result
+    try encoder.endObject(); // root
+
+    try buf.append(allocator, '\n');
     return buf.toOwnedSlice(allocator);
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="JSON Library Migration"; ASPECT=ProfileFrame; STATUS=TESTED; OWNER=protocol; UPDATED=2026-01-24
 pub fn buildProfileLine(allocator: std.mem.Allocator, json_payload: []const u8, flags: []const []const u8) ![]u8 {
-    const prefix = "{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":";
-    const suffix = "}}\n";
-    // Compute flags serialization length
-    var flags_len: usize = 0;
-    if (flags.len > 0) {
-        // ,"flagger_findings":["flag1","flag2"]
-        flags_len += ",\"flagger_findings\":[".len; // opening
-        var i: usize = 0;
-        while (i < flags.len) : (i += 1) {
-            if (i > 0) flags_len += 1; // comma
-            flags_len += 2; // quotes
-            flags_len += flags[i].len;
-        }
-        flags_len += 1; // closing ]
+    // Estimate total size for sanity check (preserve overflow protection)
+    var estimated_size: usize = 100 + json_payload.len; // base frame overhead
+    for (flags) |f| {
+        estimated_size += f.len + 3; // quotes + comma
     }
-    const total = prefix.len + json_payload.len + flags_len + suffix.len;
-    if (PROTOCOL_DEBUG) std.debug.print("[debug] buildProfileLine pre total_calc payload={d} flags_len={d} prefix={d} suffix={d}\n", .{ json_payload.len, flags_len, prefix.len, suffix.len });
-    if (total < prefix.len or total < json_payload.len) return error.OutOfMemory; // overflow guard
-    if (total > 1_000_000 and json_payload.len < 10_000) {
-        if (PROTOCOL_DEBUG) std.debug.print("[warn] buildProfileLine suspicious total={d} payload={d} flags={d}; using fallback minimal profile frame\n", .{ total, json_payload.len, flags.len });
+
+    if (PROTOCOL_DEBUG) std.debug.print("[debug] buildProfileLine payload={d} flags={d} estimated={d}\n", .{ json_payload.len, flags.len, estimated_size });
+
+    // Overflow/corruption guard: if estimated is suspiciously large relative to payload, emit fallback
+    if (estimated_size > 1_000_000 and json_payload.len < 10_000) {
+        if (PROTOCOL_DEBUG) std.debug.print("[warn] buildProfileLine suspicious estimated={d} payload={d} flags={d}; using fallback minimal profile frame\n", .{ estimated_size, json_payload.len, flags.len });
         const fallback = "{\"status_class\":\"00000\",\"result\":{\"type\":\"PROFILE\",\"json\":{\"profile_version\":2,\"ops\":[],\"totals\":{}}}}\n";
-        if (allocator.dupe(u8, fallback)) |dup| return dup else |_| {
-            const buf = try allocator.alloc(u8, fallback.len);
-            @memcpy(buf, fallback);
-            return buf;
-        }
+        return try allocator.dupe(u8, fallback);
     }
-    var out = try allocator.alloc(u8, total);
-    var idx: usize = 0;
-    // Instrumentation
-    if (PROTOCOL_DEBUG) std.debug.print("[debug] buildProfileLine(safe) total={d} payload={d} flags={d}\n", .{ total, json_payload.len, flags.len });
-    @memcpy(out[idx .. idx + prefix.len], prefix);
-    idx += prefix.len;
-    if (json_payload.len > 0) {
-        @memcpy(out[idx .. idx + json_payload.len], json_payload);
-        idx += json_payload.len;
-    }
+
+    var buf = std.ArrayList(u8).initCapacity(allocator, 256) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+
+    var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+
+    try encoder.beginObject();
+
+    try encoder.field("status_class");
+    try encoder.string("00000");
+
+    try encoder.field("result");
+    try encoder.beginObject();
+
+    try encoder.field("type");
+    try encoder.string("PROFILE");
+
+    try encoder.field("json");
+    try encoder.raw(json_payload); // Embed pre-encoded JSON directly
+
     if (flags.len > 0) {
-        const open = ",\"flagger_findings\":[";
-        @memcpy(out[idx .. idx + open.len], open);
-        idx += open.len;
-        var fi: usize = 0;
-        while (fi < flags.len) : (fi += 1) {
-            if (fi > 0) {
-                out[idx] = ',';
-                idx += 1;
-            }
-            out[idx] = '"';
-            idx += 1;
-            const f = flags[fi];
-            if (idx + f.len + 1 > total) return error.OutOfMemory;
-            @memcpy(out[idx .. idx + f.len], f);
-            idx += f.len;
-            out[idx] = '"';
-            idx += 1;
+        try encoder.field("flagger_findings");
+        try encoder.beginArray();
+        for (flags) |flag| {
+            try encoder.string(flag);
         }
-        out[idx] = ']';
-        idx += 1;
+        try encoder.endArray();
     }
-    @memcpy(out[idx .. idx + suffix.len], suffix);
-    idx += suffix.len;
-    // Safety assert
-    if (idx != total and PROTOCOL_DEBUG) std.debug.print("[debug] buildProfileLine length mismatch idx={d} total={d}\n", .{ idx, total });
-    return out;
+
+    try encoder.endObject(); // result
+    try encoder.endObject(); // root
+
+    try buf.append(allocator, '\n');
+    return buf.toOwnedSlice(allocator);
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-006; FEATURE="JSON Library Migration"; ASPECT=CdcDiagnosticsFrame; STATUS=TESTED; OWNER=protocol; UPDATED=2026-01-24
 pub fn buildCdcDiagnosticsLine(allocator: std.mem.Allocator, json_payload: []const u8) ![]u8 {
-    // Minimal frame: status_class 00000 and result type CDC_DIAGNOSTICS with nested json field
-    const prefix = "{\"status_class\":\"00000\",\"result\":{\"type\":\"CDC_DIAGNOSTICS\",\"json\":";
-    const suffix = "}}\n";
-    const total = prefix.len + json_payload.len + suffix.len;
-    var out = try allocator.alloc(u8, total);
-    @memcpy(out[0..prefix.len], prefix);
-    @memcpy(out[prefix.len .. prefix.len + json_payload.len], json_payload);
-    @memcpy(out[prefix.len + json_payload.len .. total], suffix);
-    return out;
+    var buf = std.ArrayList(u8).initCapacity(allocator, 256) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+
+    var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+
+    try encoder.beginObject();
+
+    try encoder.field("status_class");
+    try encoder.string("00000");
+
+    try encoder.field("result");
+    try encoder.beginObject();
+
+    try encoder.field("type");
+    try encoder.string("CDC_DIAGNOSTICS");
+
+    try encoder.field("json");
+    try encoder.raw(json_payload);
+
+    try encoder.endObject(); // result
+    try encoder.endObject(); // root
+
+    try buf.append(allocator, '\n');
+    return buf.toOwnedSlice(allocator);
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-007; FEATURE="JSON Library Migration"; ASPECT=CdcControlFrame; STATUS=TESTED; OWNER=protocol; UPDATED=2026-01-24
 pub fn buildCdcControlLine(allocator: std.mem.Allocator, action: []const u8, status: []const u8, epoch: u64) ![]u8 {
-    // Frame: {"status_class":"00000","result":{"type":"CDC_CONTROL","action":"<action>","status":"<status>","guardrail_epoch":<epoch>}}
-    var buf = std.ArrayList(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
-    errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
-    try w.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"CDC_CONTROL\",\"action\":\"");
-    try w.writeAll(action);
-    try w.writeAll("\",\"status\":\"");
-    try w.writeAll(status);
-    try w.writeAll("\",\"guardrail_epoch\":");
-    var tmp: [32]u8 = undefined;
-    const s = std.fmt.bufPrint(&tmp, "{d}", .{epoch}) catch "0";
-    try w.writeAll(s);
-    try w.writeAll("}}\n");
-    return buf.toOwnedSlice(allocator);
+    const response = CdcControlResponse{
+        .result = .{
+            .action = action,
+            .status = status,
+            .guardrail_epoch = epoch,
+        },
+    };
+
+    const json_str = try json_lib.encode(allocator, response, .{});
+    defer allocator.free(json_str);
+
+    // Append newline for wire protocol
+    const result = try allocator.alloc(u8, json_str.len + 1);
+    @memcpy(result[0..json_str.len], json_str);
+    result[json_str.len] = '\n';
+    return result;
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-008; FEATURE="JSON Library Migration"; ASPECT=ErrorFrame; STATUS=TESTED; OWNER=protocol; UPDATED=2026-01-24
 pub fn buildErrorLine(allocator: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
-    errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
-    try w.writeAll("{\"status_class\":\"02000\",\"status_subclass\":\"");
-    try w.writeAll(code);
-    try w.writeAll("\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
-    try w.writeAll(code);
-    try w.writeAll("\",\"message\":\"");
-    try w.writeAll(message);
-    try w.writeAll("\",\"anchor\":\"");
-    try w.writeAll(anchor);
-    try w.writeAll("\"}}\n");
-    return buf.toOwnedSlice(allocator);
+    const response = ErrorResponse{
+        .status_class = "02000",
+        .status_subclass = code,
+        .result = .{
+            .code = code,
+            .message = message,
+            .anchor = anchor,
+        },
+    };
+
+    const json_str = try json_lib.encode(allocator, response, .{});
+    defer allocator.free(json_str);
+
+    // Append newline for wire protocol
+    const result = try allocator.alloc(u8, json_str.len + 1);
+    @memcpy(result[0..json_str.len], json_str);
+    result[json_str.len] = '\n';
+    return result;
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-009; FEATURE="JSON Library Migration"; ASPECT=ErrorFrameWithFlags; STATUS=TESTED; OWNER=protocol; UPDATED=2026-01-24
 pub fn buildErrorLineWithFlags(allocator: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8, additional: []const []const u8, flags: []const []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
-    errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
-    try w.writeAll("{\"status_class\":\"02000\",\"status_subclass\":\"");
-    try w.writeAll(code);
-    try w.writeAll("\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
-    try w.writeAll(code);
-    try w.writeAll("\",\"message\":\"");
-    try w.writeAll(message);
-    try w.writeAll("\",\"anchor\":\"");
-    try w.writeAll(anchor);
-    try w.writeAll("\"");
-    if (additional.len > 0) {
-        try w.writeAll(",\"additional_statuses\":[");
-        var i: usize = 0;
-        while (i < additional.len) : (i += 1) {
-            if (i > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(additional[i]);
-            try w.writeAll("\"");
-        }
-        try w.writeAll("]");
-    }
-    if (flags.len > 0) {
-        try w.writeAll(",\"flagger_findings\":[");
-        var fi: usize = 0;
-        while (fi < flags.len) : (fi += 1) {
-            if (fi > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(flags[fi]);
-            try w.writeAll("\"");
-        }
-        try w.writeAll("]");
-    }
-    try w.writeAll("}}\n");
-    return buf.toOwnedSlice(allocator);
+    const response = ErrorResponse{
+        .status_class = "02000",
+        .status_subclass = code,
+        .result = .{
+            .code = code,
+            .message = message,
+            .anchor = anchor,
+            .additional_statuses = if (additional.len > 0) additional else null,
+            .flagger_findings = if (flags.len > 0) flags else null,
+        },
+    };
+
+    const json_str = try json_lib.encode(allocator, response, .{});
+    defer allocator.free(json_str);
+
+    // Append newline for wire protocol
+    const result = try allocator.alloc(u8, json_str.len + 1);
+    @memcpy(result[0..json_str.len], json_str);
+    result[json_str.len] = '\n';
+    return result;
 }
 
+// CANARY: REQ=REQ-LIB-MIGRATION-JSON-010; FEATURE="JSON Library Migration"; ASPECT=ErrorFrameCustomStatus; STATUS=TESTED; OWNER=protocol; UPDATED=2026-01-24
 pub fn buildErrorLineWithFlagsCustomStatus(allocator: std.mem.Allocator, code: []const u8, message: []const u8, anchor: []const u8, additional: []const []const u8, flags: []const []const u8, status_override: ?[]const u8) ![]u8 {
     const status_class = status_override orelse "02000";
-    var buf = std.ArrayList(u8).initCapacity(allocator, 32) catch return error.OutOfMemory;
-    errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
-    try w.writeAll("{\"status_class\":\"");
-    try w.writeAll(status_class);
-    try w.writeAll("\",\"status_subclass\":\"");
-    try w.writeAll(code);
-    try w.writeAll("\",\"result\":{\"type\":\"ERROR\",\"code\":\"");
-    try w.writeAll(code);
-    try w.writeAll("\",\"message\":\"");
-    try w.writeAll(message);
-    try w.writeAll("\",\"anchor\":\"");
-    try w.writeAll(anchor);
-    try w.writeAll("\"");
-    if (additional.len > 0) {
-        try w.writeAll(",\"additional_statuses\":[");
-        var ai: usize = 0;
-        while (ai < additional.len) : (ai += 1) {
-            if (ai > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(additional[ai]);
-            try w.writeAll("\"");
-        }
-        try w.writeAll("]");
-    }
-    if (flags.len > 0) {
-        try w.writeAll(",\"flagger_findings\":[");
-        var fi: usize = 0;
-        while (fi < flags.len) : (fi += 1) {
-            if (fi > 0) try w.writeAll(",");
-            try w.writeAll("\"");
-            try w.writeAll(flags[fi]);
-            try w.writeAll("\"");
-        }
-        try w.writeAll("]");
-    }
-    try w.writeAll("}}\n");
-    return buf.toOwnedSlice(allocator);
+
+    const response = ErrorResponse{
+        .status_class = status_class,
+        .status_subclass = code,
+        .result = .{
+            .code = code,
+            .message = message,
+            .anchor = anchor,
+            .additional_statuses = if (additional.len > 0) additional else null,
+            .flagger_findings = if (flags.len > 0) flags else null,
+        },
+    };
+
+    const json_str = try json_lib.encode(allocator, response, .{});
+    defer allocator.free(json_str);
+
+    // Append newline for wire protocol
+    const result = try allocator.alloc(u8, json_str.len + 1);
+    @memcpy(result[0..json_str.len], json_str);
+    result[json_str.len] = '\n';
+    return result;
 }
 
 pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !ClientMessage {
@@ -1032,4 +1127,89 @@ pub fn emitValueAsJson(writer: anytype, value: heap.Value, allocator: std.mem.Al
             try writer.writeAll("]");
         },
     }
+}
+
+// ============================================================================
+// JSON LIBRARY MIGRATION TESTS
+// ============================================================================
+
+test "TestCANARY_REQ_LIB_MIGRATION_JSON_002_SchemaLineFormat" {
+    const cols = [_]SchemaCol{
+        .{ .name = "id", .type = "INT" },
+        .{ .name = "name", .type = "STRING" },
+    };
+    const line = try buildSchemaLine(std.testing.allocator, &cols, &.{}, &.{});
+    defer std.testing.allocator.free(line);
+
+    // Verify it's valid JSON by parsing it
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, line[0 .. line.len - 1], .{});
+    defer parsed.deinit();
+
+    // Check structure
+    try std.testing.expectEqualStrings("00000", parsed.value.object.get("status_class").?.string);
+    const result = parsed.value.object.get("result").?.object;
+    try std.testing.expectEqualStrings("SCHEMA", result.get("type").?.string);
+    try std.testing.expectEqual(@as(usize, 2), result.get("columns").?.array.items.len);
+}
+
+test "TestCANARY_REQ_LIB_MIGRATION_JSON_003_BindingsLineFormat" {
+    const order_keys = [_][]const u8{"col1"};
+    const line = try buildBindingsLine(std.testing.allocator, true, &order_keys, "[{\"x\":1}]", true, &.{}, &.{});
+    defer std.testing.allocator.free(line);
+
+    // Verify it's valid JSON
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, line[0 .. line.len - 1], .{});
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("00000", parsed.value.object.get("status_class").?.string);
+    const result = parsed.value.object.get("result").?.object;
+    try std.testing.expectEqualStrings("BINDINGS", result.get("type").?.string);
+    try std.testing.expect(result.get("ordered").?.bool);
+    try std.testing.expect(result.get("final").?.bool);
+    try std.testing.expectEqual(@as(usize, 1), result.get("rows").?.array.items.len);
+}
+
+test "TestCANARY_REQ_LIB_MIGRATION_JSON_007_CdcControlLineFormat" {
+    const line = try buildCdcControlLine(std.testing.allocator, "reset", "success", 12345);
+    defer std.testing.allocator.free(line);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, line[0 .. line.len - 1], .{});
+    defer parsed.deinit();
+
+    const result = parsed.value.object.get("result").?.object;
+    try std.testing.expectEqualStrings("CDC_CONTROL", result.get("type").?.string);
+    try std.testing.expectEqualStrings("reset", result.get("action").?.string);
+    try std.testing.expectEqualStrings("success", result.get("status").?.string);
+    try std.testing.expectEqual(@as(i64, 12345), result.get("guardrail_epoch").?.integer);
+}
+
+test "TestCANARY_REQ_LIB_MIGRATION_JSON_008_ErrorLineFormat" {
+    const line = try buildErrorLine(std.testing.allocator, "42000", "Syntax error", "line 1");
+    defer std.testing.allocator.free(line);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, line[0 .. line.len - 1], .{});
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("02000", parsed.value.object.get("status_class").?.string);
+    try std.testing.expectEqualStrings("42000", parsed.value.object.get("status_subclass").?.string);
+
+    const result = parsed.value.object.get("result").?.object;
+    try std.testing.expectEqualStrings("ERROR", result.get("type").?.string);
+    try std.testing.expectEqualStrings("42000", result.get("code").?.string);
+    try std.testing.expectEqualStrings("Syntax error", result.get("message").?.string);
+    try std.testing.expectEqualStrings("line 1", result.get("anchor").?.string);
+}
+
+test "TestCANARY_REQ_LIB_MIGRATION_JSON_009_ErrorLineWithFlagsFormat" {
+    const additional = [_][]const u8{"01000"};
+    const flags = [_][]const u8{"I:TestFlag"};
+    const line = try buildErrorLineWithFlags(std.testing.allocator, "42000", "Test error", "pos:0", &additional, &flags);
+    defer std.testing.allocator.free(line);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, line[0 .. line.len - 1], .{});
+    defer parsed.deinit();
+
+    const result = parsed.value.object.get("result").?.object;
+    try std.testing.expectEqual(@as(usize, 1), result.get("additional_statuses").?.array.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.get("flagger_findings").?.array.items.len);
 }

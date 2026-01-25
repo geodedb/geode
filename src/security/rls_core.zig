@@ -1,6 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // CANARY: REQ=REQ-M10-CONSTANTS-002; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=EXEMPT; OWNER=security; UPDATED=2025-10-17
 // RLS cache configuration constants
@@ -551,7 +554,9 @@ pub const RLSEngine = struct {
                 while (i < expr.len and std.ascii.isDigit(expr[i])) : (i += 1) {}
                 const num_str = expr[num_start..i];
                 const num_value = std.fmt.parseInt(i64, num_str, 10) catch {
-                    std.log.warn("Invalid integer literal in RLS expression: '{s}'", .{num_str});
+                    log.warn("Invalid integer literal in RLS expression", &.{
+                        Attr.string("literal", num_str),
+                    });
                     return error.InvalidRlsExpression;
                 };
                 try constants.append(self.allocator, .{ .integer = num_value });

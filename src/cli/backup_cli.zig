@@ -8,6 +8,11 @@ const quic = @import("transport/quic");
 // Import migration module for actual migration operations
 const migration = @import("migration");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("cli");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-M4.3-BACKUP-CLI-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-09
 // Phase 4 M4.3: Extract backup/restore/migrate commands from cli/main.zig
 
@@ -363,7 +368,9 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                             var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
                             // GAP-0221 FIX: Log read errors instead of silent catch 0
                             const bytes_read = file.readAll(&header_buf) catch |err| blk: {
-                                std.log.debug("Failed to read backup header: {}", .{err});
+                                log.debug("Failed to read backup header", &.{
+                                    Attr.err("error", err),
+                                });
                                 break :blk 0;
                             };
                             if (bytes_read == @sizeOf(BackupHeader)) {
@@ -471,7 +478,9 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     var magic_buf: [4]u8 = undefined;
     // GAP-0221 FIX: Log read errors instead of silent catch 0
     const magic_read = file.readAll(&magic_buf) catch |err| blk: {
-        std.log.debug("Failed to read magic bytes: {}", .{err});
+        log.debug("Failed to read magic bytes", &.{
+            Attr.err("error", err),
+        });
         break :blk 0;
     };
 
@@ -518,7 +527,9 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
         // GAP-0221 FIX: Log read errors instead of silent catch 0
         const bytes_read = file.readAll(&header_buf) catch |err| blk: {
-            std.log.debug("Failed to read backup header: {}", .{err});
+            log.debug("Failed to read backup header", &.{
+                Attr.err("error", err),
+            });
             break :blk 0;
         };
 
@@ -545,7 +556,9 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 var catalog_size_buf: [8]u8 = undefined;
                 // GAP-0221 FIX: Log read errors instead of silent catch 0
                 const catalog_bytes = file.readAll(&catalog_size_buf) catch |err| blk: {
-                    std.log.debug("Failed to read catalog size: {}", .{err});
+                    log.debug("Failed to read catalog size", &.{
+                        Attr.err("error", err),
+                    });
                     break :blk 0;
                 };
                 if (catalog_bytes == 8) {
@@ -2416,7 +2429,9 @@ const SimplifiedRestoreManager = struct {
                 payload = self.allocator.alloc(u8, plen) catch break;
                 // GAP-0221 FIX: Log read errors for WAL payload
                 const got = file.readAll(payload.?) catch |err| blk: {
-                    std.log.warn("WAL payload read failed: {}", .{err});
+                    log.warn("WAL payload read failed", &.{
+                        Attr.err("error", err),
+                    });
                     break :blk 0;
                 };
                 if (got != plen) {
@@ -2430,7 +2445,9 @@ const SimplifiedRestoreManager = struct {
             var sentinel_buf: [4]u8 = undefined;
             // GAP-0221 FIX: Log read errors for WAL sentinel
             const sn = file.readAll(&sentinel_buf) catch |err| blk: {
-                std.log.warn("WAL sentinel read failed: {}", .{err});
+                log.warn("WAL sentinel read failed", &.{
+                    Attr.err("error", err),
+                });
                 break :blk 0;
             };
             if (sn != 4) break;

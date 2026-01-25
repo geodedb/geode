@@ -12,7 +12,10 @@ const expect = std.testing.expect;
 // Use lib.zig to access other modules properly
 const geode = @import("../lib.zig");
 
-const log = std.log.scoped(.ml_embeddings);
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=ML; STATUS=IMPL; OWNER=ml; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("ml");
+const Attr = logging.Attr;
 
 /// Configuration for embedding dimensions and algorithm parameters
 pub const EmbeddingConfig = struct {

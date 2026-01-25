@@ -6,6 +6,11 @@ const TextFormatter = @import("text_formatter").TextFormatter;
 const query_executor = @import("query_executor.zig");
 const server_flags = @import("server_flags.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-011; FEATURE="Structured Logging"; ASPECT=MessageHandlers; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("server");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-SERVER-REFACTOR-010; FEATURE="ServerRefactoring"; ASPECT=MESSAGE_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - Message Handlers Module (Sixth Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
@@ -125,12 +130,12 @@ pub fn handlePull(
         const ps_str = std.fmt.bufPrint(&ps_buf, "{d}", .{page_size}) catch "0";
         var rows_buf: [32]u8 = undefined;
         const rows_str = std.fmt.bufPrint(&rows_buf, "{d}", .{end - start}) catch "0";
-        std.log.info("telemetry", .{
-            .{ .key = "type", .value = "TELEMETRY" },
-            .{ .key = "event", .value = "PULL_PAGE" },
-            .{ .key = "page_size", .value = ps_str },
-            .{ .key = "rows_emitted", .value = rows_str },
-            .{ .key = "final", .value = if (is_final) "true" else "false" },
+        log.info("telemetry", &.{
+            Attr.string("type", "TELEMETRY"),
+            Attr.string("event", "PULL_PAGE"),
+            Attr.string("page_size", ps_str),
+            Attr.string("rows_emitted", rows_str),
+            Attr.string("final", if (is_final) "true" else "false"),
         });
     }
 

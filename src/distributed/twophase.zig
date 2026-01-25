@@ -2,6 +2,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const quic = @import("transport/quic");
 
+const logging = @import("logging");
+const log = logging.scoped("twophase");
+const Attr = logging.Attr;
+
 /// Two-Phase Commit transaction states
 pub const TransactionState = enum {
     active,
@@ -172,7 +176,7 @@ pub const TwoPhaseTransport = struct {
             if (env) |v| {
                 defer self.allocator.free(v);
                 if (std.mem.eql(u8, v, "1")) {
-                    std.log.warn("SECURITY WARNING: 2PC TLS verification disabled", .{});
+                    log.warn("SECURITY WARNING: 2PC TLS verification disabled", &.{});
                     break :blk true;
                 }
             }
@@ -182,14 +186,20 @@ pub const TwoPhaseTransport = struct {
         // Create new connection with TLS verification by default
         var client = quic.QuicClient.init(self.allocator);
         client.connectInsecure(host, port, allow_insecure) catch |err| {
-            std.debug.print("2PC_TRANSPORT: Failed to connect to {s}: {}\n", .{ endpoint, err });
+            log.err("2PC transport failed to connect", &.{
+                Attr.string("endpoint", endpoint),
+                Attr.string("error", @errorName(err)),
+            });
             return error.ConnectionFailed;
         };
 
         // Wait for handshake
         client.waitForHandshake(5) catch |err| {
             client.deinit();
-            std.debug.print("2PC_TRANSPORT: Handshake failed for {s}: {}\n", .{ endpoint, err });
+            log.err("2PC transport handshake failed", &.{
+                Attr.string("endpoint", endpoint),
+                Attr.string("error", @errorName(err)),
+            });
             return error.HandshakeFailed;
         };
 
@@ -224,7 +234,9 @@ pub const TwoPhaseTransport = struct {
         // Check timeout before sending
         const elapsed = std.time.milliTimestamp() - start_time;
         if (elapsed >= @as(i64, @intCast(timeout_ms))) {
-            std.debug.print("2PC_TRANSPORT: Timeout before send to {s}\n", .{endpoint});
+            log.warn("2PC transport timeout before send", &.{
+                Attr.string("endpoint", endpoint),
+            });
             return error.Timeout;
         }
 
@@ -246,7 +258,10 @@ pub const TwoPhaseTransport = struct {
             } else |err| {
                 // Check if it's just waiting for data vs actual error
                 if (err != error.WouldBlock) {
-                    std.debug.print("2PC_TRANSPORT: Failed to read response from {s}: {}\n", .{ endpoint, err });
+                    log.err("2PC transport failed to read response", &.{
+                        Attr.string("endpoint", endpoint),
+                        Attr.string("error", @errorName(err)),
+                    });
                     return error.ReadFailed;
                 }
             }
@@ -255,7 +270,10 @@ pub const TwoPhaseTransport = struct {
         }
 
         // Timeout reached
-        std.debug.print("2PC_TRANSPORT: Timeout waiting for response from {s} after {}ms\n", .{ endpoint, timeout_ms });
+        log.warn("2PC transport timeout waiting for response", &.{
+            Attr.string("endpoint", endpoint),
+            Attr.uint("timeout_ms", timeout_ms),
+        });
         return error.Timeout;
     }
 };
@@ -477,14 +495,19 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     defer client.deinit();
 
     client.connectInsecure(host, port, allow_insecure) catch |err| {
-        std.debug.print("2PC_TRANSPORT: One-shot connect failed to {s}: {}\n", .{ endpoint, err });
+        log.err("2PC transport one-shot connect failed", &.{
+            Attr.string("endpoint", endpoint),
+            Attr.string("error", @errorName(err)),
+        });
         return error.ConnectionFailed;
     };
 
     // Wait for handshake with timeout
     const handshake_timeout: u32 = @intCast(@min(timeout_ms / 1000, 5));
     client.waitForHandshake(if (handshake_timeout == 0) 1 else handshake_timeout) catch |err| {
-        std.debug.print("2PC_TRANSPORT: Handshake failed: {}\n", .{err});
+        log.err("2PC transport handshake failed", &.{
+            Attr.string("error", @errorName(err)),
+        });
         return error.HandshakeFailed;
     };
 
@@ -502,7 +525,9 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     try client.poll(100);
 
     const response_line = stream.readLine(4096) catch |err| {
-        std.debug.print("2PC_TRANSPORT: Read response failed: {}\n", .{err});
+        log.err("2PC transport read response failed", &.{
+            Attr.string("error", @errorName(err)),
+        });
         return error.ReadFailed;
     };
     defer allocator.free(response_line);

@@ -1,5 +1,8 @@
 const std = @import("std");
 const crypto = std.crypto;
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // HashiCorp Vault KMS Provider for Geode TDE
 // CANARY: REQ=REQ-GQL-VAULT-KMS-001; FEATURE="VaultKMSProvider"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_vault_kms_provider.zig; OWNER=security; UPDATED=2025-10-05
@@ -140,7 +143,9 @@ pub const VaultKMSProvider = struct {
             .env_map = &std.process.EnvMap.init(self.allocator),
         }) catch |err| {
             // If vault command fails (e.g., vault not available), return empty list
-            std.log.warn("Vault list keys failed: {}, returning empty list", .{err});
+            log.warn("Vault list keys failed, returning empty list", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return try self.allocator.alloc([]u8, 0);
         };
         defer self.allocator.free(result.stderr);

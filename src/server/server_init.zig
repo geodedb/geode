@@ -9,6 +9,11 @@ const index_catalog = @import("index_catalog.zig");
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-014; FEATURE="Structured Logging"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("server");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-SERVER-REFACTOR-008; FEATURE="ServerRefactoring"; ASPECT=SERVER_INIT; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - Server Initialization Module (Fourth Increment)
 // Extracted from server/main.zig to improve modularity and reduce main() function size
@@ -116,7 +121,7 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
             pm.loadPage(p, 0) catch |e| switch (e) {
                 error.PageChecksumMismatch => {
                     config.storage_checksum_error = true;
-                    std.log.err("Storage page checksum mismatch detected during startup in path: {s}", .{p});
+                    log.err("Storage page checksum mismatch detected during startup", &.{Attr.string("path", p)});
                 },
                 else => {},
             };
@@ -243,12 +248,12 @@ pub fn initialize(
 
     if (env_config.abac_enabled) {
         ctx.security_manager_storage = initializeSecurityManager(allocator) catch |err| blk: {
-            std.log.err("Failed to initialize SecurityManager: {}", .{err});
+            log.err("Failed to initialize SecurityManager", &.{Attr.string("error", @errorName(err))});
             break :blk null;
         };
         if (ctx.security_manager_storage) |*sm| {
             ctx.security_manager = sm;
-            std.log.info("ABAC enforcement enabled - SecurityManager initialized", .{});
+            log.info("ABAC enforcement enabled - SecurityManager initialized", &.{});
         }
     }
 

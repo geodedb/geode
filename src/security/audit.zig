@@ -5,6 +5,9 @@ const audit_sink = @import("audit_sink.zig");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
 const Ed25519 = std.crypto.sign.Ed25519;
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // Use AuditEvent from RLS to ensure consistency and access the new fields
 pub const AuditEvent = rls.AuditLogger.AuditEvent;
@@ -108,7 +111,12 @@ pub const AuditLogger = struct {
         if (pub_hex != null and sec_hex != null) {
             var kp: Ed25519.KeyPair = undefined;
             if (pub_hex.?.len != 64 or sec_hex.?.len != 128) {
-                std.log.err("Invalid key length in env vars", .{});
+                log.err("Invalid key length in env vars", &.{
+                    Attr.int("pub_key_len", @intCast(pub_hex.?.len)),
+                    Attr.int("sec_key_len", @intCast(sec_hex.?.len)),
+                    Attr.int("expected_pub_len", 64),
+                    Attr.int("expected_sec_len", 128),
+                });
                 return error.ConfigError;
             }
             _ = try std.fmt.hexToBytes(&kp.public_key.bytes, pub_hex.?);
@@ -118,7 +126,7 @@ pub const AuditLogger = struct {
         }
 
         if (!is_test) {
-            std.log.err("CONFIG_ERROR: SIGNING_KEYS_MISSING. GEODE_AUDIT_PUB/SEC required in production.", .{});
+            log.err("Signing keys missing - GEODE_AUDIT_PUB/SEC required in production", &.{});
             return error.SigningKeysMissing;
         }
 
@@ -156,7 +164,9 @@ pub const AuditLogger = struct {
         if (last_line.len == 0) return;
 
         var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, last_line, .{}) catch |err| {
-            std.log.warn("WARN ignored trailing partial record (non-fatal): {any}", .{err});
+            log.warn("Ignored trailing partial record (non-fatal)", &.{
+                Attr.string("error", @errorName(err)),
+            });
             return;
         };
         defer parsed.deinit();

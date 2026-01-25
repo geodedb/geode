@@ -1,6 +1,11 @@
 const std = @import("std");
 const graph_storage_manager = @import("../server/graph_storage_manager.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Schema; STATUS=IMPL; OWNER=schema; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("schema");
+const Attr = logging.Attr;
+
 // PERF: PHASE3_RWLOCK - RwLock for concurrent catalog access
 // CANARY: REQ=REQ-PERF-PHASE3-001; FEATURE="ConcurrencyOptimization"; ASPECT=CATALOG_LOCK; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-17
 // CANARY: REQ=REQ-ARCH-M2-FIX; FEATURE="DependencyInjection"; ASPECT=CATALOG; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
@@ -69,7 +74,9 @@ pub const Catalog = struct {
 
         // Load persisted catalog if it exists
         self.load() catch |err| {
-            std.log.warn("Failed to load catalog from disk: {any}", .{err});
+            log.warn("Failed to load catalog from disk", &.{
+                Attr.err("error", err),
+            });
         };
 
         return self;
@@ -690,7 +697,9 @@ pub fn initCatalog() void {
 
         // Load persisted catalog if it exists
         loadCatalog() catch |err| {
-            std.log.warn("Failed to load catalog from disk: {any}", .{err});
+            log.warn("Failed to load catalog from disk", &.{
+                Attr.err("error", err),
+            });
         };
     } else {
         allocator.free(current_data_dir);

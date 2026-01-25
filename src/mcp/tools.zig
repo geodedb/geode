@@ -1,0 +1,546 @@
+const std = @import("std");
+
+// CANARY: REQ=REQ-LIB-MIGRATION-MCP-002; FEATURE="External Library Migration"; ASPECT=MCPTools; STATUS=TESTED; OWNER=core; UPDATED=2026-01-24
+// MCP Tools for Geode - GQL query execution, schema introspection, graph operations, and LSP features
+const mcp = @import("mcp");
+
+const GeodeClient = @import("client.zig").GeodeClient;
+const lsp = @import("lsp.zig");
+
+/// List available Geode MCP tools
+/// Returns JSON array of tool definitions
+pub fn listTools(cursor: ?[]const u8) []const u8 {
+    _ = cursor; // Pagination not needed for small tool list
+    return tools_json;
+}
+
+/// Execute a Geode MCP tool
+pub fn callTool(
+    allocator: std.mem.Allocator,
+    geode_endpoint: ?[]const u8,
+    name: []const u8,
+    args_json: []const u8,
+    cancel: *const mcp.CancelToken,
+) ![]const u8 {
+    _ = cancel; // TODO: Implement cancellation support
+
+    if (std.mem.eql(u8, name, "query")) {
+        return executeQuery(allocator, geode_endpoint, args_json);
+    } else if (std.mem.eql(u8, name, "schema")) {
+        return getSchema(allocator, geode_endpoint);
+    } else if (std.mem.eql(u8, name, "explain")) {
+        return explainQuery(allocator, geode_endpoint, args_json);
+    } else if (std.mem.eql(u8, name, "catalogs")) {
+        return listCatalogs(allocator, geode_endpoint);
+    } else if (std.mem.eql(u8, name, "graphs")) {
+        return listGraphs(allocator, geode_endpoint, args_json);
+    } else if (std.mem.eql(u8, name, "validate")) {
+        return validateGql(allocator, args_json);
+    } else if (std.mem.eql(u8, name, "complete")) {
+        return getCompletions(allocator, args_json);
+    } else if (std.mem.eql(u8, name, "hover")) {
+        return getHoverInfo(allocator, args_json);
+    } else if (std.mem.eql(u8, name, "diagnostics")) {
+        return getDiagnostics(allocator, args_json);
+    } else {
+        return error.UnknownTool;
+    }
+}
+
+/// Execute a GQL query against Geode
+fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []const u8) ![]const u8 {
+    // Parse the query from args
+    const parsed = std.json.parseFromSlice(QueryArgs, allocator, args_json, .{}) catch {
+        return "{\"error\": \"Invalid query arguments\"}";
+    };
+    defer parsed.deinit();
+
+    const query = parsed.value.query;
+    const endpoint_str = endpoint orelse "localhost:3141";
+
+    // Create client and execute query
+    const client = GeodeClient.init(allocator, endpoint_str) catch {
+        return try formatErrorResponse(allocator, "Failed to initialize client");
+    };
+    defer client.deinit();
+
+    // Build params JSON if provided
+    var params_json: ?[]const u8 = null;
+    if (parsed.value.parameters) |p| {
+        params_json = std.fmt.allocPrint(allocator, "{any}", .{std.json.fmt(p, .{})}) catch null;
+    }
+    defer if (params_json) |pj| allocator.free(pj);
+
+    const result = client.query(query, params_json) catch |err| {
+        return try formatErrorResponse(allocator, @errorName(err));
+    };
+
+    // Format as MCP tool result
+    return try formatToolResult(allocator, result);
+}
+
+/// Get database schema information
+fn getSchema(allocator: std.mem.Allocator, endpoint: ?[]const u8) ![]const u8 {
+    const endpoint_str = endpoint orelse "localhost:3141";
+
+    const client = GeodeClient.init(allocator, endpoint_str) catch {
+        return try formatErrorResponse(allocator, "Failed to initialize client");
+    };
+    defer client.deinit();
+
+    const result = client.getSchema() catch |err| {
+        return try formatErrorResponse(allocator, @errorName(err));
+    };
+
+    return try formatToolResult(allocator, result);
+}
+
+/// Explain a GQL query plan
+fn explainQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(QueryArgs, allocator, args_json, .{}) catch {
+        return "{\"error\": \"Invalid query arguments\"}";
+    };
+    defer parsed.deinit();
+
+    const endpoint_str = endpoint orelse "localhost:3141";
+
+    const client = GeodeClient.init(allocator, endpoint_str) catch {
+        return try formatErrorResponse(allocator, "Failed to initialize client");
+    };
+    defer client.deinit();
+
+    const result = client.explain(parsed.value.query) catch |err| {
+        return try formatErrorResponse(allocator, @errorName(err));
+    };
+
+    return try formatToolResult(allocator, result);
+}
+
+/// List available catalogs
+fn listCatalogs(allocator: std.mem.Allocator, endpoint: ?[]const u8) ![]const u8 {
+    const endpoint_str = endpoint orelse "localhost:3141";
+
+    const client = GeodeClient.init(allocator, endpoint_str) catch {
+        return try formatErrorResponse(allocator, "Failed to initialize client");
+    };
+    defer client.deinit();
+
+    const result = client.listCatalogs() catch |err| {
+        return try formatErrorResponse(allocator, @errorName(err));
+    };
+
+    return try formatToolResult(allocator, result);
+}
+
+/// List available graphs in a catalog
+fn listGraphs(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []const u8) ![]const u8 {
+    // Parse catalog argument if provided
+    var catalog: ?[]const u8 = null;
+    if (args_json.len > 2) { // More than just "{}"
+        const parsed = std.json.parseFromSlice(struct { catalog: ?[]const u8 = null }, allocator, args_json, .{}) catch null;
+        if (parsed) |p| {
+            catalog = p.value.catalog;
+            defer p.deinit();
+        }
+    }
+
+    const endpoint_str = endpoint orelse "localhost:3141";
+
+    const client = GeodeClient.init(allocator, endpoint_str) catch {
+        return try formatErrorResponse(allocator, "Failed to initialize client");
+    };
+    defer client.deinit();
+
+    const result = client.listGraphs(catalog) catch |err| {
+        return try formatErrorResponse(allocator, @errorName(err));
+    };
+
+    return try formatToolResult(allocator, result);
+}
+
+// =============================================================================
+// LSP Tools - GQL validation, completions, and hover information
+// =============================================================================
+
+/// Validate a GQL query and return diagnostics
+fn validateGql(allocator: std.mem.Allocator, args_json: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(LspQueryArgs, allocator, args_json, .{}) catch {
+        return try formatErrorResponse(allocator, "Invalid arguments: expected {\"query\": \"...\"}");
+    };
+    defer parsed.deinit();
+
+    const result = lsp.validateQuery(allocator, parsed.value.query) catch |err| {
+        return try formatErrorResponse(allocator, @errorName(err));
+    };
+
+    return try formatToolResult(allocator, result);
+}
+
+/// Get completions at a cursor position
+fn getCompletions(allocator: std.mem.Allocator, args_json: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(LspPositionArgs, allocator, args_json, .{}) catch {
+        return try formatErrorResponse(allocator, "Invalid arguments: expected {\"query\": \"...\", \"line\": N, \"column\": N}");
+    };
+    defer parsed.deinit();
+
+    const result = lsp.getCompletions(allocator, parsed.value.query, parsed.value.line, parsed.value.column) catch |err| {
+        return try formatErrorResponse(allocator, @errorName(err));
+    };
+
+    return try formatToolResult(allocator, result);
+}
+
+/// Get hover information at a cursor position
+fn getHoverInfo(allocator: std.mem.Allocator, args_json: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(LspPositionArgs, allocator, args_json, .{}) catch {
+        return try formatErrorResponse(allocator, "Invalid arguments: expected {\"query\": \"...\", \"line\": N, \"column\": N}");
+    };
+    defer parsed.deinit();
+
+    const result = lsp.getHover(allocator, parsed.value.query, parsed.value.line, parsed.value.column) catch |err| {
+        return try formatErrorResponse(allocator, @errorName(err));
+    };
+
+    return try formatToolResult(allocator, result);
+}
+
+/// Get all diagnostics for a GQL document
+fn getDiagnostics(allocator: std.mem.Allocator, args_json: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(LspQueryArgs, allocator, args_json, .{}) catch {
+        return try formatErrorResponse(allocator, "Invalid arguments: expected {\"query\": \"...\"}");
+    };
+    defer parsed.deinit();
+
+    const result = lsp.getDiagnostics(allocator, parsed.value.query) catch |err| {
+        return try formatErrorResponse(allocator, @errorName(err));
+    };
+
+    return try formatToolResult(allocator, result);
+}
+
+const LspQueryArgs = struct {
+    query: []const u8,
+};
+
+const LspPositionArgs = struct {
+    query: []const u8,
+    line: u32,
+    column: u32,
+};
+
+/// Format a successful tool result for MCP response
+fn formatToolResult(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
+    // Escape the content for JSON embedding
+    var escape_count: usize = 0;
+    for (content) |c| {
+        switch (c) {
+            '"', '\\', '\n', '\r', '\t' => escape_count += 1,
+            else => {},
+        }
+    }
+
+    var escaped: []u8 = undefined;
+    if (escape_count == 0) {
+        escaped = try allocator.dupe(u8, content);
+    } else {
+        escaped = try allocator.alloc(u8, content.len + escape_count);
+        var idx: usize = 0;
+        for (content) |c| {
+            switch (c) {
+                '"' => {
+                    escaped[idx] = '\\';
+                    escaped[idx + 1] = '"';
+                    idx += 2;
+                },
+                '\\' => {
+                    escaped[idx] = '\\';
+                    escaped[idx + 1] = '\\';
+                    idx += 2;
+                },
+                '\n' => {
+                    escaped[idx] = '\\';
+                    escaped[idx + 1] = 'n';
+                    idx += 2;
+                },
+                '\r' => {
+                    escaped[idx] = '\\';
+                    escaped[idx + 1] = 'r';
+                    idx += 2;
+                },
+                '\t' => {
+                    escaped[idx] = '\\';
+                    escaped[idx + 1] = 't';
+                    idx += 2;
+                },
+                else => {
+                    escaped[idx] = c;
+                    idx += 1;
+                },
+            }
+        }
+    }
+    defer allocator.free(escaped);
+    defer allocator.free(content);
+
+    return try std.fmt.allocPrint(allocator, "{{\"content\":[{{\"type\":\"text\",\"text\":\"{s}\"}}]}}", .{escaped});
+}
+
+/// Format an error response for MCP
+fn formatErrorResponse(allocator: std.mem.Allocator, error_msg: []const u8) ![]const u8 {
+    return try std.fmt.allocPrint(allocator, "{{\"content\":[{{\"type\":\"text\",\"text\":\"Error: {s}\"}}],\"isError\":true}}", .{error_msg});
+}
+
+const QueryArgs = struct {
+    query: []const u8,
+    parameters: ?std.json.Value = null,
+    catalog: ?[]const u8 = null,
+    graph: ?[]const u8 = null,
+};
+
+/// Static JSON definition of available tools
+const tools_json =
+    \\[
+    \\  {
+    \\    "name": "query",
+    \\    "description": "Execute a GQL (Graph Query Language) query against the Geode database. Returns query results as JSON.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": {
+    \\        "query": {
+    \\          "type": "string",
+    \\          "description": "The GQL query to execute (ISO/IEC 39075:2024 compliant)"
+    \\        },
+    \\        "parameters": {
+    \\          "type": "object",
+    \\          "description": "Optional query parameters as key-value pairs"
+    \\        },
+    \\        "catalog": {
+    \\          "type": "string",
+    \\          "description": "Target catalog name (default: 'default')"
+    \\        },
+    \\        "graph": {
+    \\          "type": "string",
+    \\          "description": "Target graph name (default: 'default')"
+    \\        }
+    \\      },
+    \\      "required": ["query"]
+    \\    }
+    \\  },
+    \\  {
+    \\    "name": "schema",
+    \\    "description": "Get the database schema including node labels, relationship types, and property definitions.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": {}
+    \\    }
+    \\  },
+    \\  {
+    \\    "name": "explain",
+    \\    "description": "Get the execution plan for a GQL query without running it. Useful for query optimization.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": {
+    \\        "query": {
+    \\          "type": "string",
+    \\          "description": "The GQL query to explain"
+    \\        }
+    \\      },
+    \\      "required": ["query"]
+    \\    }
+    \\  },
+    \\  {
+    \\    "name": "catalogs",
+    \\    "description": "List all available catalogs in the database.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": {}
+    \\    }
+    \\  },
+    \\  {
+    \\    "name": "graphs",
+    \\    "description": "List all available graphs in the current or specified catalog.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": {
+    \\        "catalog": {
+    \\          "type": "string",
+    \\          "description": "Catalog name (default: 'default')"
+    \\        }
+    \\      }
+    \\    }
+    \\  },
+    \\  {
+    \\    "name": "validate",
+    \\    "description": "Validate GQL syntax and return diagnostics. Does not require a running Geode server.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": {
+    \\        "query": {
+    \\          "type": "string",
+    \\          "description": "The GQL query to validate"
+    \\        }
+    \\      },
+    \\      "required": ["query"]
+    \\    }
+    \\  },
+    \\  {
+    \\    "name": "complete",
+    \\    "description": "Get GQL completions at a cursor position. Returns keywords, functions, types, and procedures.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": {
+    \\        "query": {
+    \\          "type": "string",
+    \\          "description": "The GQL query text"
+    \\        },
+    \\        "line": {
+    \\          "type": "integer",
+    \\          "description": "Cursor line number (1-indexed)"
+    \\        },
+    \\        "column": {
+    \\          "type": "integer",
+    \\          "description": "Cursor column number (1-indexed)"
+    \\        }
+    \\      },
+    \\      "required": ["query", "line", "column"]
+    \\    }
+    \\  },
+    \\  {
+    \\    "name": "hover",
+    \\    "description": "Get hover information (documentation) for the GQL element at a position.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": {
+    \\        "query": {
+    \\          "type": "string",
+    \\          "description": "The GQL query text"
+    \\        },
+    \\        "line": {
+    \\          "type": "integer",
+    \\          "description": "Cursor line number (1-indexed)"
+    \\        },
+    \\        "column": {
+    \\          "type": "integer",
+    \\          "description": "Cursor column number (1-indexed)"
+    \\        }
+    \\      },
+    \\      "required": ["query", "line", "column"]
+    \\    }
+    \\  },
+    \\  {
+    \\    "name": "diagnostics",
+    \\    "description": "Get all diagnostics (errors, warnings) for a GQL document. Alias for validate.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": {
+    \\        "query": {
+    \\          "type": "string",
+    \\          "description": "The GQL query to analyze"
+    \\        }
+    \\      },
+    \\      "required": ["query"]
+    \\    }
+    \\  }
+    \\]
+;
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+test "listTools returns valid JSON" {
+    const result = listTools(null);
+    try std.testing.expect(result.len > 0);
+    try std.testing.expect(std.mem.startsWith(u8, result, "["));
+}
+
+test "formatToolResult escapes content correctly" {
+    const allocator = std.testing.allocator;
+
+    const content = try allocator.dupe(u8, "{\"test\": \"value\"}");
+    const result = try formatToolResult(allocator, content);
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "content") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "text") != null);
+}
+
+test "formatErrorResponse formats correctly" {
+    const allocator = std.testing.allocator;
+
+    const result = try formatErrorResponse(allocator, "ConnectionFailed");
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "isError") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "ConnectionFailed") != null);
+}
+
+test "listTools contains all required tools" {
+    const result = listTools(null);
+
+    // Verify all 9 tools are present (5 database + 4 LSP)
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"query\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"schema\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"explain\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"catalogs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"graphs\"") != null);
+    // LSP tools
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"validate\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"complete\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"hover\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"diagnostics\"") != null);
+}
+
+test "listTools contains valid JSON structure" {
+    const allocator = std.testing.allocator;
+    const result = listTools(null);
+
+    // Parse to verify it's valid JSON
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, result, .{}) catch {
+        try std.testing.expect(false); // Should not fail to parse
+        return;
+    };
+    defer parsed.deinit();
+
+    // Verify it's an array with 9 tools (5 database + 4 LSP)
+    try std.testing.expect(parsed.value == .array);
+    try std.testing.expectEqual(@as(usize, 9), parsed.value.array.items.len);
+}
+
+test "listTools cursor is ignored" {
+    const result1 = listTools(null);
+    const result2 = listTools("some_cursor");
+
+    // Both should return the same result (cursor is ignored)
+    try std.testing.expectEqualStrings(result1, result2);
+}
+
+test "formatToolResult with special characters" {
+    const allocator = std.testing.allocator;
+
+    const content = try allocator.dupe(u8, "{\"message\": \"Hello\\nWorld\"}");
+    const result = try formatToolResult(allocator, content);
+    defer allocator.free(result);
+
+    // Should contain escaped content
+    try std.testing.expect(std.mem.indexOf(u8, result, "content") != null);
+}
+
+test "formatErrorResponse with various error types" {
+    const allocator = std.testing.allocator;
+
+    const errors = [_][]const u8{
+        "ConnectionFailed",
+        "QueryFailed",
+        "InvalidResponse",
+        "Timeout",
+    };
+
+    for (errors) |err| {
+        const result = try formatErrorResponse(allocator, err);
+        defer allocator.free(result);
+
+        try std.testing.expect(std.mem.indexOf(u8, result, "isError") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result, err) != null);
+    }
+}

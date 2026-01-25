@@ -3,6 +3,12 @@ const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
+
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("execution");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-TXN-UNDO-008; FEATURE="TransactionUndoLog"; ASPECT=CrudImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
 // CANARY: REQ=REQ-CONSTRAINT-ENFORCE-001; FEATURE="ConstraintEnforcement"; ASPECT=CatalogImport; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
@@ -2296,7 +2302,9 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
         // Save changes to persistent storage
         store.saveToFile() catch |err| {
-            std.log.err("CRITICAL: Failed to persist graph store after deletion: {any}", .{err});
+            log.err("CRITICAL: Failed to persist graph store after deletion", &.{
+                Attr.err("error", err),
+            });
         };
     } else if (d.items.len > 0) {
         // Delete specific items

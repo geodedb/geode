@@ -2,6 +2,11 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-028; FEATURE="WAL Compaction"; ASPECT=Storage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_WalCompact; OWNER=storage; UPDATED=2025-09-27
 const Allocator = std.mem.Allocator;
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("storage");
+const Attr = logging.Attr;
+
 // Automatic WAL compaction based on configurable thresholds
 pub const WalCompactor = struct {
     allocator: Allocator,
@@ -188,7 +193,7 @@ pub const WalCompactor = struct {
         self.stats.bytes_reclaimed += bytes_before - bytes_after;
         self.stats.records_compacted += records_written;
 
-        std.log.info("WAL compaction completed: {} segments -> 1, {} MB -> {} MB, {} records", .{
+        log.info("WAL compaction completed", .{
             segments.len,
             bytes_before / 1024 / 1024,
             bytes_after / 1024 / 1024,
@@ -207,7 +212,7 @@ pub const WalCompactor = struct {
         while (self.config.auto_compact) {
             if (self.shouldCompact() catch false) {
                 self.compact() catch |err| {
-                    std.log.err("WAL compaction failed: {}", .{err});
+                    log.err("WAL compaction failed: {}", .{err});
                     self.stats.failed_compactions += 1;
                 };
             }
@@ -297,7 +302,7 @@ pub const WalCompactor = struct {
         // For now, just delete old segments
         for (old_segments) |segment| {
             std.fs.deleteFileAbsolute(segment.path) catch |err| {
-                std.log.warn("Failed to delete old segment {s}: {}", .{ segment.path, err });
+                log.warn("Failed to delete old segment {s}: {}", .{ segment.path, err });
             };
         }
 

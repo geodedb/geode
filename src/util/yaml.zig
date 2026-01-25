@@ -1,5 +1,17 @@
 const std = @import("std");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-YAML-001; FEATURE="External Library Migration"; ASPECT=YAMLParsing; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// External YAML 1.2.2 library integration for enhanced YAML parsing capabilities
+// The internal parser is kept for backward compatibility with existing test specifications
+const yaml_lib = @import("yaml");
+
+/// Parse YAML using the external library (full YAML 1.2.2 support)
+/// Returns the external library's parsed structure
+pub fn parseExternal(allocator: std.mem.Allocator, input: []const u8) !yaml_lib.Value {
+    var parser = yaml_lib.Parser.init(allocator, input);
+    return try yaml_lib.resolveToValue(allocator, &parser);
+}
+
 /// Simple YAML parser for test specifications
 /// Supports a subset of YAML needed for test specs: scalars, lists, maps
 // CANARY: REQ=REQ-TEST-YAML-001; FEATURE="YAML Parser"; ASPECT=Testing; STATUS=TESTED; TEST=yaml_parser_tests; OWNER=test; UPDATED=2026-01-17

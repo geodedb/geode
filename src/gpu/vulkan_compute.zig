@@ -2,6 +2,21 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan_loader.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-VULKAN-001; FEATURE="External Library Migration"; ASPECT=VulkanCompute; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
+// External vulkan library integration for availability checking and future migration
+// Current code maintains backward compatibility while exposing external library capabilities
+const vulkan_lib = @import("vulkan");
+
+/// Check if Vulkan is available using the external library
+pub fn isVulkanAvailable() bool {
+    return vulkan_lib.isAvailable();
+}
+
+/// Probe system for available Vulkan devices using external library
+pub fn probeDevices(allocator: Allocator) vulkan_lib.ProbeResult {
+    return vulkan_lib.probe(allocator);
+}
+
 pub const VulkanError = error{
     InstanceCreationFailed,
     NoPhysicalDevices,

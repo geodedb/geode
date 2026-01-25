@@ -2,6 +2,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const net = std.net;
 
+const logging = @import("logging");
+const log = logging.scoped("sharding");
+const Attr = logging.Attr;
+
 // Enhanced sharding implementation for horizontal scaling
 pub const ShardManager = struct {
     allocator: Allocator,
@@ -1005,10 +1009,11 @@ pub const ConsistentHash = struct {
         while (iter.next()) |entry| {
             const load = entry.value_ptr.*;
             if (@abs(load - avg_load) > threshold) {
-                std.log.info("Node {} has load {d:.2}% (avg: {d:.2}%)", .{
-                    entry.key_ptr.*,
-                    load * 100,
-                    avg_load * 100,
+                // Note: Using uint for node_id, load percentages logged at integer precision
+                log.info("Node has unbalanced load", &.{
+                    Attr.uint("node_id", entry.key_ptr.*),
+                    Attr.uint("load_percent", @intFromFloat(load * 100)),
+                    Attr.uint("avg_load_percent", @intFromFloat(avg_load * 100)),
                 });
             }
         }
@@ -1162,7 +1167,11 @@ pub const ShardManager = struct {
         // Remove old shard
         _ = self.shards.remove(shard_id);
 
-        std.log.info("Split shard {} into {} and {}", .{ shard_id, new_shard1_id, new_shard2_id });
+        log.info("Split shard into two new shards", &.{
+            Attr.uint("original_shard_id", shard_id),
+            Attr.uint("new_shard1_id", new_shard1_id),
+            Attr.uint("new_shard2_id", new_shard2_id),
+        });
     }
 
     pub fn mergeShard(self: *ShardManager, shard1_id: u64, shard2_id: u64) !void {
@@ -1199,7 +1208,11 @@ pub const ShardManager = struct {
         _ = self.shards.remove(shard1_id);
         _ = self.shards.remove(shard2_id);
 
-        std.log.info("Merged shards {} and {} into {}", .{ shard1_id, shard2_id, merged_id });
+        log.info("Merged shards into one", &.{
+            Attr.uint("shard1_id", shard1_id),
+            Attr.uint("shard2_id", shard2_id),
+            Attr.uint("merged_id", merged_id),
+        });
     }
 
     pub fn rebalanceShards(self: *ShardManager) !void {

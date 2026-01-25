@@ -3,6 +3,11 @@ const fle_integration = @import("fle_integration.zig");
 const fle_catalog = @import("schema/fle_catalog.zig");
 const fle_annotations = @import("schema/annotations.zig");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("execution");
+const Attr = logging.Attr;
+
 // Field-Level Encryption Execution Hooks
 // CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15
 // Schema Catalog Registration During Execution
@@ -787,7 +792,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 const store = graph_store.getGlobalStore(allocator);
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 undo_log.rollback(store) catch |err| {
-                    std.log.err("Failed to rollback transaction: {any}", .{err});
+                    log.err("Failed to rollback transaction", &.{
+                        Attr.err("error", err),
+                    });
                 };
 
                 break :blk "transaction rolled back";
@@ -1154,7 +1161,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // and queries can be executed against this graph
             _ = graph_storage_manager.createGraphStorage(allocator, graph_name) catch |err| {
                 // If storage creation fails (e.g., already exists), that's OK - log and continue
-                std.log.debug("Graph storage creation for '{s}': {s}", .{ graph_name, @errorName(err) });
+                log.debug("Graph storage creation failed", &.{
+                    Attr.string("graph_name", graph_name),
+                    Attr.err("error", err),
+                });
             };
 
             return ExecutionResult{
@@ -1196,7 +1206,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // This ensures SHOW GRAPHS no longer lists this graph
             graph_storage_manager.dropGraphStorage(graph_name) catch |err| {
                 // Log but don't fail - graph might only exist in one place
-                std.log.warn("dropGraphStorage for '{s}': {s}", .{ graph_name, @errorName(err) });
+                log.warn("dropGraphStorage failed", &.{
+                    Attr.string("graph_name", graph_name),
+                    Attr.err("error", err),
+                });
             };
 
             return ExecutionResult{
@@ -1958,7 +1971,10 @@ pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionRe
 pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
     if (input_result.columns.len > MAX_COLUMNS_PER_RESULT) {
-        std.log.err("Corrupted input_result.columns.len = {d} in executeWithClause (max: {d})", .{ input_result.columns.len, MAX_COLUMNS_PER_RESULT });
+        log.err("Corrupted input_result.columns.len in executeWithClause", &.{
+            Attr.int("columns_len", @intCast(input_result.columns.len)),
+            Attr.int("max", MAX_COLUMNS_PER_RESULT),
+        });
         return error.CorruptedExecutionResult;
     }
 

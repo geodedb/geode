@@ -3,6 +3,11 @@ const wal = @import("wal");
 const catalog = @import("storage_catalog");
 const page_manager = @import("storage_page_manager");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("storage");
+const Attr = logging.Attr;
+
 // CANARY: REQ=REQ-BACKUP-HEX-001; FEATURE="SecureHexKeyParsing"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-13
 // GAP-0148 SECURITY FIX: Proper error handling for hex key parsing instead of silent catch 0
 
@@ -10,7 +15,10 @@ const page_manager = @import("storage_page_manager");
 /// GAP-0148: Replaces unsafe `catch 0` pattern that could corrupt encryption keys.
 fn parseHexKey(hex_str: []const u8) ![32]u8 {
     if (hex_str.len != 64) {
-        std.log.err("SECURITY ERROR: GEODE_TDE_KEY must be exactly 64 hex characters (32 bytes), got {d}", .{hex_str.len});
+        log.err("SECURITY: GEODE_TDE_KEY must be exactly 64 hex characters", &.{
+            Attr.uint("expected_len", 64),
+            Attr.uint("actual_len", @intCast(hex_str.len)),
+        });
         return error.InvalidTdeKeyLength;
     }
 
@@ -18,11 +26,15 @@ fn parseHexKey(hex_str: []const u8) ![32]u8 {
     var i: usize = 0;
     while (i < 32) : (i += 1) {
         const hi = std.fmt.charToDigit(hex_str[i * 2], 16) catch {
-            std.log.err("SECURITY ERROR: Invalid hex character at position {d} in GEODE_TDE_KEY", .{i * 2});
+            log.err("SECURITY: Invalid hex character in GEODE_TDE_KEY", &.{
+                Attr.uint("position", i * 2),
+            });
             return error.InvalidTdeKeyHex;
         };
         const lo = std.fmt.charToDigit(hex_str[i * 2 + 1], 16) catch {
-            std.log.err("SECURITY ERROR: Invalid hex character at position {d} in GEODE_TDE_KEY", .{i * 2 + 1});
+            log.err("SECURITY: Invalid hex character in GEODE_TDE_KEY", &.{
+                Attr.uint("position", i * 2 + 1),
+            });
             return error.InvalidTdeKeyHex;
         };
         key[i] = @as(u8, @intCast(hi * 16 + lo));
@@ -127,11 +139,13 @@ pub const BackupManager = struct {
             if (std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY")) |raw| {
                 defer allocator.free(raw);
                 enc_key = parseHexKey(raw) catch |err| {
-                    std.log.err("Failed to parse GEODE_TDE_KEY: {}", .{err});
+                    log.err("Failed to parse GEODE_TDE_KEY", &.{
+                        Attr.err("error", err),
+                    });
                     return err;
                 };
             } else |_| {
-                std.log.warn("SECURITY WARNING: Encryption enabled but GEODE_TDE_KEY not set", .{});
+                log.warn("SECURITY: Encryption enabled but GEODE_TDE_KEY not set", &.{});
             }
         }
 
@@ -557,11 +571,13 @@ pub const BackupManager = struct {
             if (std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY")) |raw| {
                 defer self.allocator.free(raw);
                 recovery_wal.enc_key = parseHexKey(raw) catch |err| {
-                    std.log.err("Failed to parse GEODE_TDE_KEY during restore: {}", .{err});
+                    log.err("Failed to parse GEODE_TDE_KEY during restore", &.{
+                        Attr.err("error", err),
+                    });
                     return err;
                 };
             } else |_| {
-                std.log.warn("SECURITY WARNING: Encryption enabled but GEODE_TDE_KEY not set for restore", .{});
+                log.warn("SECURITY: Encryption enabled but GEODE_TDE_KEY not set for restore", &.{});
             }
         }
 
@@ -594,11 +610,13 @@ pub const BackupManager = struct {
             if (std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY")) |raw| {
                 defer self.allocator.free(raw);
                 recovery_wal.enc_key = parseHexKey(raw) catch |err| {
-                    std.log.err("Failed to parse GEODE_TDE_KEY during WAL recovery: {}", .{err});
+                    log.err("Failed to parse GEODE_TDE_KEY during WAL recovery", &.{
+                        Attr.err("error", err),
+                    });
                     return err;
                 };
             } else |_| {
-                std.log.warn("SECURITY WARNING: Encryption enabled but GEODE_TDE_KEY not set for WAL recovery", .{});
+                log.warn("SECURITY: Encryption enabled but GEODE_TDE_KEY not set for WAL recovery", &.{});
             }
         }
 

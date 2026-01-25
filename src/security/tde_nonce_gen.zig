@@ -6,6 +6,9 @@
 /// Extracted as part of Phase 1, M1.3 of the modularization effort.
 const std = @import("std");
 const testing = std.testing; // global for test blocks
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE Nonce Generation"; ASPECT=NonceGeneration; STATUS=TESTED; TEST=tde_tests; OWNER=security; UPDATED=2025-11-12
 
@@ -34,8 +37,7 @@ pub const NonceGenerator = struct {
     pub fn init(mode: NonceMode) NonceGenerator {
         // In production builds, deterministic mode is blocked at runtime
         if (is_production_build and mode == .Deterministic) {
-            std.log.err("SECURITY ERROR: Deterministic nonce mode is blocked in production builds. " ++
-                "This would allow catastrophic IV reuse attacks.", .{});
+            log.err("Deterministic nonce mode is blocked in production builds - would allow catastrophic IV reuse attacks", &.{});
             @panic("GAP-0109: Deterministic nonce mode blocked in production");
         }
         return NonceGenerator{

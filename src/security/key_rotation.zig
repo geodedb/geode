@@ -1,4 +1,7 @@
 const std = @import("std");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // key_rotation.zig
 // Complete encryption key rotation subsystem with audit logging and rollback support.
@@ -357,7 +360,9 @@ pub const KeyRegistry = struct {
                     var checksum_valid = true;
                     while (j < 16) : (j += 1) {
                         parsed_checksum[j] = std.fmt.parseInt(u8, hex_slice[j * 2 .. j * 2 + 2], 16) catch {
-                            std.log.warn("Invalid hex in checksum at position {d}", .{j * 2});
+                            log.warn("Invalid hex in checksum", &.{
+                                Attr.int("position", @intCast(j * 2)),
+                            });
                             checksum_valid = false;
                             break;
                         };
@@ -398,7 +403,9 @@ pub const KeyRegistry = struct {
                         var material_valid = true;
                         while (k < 32) : (k += 1) {
                             material[k] = std.fmt.parseInt(u8, hex_slice[k * 2 .. k * 2 + 2], 16) catch {
-                                std.log.warn("Invalid hex in key material at position {d}", .{k * 2});
+                                log.warn("Invalid hex in key material", &.{
+                                    Attr.int("position", @intCast(k * 2)),
+                                });
                                 material_valid = false;
                                 break;
                             };

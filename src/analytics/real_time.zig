@@ -12,7 +12,10 @@ const print = std.debug.print;
 const geode = @import("../lib.zig");
 const ml_embeddings = @import("../ml/graph_embeddings.zig");
 
-const log = std.log.scoped(.real_time_analytics);
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Analytics; STATUS=IMPL; OWNER=analytics; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("analytics");
+const Attr = logging.Attr;
 
 /// Types of real-time analytics events
 pub const AnalyticsEventType = enum {

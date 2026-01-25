@@ -7,6 +7,10 @@ const raft = @import("raft.zig");
 // GAP-0077: Import CBO for statistics integration
 const cbo = @import("../planner/cbo.zig");
 
+const logging = @import("logging");
+const log = logging.scoped("query_coordinator");
+const Attr = logging.Attr;
+
 /// Distributed query coordinator
 /// Handles scatter-gather pattern for federated queries
 /// GAP-0077: Now uses statistics registry for row estimates
@@ -192,7 +196,10 @@ pub const QueryCoordinator = struct {
             };
             threads[i] = std.Thread.spawn(.{}, WorkerContext.execute, .{&contexts[i]}) catch |err| {
                 // If thread spawn fails, execute sequentially for remaining fragments
-                std.log.warn("Thread spawn failed for shard {}, falling back to sequential: {}", .{ i, err });
+                log.warn("Thread spawn failed for shard, falling back to sequential", &.{
+                    Attr.uint("shard_index", i),
+                    Attr.string("error", @errorName(err)),
+                });
                 const node = try self.node_registry.getNode(fragment.shard_id);
                 if (node.is_local) {
                     results[i] = try self.executeLocalFragment(fragment.query_text, params);
@@ -208,7 +215,10 @@ pub const QueryCoordinator = struct {
             thread.join();
             // Check for errors from worker threads
             if (thread_errors[i]) |err| {
-                std.log.err("Shard {} execution failed: {}", .{ i, err });
+                log.err("Shard execution failed", &.{
+                    Attr.uint("shard_index", i),
+                    Attr.string("error", @errorName(err)),
+                });
                 // Continue with empty result rather than failing entire query
             }
         }
@@ -564,13 +574,18 @@ const ShardMap = struct {
             }
 
             if (matching_shards.items.len > 0) {
-                std.log.debug("Shard pruning: query targets {} of {} shards", .{ matching_shards.items.len, self.shards.count() });
+                log.debug("Shard pruning: query targets subset of shards", &.{
+                    Attr.uint("target_shards", matching_shards.items.len),
+                    Attr.uint("total_shards", self.shards.count()),
+                });
                 return matching_shards.toOwnedSlice();
             }
         }
 
         // Fallback: return all shards if no partition key found or no matches
-        std.log.debug("Shard pruning: query targets all {} shards (no partition key found)", .{self.shards.count()});
+        log.debug("Shard pruning: query targets all shards (no partition key found)", &.{
+            Attr.uint("total_shards", self.shards.count()),
+        });
         var shard_ids = try self.allocator.alloc([]const u8, self.shards.count());
         var iter = self.shards.iterator();
         var i: usize = 0;

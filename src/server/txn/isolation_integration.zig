@@ -6,6 +6,11 @@ const mvcc = @import("mvcc.zig");
 const enhanced_isolation = @import("enhanced_isolation.zig");
 const geode = @import("geode");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-017; FEATURE="Structured Logging"; ASPECT=IsolationIntegration; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("server");
+const Attr = logging.Attr;
+
 /// Transaction isolation integration for the main server
 pub const IsolationIntegration = struct {
     allocator: std.mem.Allocator,
@@ -56,7 +61,7 @@ pub const IsolationIntegration = struct {
             // Perform deadlock detection
             self.enhanced_manager.detectAndResolveDeadlocks() catch |err| {
                 // Log error but continue detection
-                std.log.err("Deadlock detection error: {}", .{err});
+                log.err("Deadlock detection error", &.{Attr.string("error", @errorName(err))});
             };
 
             // Sleep for the configured interval

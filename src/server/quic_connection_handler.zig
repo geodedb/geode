@@ -26,7 +26,10 @@ const geode_auth = @import("geode_auth");
 // Extracted from server/main.zig to improve modularity and reduce main() function size
 // Contains handleQuicConnection and processMessage functions for QUIC protocol handling
 
-const log = std.log.scoped(.server);
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-012; FEATURE="Structured Logging"; ASPECT=QUICHandler; STATUS=IMPL; OWNER=server; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("server");
+const Attr = logging.Attr;
 
 // Import types and functions from query_executor
 const evaluateUnion = query_executor.evaluateUnion;
@@ -232,7 +235,7 @@ pub fn processMessage(
                 // Note: username comes from arena which is freed, so we must dupe it
                 state.authenticated_user = gpa.dupe(u8, username) catch null;
                 state.authenticated_role = role;
-                log.info("Authenticated user: {s} with role: {s}", .{ username, role.toString() });
+                log.info("Authenticated user", &.{ Attr.string("username", username), Attr.string("role", role.toString()) });
             }
 
             // CANARY: REQ=REQ-MULTI-TENANT-005; FEATURE="Multi-Tenancy Session"; ASPECT=HelloHandler; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=session; UPDATED=2026-01-09
@@ -240,7 +243,7 @@ pub fn processMessage(
             if (hello.tenant_id) |tenant| {
                 if (state.session_config) |*config| {
                     config.tenant_id = gpa.dupe(u8, tenant) catch null;
-                    log.info("Session tenant_id set to: {s}", .{tenant});
+                    log.info("Session tenant_id set", &.{Attr.string("tenant_id", tenant)});
                 }
             }
 
@@ -450,7 +453,7 @@ pub fn processMessage(
                                 if (plan) |p| {
                                     // Log optimization metrics for PROFILE mode
                                     if (profile_mode and DEBUG_PROFILE) {
-                                        std.log.info("Query plan optimized: cost={d:.2}, memory={d}, parallelism={d}", .{ p.estimated_cost, p.memory_requirement, p.parallelism_level });
+                                        log.info("Query plan optimized", &.{ Attr.flt("cost", @floatCast(p.estimated_cost)), Attr.int("memory", @intCast(p.memory_requirement)), Attr.int("parallelism", @intCast(p.parallelism_level)) });
                                     }
                                     // Future: Use optimized plan for execution
                                     // For now, the plan is cached for subsequent identical queries
@@ -463,7 +466,7 @@ pub fn processMessage(
                                 if (distributed_plan) |d_plan| {
                                     // Log distributed optimization metrics for PROFILE mode
                                     if (profile_mode and DEBUG_PROFILE) {
-                                        std.log.info("Distributed plan generated: cost={d:.2}, phases={d}, parallelism={d}", .{ d_plan.estimated_cost, d_plan.execution_phases.len, d_plan.parallelism_level });
+                                        log.info("Distributed plan generated", &.{ Attr.flt("cost", @floatCast(d_plan.estimated_cost)), Attr.int("phases", @intCast(d_plan.execution_phases.len)), Attr.int("parallelism", @intCast(d_plan.parallelism_level)) });
                                     }
                                     // Future: Use distributed plan for federated execution
                                     // For now, the plan provides optimization insights

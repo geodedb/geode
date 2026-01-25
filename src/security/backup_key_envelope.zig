@@ -1,4 +1,7 @@
 const std = @import("std");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // backup_key_envelope.zig
 // Export / import semantics for key registry backup (envelopes + checksum manifest)
@@ -59,7 +62,9 @@ pub fn import(allocator: std.mem.Allocator, blob: []const u8) !ImportResult {
                 var checksum_valid = true;
                 while (k < 16) : (k += 1) {
                     checksum[k] = std.fmt.parseInt(u8, hex[k * 2 .. k * 2 + 2], 16) catch {
-                        std.log.warn("Invalid hex in backup checksum at position {d}", .{k * 2});
+                        log.warn("Invalid hex in backup checksum", &.{
+                            Attr.int("position", @intCast(k * 2)),
+                        });
                         checksum_valid = false;
                         break;
                     };

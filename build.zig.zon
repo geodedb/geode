@@ -1,0 +1,122 @@
+.{
+    // Geode Graph Database - ISO/IEC 39075:2024 GQL Implementation
+    .name = .geode,
+    .version = "0.19.0",
+    .fingerprint = 0x9e0aec1832a82609,
+    .minimum_zig_version = "0.15.1",
+
+    // Dependencies from ~/gl/devnw/zig/* libraries
+    // Using path references for local development
+    // For production releases, use git+https URLs with computed hashes
+    .dependencies = .{
+        // =======================================================================
+        // Phase 1: Foundation Libraries (No Dependencies)
+        // =======================================================================
+
+        // URI/URL parsing - RFC 3986 compliant
+        .uri = .{
+            .path = "../../../zig/uri",
+        },
+
+        // YAML 1.2.2 parser/emitter
+        .yaml = .{
+            .path = "../../../zig/yaml",
+        },
+
+        // TOML v1.1.0 parser
+        .toml = .{
+            .path = "../../../zig/toml",
+        },
+
+        // Unicode string library with SIMD acceleration
+        .strings = .{
+            .path = "../../../zig/strings",
+        },
+
+        // REPL library with Emacs/Vi keybindings
+        .repl = .{
+            .path = "../../../zig/repl",
+        },
+
+        // Data structures and graph algorithms
+        .ds = .{
+            .path = "../../../zig/ds",
+        },
+
+        // Vulkan compute library
+        .vulkan = .{
+            .path = "../../../zig/vulkan",
+        },
+
+        // CUDA compute library
+        .cuda = .{
+            .path = "../../../zig/cuda",
+        },
+
+        // =======================================================================
+        // Phase 2: Core Libraries
+        // =======================================================================
+
+        // JSON parser/encoder - RFC 8259 compliant with JSON Schema 2020-12
+        .json = .{
+            .path = "../../../zig/json",
+        },
+
+        // TLS 1.3 library for QUIC
+        .tls = .{
+            .path = "../../../zig/tls",
+        },
+
+        // QUIC v1/v2 protocol implementation
+        .quic = .{
+            .path = "../../../zig/quic",
+        },
+
+        // =======================================================================
+        // Phase 3: Integration Libraries
+        // =======================================================================
+
+        // Structured logging - slog-style logging with multiple handlers
+        .slog = .{
+            .path = "../../../zig/slog",
+        },
+
+        // Configuration management - XDG compliant, multi-format support
+        .config = .{
+            .path = "../../../zig/config",
+        },
+
+        // =======================================================================
+        // Phase 4: Application Libraries
+        // =======================================================================
+
+        // CLI framework - Cobra/Viper-class command-line interface
+        .cli = .{
+            .path = "../../../zig/cli",
+        },
+
+        // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
+        .dns = .{
+            .path = "../../../zig/dns",
+        },
+
+        // =======================================================================
+        // Phase 5: Optional Enhancements
+        // =======================================================================
+
+        // Model Context Protocol (MCP) - AI/LLM integration
+        .mcp = .{
+            .path = "../../../zig/mcp",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+        "benchmarks",
+        "tools",
+        "geodetestlab",
+    },
+}

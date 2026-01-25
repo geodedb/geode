@@ -1,6 +1,0 @@
-[submodule "vendor/quic"]
-	path = vendor/quic
-	url = https://gitlab.com/devnw/zig/quic.git
-[submodule "vendor/ztls"]
-	path = vendor/ztls
-	url = https://gitlab.com/devnw/zig/tls.git

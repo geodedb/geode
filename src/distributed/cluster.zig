@@ -4,6 +4,10 @@ const raft_consensus = @import("raft_consensus.zig");
 const RaftNode = raft_consensus.RaftNode;
 const txn_coordinator = @import("txn_coordinator.zig");
 
+const logging = @import("logging");
+const log = logging.scoped("cluster");
+const Attr = logging.Attr;
+
 // Temporary Message struct for distributed operations
 // In production, this would integrate with protocol.zig
 const Message = struct {
@@ -297,13 +301,17 @@ pub const ClusterCoordinator = struct {
             if (line.len == 0) continue;
             // Attempt Raft frame decode first
             const frame_res = raft_consensus.decodeRaftFrame(self.allocator, line) catch |e| {
-                std.log.warn("cluster: failed to decode raft frame: {}", .{e});
+                log.warn("Failed to decode raft frame", &.{
+                    Attr.string("error", @errorName(e)),
+                });
                 continue; // Ignore unknown line for now
             };
             defer frame_res.deinit(self.allocator);
             // Dispatch to Raft state machine
             self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
-                std.log.err("cluster: raft handleMessage error: {}", .{e});
+                log.err("Raft handleMessage error", &.{
+                    Attr.string("error", @errorName(e)),
+                });
             };
         }
     }
@@ -334,7 +342,9 @@ pub const ClusterCoordinator = struct {
     }
 
     fn handleNodeFailure(self: *ClusterCoordinator, failed_node: u64) !void {
-        std.log.warn("Node {} detected as failed", .{failed_node});
+        log.warn("Node detected as failed", &.{
+            Attr.uint("node_id", failed_node),
+        });
 
         if (!self.failover_config.auto_failover) return;
 
@@ -386,7 +396,10 @@ pub const ClusterCoordinator = struct {
             }
         }
 
-        std.log.info("Promoting replica {} to primary for shard {}", .{ best_replica, shard.id });
+        log.info("Promoting replica to primary for shard", &.{
+            Attr.uint("replica_id", best_replica),
+            Attr.uint("shard_id", shard.id),
+        });
         shard.primary_node = best_replica;
 
         // Remove from replica list
@@ -410,7 +423,9 @@ pub const ClusterCoordinator = struct {
                 const available_nodes = try self.getAvailableNodes(shard);
 
                 if (available_nodes.len < needed) {
-                    std.log.warn("Insufficient nodes to maintain replication factor for shard {}", .{shard.id});
+                    log.warn("Insufficient nodes to maintain replication factor for shard", &.{
+                        Attr.uint("shard_id", shard.id),
+                    });
                     continue;
                 }
 
@@ -583,7 +598,10 @@ pub const ClusterCoordinator = struct {
 
     // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="DistributedCluster"; ASPECT=Replication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
     fn startReplication(self: *ClusterCoordinator, shard_id: u64, node_id: u64) !void {
-        std.log.info("Starting replication of shard {} to node {}", .{ shard_id, node_id });
+        log.info("Starting replication of shard to node", &.{
+            Attr.uint("shard_id", shard_id),
+            Attr.uint("node_id", node_id),
+        });
 
         // Find the shard and add the node as a replica
         for (self.cluster_state.shards.items) |*shard| {
@@ -591,7 +609,10 @@ pub const ClusterCoordinator = struct {
                 // Check if node is already a replica
                 for (shard.replica_nodes) |replica| {
                     if (replica == node_id) {
-                        std.log.info("Node {} is already a replica for shard {}", .{ node_id, shard_id });
+                        log.info("Node is already a replica for shard", &.{
+                            Attr.uint("node_id", node_id),
+                            Attr.uint("shard_id", shard_id),
+                        });
                         return;
                     }
                 }
@@ -607,23 +628,31 @@ pub const ClusterCoordinator = struct {
                 }
                 shard.replica_nodes = new_replicas;
 
-                std.log.info("Added node {} as replica for shard {}, total replicas: {}", .{ node_id, shard_id, new_replicas.len });
+                log.info("Added node as replica for shard", &.{
+                    Attr.uint("node_id", node_id),
+                    Attr.uint("shard_id", shard_id),
+                    Attr.uint("total_replicas", new_replicas.len),
+                });
                 return;
             }
         }
 
-        std.log.warn("Shard {} not found for replication", .{shard_id});
+        log.warn("Shard not found for replication", &.{
+            Attr.uint("shard_id", shard_id),
+        });
     }
 
     // CANARY: REQ=REQ-DIST-CLUSTER-003; FEATURE="DistributedCluster"; ASPECT=Rebalance; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
     fn rebalanceShards(self: *ClusterCoordinator) !void {
         const node_count = self.cluster_state.nodes.items.len;
         if (node_count == 0) {
-            std.log.warn("No nodes available for rebalancing", .{});
+            log.warn("No nodes available for rebalancing", &.{});
             return;
         }
 
-        std.log.info("Rebalancing shards across {} nodes", .{node_count});
+        log.info("Rebalancing shards across nodes", &.{
+            Attr.uint("node_count", node_count),
+        });
 
         // Calculate target shards per node
         const shard_count = self.cluster_state.shards.items.len;
@@ -650,7 +679,12 @@ pub const ClusterCoordinator = struct {
             }
         }
 
-        std.log.info("Rebalance analysis: {} shards, {} nodes, target {} per node, {} moves needed", .{ shard_count, node_count, target_per_node, moves_needed });
+        log.info("Rebalance analysis", &.{
+            Attr.uint("shard_count", shard_count),
+            Attr.uint("node_count", node_count),
+            Attr.uint("target_per_node", target_per_node),
+            Attr.uint("moves_needed", moves_needed),
+        });
     }
 
     // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
@@ -701,7 +735,9 @@ pub const ClusterCoordinator = struct {
         defer arena.deinit();
         const ally = arena.allocator();
         const parsed = std.json.parseFromSlice(std.json.Value, ally, data, .{}) catch |e| {
-            std.log.warn("cluster: parseNodeInfo JSON error: {}", .{e});
+            log.warn("parseNodeInfo JSON error", &.{
+                Attr.string("error", @errorName(e)),
+            });
             return error.InvalidNodeInfo;
         };
         defer parsed.deinit();

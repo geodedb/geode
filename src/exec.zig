@@ -13,6 +13,11 @@ const graph_store = @import("graph_store.zig");
 const stdx = std;
 const auth = @import("geode_auth");
 const rls = @import("rls");
+
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("execution");
+const Attr = logging.Attr;
 /// Tuning knobs for set-ops implementations.
 pub const SetOpsTuning = struct {
     /// For UNION DISTINCT: if total input rows >= this, prefer hash-based dedup then sort; else sort+unique directly.
@@ -267,56 +272,84 @@ pub fn runGroupedQuery(
                         if (std.ascii.eqlIgnoreCase(id.orig, "count")) {
                             if (c.args.len == 0) {
                                 aggs_out.append(allocator_inner, .CountStar) catch |err| {
-                                    std.log.err("CRITICAL: Failed to append COUNT(*) aggregate (OOM, query will fail): {any}", .{err});
+                                    log.err("CRITICAL: Failed to append COUNT(*) aggregate (OOM, query will fail)", &.{
+                                        Attr.err("error", err),
+                                    });
                                 };
                                 args_out.append(allocator_inner, null) catch |err| {
-                                    std.log.err("CRITICAL: Failed to append COUNT(*) args (OOM, query will fail): {any}", .{err});
+                                    log.err("CRITICAL: Failed to append COUNT(*) args (OOM, query will fail)", &.{
+                                        Attr.err("error", err),
+                                    });
                                 };
                             } else {
                                 aggs_out.append(allocator_inner, .Count) catch |err| {
-                                    std.log.err("CRITICAL: Failed to append COUNT aggregate (OOM, query will fail): {any}", .{err});
+                                    log.err("CRITICAL: Failed to append COUNT aggregate (OOM, query will fail)", &.{
+                                        Attr.err("error", err),
+                                    });
                                 };
                                 args_out.append(allocator_inner, c.args[0].*) catch |err| {
-                                    std.log.err("CRITICAL: Failed to append COUNT args (OOM, query will fail): {any}", .{err});
+                                    log.err("CRITICAL: Failed to append COUNT args (OOM, query will fail)", &.{
+                                        Attr.err("error", err),
+                                    });
                                 };
                             }
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "countdistinct") or std.ascii.eqlIgnoreCase(id.orig, "count_distinct")) {
                             // Interim syntax: COUNT_DISTINCT(expr) or countDistinct(expr) until parser supports COUNT(DISTINCT expr)
                             if (c.args.len == 1) {
                                 aggs_out.append(allocator_inner, .CountDistinct) catch |err| {
-                                    std.log.err("CRITICAL: Failed to append COUNT DISTINCT aggregate (OOM, query will fail): {any}", .{err});
+                                    log.err("CRITICAL: Failed to append COUNT DISTINCT aggregate (OOM, query will fail)", &.{
+                                        Attr.err("error", err),
+                                    });
                                 };
                                 args_out.append(allocator_inner, c.args[0].*) catch |err| {
-                                    std.log.err("CRITICAL: Failed to append COUNT DISTINCT args (OOM, query will fail): {any}", .{err});
+                                    log.err("CRITICAL: Failed to append COUNT DISTINCT args (OOM, query will fail)", &.{
+                                        Attr.err("error", err),
+                                    });
                                 };
                             }
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "sum")) {
                             aggs_out.append(allocator_inner, .Sum) catch |err| {
-                                std.log.err("CRITICAL: Failed to append SUM aggregate (OOM, query will fail): {any}", .{err});
+                                log.err("CRITICAL: Failed to append SUM aggregate (OOM, query will fail)", &.{
+                                    Attr.err("error", err),
+                                });
                             };
                             args_out.append(allocator_inner, c.args[0].*) catch |err| {
-                                std.log.err("CRITICAL: Failed to append SUM args (OOM, query will fail): {any}", .{err});
+                                log.err("CRITICAL: Failed to append SUM args (OOM, query will fail)", &.{
+                                    Attr.err("error", err),
+                                });
                             };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "min")) {
                             aggs_out.append(allocator_inner, .Min) catch |err| {
-                                std.log.err("CRITICAL: Failed to append MIN aggregate (OOM, query will fail): {any}", .{err});
+                                log.err("CRITICAL: Failed to append MIN aggregate (OOM, query will fail)", &.{
+                                    Attr.err("error", err),
+                                });
                             };
                             args_out.append(allocator_inner, c.args[0].*) catch |err| {
-                                std.log.err("CRITICAL: Failed to append MIN args (OOM, query will fail): {any}", .{err});
+                                log.err("CRITICAL: Failed to append MIN args (OOM, query will fail)", &.{
+                                    Attr.err("error", err),
+                                });
                             };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "max")) {
                             aggs_out.append(allocator_inner, .Max) catch |err| {
-                                std.log.err("CRITICAL: Failed to append MAX aggregate (OOM, query will fail): {any}", .{err});
+                                log.err("CRITICAL: Failed to append MAX aggregate (OOM, query will fail)", &.{
+                                    Attr.err("error", err),
+                                });
                             };
                             args_out.append(allocator_inner, c.args[0].*) catch |err| {
-                                std.log.err("CRITICAL: Failed to append MAX args (OOM, query will fail): {any}", .{err});
+                                log.err("CRITICAL: Failed to append MAX args (OOM, query will fail)", &.{
+                                    Attr.err("error", err),
+                                });
                             };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "avg")) {
                             aggs_out.append(allocator_inner, .Avg) catch |err| {
-                                std.log.err("CRITICAL: Failed to append AVG aggregate (OOM, query will fail): {any}", .{err});
+                                log.err("CRITICAL: Failed to append AVG aggregate (OOM, query will fail)", &.{
+                                    Attr.err("error", err),
+                                });
                             };
                             args_out.append(allocator_inner, c.args[0].*) catch |err| {
-                                std.log.err("CRITICAL: Failed to append AVG args (OOM, query will fail): {any}", .{err});
+                                log.err("CRITICAL: Failed to append AVG args (OOM, query will fail)", &.{
+                                    Attr.err("error", err),
+                                });
                             };
                         }
                     },
@@ -1137,7 +1170,10 @@ pub const HashAggregator = struct {
         while (i < self.spill_segments.items.len) : (i += 1) {
             // Best effort cleanup
             std.fs.cwd().deleteFile(self.spill_segments.items[i]) catch |err| {
-                std.log.warn("Failed to delete spill segment '{s}' (disk space leak possible): {any}", .{ self.spill_segments.items[i], err });
+                log.warn("Failed to delete spill segment (disk space leak possible)", &.{
+                    Attr.string("segment", self.spill_segments.items[i]),
+                    Attr.err("error", err),
+                });
             };
             self.allocator.free(self.spill_segments.items[i]);
         }
@@ -1634,7 +1670,10 @@ pub const HashAggregator = struct {
         i = 0;
         while (i < filename_list.len) : (i += 1) {
             std.fs.cwd().deleteFile(filename_list[i]) catch |err| {
-                std.log.warn("Failed to delete reloaded spill file '{s}' (disk space leak possible): {any}", .{ filename_list[i], err });
+                log.warn("Failed to delete reloaded spill file (disk space leak possible)", &.{
+                    Attr.string("file", filename_list[i]),
+                    Attr.err("error", err),
+                });
             };
         }
         // Clear segment tracking

@@ -1,6 +1,11 @@
 const std = @import("std");
 const wal = @import("wal");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("storage");
+const Attr = logging.Attr;
+
 // WAL Compaction Pipeline orchestrates periodic checkpoint selection, compaction execution, and archival hook firing.
 // CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CheckpointSelection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_CheckpointSelection; OWNER=storage; UPDATED=2025-09-27
 // CANARY: REQ=REQ-GQL-083; FEATURE="WalCompaction"; ASPECT=CompactionJob; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_CompactionJob; OWNER=storage; UPDATED=2025-09-23
@@ -75,7 +80,9 @@ pub const Pipeline = struct {
         std.fs.cwd().makePath(archive_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => {
-                std.log.err("WAL archival failed: cannot create archive dir: {}", .{err});
+                log.err("WAL archival failed: cannot create archive dir", &.{
+                    Attr.err("error", err),
+                });
                 return err;
             },
         };
@@ -87,13 +94,15 @@ pub const Pipeline = struct {
             upto_lsn,
             timestamp,
         }) catch {
-            std.log.err("WAL archival failed: filename buffer overflow", .{});
+            log.err("WAL archival failed: filename buffer overflow", &.{});
             return error.BufferOverflow;
         };
 
         // Create archive file and write header
         const archive_file = std.fs.cwd().createFile(archive_name, .{}) catch |err| {
-            std.log.err("WAL archival failed: cannot create archive file: {}", .{err});
+            log.err("WAL archival failed: cannot create archive file", &.{
+                Attr.err("error", err),
+            });
             return err;
         };
         defer archive_file.close();
@@ -121,7 +130,9 @@ pub const Pipeline = struct {
         // Write header
         const header_bytes = std.mem.asBytes(&header);
         archive_file.writeAll(header_bytes) catch |err| {
-            std.log.err("WAL archival failed: write header error: {}", .{err});
+            log.err("WAL archival failed: write header error", &.{
+                Attr.err("error", err),
+            });
             return err;
         };
 
@@ -142,7 +153,9 @@ pub const Pipeline = struct {
                 if (bytes_read == 0) break;
 
                 archive_file.writeAll(buffer[0..bytes_read]) catch |err| {
-                    std.log.err("WAL archival failed: write data error: {}", .{err});
+                    log.err("WAL archival failed: write data error", &.{
+                        Attr.err("error", err),
+                    });
                     return err;
                 };
                 total_archived += bytes_read;
@@ -151,16 +164,16 @@ pub const Pipeline = struct {
             // Restore original position
             try wal_file.seekTo(current_pos);
 
-            std.log.info("WAL archival completed: lsn={d} file={s} size={d} bytes", .{
-                upto_lsn,
-                archive_name,
-                total_archived + header_bytes.len,
+            log.info("WAL archival completed", &.{
+                Attr.uint("lsn", upto_lsn),
+                Attr.string("file", archive_name),
+                Attr.uint("size_bytes", @intCast(total_archived + header_bytes.len)),
             });
         } else {
             // No WAL file available, just write the header as a marker
-            std.log.info("WAL archival marker created: lsn={d} file={s} (no WAL data)", .{
-                upto_lsn,
-                archive_name,
+            log.info("WAL archival marker created (no WAL data)", &.{
+                Attr.uint("lsn", upto_lsn),
+                Attr.string("file", archive_name),
             });
         }
     }

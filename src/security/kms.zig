@@ -1,6 +1,9 @@
 const std = @import("std");
 const external_kms = @import("external_kms_client.zig");
 const kms_remote = @import("kms_remote.zig");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // kms.zig - Comprehensive KMS provider abstraction
 // CANARY: REQ=REQ-GQL-SEC-KMS-001; FEATURE="KMSProviderSystem"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_kms_provider.zig; OWNER=security; UPDATED=2025-10-05
@@ -70,8 +73,10 @@ pub const KMSProvider = struct {
     pub fn init(allocator: std.mem.Allocator, config: KMSConfig) KMSProvider {
         // Production safety warning
         if (is_production_build and !config.provider_type.isProductionSafe()) {
-            std.log.warn("SECURITY WARNING: Using non-production-safe KMS provider '{s}' in production build. " ++
-                "Configure vault_transit, aws_kms, azure_kv, or remote_kms for production deployments.", .{@tagName(config.provider_type)});
+            log.warn("Using non-production-safe KMS provider in production build", &.{
+                Attr.string("provider_type", @tagName(config.provider_type)),
+                Attr.string("recommendation", "Configure vault_transit, aws_kms, azure_kv, or remote_kms"),
+            });
         }
 
         return KMSProvider{

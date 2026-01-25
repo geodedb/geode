@@ -1,5 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const logging = @import("logging");
+const log = logging.scoped("security");
+const Attr = logging.Attr;
 
 // CANARY: REQ=REQ-AUTH-STATE-DEFAULTS-001; FEATURE="Production Password Guard"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=security; UPDATED=2026-01-14
 // GAP-0153 FIX: Production builds must not use hardcoded default passwords
@@ -210,8 +213,10 @@ pub const State = struct {
                 // Generate cryptographically secure random password in production
                 std.crypto.random.bytes(&generated_admin_pw);
                 generated_admin_pw_hex = std.fmt.bytesToHex(generated_admin_pw, .lower);
-                std.log.warn("SECURITY: Generated random admin password. Set GEODE_ADMIN_PASSWORD env var for persistent password.", .{});
-                std.log.info("ADMIN_PASSWORD={s}", .{generated_admin_pw_hex});
+                log.warn("Generated random admin password - set GEODE_ADMIN_PASSWORD env var for persistent password", &.{});
+                log.info("Admin password generated", &.{
+                    Attr.string("password", &generated_admin_pw_hex),
+                });
                 break :blk &generated_admin_pw_hex;
             }
             // Debug builds: use simple default for testing convenience
@@ -229,8 +234,10 @@ pub const State = struct {
                 // Generate cryptographically secure random password in production
                 std.crypto.random.bytes(&generated_test_pw);
                 generated_test_pw_hex = std.fmt.bytesToHex(generated_test_pw, .lower);
-                std.log.warn("SECURITY: Generated random testuser password. Set GEODE_USER_PASSWORD env var for persistent password.", .{});
-                std.log.info("TESTUSER_PASSWORD={s}", .{generated_test_pw_hex});
+                log.warn("Generated random testuser password - set GEODE_USER_PASSWORD env var for persistent password", &.{});
+                log.info("Testuser password generated", &.{
+                    Attr.string("password", &generated_test_pw_hex),
+                });
                 break :blk &generated_test_pw_hex;
             }
             // Debug builds: use simple default for testing convenience

@@ -4,7 +4,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const raft_consensus = @import("raft_consensus.zig");
 
-const log = std.log.scoped(.txn_coordinator);
+const logging = @import("logging");
+const log = logging.scoped("txn_coordinator");
+const Attr = logging.Attr;
 
 /// Prepared transaction state
 pub const PreparedTxn = struct {
@@ -94,7 +96,11 @@ pub const TxnCoordinator = struct {
         for (keys) |key| {
             if (self.lock_table.get(key)) |existing_lock| {
                 if (existing_lock.holder_xid != prepare.xid) {
-                    log.debug("Transaction {} conflicts with {} on key {s}", .{ prepare.xid, existing_lock.holder_xid, key });
+                    log.debug("Transaction conflicts on key", &.{
+                        Attr.uint("xid", prepare.xid),
+                        Attr.uint("holder_xid", existing_lock.holder_xid),
+                        Attr.string("key", key),
+                    });
                     return false; // Conflict - vote abort
                 }
             }
@@ -121,14 +127,18 @@ pub const TxnCoordinator = struct {
         };
 
         try self.prepared_txns.put(prepare.xid, prepared);
-        log.info("Transaction {} prepared successfully", .{prepare.xid});
+        log.info("Transaction prepared successfully", &.{
+            Attr.uint("xid", prepare.xid),
+        });
         return true; // Vote commit
     }
 
     /// Handle txn_decide command from Raft
     pub fn handleDecide(self: *TxnCoordinator, decide: raft_consensus.TxnDecide) !void {
         const prepared = self.prepared_txns.get(decide.xid) orelse {
-            log.warn("Transaction {} not found in prepared state", .{decide.xid});
+            log.warn("Transaction not found in prepared state", &.{
+                Attr.uint("xid", decide.xid),
+            });
             return;
         };
 
@@ -149,10 +159,14 @@ pub const TxnCoordinator = struct {
         if (decide.commit) {
             // Apply the write set
             try self.applyWriteSet(prepared.write_set);
-            log.info("Transaction {} committed", .{decide.xid});
+            log.info("Transaction committed", &.{
+                Attr.uint("xid", decide.xid),
+            });
         } else {
             // Rollback is implicit - just release locks
-            log.info("Transaction {} aborted", .{decide.xid});
+            log.info("Transaction aborted", &.{
+                Attr.uint("xid", decide.xid),
+            });
         }
     }
 
@@ -171,7 +185,9 @@ pub const TxnCoordinator = struct {
         }
 
         for (to_abort.items) |xid| {
-            log.warn("Transaction {} timed out, auto-aborting", .{xid});
+            log.warn("Transaction timed out, auto-aborting", &.{
+                Attr.uint("xid", xid),
+            });
             try self.handleDecide(.{ .xid = xid, .commit = false });
         }
     }
@@ -249,19 +265,26 @@ pub const TxnCoordinator = struct {
                     const key_copy = try self.allocator.dupe(u8, op.key);
                     const val_copy = try self.allocator.dupe(u8, op.value orelse "");
                     try self.committed_store.put(key_copy, val_copy);
-                    log.debug("2PC applied PUT: {s}={s}", .{ op.key, op.value orelse "" });
+                    log.debug("2PC applied PUT", &.{
+                        Attr.string("key", op.key),
+                        Attr.string("value", op.value orelse ""),
+                    });
                 },
                 .delete => {
                     if (self.committed_store.fetchRemove(op.key)) |old| {
                         self.allocator.free(old.key);
                         self.allocator.free(old.value);
-                        log.debug("2PC applied DEL: {s}", .{op.key});
+                        log.debug("2PC applied DEL", &.{
+                            Attr.string("key", op.key),
+                        });
                     }
                 },
             }
         }
 
-        log.info("2PC applied {} operations from write set", .{ops.items.len});
+        log.info("2PC applied operations from write set", &.{
+            Attr.uint("operation_count", ops.items.len),
+        });
     }
 };
 

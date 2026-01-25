@@ -1,6 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Tools; STATUS=IMPL; OWNER=tools; UPDATED=2026-01-24
+const logging = @import("logging");
+const log = logging.scoped("tools");
+const Attr = logging.Attr;
+
 // fed_latency_governance: Summarize readiness using latest aggregate + streak + optional archive scan.
 // Inputs:
 //   --aggregate <path>   (required) latest JSON aggregate file (single line)
@@ -87,7 +92,7 @@ pub fn main() !void {
         }
     }
     if (aggregate_path == null) {
-        std.log.err("missing --aggregate path", .{});
+        log.err("missing --aggregate path", &.{});
         return error.MissingArgument;
     }
 
