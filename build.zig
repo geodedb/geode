@@ -1066,8 +1066,10 @@ pub fn build(b: *std.Build) void {
     remote_kms_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     // Expose kms_remote server/client module under alias security/kms_remote
     const kms_remote_mod = b.createModule(.{ .root_source_file = b.path("src/security/kms_remote.zig"), .target = target, .optimize = optimize });
-    // kms_remote depends on transport/quic
+    // kms_remote depends on transport/quic and logging (for external_kms_client)
     kms_remote_mod.addImport("transport/quic", transport_quic_mod);
+    kms_remote_mod.addImport("logging", logging_mod);
+    kms_remote_mod.addImport("json", json_mod);
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     if (target.result.os.tag == .windows) {
         remote_kms_tests.linkLibC();
