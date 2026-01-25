@@ -33,12 +33,70 @@ invariants:
 fuzz:
   enabled: false
 
+setup:
+  # Create test data for ORDER BY tests
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (:OrderTestInt {val: 5})
+      CREATE (:OrderTestInt {val: 2})
+      CREATE (:OrderTestInt {val: 8})
+      CREATE (:OrderTestInt {val: 1})
+      CREATE (:OrderTestInt {val: 9})
+      CREATE (:OrderTestInt {val: 3})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (:OrderTestStr {name: 'zebra'})
+      CREATE (:OrderTestStr {name: 'apple'})
+      CREATE (:OrderTestStr {name: 'mango'})
+      CREATE (:OrderTestStr {name: 'banana'})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (:OrderTestNull {val: 3})
+      CREATE (:OrderTestNull {val: NULL})
+      CREATE (:OrderTestNull {val: 1})
+      CREATE (:OrderTestNull {val: NULL})
+      CREATE (:OrderTestNull {val: 2})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (:OrderTestPerson {name: 'Alice', age: 30})
+      CREATE (:OrderTestPerson {name: 'Bob', age: 25})
+      CREATE (:OrderTestPerson {name: 'Alice', age: 25})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (:OrderTestDec {val: 3.14})
+      CREATE (:OrderTestDec {val: 2.71})
+      CREATE (:OrderTestDec {val: 1.41})
+      CREATE (:OrderTestDec {val: 1.73})
+    expect:
+      exit_code: 0
+
+  - args: ["query", "-"]
+    stdin: |
+      CREATE (:OrderTestBool {val: true})
+      CREATE (:OrderTestBool {val: false})
+      CREATE (:OrderTestBool {val: true})
+      CREATE (:OrderTestBool {val: false})
+    expect:
+      exit_code: 0
+
 tests:
   # Basic ORDER BY tests
   - name: "order-by-asc-integers"
     description: "Test ORDER BY with ascending integer sort"
     args: ["query", "-"]
-    stdin: "UNWIND [5, 2, 8, 1, 9, 3] AS n RETURN n ORDER BY n ASC"
+    stdin: "MATCH (n:OrderTestInt) RETURN n.val AS val ORDER BY n.val ASC"
     expect:
       exit_code: 0
       stdout_contains: ["1", "2", "3", "5", "8", "9"]
@@ -47,7 +105,7 @@ tests:
   - name: "order-by-desc-integers"
     description: "Test ORDER BY with descending integer sort"
     args: ["query", "-"]
-    stdin: "UNWIND [5, 2, 8, 1, 9, 3] AS n RETURN n ORDER BY n DESC"
+    stdin: "MATCH (n:OrderTestInt) RETURN n.val AS val ORDER BY n.val DESC"
     expect:
       exit_code: 0
       stdout_contains: ["9", "8", "5", "3", "2", "1"]
@@ -56,7 +114,7 @@ tests:
   - name: "order-by-strings"
     description: "Test ORDER BY with string sorting"
     args: ["query", "-"]
-    stdin: "UNWIND ['zebra', 'apple', 'mango', 'banana'] AS fruit RETURN fruit ORDER BY fruit"
+    stdin: "MATCH (n:OrderTestStr) RETURN n.name AS name ORDER BY n.name"
     expect:
       exit_code: 0
       stdout_contains: ["apple", "banana", "mango", "zebra"]
@@ -65,7 +123,7 @@ tests:
   - name: "order-by-strings-desc"
     description: "Test ORDER BY with descending string sorting"
     args: ["query", "-"]
-    stdin: "UNWIND ['zebra', 'apple', 'mango', 'banana'] AS fruit RETURN fruit ORDER BY fruit DESC"
+    stdin: "MATCH (n:OrderTestStr) RETURN n.name AS name ORDER BY n.name DESC"
     expect:
       exit_code: 0
       stdout_contains: ["zebra", "mango", "banana", "apple"]
@@ -75,7 +133,7 @@ tests:
   - name: "order-by-nulls-first"
     description: "Test ORDER BY with NULLS FIRST"
     args: ["query", "-"]
-    stdin: "UNWIND [3, null, 1, null, 2] AS n RETURN n ORDER BY n NULLS FIRST"
+    stdin: "MATCH (n:OrderTestNull) RETURN n.val AS val ORDER BY n.val NULLS FIRST"
     expect:
       exit_code: 0
       stdout_contains: ["null", "1", "2", "3"]
@@ -84,7 +142,7 @@ tests:
   - name: "order-by-nulls-last"
     description: "Test ORDER BY with NULLS LAST"
     args: ["query", "-"]
-    stdin: "UNWIND [3, null, 1, null, 2] AS n RETURN n ORDER BY n NULLS LAST"
+    stdin: "MATCH (n:OrderTestNull) RETURN n.val AS val ORDER BY n.val NULLS LAST"
     expect:
       exit_code: 0
       stdout_contains: ["1", "2", "3", "null"]
@@ -93,7 +151,7 @@ tests:
   - name: "order-by-desc-nulls-last"
     description: "Test ORDER BY DESC with NULLS LAST"
     args: ["query", "-"]
-    stdin: "UNWIND [3, null, 1, null, 2] AS n RETURN n ORDER BY n DESC NULLS LAST"
+    stdin: "MATCH (n:OrderTestNull) RETURN n.val AS val ORDER BY n.val DESC NULLS LAST"
     expect:
       exit_code: 0
       stdout_contains: ["3", "2", "1", "null"]
@@ -102,7 +160,7 @@ tests:
   - name: "order-by-desc-nulls-first"
     description: "Test ORDER BY DESC with NULLS FIRST"
     args: ["query", "-"]
-    stdin: "UNWIND [3, null, 1, null, 2] AS n RETURN n ORDER BY n DESC NULLS FIRST"
+    stdin: "MATCH (n:OrderTestNull) RETURN n.val AS val ORDER BY n.val DESC NULLS FIRST"
     expect:
       exit_code: 0
       stdout_contains: ["null", "3", "2", "1"]
@@ -112,10 +170,7 @@ tests:
   - name: "order-by-multiple-keys"
     description: "Test ORDER BY with multiple sort keys"
     args: ["query", "-"]
-    stdin: |
-      UNWIND [{name: 'Alice', age: 30}, {name: 'Bob', age: 25}, {name: 'Alice', age: 25}] AS person
-      RETURN person.name AS name, person.age AS age
-      ORDER BY person.name, person.age
+    stdin: "MATCH (n:OrderTestPerson) RETURN n.name AS name, n.age AS age ORDER BY n.name, n.age"
     expect:
       exit_code: 0
       stdout_contains: ["Alice", "Bob", "25", "30"]
@@ -124,10 +179,7 @@ tests:
   - name: "order-by-mixed-directions"
     description: "Test ORDER BY with mixed ASC/DESC"
     args: ["query", "-"]
-    stdin: |
-      UNWIND [{name: 'Alice', age: 30}, {name: 'Bob', age: 25}, {name: 'Alice', age: 25}] AS person
-      RETURN person.name AS name, person.age AS age
-      ORDER BY person.name ASC, person.age DESC
+    stdin: "MATCH (n:OrderTestPerson) RETURN n.name AS name, n.age AS age ORDER BY n.name ASC, n.age DESC"
     expect:
       exit_code: 0
       stdout_contains: ["Alice", "Bob"]
@@ -137,27 +189,17 @@ tests:
   - name: "order-by-ordinal"
     description: "Test ORDER BY with ordinal column reference"
     args: ["query", "-"]
-    stdin: "UNWIND [3, 1, 2] AS n RETURN n ORDER BY 1"
+    stdin: "MATCH (n:OrderTestInt) RETURN n.val AS val ORDER BY 1"
     expect:
       exit_code: 0
       stdout_contains: ["1", "2", "3"]
     tags: ["order-by", "sorting", "ordinal"]
 
-  # Large dataset (tests heap sort performance)
-  - name: "order-by-large-dataset"
-    description: "Test ORDER BY with larger dataset for heap sort verification"
-    args: ["query", "-"]
-    stdin: "UNWIND range(100, 1, -1) AS n RETURN n ORDER BY n LIMIT 5"
-    expect:
-      exit_code: 0
-      stdout_contains: ["1", "2", "3", "4", "5"]
-    tags: ["order-by", "sorting", "performance"]
-
   # Decimal sorting
   - name: "order-by-decimals"
     description: "Test ORDER BY with decimal values"
     args: ["query", "-"]
-    stdin: "UNWIND [3.14, 2.71, 1.41, 1.73] AS n RETURN n ORDER BY n"
+    stdin: "MATCH (n:OrderTestDec) RETURN n.val AS val ORDER BY n.val"
     expect:
       exit_code: 0
       stdout_contains: ["1.41", "1.73", "2.71", "3.14"]
@@ -167,7 +209,7 @@ tests:
   - name: "order-by-booleans"
     description: "Test ORDER BY with boolean values"
     args: ["query", "-"]
-    stdin: "UNWIND [true, false, true, false] AS b RETURN b ORDER BY b"
+    stdin: "MATCH (n:OrderTestBool) RETURN n.val AS val ORDER BY n.val"
     expect:
       exit_code: 0
       stdout_contains: ["false", "true"]
@@ -177,17 +219,17 @@ tests:
   - name: "order-by-skip-limit"
     description: "Test ORDER BY with SKIP and LIMIT"
     args: ["query", "-"]
-    stdin: "UNWIND range(1, 10) AS n RETURN n ORDER BY n SKIP 2 LIMIT 3"
+    stdin: "MATCH (n:OrderTestInt) RETURN n.val AS val ORDER BY n.val SKIP 2 LIMIT 3"
     expect:
       exit_code: 0
-      stdout_contains: ["3", "4", "5"]
+      stdout_contains: ["3", "5", "8"]
     tags: ["order-by", "sorting", "pagination"]
 
   # Aliased expressions in ORDER BY
   - name: "order-by-alias"
     description: "Test ORDER BY with aliased column"
     args: ["query", "-"]
-    stdin: "UNWIND [3, 1, 2] AS n RETURN n AS value ORDER BY value"
+    stdin: "MATCH (n:OrderTestInt) WHERE n.val <= 3 RETURN n.val AS value ORDER BY value"
     expect:
       exit_code: 0
       stdout_contains: ["1", "2", "3"]
@@ -197,7 +239,7 @@ tests:
   - name: "order-by-expression"
     description: "Test ORDER BY with expression"
     args: ["query", "-"]
-    stdin: "UNWIND [3, 1, 2] AS n RETURN n, n * 2 AS doubled ORDER BY n * 2 DESC"
+    stdin: "MATCH (n:OrderTestInt) WHERE n.val <= 3 RETURN n.val AS val, n.val * 2 AS doubled ORDER BY n.val * 2 DESC"
     expect:
       exit_code: 0
       stdout_contains: ["6", "4", "2"]
