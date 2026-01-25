@@ -38,7 +38,9 @@ tests:
   - name: "insert-relationship"
     description: "Test INSERT relationship pattern"
     setup:
-      - "query \"INSERT (a:Person {name: 'David', age: 40}), (b:Person {name: 'Eve', age: 28})\""
+      - args: ["query", "INSERT (a:Person {name: 'David', age: 40}), (b:Person {name: 'Eve', age: 28})"]
+        expect:
+          exit_code: 0
     args: ["query", "INSERT (a:Person {name: 'David'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Eve'})"]
     expect:
       exit_code: 0
@@ -74,7 +76,9 @@ tests:
   - name: "set-property-basic"
     description: "Test basic SET property operation"
     setup:
-      - "query \"INSERT (n:Person {name: 'Grace', age: 26})\""
+      - args: ["query", "INSERT (n:Person {name: 'Grace', age: 26})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person {name: 'Grace'}) SET n.age = 27"]
     expect:
       exit_code: 0
@@ -83,7 +87,9 @@ tests:
   - name: "set-multiple-properties"
     description: "Test SET multiple properties"
     setup:
-      - "query \"INSERT (n:Person {name: 'Henry', age: 30})\""
+      - args: ["query", "INSERT (n:Person {name: 'Henry', age: 30})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person {name: 'Henry'}) SET n.age = 31, n.city = 'New York', n.updated = true"]
     expect:
       exit_code: 0
@@ -92,7 +98,9 @@ tests:
   - name: "set-all-properties"
     description: "Test SET all properties with property map"
     setup:
-      - "query \"INSERT (n:Person {name: 'Ivy', age: 29})\""
+      - args: ["query", "INSERT (n:Person {name: 'Ivy', age: 29})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person {name: 'Ivy'}) SET n = {name: 'Ivy Johnson', age: 30, department: 'Engineering', active: true}"]
     expect:
       exit_code: 0
@@ -101,7 +109,9 @@ tests:
   - name: "set-label"
     description: "Test SET label operation"
     setup:
-      - "query \"INSERT (n:Person {name: 'Jack', age: 33})\""
+      - args: ["query", "INSERT (n:Person {name: 'Jack', age: 33})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person {name: 'Jack'}) SET n:Employee"]
     expect:
       exit_code: 0
@@ -110,7 +120,9 @@ tests:
   - name: "set-multiple-labels"
     description: "Test SET multiple labels"
     setup:
-      - "query \"INSERT (n:Person {name: 'Kate', age: 27})\""
+      - args: ["query", "INSERT (n:Person {name: 'Kate', age: 27})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person {name: 'Kate'}) SET n:Employee, n:Manager"]
     expect:
       exit_code: 0
@@ -119,7 +131,9 @@ tests:
   - name: "set-relationship-property"
     description: "Test SET property on relationship"
     setup:
-      - "query \"INSERT (a:Person {name: 'Liam'}), (b:Person {name: 'Mia'}), (a)-[:KNOWS]->(b)\""
+      - args: ["query", "INSERT (a:Person {name: 'Liam'}), (b:Person {name: 'Mia'}), (a)-[:KNOWS]->(b)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (a:Person {name: 'Liam'})-[r:KNOWS]->(b:Person {name: 'Mia'}) SET r.strength = 'strong', r.verified = true"]
     expect:
       exit_code: 0
@@ -128,7 +142,9 @@ tests:
   - name: "set-computed-property"
     description: "Test SET property with computed value"
     setup:
-      - "query \"INSERT (n:Product {name: 'Monitor', price: 299.99})\""
+      - args: ["query", "INSERT (n:Product {name: 'Monitor', price: 299.99})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Product {name: 'Monitor'}) SET n.discounted_price = n.price * 0.9"]
     expect:
       exit_code: 0
@@ -141,7 +157,9 @@ tests:
   - name: "remove-property-basic"
     description: "Test basic REMOVE property operation"
     setup:
-      - "query \"INSERT (n:Person {name: 'Noah', age: 35, temp_field: 'remove_me'})\""
+      - args: ["query", "INSERT (n:Person {name: 'Noah', age: 35, temp_field: 'remove_me'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person {name: 'Noah'}) REMOVE n.temp_field"]
     expect:
       exit_code: 0
@@ -150,7 +168,9 @@ tests:
   - name: "remove-multiple-properties"
     description: "Test REMOVE multiple properties"
     setup:
-      - "query \"INSERT (n:Person {name: 'Olivia', age: 28, temp1: 'remove', temp2: 'also_remove'})\""
+      - args: ["query", "INSERT (n:Person {name: 'Olivia', age: 28, temp1: 'remove', temp2: 'also_remove'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person {name: 'Olivia'}) REMOVE n.temp1, n.temp2"]
     expect:
       exit_code: 0
@@ -159,7 +179,9 @@ tests:
   - name: "remove-label-basic"
     description: "Test basic REMOVE label operation"
     setup:
-      - "query \"INSERT (n:Person:Temporary {name: 'Paul', age: 42})\""
+      - args: ["query", "INSERT (n:Person:Temporary {name: 'Paul', age: 42})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person {name: 'Paul'}) REMOVE n:Temporary"]
     expect:
       exit_code: 0
@@ -168,7 +190,9 @@ tests:
   - name: "remove-multiple-labels"
     description: "Test REMOVE multiple labels"
     setup:
-      - "query \"INSERT (n:Person:Employee:Manager:Temporary {name: 'Quinn', age: 38})\""
+      - args: ["query", "INSERT (n:Person:Employee:Manager:Temporary {name: 'Quinn', age: 38})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person {name: 'Quinn'}) REMOVE n:Employee, n:Temporary"]
     expect:
       exit_code: 0
@@ -177,7 +201,9 @@ tests:
   - name: "remove-relationship-property"
     description: "Test REMOVE property from relationship"
     setup:
-      - "query \"INSERT (a:Person {name: 'Ryan'}), (b:Person {name: 'Sara'}), (a)-[:KNOWS {temp_prop: 'remove_me', since: 2020}]->(b)\""
+      - args: ["query", "INSERT (a:Person {name: 'Ryan'}), (b:Person {name: 'Sara'}), (a)-[:KNOWS {temp_prop: 'remove_me', since: 2020}]->(b)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (a:Person {name: 'Ryan'})-[r:KNOWS]->(b:Person {name: 'Sara'}) REMOVE r.temp_prop"]
     expect:
       exit_code: 0
@@ -190,7 +216,9 @@ tests:
   - name: "delete-node-basic"
     description: "Test basic DELETE node operation"
     setup:
-      - "query \"INSERT (n:TempNode {id: 1, name: 'delete_me'})\""
+      - args: ["query", "INSERT (n:TempNode {id: 1, name: 'delete_me'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:TempNode {id: 1}) DELETE n"]
     expect:
       exit_code: 0
@@ -199,7 +227,9 @@ tests:
   - name: "delete-multiple-nodes"
     description: "Test DELETE multiple nodes"
     setup:
-      - "query \"INSERT (a:TempNode {id: 2}), (b:TempNode {id: 3})\""
+      - args: ["query", "INSERT (a:TempNode {id: 2}), (b:TempNode {id: 3})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:TempNode) WHERE n.id IN [2, 3] DELETE n"]
     expect:
       exit_code: 0
@@ -208,7 +238,9 @@ tests:
   - name: "delete-relationship-basic"
     description: "Test DELETE relationship operation"
     setup:
-      - "query \"INSERT (a:Person {name: 'Tom'}), (b:Person {name: 'Uma'}), (a)-[:TEMP_REL]->(b)\""
+      - args: ["query", "INSERT (a:Person {name: 'Tom'}), (b:Person {name: 'Uma'}), (a)-[:TEMP_REL]->(b)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (a:Person {name: 'Tom'})-[r:TEMP_REL]->(b:Person {name: 'Uma'}) DELETE r"]
     expect:
       exit_code: 0
@@ -217,7 +249,9 @@ tests:
   - name: "detach-delete-node"
     description: "Test DETACH DELETE node operation"
     setup:
-      - "query \"INSERT (a:Person {name: 'Victor'}), (b:TempNode {name: 'detach_me'}), (a)-[:CONNECTED]->(b)\""
+      - args: ["query", "INSERT (a:Person {name: 'Victor'}), (b:TempNode {name: 'detach_me'}), (a)-[:CONNECTED]->(b)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:TempNode {name: 'detach_me'}) DETACH DELETE n"]
     expect:
       exit_code: 0
@@ -227,20 +261,26 @@ tests:
     description: "Test NODETACH DELETE on node with relationships (should error)"
     skip: true  # Geode returns status codes via response, not exit codes - test runner limitation
     setup:
-      - "query \"INSERT (a:Person {name: 'Walter'}), (b:TempNode {name: 'nodetach_error'}), (a)-[:CONNECTED]->(b)\""
+      - args: ["query", "INSERT (a:Person {name: 'Walter'}), (b:TempNode {name: 'nodetach_error'}), (a)-[:CONNECTED]->(b)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:TempNode {name: 'nodetach_error'}) NODETACH DELETE n"]
     expect:
       exit_code: 0
       geode_query:
         status_class: "22000"  # Integrity constraint violation
     cleanup:
-      - "query \"MATCH (n:TempNode {name: 'nodetach_error'}) DETACH DELETE n\""
+      - args: ["query", "MATCH (n:TempNode {name: 'nodetach_error'}) DETACH DELETE n"]
+        expect:
+          exit_code: 0
     tags: ["delete", "nodetach", "error"]
 
   - name: "delete-complex-pattern"
     description: "Test DELETE with complex matching pattern"
     setup:
-      - "query \"INSERT (a:TempNode {type: 'source'}), (b:TempNode {type: 'target'}), (a)-[:TEMP_CONNECTS {weight: 1.0}]->(b)\""
+      - args: ["query", "INSERT (a:TempNode {type: 'source'}), (b:TempNode {type: 'target'}), (a)-[:TEMP_CONNECTS {weight: 1.0}]->(b)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (a:TempNode {type: 'source'})-[r:TEMP_CONNECTS]->(b:TempNode {type: 'target'}) DELETE r, a, b"]
     expect:
       exit_code: 0
@@ -268,7 +308,9 @@ tests:
   - name: "set-remove-workflow"
     description: "Test SET followed by REMOVE operations"
     setup:
-      - "query \"INSERT (n:WorkflowTest {name: 'ModifyUser', temp: 'temporary', keep: 'permanent'})\""
+      - args: ["query", "INSERT (n:WorkflowTest {name: 'ModifyUser', temp: 'temporary', keep: 'permanent'})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -339,7 +381,9 @@ tests:
     description: "Performance test with bulk SET operations"
     timeout_ms: 30000
     setup:
-      - "query \"INSERT (n1:BulkSetTest {id: 1}), (n2:BulkSetTest {id: 2}), (n3:BulkSetTest {id: 3}), (n4:BulkSetTest {id: 4}), (n5:BulkSetTest {id: 5})\""
+      - args: ["query", "INSERT (n1:BulkSetTest {id: 1}), (n2:BulkSetTest {id: 2}), (n3:BulkSetTest {id: 3}), (n4:BulkSetTest {id: 4}), (n5:BulkSetTest {id: 5})"]
+        expect:
+          exit_code: 0
     args:
       - "query"
       - |
@@ -366,7 +410,9 @@ tests:
   - name: "remove-nonexistent-property"
     description: "Test REMOVE non-existent property (should succeed with no effect)"
     setup:
-      - "query \"INSERT (n:ErrorTest {name: 'test'})\""
+      - args: ["query", "INSERT (n:ErrorTest {name: 'test'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:ErrorTest) REMOVE n.nonexistent_property"]
     expect:
       exit_code: 0

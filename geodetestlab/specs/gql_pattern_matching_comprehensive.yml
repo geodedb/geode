@@ -24,7 +24,9 @@ tests:
   - name: "node-pattern-simple"
     description: "Test simple node pattern matching"
     setup:
-      - "query \"CREATE (a), (b), (c)\""
+      - args: ["query", "CREATE (a), (b), (c)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n) RETURN count(n) AS node_count"]
     expect:
       exit_code: 0
@@ -39,7 +41,9 @@ tests:
   - name: "node-pattern-with-variable"
     description: "Test node pattern with variable binding"
     setup:
-      - "query \"CREATE (a {id: 1}), (b {id: 2})\""
+      - args: ["query", "CREATE (a {id: 1}), (b {id: 2})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (node) RETURN node.id AS id ORDER BY id"]
     expect:
       exit_code: 0
@@ -51,7 +55,9 @@ tests:
   - name: "node-pattern-with-label"
     description: "Test node pattern with label matching"
     setup:
-      - "query \"CREATE (a:Person), (b:Person), (c:Company)\""
+      - args: ["query", "CREATE (a:Person), (b:Person), (c:Company)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person) RETURN count(n) AS person_count"]
     expect:
       exit_code: 0
@@ -66,7 +72,9 @@ tests:
   - name: "node-pattern-with-properties"
     description: "Test node pattern with property matching"
     setup:
-      - "query \"CREATE (a:User {name: 'Alice', age: 30}), (b:User {name: 'Bob', age: 25}), (c:User {name: 'Charlie', age: 30})\""
+      - args: ["query", "CREATE (a:User {name: 'Alice', age: 30}), (b:User {name: 'Bob', age: 25}), (c:User {name: 'Charlie', age: 30})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:User {age: 30}) RETURN count(n) AS age_30_count"]
     expect:
       exit_code: 0
@@ -81,7 +89,9 @@ tests:
   - name: "node-pattern-multiple-labels"
     description: "Test node pattern with multiple labels"
     setup:
-      - "query \"CREATE (a:Person:Employee), (b:Person), (c:Employee)\""
+      - args: ["query", "CREATE (a:Person:Employee), (b:Person), (c:Employee)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:Person:Employee) RETURN count(n) AS both_labels_count"]
     expect:
       exit_code: 0
@@ -100,7 +110,9 @@ tests:
   - name: "relationship-pattern-simple"
     description: "Test simple relationship pattern matching"
     setup:
-      - "query \"CREATE (a)-[:KNOWS]->(b), (c)-[:LIKES]->(d)\""
+      - args: ["query", "CREATE (a)-[:KNOWS]->(b), (c)-[:LIKES]->(d)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH ()-[r]->() RETURN count(r) AS rel_count"]
     expect:
       exit_code: 0
@@ -115,7 +127,9 @@ tests:
   - name: "relationship-pattern-with-type"
     description: "Test relationship pattern with type matching"
     setup:
-      - "query \"CREATE (a)-[:KNOWS]->(b), (c)-[:KNOWS]->(d), (e)-[:LIKES]->(f)\""
+      - args: ["query", "CREATE (a)-[:KNOWS]->(b), (c)-[:KNOWS]->(d), (e)-[:LIKES]->(f)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH ()-[r:KNOWS]->() RETURN count(r) AS knows_count"]
     expect:
       exit_code: 0
@@ -130,7 +144,9 @@ tests:
   - name: "relationship-pattern-with-properties"
     description: "Test relationship pattern with property matching"
     setup:
-      - "query \"CREATE (a)-[:RATED {score: 5}]->(b), (c)-[:RATED {score: 3}]->(d), (e)-[:RATED {score: 5}]->(f)\""
+      - args: ["query", "CREATE (a)-[:RATED {score: 5}]->(b), (c)-[:RATED {score: 3}]->(d), (e)-[:RATED {score: 5}]->(f)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH ()-[r:RATED {score: 5}]->() RETURN count(r) AS high_rated_count"]
     expect:
       exit_code: 0
@@ -145,7 +161,9 @@ tests:
   - name: "relationship-pattern-undirected"
     description: "Test undirected relationship pattern matching"
     setup:
-      - "query \"CREATE (a)-[:CONNECTED]->(b), (c)-[:CONNECTED]->(d)\""
+      - args: ["query", "CREATE (a)-[:CONNECTED]->(b), (c)-[:CONNECTED]->(d)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH ()-[r:CONNECTED]-() RETURN count(r) AS connected_count"]
     expect:
       exit_code: 0
@@ -160,7 +178,9 @@ tests:
   - name: "relationship-pattern-reverse-direction"
     description: "Test reverse direction relationship pattern"
     setup:
-      - "query \"CREATE (a {name: 'source'})-[:FLOWS_TO]->(b {name: 'target'})\""
+      - args: ["query", "CREATE (a {name: 'source'})-[:FLOWS_TO]->(b {name: 'target'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (target)<-[:FLOWS_TO]-(source) RETURN source.name AS source_name, target.name AS target_name"]
     expect:
       exit_code: 0
@@ -181,7 +201,9 @@ tests:
   - name: "variable-length-any"
     description: "Test variable-length pattern with any length (*)"
     setup:
-      - "query \"CREATE (a)-[:NEXT]->(b)-[:NEXT]->(c)-[:NEXT]->(d)\""
+      - args: ["query", "CREATE (a)-[:NEXT]->(b)-[:NEXT]->(c)-[:NEXT]->(d)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (start)-[:NEXT*]->(end) RETURN count(*) AS path_count"]
     expect:
       exit_code: 0
@@ -196,7 +218,9 @@ tests:
   - name: "variable-length-exact"
     description: "Test variable-length pattern with exact length"
     setup:
-      - "query \"CREATE (a)-[:STEP]->(b)-[:STEP]->(c)-[:STEP]->(d)\""
+      - args: ["query", "CREATE (a)-[:STEP]->(b)-[:STEP]->(c)-[:STEP]->(d)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (start)-[:STEP*2]->(end) RETURN count(*) AS two_step_count"]
     expect:
       exit_code: 0
@@ -211,7 +235,9 @@ tests:
   - name: "variable-length-range"
     description: "Test variable-length pattern with range (min..max)"
     setup:
-      - "query \"CREATE (a)-[:LINK]->(b)-[:LINK]->(c)-[:LINK]->(d)-[:LINK]->(e)\""
+      - args: ["query", "CREATE (a)-[:LINK]->(b)-[:LINK]->(c)-[:LINK]->(d)-[:LINK]->(e)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (start)-[:LINK*2..3]->(end) RETURN count(*) AS range_count"]
     expect:
       exit_code: 0
@@ -226,7 +252,9 @@ tests:
   - name: "variable-length-min-only"
     description: "Test variable-length pattern with minimum only (min..)"
     setup:
-      - "query \"CREATE (a)-[:CHAIN]->(b)-[:CHAIN]->(c)-[:CHAIN]->(d)\""
+      - args: ["query", "CREATE (a)-[:CHAIN]->(b)-[:CHAIN]->(c)-[:CHAIN]->(d)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (start)-[:CHAIN*2..]->(end) RETURN count(*) AS min_two_count"]
     expect:
       exit_code: 0
@@ -241,7 +269,9 @@ tests:
   - name: "variable-length-max-only"
     description: "Test variable-length pattern with maximum only (..max)"
     setup:
-      - "query \"CREATE (a)-[:PATH]->(b)-[:PATH]->(c)-[:PATH]->(d)\""
+      - args: ["query", "CREATE (a)-[:PATH]->(b)-[:PATH]->(c)-[:PATH]->(d)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (start)-[:PATH*..2]->(end) RETURN count(*) AS max_two_count"]
     expect:
       exit_code: 0
@@ -260,7 +290,9 @@ tests:
   - name: "path-variable-assignment"
     description: "Test path variable assignment"
     setup:
-      - "query \"CREATE (a {name: 'start'})-[:CONNECTS]->(b {name: 'middle'})-[:CONNECTS]->(c {name: 'end'})\""
+      - args: ["query", "CREATE (a {name: 'start'})-[:CONNECTS]->(b {name: 'middle'})-[:CONNECTS]->(c {name: 'end'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH path = (a)-[:CONNECTS*2]->(c) RETURN length(path) AS path_length"]
     expect:
       exit_code: 0
@@ -275,7 +307,9 @@ tests:
   - name: "path-variable-nodes"
     description: "Test accessing nodes from path variable"
     setup:
-      - "query \"CREATE (a {id: 1})-[:TO]->(b {id: 2})-[:TO]->(c {id: 3})\""
+      - args: ["query", "CREATE (a {id: 1})-[:TO]->(b {id: 2})-[:TO]->(c {id: 3})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH path = (start)-[:TO*2]->(end) RETURN nodes(path)[0].id AS first_id, nodes(path)[2].id AS last_id"]
     expect:
       exit_code: 0
@@ -292,7 +326,9 @@ tests:
   - name: "path-variable-relationships"
     description: "Test accessing relationships from path variable"
     setup:
-      - "query \"CREATE (a)-[:REL {weight: 1.0}]->(b)-[:REL {weight: 2.0}]->(c)\""
+      - args: ["query", "CREATE (a)-[:REL {weight: 1.0}]->(b)-[:REL {weight: 2.0}]->(c)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH path = (a)-[:REL*2]->(c) RETURN relationships(path)[0].weight AS first_weight, relationships(path)[1].weight AS second_weight"]
     expect:
       exit_code: 0
@@ -313,7 +349,9 @@ tests:
   - name: "multiple-patterns-in-match"
     description: "Test multiple patterns in single MATCH clause"
     setup:
-      - "query \"CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})-[:LIKES]->(d:Item {name: 'coffee'})\""
+      - args: ["query", "CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})-[:LIKES]->(d:Item {name: 'coffee'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (p1:Person)-[:KNOWS]->(p2:Person), (p3:Person)-[:LIKES]->(i:Item) RETURN count(*) AS pattern_count"]
     expect:
       exit_code: 0
@@ -328,7 +366,9 @@ tests:
   - name: "connected-patterns"
     description: "Test connected patterns sharing variables"
     setup:
-      - "query \"CREATE (a:User {name: 'Alice'})-[:OWNS]->(b:Car {model: 'Toyota'}), (a)-[:LIVES_IN]->(c:City {name: 'Boston'})\""
+      - args: ["query", "CREATE (a:User {name: 'Alice'})-[:OWNS]->(b:Car {model: 'Toyota'}), (a)-[:LIVES_IN]->(c:City {name: 'Boston'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (u:User)-[:OWNS]->(car:Car), (u)-[:LIVES_IN]->(city:City) RETURN u.name AS user_name, car.model AS car_model, city.name AS city_name"]
     expect:
       exit_code: 0
@@ -347,7 +387,9 @@ tests:
   - name: "triangular-pattern"
     description: "Test triangular pattern (A->B->C->A)"
     setup:
-      - "query \"CREATE (a {name: 'A'})-[:EDGE]->(b {name: 'B'})-[:EDGE]->(c {name: 'C'})-[:EDGE]->(a)\""
+      - args: ["query", "CREATE (a {name: 'A'})-[:EDGE]->(b {name: 'B'})-[:EDGE]->(c {name: 'C'})-[:EDGE]->(a)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (a)-[:EDGE]->(b)-[:EDGE]->(c)-[:EDGE]->(a) RETURN a.name AS node_a, b.name AS node_b, c.name AS node_c"]
     expect:
       exit_code: 0
@@ -370,7 +412,9 @@ tests:
   - name: "pattern-with-where-clause"
     description: "Test pattern matching with WHERE clause"
     setup:
-      - "query \"CREATE (a:Product {name: 'Laptop', price: 1000}), (b:Product {name: 'Mouse', price: 25}), (c:Product {name: 'Keyboard', price: 75})\""
+      - args: ["query", "CREATE (a:Product {name: 'Laptop', price: 1000}), (b:Product {name: 'Mouse', price: 25}), (c:Product {name: 'Keyboard', price: 75})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (p:Product) WHERE p.price > 50 RETURN p.name AS expensive_product ORDER BY p.price"]
     expect:
       exit_code: 0
@@ -382,7 +426,9 @@ tests:
   - name: "pattern-with-relationship-filter"
     description: "Test pattern matching with relationship property filter"
     setup:
-      - "query \"CREATE (a)-[:RATED {score: 9}]->(b), (c)-[:RATED {score: 3}]->(d), (e)-[:RATED {score: 8}]->(f)\""
+      - args: ["query", "CREATE (a)-[:RATED {score: 9}]->(b), (c)-[:RATED {score: 3}]->(d), (e)-[:RATED {score: 8}]->(f)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH ()-[r:RATED]->() WHERE r.score >= 8 RETURN count(r) AS high_ratings"]
     expect:
       exit_code: 0
@@ -397,7 +443,9 @@ tests:
   - name: "pattern-with-path-length-filter"
     description: "Test pattern matching with path length filter"
     setup:
-      - "query \"CREATE (a)-[:STEP]->(b)-[:STEP]->(c)-[:STEP]->(d)-[:STEP]->(e)\""
+      - args: ["query", "CREATE (a)-[:STEP]->(b)-[:STEP]->(c)-[:STEP]->(d)-[:STEP]->(e)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH path = (start)-[:STEP*]->(end) WHERE length(path) = 3 RETURN count(path) AS three_step_paths"]
     expect:
       exit_code: 0
@@ -416,7 +464,9 @@ tests:
   - name: "optional-match-basic"
     description: "Test basic OPTIONAL MATCH pattern"
     setup:
-      - "query \"CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})-[:HAS_EMAIL]->(e:Email {address: 'bob@example.com'})\""
+      - args: ["query", "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})-[:HAS_EMAIL]->(e:Email {address: 'bob@example.com'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (p:Person) OPTIONAL MATCH (p)-[:HAS_EMAIL]->(email:Email) RETURN p.name AS name, email.address AS email_address ORDER BY name"]
     expect:
       exit_code: 0
@@ -428,7 +478,9 @@ tests:
   - name: "optional-match-with-where"
     description: "Test OPTIONAL MATCH with WHERE clause"
     setup:
-      - "query \"CREATE (a:User {name: 'Alice', age: 25}), (b:User {name: 'Bob', age: 35})-[:OWNS]->(c:Car {brand: 'Toyota'})\""
+      - args: ["query", "CREATE (a:User {name: 'Alice', age: 25}), (b:User {name: 'Bob', age: 35})-[:OWNS]->(c:Car {brand: 'Toyota'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (u:User) OPTIONAL MATCH (u)-[:OWNS]->(car:Car) WHERE u.age > 30 RETURN u.name AS name, car.brand AS car_brand ORDER BY name"]
     expect:
       exit_code: 0
@@ -444,7 +496,9 @@ tests:
   - name: "pattern-in-list-comprehension"
     description: "Test pattern within list comprehension"
     setup:
-      - "query \"CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}), (a)-[:KNOWS]->(c:Person {name: 'Charlie'})\""
+      - args: ["query", "CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}), (a)-[:KNOWS]->(c:Person {name: 'Charlie'})"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (p:Person {name: 'Alice'}) RETURN [(p)-[:KNOWS]->(friend) | friend.name] AS friends"]
     expect:
       exit_code: 0
@@ -460,7 +514,9 @@ tests:
   - name: "pattern-no-matches"
     description: "Test pattern matching with no results"
     setup:
-      - "query \"CREATE (a:TypeA), (b:TypeB)\""
+      - args: ["query", "CREATE (a:TypeA), (b:TypeB)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n:TypeC) RETURN count(n) AS count"]
     expect:
       exit_code: 0
@@ -475,7 +531,9 @@ tests:
   - name: "pattern-variable-reuse"
     description: "Test reusing pattern variables"
     setup:
-      - "query \"CREATE (a {name: 'self'})-[:REFLEXIVE]->(a)\""
+      - args: ["query", "CREATE (a {name: 'self'})-[:REFLEXIVE]->(a)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (n)-[:REFLEXIVE]->(n) RETURN n.name AS self_referencing"]
     expect:
       exit_code: 0
@@ -505,8 +563,12 @@ tests:
     description: "Performance test with larger graph pattern matching"
     timeout_ms: 30000
     setup:
-      - "query \"CREATE (n1:Node {id: 1}), (n2:Node {id: 2}), (n3:Node {id: 3}), (n4:Node {id: 4}), (n5:Node {id: 5})\""
-      - "query \"MATCH (a:Node), (b:Node) WHERE a.id < b.id CREATE (a)-[:CONNECTS]->(b)\""
+      - args: ["query", "CREATE (n1:Node {id: 1}), (n2:Node {id: 2}), (n3:Node {id: 3}), (n4:Node {id: 4}), (n5:Node {id: 5})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "MATCH (a:Node), (b:Node) WHERE a.id < b.id CREATE (a)-[:CONNECTS]->(b)"]
+        expect:
+          exit_code: 0
     args: ["query", "MATCH (a:Node)-[:CONNECTS*2]->(c:Node) RETURN count(*) AS two_hop_paths"]
     expect:
       exit_code: 0
