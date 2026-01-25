@@ -87,8 +87,8 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git#04138bb83784819f58f01b83a78e0bdf44de2964",
-            .hash = "slog-0.1.0-SamED1LeAwCLXUkdx2TVZ1LB7WsDeB7hMILer1kpuiPs",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git#v0.1.1",
+            .hash = "slog-0.1.0-SamED67fAwDghixIpZN48hgYrnT4CS8zcn4VcEN5jm67",
         },
 
         // Configuration management - XDG compliant, multi-format support
