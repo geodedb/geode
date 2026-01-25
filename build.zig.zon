@@ -13,49 +13,49 @@
 
         // URI/URL parsing - RFC 3986 compliant
         .uri = .{
-            .url = "git+https://gitlab.com/devnw/zig/uri.git",
+            .url = "git+https://gitlab.com/devnw/zig/uri.git#ecbe05857577799a283464b52724de979f6b7b30",
             .hash = "uri-0.1.0-zVvOsXZLAQAfg1wUuvR2yQC3FLtQPAV85R2aS6EFiaZn",
         },
 
         // YAML 1.2.2 parser/emitter
         .yaml = .{
-            .url = "git+https://gitlab.com/devnw/zig/yaml.git",
+            .url = "git+https://gitlab.com/devnw/zig/yaml.git#c44327be5d26304b6624136505fe8076900d116a",
             .hash = "yaml-0.1.1-lcW-hEyJBABZo0NG6sKHQkL4gciVKTQ4GLwXVeA2kpCe",
         },
 
         // TOML v1.1.0 parser
         .toml = .{
-            .url = "git+https://gitlab.com/devnw/zig/toml.git",
+            .url = "git+https://gitlab.com/devnw/zig/toml.git#8fbed132d2a00cb86dc77339a3bccb162da8bcc3",
             .hash = "toml-0.1.0-MHnSh1XcAQBQcxyP1MWysHD43Y4LDb_0klB_hfM_sFRe",
         },
 
         // Unicode string library with SIMD acceleration
         .strings = .{
-            .url = "git+https://gitlab.com/devnw/zig/strings.git",
+            .url = "git+https://gitlab.com/devnw/zig/strings.git#635377eb637a84f5a956acec6c63d277c7a5d133",
             .hash = "strings-0.1.0-adMOtbd1HABrved9iMt4lKxtonWX5dKNIWrdaWc2B5mo",
         },
 
         // REPL library with Emacs/Vi keybindings
         .repl = .{
-            .url = "git+https://gitlab.com/devnw/zig/repl.git",
+            .url = "git+https://gitlab.com/devnw/zig/repl.git#1d7a685efffff1bfa6d0ed8ad89bb55b2f756dff",
             .hash = "repl-0.1.0-gwF1T66xAgCW6w1v0xNV5V5CzO7NjZNVxwnDZB57vFqz",
         },
 
         // Data structures and graph algorithms
         .ds = .{
-            .url = "git+https://gitlab.com/devnw/zig/ds.git",
+            .url = "git+https://gitlab.com/devnw/zig/ds.git#a6be6636eadda6afa02c68ceb4fc5569336ce4f4",
             .hash = "ds-0.1.0-aDfG04NfBgA1YVvVP7RmsobOasrM6uUa1R8EycPfssXq",
         },
 
         // Vulkan compute library
         .vulkan = .{
-            .url = "git+https://gitlab.com/devnw/zig/vulkan.git",
+            .url = "git+https://gitlab.com/devnw/zig/vulkan.git#18caaad57c70af0e3f803f9fe45269fd1d9da841",
             .hash = "vulkan-0.1.0-zh1htcsSEQAdVTyZAhLTPxbhndNokVOSC4-Ureyd0dJx",
         },
 
         // CUDA compute library
         .cuda = .{
-            .url = "git+https://gitlab.com/devnw/zig/cuda.git",
+            .url = "git+https://gitlab.com/devnw/zig/cuda.git#53600995a5c18a86a77f89390da86c5768687968",
             .hash = "cuda-0.1.0-OCmgen2yBwC_15T5G8KeQ-9tC3zMjSdNZWuByJFcOXUy",
         },
 
@@ -65,13 +65,13 @@
 
         // JSON parser/encoder - RFC 8259 compliant with JSON Schema 2020-12
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git",
+            .url = "git+https://gitlab.com/devnw/zig/json.git#2048a73e275b6242b6799469b4553a798fdcad20",
             .hash = "json-0.1.0-tOue4WZ_CwDmY9dvdVfuFN_LcZZs6XcHmnQqkvsqdNCM",
         },
 
         // TLS 1.3 library for QUIC
         .tls = .{
-            .url = "git+https://gitlab.com/devnw/zig/tls.git",
+            .url = "git+https://gitlab.com/devnw/zig/tls.git#8c511791b85349fc6b4c07ba6309e754c720c68e",
             .hash = "tls-0.1.0-mtEaLEtsEQAcNcPqUq9or5b7zwp9seF_JIhc74uLLvBz",
         },
 
@@ -87,13 +87,13 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git#04138bb83784819f58f01b83a78e0bdf44de2964",
             .hash = "slog-0.1.0-SamED1LeAwCLXUkdx2TVZ1LB7WsDeB7hMILer1kpuiPs",
         },
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
-            .url = "git+https://gitlab.com/devnw/zig/config.git",
+            .url = "git+https://gitlab.com/devnw/zig/config.git#5ffb0e4bd95d8106fad6f66374145c796206d17b",
             .hash = "config-0.1.0-TiLumiKJBQDP5bfj9FFnfZB8unOVJZGv6eMQVN5_eUNH",
         },
 
@@ -103,13 +103,13 @@
 
         // CLI framework - Cobra/Viper-class command-line interface
         .cli = .{
-            .url = "git+https://gitlab.com/devnw/zig/cli.git",
+            .url = "git+https://gitlab.com/devnw/zig/cli.git#fdcf2596a6121361421da36fc35b48e8eed97d28",
             .hash = "cli-0.1.0-0aso9F-vBAAoH-0L84gQXM4-y2NC_HzjU3KLsGEfBea3",
         },
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#d7b914b83af2f431d9e5e9ff3d0acc3c1b19fc8a",
             .hash = "dns-0.1.0-x4U-zYgMCwDlLjH2DUzIcVIqEfCj5x_2yGKIWFaiFJLA",
         },
 
@@ -119,7 +119,7 @@
 
         // Model Context Protocol (MCP) - AI/LLM integration
         .mcp = .{
-            .url = "git+https://gitlab.com/devnw/zig/mcp.git",
+            .url = "git+https://gitlab.com/devnw/zig/mcp.git#e05a814af90370746102bf4a9b0f03ed6e2f58f5",
             .hash = "mcp-0.1.0-exAeBHj7BAAYmmNRjZD3HG6hXVJG8-LEtybCLkBu7oj6",
         },
     },
