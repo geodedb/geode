@@ -1723,7 +1723,7 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
     const geom_type = std.mem.readInt(u32, wkb[1..5][0..4], byte_order);
 
     var buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-    defer buf.deinit(allocator);  // Always clean up - we dupe the result before returning
+    defer buf.deinit(allocator); // Always clean up - we dupe the result before returning
 
     var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
     defer encoder.deinit();

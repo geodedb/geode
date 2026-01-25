@@ -482,8 +482,8 @@ pub const GraphStore = struct {
                 // Save to persistent storage
                 self.saveToFile() catch |err| {
                     log.err("CRITICAL: Failed to persist graph store", &.{
-                    Attr.err("error", err),
-                });
+                        Attr.err("error", err),
+                    });
                 };
             }
         }
@@ -527,8 +527,8 @@ pub const GraphStore = struct {
         // Save to persistent storage
         self.saveToFile() catch |err| {
             log.err("CRITICAL: Failed to persist graph store", &.{
-                    Attr.err("error", err),
-                });
+                Attr.err("error", err),
+            });
         };
 
         return id;

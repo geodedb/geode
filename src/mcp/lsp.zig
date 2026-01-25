@@ -82,7 +82,7 @@ pub const CompletionItem = struct {
 pub const CompletionKind = enum {
     keyword,
     function,
-    @"type",
+    type,
     procedure,
     snippet,
 };
@@ -372,10 +372,10 @@ fn isIdentifierChar(c: u8) bool {
 
 fn addClauseKeywords(allocator: std.mem.Allocator, completions: *std.ArrayList(CompletionItem)) !void {
     const clause_keywords = [_][]const u8{
-        "MATCH",    "OPTIONAL", "RETURN", "WITH",    "CREATE",
-        "DELETE",   "MERGE",    "SET",    "REMOVE",  "CALL",
-        "UNWIND",   "USE",      "BEGIN",  "COMMIT",  "ROLLBACK",
-        "EXPLAIN",  "PROFILE",  "INSERT", "DROP",    "SHOW",
+        "MATCH",   "OPTIONAL", "RETURN", "WITH",   "CREATE",
+        "DELETE",  "MERGE",    "SET",    "REMOVE", "CALL",
+        "UNWIND",  "USE",      "BEGIN",  "COMMIT", "ROLLBACK",
+        "EXPLAIN", "PROFILE",  "INSERT", "DROP",   "SHOW",
     };
 
     for (clause_keywords) |kw| {
@@ -419,7 +419,7 @@ fn addTypes(allocator: std.mem.Allocator, completions: *std.ArrayList(Completion
     for (language_metadata.types) |typ| {
         try completions.append(allocator, CompletionItem{
             .label = try allocator.dupe(u8, typ.name),
-            .kind = .@"type",
+            .kind = .type,
             .detail = try allocator.dupe(u8, "GQL Type"),
             .documentation = try allocator.dupe(u8, typ.doc),
         });

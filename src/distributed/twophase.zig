@@ -28,7 +28,7 @@ const NodeOpJson = struct {
 
 /// JSON structure for edge operations
 const EdgeOpJson = struct {
-    @"type": []const u8,
+    type: []const u8,
     edge_id: u64,
     src: u64,
     tgt: u64,
