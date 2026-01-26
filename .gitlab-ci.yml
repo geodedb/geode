@@ -405,25 +405,38 @@ snapshot:
       tar -xJf /tmp/zig.tar.xz -C /usr/local
       ln -sf /usr/local/zig-x86_64-linux-0.15.2/zig /usr/local/bin/zig
       zig version
+    # Wait for Docker daemon before any Docker operations
+    - |
+      echo "Waiting for Docker daemon..."
+      for i in $(seq 1 120); do
+        if docker info >/dev/null 2>&1; then
+          echo "Docker daemon ready after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+      docker info || echo "Warning: Docker daemon may not be fully ready"
     # Docker login
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-    # Setup Docker buildx with docker-container driver for multi-arch support
+    # Setup Docker buildx for multi-arch support
     - |
-      docker context create builder-ctx || true
-      docker buildx create --name multiarch-builder --driver docker-container --use builder-ctx 2>/dev/null || \
+      echo "Setting up Docker buildx..."
+      docker buildx create --name multiarch-builder --driver docker-container --use 2>/dev/null || \
         docker buildx use multiarch-builder 2>/dev/null || \
         docker buildx create --driver docker-container --use 2>/dev/null || true
-      docker buildx inspect --bootstrap || true
+      docker buildx inspect --bootstrap 2>&1 || echo "Buildx bootstrap warning (non-fatal)"
   script:
     - |
       echo "=== Running GoReleaser Snapshot ==="
+      echo "CI_REGISTRY_IMAGE: ${CI_REGISTRY_IMAGE}"
 
-      # Wait for Docker daemon to be ready
-      echo "Waiting for Docker daemon..."
-      timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done' || {
-        echo "Docker daemon not available, skipping Docker builds"
+      # Verify Docker is working
+      if ! docker info >/dev/null 2>&1; then
+        echo "WARNING: Docker daemon not available, skipping Docker builds"
         SKIP_DOCKER="--skip docker"
-      }
+      else
+        echo "Docker daemon is ready"
+      fi
 
       # Install GoReleaser
       curl -sfL https://goreleaser.com/static/run | bash -s -- --version
@@ -470,30 +483,47 @@ release:
       tar -xJf /tmp/zig.tar.xz -C /usr/local
       ln -sf /usr/local/zig-x86_64-linux-0.15.2/zig /usr/local/bin/zig
       zig version
+    # Wait for Docker daemon before any Docker operations
+    - |
+      echo "Waiting for Docker daemon..."
+      for i in $(seq 1 120); do
+        if docker info >/dev/null 2>&1; then
+          echo "Docker daemon ready after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+      docker info || echo "Warning: Docker daemon may not be fully ready"
     # Docker login
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
     # Setup Docker buildx with docker-container driver for multi-arch support
     - |
-      docker context create builder-ctx || true
-      docker buildx create --name multiarch-builder --driver docker-container --use builder-ctx 2>/dev/null || \
+      echo "Setting up Docker buildx..."
+      docker buildx create --name multiarch-builder --driver docker-container --use 2>/dev/null || \
         docker buildx use multiarch-builder 2>/dev/null || \
         docker buildx create --driver docker-container --use 2>/dev/null || true
-      docker buildx inspect --bootstrap || true
+      docker buildx inspect --bootstrap 2>&1 || echo "Buildx bootstrap warning (non-fatal)"
+      docker buildx ls
   script:
     - |
       echo "=== Building Release: ${CI_COMMIT_TAG} ==="
+      echo "CI_REGISTRY_IMAGE: ${CI_REGISTRY_IMAGE}"
 
-      # Wait for Docker daemon to be ready
-      echo "Waiting for Docker daemon..."
-      timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done' || {
-        echo "Docker daemon not available, skipping Docker builds"
+      # Verify Docker is working
+      if ! docker info >/dev/null 2>&1; then
+        echo "WARNING: Docker daemon not available, skipping Docker builds"
         SKIP_DOCKER="--skip docker"
-      }
+      else
+        echo "Docker daemon is ready"
+        docker version
+      fi
 
       # Install GoReleaser
+      echo "Installing GoReleaser..."
       curl -sfL https://goreleaser.com/static/run | bash -s -- --version
 
       # Run GoReleaser release (120m timeout for 8-target cross-compilation)
+      echo "Running GoReleaser release..."
       curl -sfL https://goreleaser.com/static/run | \
         GORELEASER_KEY="${GORELEASER_KEY:-}" \
         GITLAB_TOKEN="$CI_JOB_TOKEN" \
@@ -505,11 +535,16 @@ release:
         bash -s -- release --clean --timeout 120m ${SKIP_DOCKER:-} 2>&1 || {
           echo "GoReleaser failed, checking logs..."
           cat dist/*.log 2>/dev/null || true
+          ls -la dist/ 2>/dev/null || true
           exit 1
         }
 
       echo "=== Release build complete ==="
       ls -la dist/
+
+      # Show what was published
+      echo "=== Artifacts published ==="
+      find dist/ -type f -name "*.tar.gz" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" | head -20
   artifacts:
     paths:
       - dist/

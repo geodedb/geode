@@ -152,13 +152,12 @@ dockers:
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
 
-  # Alpine-based images (smaller)
+  # Alpine-based images (smaller, musl-linked)
   - id: geode-alpine-amd64
     ids:
       - geode
     goos: linux
     goarch: amd64
-    goamd64: v1
     image_templates:
       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64"
     dockerfile: Dockerfile.release.alpine
@@ -342,9 +341,9 @@ nfpms:
 # =============================================================================
 
 release:
-  # Skip GitLab release creation (requires GITLAB_TOKEN with api scope)
-  # Docker images and packages are published directly
-  disable: true
+  # Enable GitLab release creation
+  # Uses CI_JOB_TOKEN for authentication (api scope not required)
+  disable: false
 
   name_template: "Geode v{{ .Version }}"
 
