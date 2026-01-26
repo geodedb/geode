@@ -233,7 +233,7 @@ nfpms:
     ids:
       - geode
     vendor: CodePros
-    homepage: https://github.com/codeprosorg/geode
+    homepage: https://gitlab.com/devnw/codepros/geode/geode
     maintainer: Geode Team <geode@codepros.dev>
     description: |-
       Geode Graph Database - ISO/IEC 39075:2024 GQL-compliant property-graph database.
@@ -371,13 +371,13 @@ release:
     **Linux (Debian/Ubuntu)**
     ```bash
     # Download and install
-    wget https://github.com/codeprosorg/geode/releases/download/v{{ .Version }}/geode_{{ .Version }}_Linux_x86_64.deb
+    wget https://gitlab.com/devnw/codepros/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.deb
     sudo dpkg -i geode_{{ .Version }}_Linux_x86_64.deb
     ```
 
     **Linux (RHEL/Fedora)**
     ```bash
-    wget https://github.com/codeprosorg/geode/releases/download/v{{ .Version }}/geode_{{ .Version }}_Linux_x86_64.rpm
+    wget https://gitlab.com/devnw/codepros/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.rpm
     sudo rpm -i geode_{{ .Version }}_Linux_x86_64.rpm
     ```
 
@@ -415,13 +415,13 @@ release:
 #       owner: devnw
 #       name: homebrew-geode
 #       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-#     url_template: "https://gitlab.com/devnw/codepros/geode/-/releases/{{ .Tag }}/downloads/{{ .ArtifactName }}"
+#     url_template: "https://gitlab.com/devnw/codepros/geode/geode/-/releases/{{ .Tag }}/downloads/{{ .ArtifactName }}"
 #     commit_author:
 #       name: geode-bot
 #       email: geode-bot@devnw.com
 #     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
 #     directory: Formula
-#     homepage: "https://gitlab.com/devnw/codepros/geode"
+#     homepage: "https://gitlab.com/devnw/codepros/geode/geode"
 #     description: "ISO/IEC 39075:2024 GQL-compliant property-graph database"
 #     license: "MIT"
 #     skip_upload: auto

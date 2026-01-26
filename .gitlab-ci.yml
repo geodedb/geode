@@ -418,16 +418,22 @@ snapshot:
     - |
       echo "=== Running GoReleaser Snapshot ==="
 
+      # Wait for Docker daemon to be ready
+      echo "Waiting for Docker daemon..."
+      timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done' || {
+        echo "Docker daemon not available, skipping Docker builds"
+        SKIP_DOCKER="--skip docker"
+      }
+
       # Install GoReleaser
       curl -sfL https://goreleaser.com/static/run | bash -s -- --version
 
       # Run GoReleaser in snapshot mode (120m timeout for 8-target cross-compilation)
-      # Skip docker builds - DinD connection is unreliable in Kubernetes executor
       curl -sfL https://goreleaser.com/static/run | \
         GORELEASER_KEY="${GORELEASER_KEY:-}" \
         CI_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE" \
         HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
-        bash -s -- release --snapshot --clean --timeout 120m --skip docker 2>&1 || {
+        bash -s -- release --snapshot --clean --timeout 120m ${SKIP_DOCKER:-} 2>&1 || {
           echo "GoReleaser failed, checking logs..."
           cat dist/*.log 2>/dev/null || true
           exit 1
@@ -477,11 +483,17 @@ release:
     - |
       echo "=== Building Release: ${CI_COMMIT_TAG} ==="
 
+      # Wait for Docker daemon to be ready
+      echo "Waiting for Docker daemon..."
+      timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done' || {
+        echo "Docker daemon not available, skipping Docker builds"
+        SKIP_DOCKER="--skip docker"
+      }
+
       # Install GoReleaser
       curl -sfL https://goreleaser.com/static/run | bash -s -- --version
 
       # Run GoReleaser release (120m timeout for 8-target cross-compilation)
-      # Skip docker builds - DinD connection is unreliable in Kubernetes executor
       curl -sfL https://goreleaser.com/static/run | \
         GORELEASER_KEY="${GORELEASER_KEY:-}" \
         GITLAB_TOKEN="$CI_JOB_TOKEN" \
@@ -490,7 +502,7 @@ release:
         CI_API_V4_URL="$CI_API_V4_URL" \
         CI_PROJECT_ID="$CI_PROJECT_ID" \
         HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
-        bash -s -- release --clean --timeout 120m --skip docker 2>&1 || {
+        bash -s -- release --clean --timeout 120m ${SKIP_DOCKER:-} 2>&1 || {
           echo "GoReleaser failed, checking logs..."
           cat dist/*.log 2>/dev/null || true
           exit 1
