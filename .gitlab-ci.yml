@@ -556,12 +556,36 @@ publish-release:
   needs:
     - build-release
   script:
-    - echo "Publishing release ${CI_COMMIT_TAG}"
-    - ls -la dist/
-  release:
-    tag_name: $CI_COMMIT_TAG
-    name: "Geode ${CI_COMMIT_TAG}"
-    description: |
+    - |
+      echo "Publishing release ${CI_COMMIT_TAG}"
+      ls -la dist/
+
+      # Strip 'v' prefix for version number
+      VERSION="${CI_COMMIT_TAG#v}"
+      echo "Version: ${VERSION}"
+
+      # Build asset links array
+      ASSETS_JSON=$(cat <<EOF
+      [
+        {"name": "Linux x86_64 (glibc)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-gnu.tar.gz?job=build-release", "link_type": "package"},
+        {"name": "Linux x86_64 (musl/Alpine)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-musl.tar.gz?job=build-release", "link_type": "package"},
+        {"name": "Linux ARM64 (glibc)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-linux-gnu.tar.gz?job=build-release", "link_type": "package"},
+        {"name": "Linux ARM64 (musl/Alpine)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-linux-musl.tar.gz?job=build-release", "link_type": "package"},
+        {"name": "Linux ARMv7", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_arm-linux-gnueabihf.tar.gz?job=build-release", "link_type": "package"},
+        {"name": "Linux RISC-V 64", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_riscv64-linux-gnu.tar.gz?job=build-release", "link_type": "package"},
+        {"name": "Debian/Ubuntu x86_64 (.deb)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.deb?job=build-release", "link_type": "package"},
+        {"name": "Debian/Ubuntu ARM64 (.deb)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.deb?job=build-release", "link_type": "package"},
+        {"name": "RHEL/Fedora x86_64 (.rpm)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.rpm?job=build-release", "link_type": "package"},
+        {"name": "RHEL/Fedora ARM64 (.rpm)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.rpm?job=build-release", "link_type": "package"},
+        {"name": "Alpine x86_64 (.apk)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.apk?job=build-release", "link_type": "package"},
+        {"name": "Alpine ARM64 (.apk)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.apk?job=build-release", "link_type": "package"},
+        {"name": "Checksums (SHA256)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/checksums.txt?job=build-release", "link_type": "other"}
+      ]
+      EOF
+      )
+
+      # Create release description
+      DESCRIPTION=$(cat <<EOF
       ## Geode ${CI_COMMIT_TAG}
 
       **ISO/IEC 39075:2024 GQL-compliant property-graph database.**
@@ -569,60 +593,40 @@ publish-release:
       ### Installation
 
       **Linux (Debian/Ubuntu)**
-      ```bash
-      wget ${CI_PROJECT_URL}/-/releases/${CI_COMMIT_TAG}/downloads/geode_${CI_COMMIT_TAG#v}_Linux_x86_64.deb
-      sudo dpkg -i geode_${CI_COMMIT_TAG#v}_Linux_x86_64.deb
-      ```
+      \`\`\`bash
+      wget ${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.deb?job=build-release -O geode.deb
+      sudo dpkg -i geode.deb
+      \`\`\`
 
       **Linux (RHEL/Fedora)**
-      ```bash
-      wget ${CI_PROJECT_URL}/-/releases/${CI_COMMIT_TAG}/downloads/geode_${CI_COMMIT_TAG#v}_Linux_x86_64.rpm
-      sudo rpm -i geode_${CI_COMMIT_TAG#v}_Linux_x86_64.rpm
-      ```
+      \`\`\`bash
+      wget ${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.rpm?job=build-release -O geode.rpm
+      sudo rpm -i geode.rpm
+      \`\`\`
 
       **Binary Download**
       Download the appropriate archive for your platform from the assets below.
-    assets:
-      links:
-        - name: "Linux x86_64 (glibc)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_x86_64-linux-gnu.tar.gz?job=build-release"
-          link_type: package
-        - name: "Linux x86_64 (musl/Alpine)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_x86_64-linux-musl.tar.gz?job=build-release"
-          link_type: package
-        - name: "Linux ARM64 (glibc)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_aarch64-linux-gnu.tar.gz?job=build-release"
-          link_type: package
-        - name: "Linux ARM64 (musl/Alpine)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_aarch64-linux-musl.tar.gz?job=build-release"
-          link_type: package
-        - name: "Linux ARMv7"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_arm-linux-gnueabihf.tar.gz?job=build-release"
-          link_type: package
-        - name: "Linux RISC-V 64"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_riscv64-linux-gnu.tar.gz?job=build-release"
-          link_type: package
-        - name: "Debian/Ubuntu x86_64 (.deb)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_Linux_x86_64.deb?job=build-release"
-          link_type: package
-        - name: "Debian/Ubuntu ARM64 (.deb)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_Linux_arm64.deb?job=build-release"
-          link_type: package
-        - name: "RHEL/Fedora x86_64 (.rpm)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_Linux_x86_64.rpm?job=build-release"
-          link_type: package
-        - name: "RHEL/Fedora ARM64 (.rpm)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_Linux_arm64.rpm?job=build-release"
-          link_type: package
-        - name: "Alpine x86_64 (.apk)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_Linux_x86_64.apk?job=build-release"
-          link_type: package
-        - name: "Alpine ARM64 (.apk)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${CI_COMMIT_TAG#v}_Linux_arm64.apk?job=build-release"
-          link_type: package
-        - name: "Checksums (SHA256)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/checksums.txt?job=build-release"
-          link_type: other
+      EOF
+      )
+
+      # Build release-cli command with asset links
+      release-cli create \
+        --name "Geode ${CI_COMMIT_TAG}" \
+        --tag-name "${CI_COMMIT_TAG}" \
+        --description "${DESCRIPTION}" \
+        --assets-link "{\"name\":\"Linux x86_64 (glibc)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-gnu.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Linux x86_64 (musl/Alpine)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-musl.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Linux ARM64 (glibc)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-linux-gnu.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Linux ARM64 (musl/Alpine)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-linux-musl.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Linux ARMv7\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_arm-linux-gnueabihf.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Linux RISC-V 64\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_riscv64-linux-gnu.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Debian/Ubuntu x86_64 (.deb)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.deb?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Debian/Ubuntu ARM64 (.deb)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.deb?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"RHEL/Fedora x86_64 (.rpm)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.rpm?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"RHEL/Fedora ARM64 (.rpm)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.rpm?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Alpine x86_64 (.apk)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.apk?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Alpine ARM64 (.apk)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.apk?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"Checksums (SHA256)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/checksums.txt?job=build-release\",\"link_type\":\"other\"}"
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-alpha\.\d+|-beta\.\d+|-rc\.\d+)?$/'
 
