@@ -80,7 +80,6 @@ zig-out/**/*.xml
 !specs/**/*.xml
 
 # Build and cache directories
-.direnv/
 .zig-cache/
 zig-cache/
 zig-out/
