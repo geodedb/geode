@@ -393,6 +393,9 @@ snapshot:
     - docker:dind
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_VERIFY: 1
+    DOCKER_CERT_PATH: /certs/client
     GIT_DEPTH: 0
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
@@ -450,6 +453,9 @@ release:
     - docker:dind
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_VERIFY: 1
+    DOCKER_CERT_PATH: /certs/client
     GIT_DEPTH: 0
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
