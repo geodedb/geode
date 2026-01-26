@@ -17,6 +17,7 @@ stages:
   - governance
   - test
   - release
+  - publish
 
 # Default configuration applied to all jobs
 default:
@@ -581,6 +582,12 @@ publish-release:
 
       ### Installation
 
+      **Docker (Recommended)**
+      \`\`\`bash
+      docker pull registry.gitlab.com/devnw/codepros/geode/geode:${VERSION}
+      docker run -p 3141:3141/udp registry.gitlab.com/devnw/codepros/geode/geode:${VERSION}
+      \`\`\`
+
       **Linux (Debian/Ubuntu)**
       \`\`\`bash
       wget ${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.deb?job=build-release -O geode.deb
@@ -593,8 +600,19 @@ publish-release:
       sudo rpm -i geode.rpm
       \`\`\`
 
+      **macOS**
+      \`\`\`bash
+      # Download Universal binary (Intel + Apple Silicon)
+      curl -LO ${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_darwin_all.tar.gz?job=build-release
+      tar xzf geode_${VERSION}_darwin_all.tar.gz
+      sudo mv geode /usr/local/bin/
+      \`\`\`
+
       **Binary Download**
       Download the appropriate archive for your platform from the assets below.
+
+      **Package Registry**
+      All packages are also available in the [GitLab Package Registry](${CI_PROJECT_URL}/-/packages).
       EOF
       )
 
@@ -603,6 +621,9 @@ publish-release:
         --name "Geode ${CI_COMMIT_TAG}" \
         --tag-name "${CI_COMMIT_TAG}" \
         --description "${DESCRIPTION}" \
+        --assets-link "{\"name\":\"macOS Universal (Intel + Apple Silicon)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_darwin_all.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"macOS Intel (x86_64)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-macos.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"macOS Apple Silicon (ARM64)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-macos.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"Linux x86_64 (glibc)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-gnu.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"Linux x86_64 (musl/Alpine)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-musl.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"Linux ARM64 (glibc)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-linux-gnu.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
@@ -615,7 +636,84 @@ publish-release:
         --assets-link "{\"name\":\"RHEL/Fedora ARM64 (.rpm)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.rpm?job=build-release\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"Alpine x86_64 (.apk)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.apk?job=build-release\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"Alpine ARM64 (.apk)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.apk?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Checksums (SHA256)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/checksums.txt?job=build-release\",\"link_type\":\"other\"}"
+        --assets-link "{\"name\":\"Checksums (SHA256)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/checksums.txt?job=build-release\",\"link_type\":\"other\"}" \
+        --assets-link "{\"name\":\"Package Registry\",\"url\":\"${CI_PROJECT_URL}/-/packages\",\"link_type\":\"other\"}"
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-alpha\.\d+|-beta\.\d+|-rc\.\d+)?$/'
+
+# =============================================================================
+# Publish Stage - Package Registry Upload
+# =============================================================================
+
+# Publish packages to GitLab Package Registry (Generic, Debian, RPM)
+publish-packages:
+  stage: publish
+  tags:
+    - saas-linux-medium-amd64
+  image: curlimages/curl:latest
+  needs:
+    - build-release
+  script:
+    - |
+      echo "=== Publishing packages to GitLab Package Registry ==="
+      VERSION="${CI_COMMIT_TAG#v}"
+      echo "Version: ${VERSION}"
+
+      # Package Registry API base URL
+      PACKAGE_API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages"
+
+      # Function to upload a file to the generic package registry
+      upload_generic() {
+        local file="$1"
+        local filename=$(basename "$file")
+        local pkg_name="geode"
+
+        echo "Uploading $filename to generic registry..."
+        curl --fail-with-body --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$file" \
+          "${PACKAGE_API}/generic/${pkg_name}/${VERSION}/${filename}" || {
+          echo "Warning: Failed to upload $filename"
+          return 1
+        }
+        echo "  ✓ Uploaded $filename"
+      }
+
+      # Upload all tarballs (binary archives)
+      echo ""
+      echo "=== Uploading binary archives ==="
+      for f in dist/*.tar.gz; do
+        [ -f "$f" ] && upload_generic "$f"
+      done
+
+      # Upload checksums
+      echo ""
+      echo "=== Uploading checksums ==="
+      [ -f "dist/checksums.txt" ] && upload_generic "dist/checksums.txt"
+
+      # Upload Debian packages (.deb)
+      echo ""
+      echo "=== Uploading Debian packages ==="
+      for f in dist/*.deb; do
+        [ -f "$f" ] && upload_generic "$f"
+      done
+
+      # Upload RPM packages (.rpm)
+      echo ""
+      echo "=== Uploading RPM packages ==="
+      for f in dist/*.rpm; do
+        [ -f "$f" ] && upload_generic "$f"
+      done
+
+      # Upload Alpine packages (.apk)
+      echo ""
+      echo "=== Uploading Alpine packages ==="
+      for f in dist/*.apk; do
+        [ -f "$f" ] && upload_generic "$f"
+      done
+
+      echo ""
+      echo "=== Package Registry upload complete ==="
+      echo "View packages at: ${CI_PROJECT_URL}/-/packages"
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-alpha\.\d+|-beta\.\d+|-rc\.\d+)?$/'
 
