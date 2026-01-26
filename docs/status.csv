@@ -354,7 +354,6 @@ REQ-CI-CANARYSCAN-001,CI Canaryscan Verify,Governance,TESTED,,,ci,2026-01-17,.gi
 REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml
 REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-25,.gitlab-ci.yml
 REQ-CI-GOV-001,CI Governance Checks,Core,TESTED,,,ci,2026-01-16,.gitlab-ci.yml
-REQ-CI-NIX-001,Nix Flake CI,Packaging,TESTED,,,ci,2026-01-22,.gitlab-ci.yml
 REQ-CI-REQ-DOC-REGRESSION-001,REQ-DOC Report Regression Tests,RegressionTesting,TESTED,,,governance,2026-01-17,geodetestlab/specs/gap_0229_req_doc_reports.yml
 REQ-CI-REQ-DOC-REPORT-001,CI REQ-DOC Reports,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml
 REQ-CI-REQ-DOC-REPORT-001,Requirement ID Report Generator,Governance,TESTED,,,governance,2026-01-17,tools/req_doc_report.py
