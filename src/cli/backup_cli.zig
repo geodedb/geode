@@ -1026,8 +1026,9 @@ fn readLineWithPoll(quic_client: *quic.QuicClient, stream: *quic.QuicClientStrea
         const line = stream.readLine(max_size) catch |err| {
             if (err == error.WouldBlock or err == error.EndOfStream) {
                 if (std.time.milliTimestamp() - start >= timeout_ms) return err;
-                quic_client.poll(50) catch {};
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                // GAP-0200: Reduced poll/sleep from 50ms to 10ms for higher throughput
+                quic_client.poll(10) catch {};
+                std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             }
             return err;
@@ -1227,7 +1228,13 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     printStdout("Running migrations from: {s}\n", .{migrations_dir});
 
     // Scan migrations directory for .gql files (excluding .down.gql rollback files)
+    // GAP-0200: Treat non-existent directory as empty (no migrations to run)
     var dir = std.fs.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) {
+            // Directory doesn't exist - treat as empty (no migrations)
+            printStdout("No migration files found in '{s}'\n", .{migrations_dir});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
         std.debug.print("Error: Cannot open migrations directory '{s}': {}\n", .{ migrations_dir, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -1554,8 +1561,9 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
         // Read chunk
         const bytes_read = stream.read(chunk_buf[0..chunk_size]) catch |err| {
             if (err == error.WouldBlock) {
-                client.poll(50) catch {};
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                // GAP-0200: Reduced poll/sleep from 50ms to 10ms for higher throughput
+                client.poll(10) catch {};
+                std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             }
             std.debug.print("Error: Failed to receive backup data: {}\n", .{err});
@@ -1563,7 +1571,8 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
         };
 
         if (bytes_read == 0) {
-            client.poll(50) catch {};
+            // GAP-0200: Reduced poll from 50ms to 10ms for higher throughput
+            client.poll(10) catch {};
             continue;
         }
 

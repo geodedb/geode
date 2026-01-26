@@ -283,7 +283,7 @@ pub const QuicConnection = struct {
 
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
         const stream_id = try self.inner.acceptStream();
-        std.debug.print("[WRAPPER-ACCEPT] wrapper_conn=0x{x} inner_conn=0x{x} stream_id={}\n", .{ @intFromPtr(self), @intFromPtr(self.inner), stream_id });
+        // GAP-0200: Debug print removed from hot path for performance
         const stream = try self.allocator.create(QuicStream);
         stream.* = QuicStream{
             .allocator = self.allocator,
@@ -350,7 +350,7 @@ pub const QuicStream = struct {
     }
 
     pub fn read(self: *QuicStream, buffer: []u8) !usize {
-        std.debug.print("[WRAPPER-READ] stream_conn=0x{x} stream_id={} buf_len={}\n", .{ @intFromPtr(self.connection), self.stream_id, buffer.len });
+        // GAP-0200: Debug print removed from hot path for performance
         return self.connection.readStream(self.stream_id, buffer);
     }
 
@@ -371,11 +371,11 @@ pub const QuicStream = struct {
                 if (err == error.WouldBlock) {
                     retry_count += 1;
                     if (retry_count > max_retries) {
-                        // After max retries, return partial data as error
-                        std.debug.print("[READLINE-TIMEOUT] Gave up after {} retries, pos={} bytes read\n", .{ retry_count, pos });
+                        // GAP-0200: Debug print removed from hot path for performance
                         return error.UnexpectedEndOfStream;
                     }
-                    std.Thread.sleep(5 * std.time.ns_per_ms); // Sleep 5ms before retrying (increased from 1ms)
+                    // GAP-0200: Reduced sleep from 5ms to 500μs for high throughput
+                    std.Thread.sleep(500 * std.time.ns_per_us);
                     continue;
                 }
                 return err;
@@ -386,7 +386,7 @@ pub const QuicStream = struct {
                 if (pos == 0) return error.EndOfStream;
                 // If we've read partial data but no '\n', this is an error
                 // (client sent incomplete line before FIN)
-                std.debug.print("[READLINE-FIN] Stream ended with partial line, pos={} bytes\n", .{pos});
+                // GAP-0200: Debug print removed from hot path for performance
                 return error.UnexpectedEndOfStream;
             }
 
@@ -402,17 +402,7 @@ pub const QuicStream = struct {
         const result = try self.allocator.alloc(u8, pos);
         @memcpy(result, temp_buf[0..pos]);
 
-        // Debug: Show what we read
-        std.debug.print("[READLINE-DEBUG] stream_id={} read {} bytes: ", .{ self.stream_id, pos });
-        for (result) |b| {
-            if (b >= 32 and b < 127) {
-                std.debug.print("{c}", .{b});
-            } else {
-                std.debug.print("\\x{x:0>2}", .{b});
-            }
-        }
-        std.debug.print("\n", .{});
-
+        // GAP-0200: Debug prints removed from hot path for performance
         return result;
     }
 
@@ -542,7 +532,8 @@ pub const QuicClient = struct {
             if (api.isHandshakeConfirmed(self.connection.?)) {
                 return;
             }
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            // GAP-0200: Reduced sleep from 10ms to 1ms for faster handshake completion
+            std.Thread.sleep(1 * std.time.ns_per_ms);
         }
 
         return QuicError.HandshakeError;

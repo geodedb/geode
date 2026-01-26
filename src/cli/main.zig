@@ -234,8 +234,9 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
         const line = impl.stream.readLine(max_size) catch |err| {
             if (err == error.WouldBlock or err == error.EndOfStream) {
                 if (std.time.milliTimestamp() - start >= timeout_ms) return err;
-                impl.client.poll(50) catch {};
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                // GAP-0200: Reduced poll/sleep from 50ms to 5ms for higher throughput
+                impl.client.poll(5) catch {};
+                std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
             }
             return err;
@@ -618,7 +619,7 @@ fn writeAllToStream(
     var stalled: usize = 0;
     const max_retries: usize = 200;
 
-    std.debug.print("[QUIC-CLI] Writing {} bytes to stream {}\n", .{ data.len, stream_id });
+    // GAP-0200: Debug print removed from hot path for performance
 
     while (written < data.len) {
         const n = conn.inner.writeStream(stream_id, data[written..], false) catch |err| switch (err) {
@@ -1150,7 +1151,8 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
                 if (err == error.EndOfStream) return;
                 if (err == error.WouldBlock) {
                     // Data not ready yet, poll and retry
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                    // GAP-0200: Reduced sleep from 10ms to 1ms for higher throughput
+                    std.Thread.sleep(1 * std.time.ns_per_ms);
                     continue;
                 }
                 log.err("Failed to read message", &.{Attr.err("error", err)});
@@ -1824,7 +1826,8 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     var loop_iteration: u64 = 0;
     main_loop: while (true) {
         loop_iteration += 1;
-        if (loop_iteration % 1000 == 0) {
+        // GAP-0200: Reduced debug logging frequency from 1000 to 100000 iterations
+        if (loop_iteration % 100000 == 0) {
             std.debug.print("Main loop iteration #{} (conns={}, streams={})\n", .{ loop_iteration, connection_count, stream_count });
         }
 
@@ -1833,12 +1836,13 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         // Poll to process packets and timers (critical for handshake completion)
         // RFC 9000 §6 mandates timers for loss detection and idle timeout
         // Note: poll() handles both packet processing AND timer events
-        quic_server.poll(20) catch {};
+        // GAP-0200: Reduced poll timeout from 20ms to 1ms for higher throughput
+        quic_server.poll(1) catch {};
 
         // Try to accept newly-ready connections (non-blocking)
         // Connections become available after QUIC handshake completes
         while (quic_server.tryAccept()) |conn| {
-            std.debug.print("[QUIC-CLI] Accepted new connection\n", .{});
+            // GAP-0200: Debug print removed from hot path for performance
             connection_count += 1;
             var conn_state = ConnectionState.init(allocator, conn, &quic_server);
             active_connections.append(allocator, conn_state) catch {
@@ -1863,9 +1867,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             // Only try to read streams if handshake is confirmed
             if (!conn_state.conn.isHandshakeConfirmed()) {
                 // Handshake still in progress - skip for now
-                if (loop_iteration % 1000 == 0) {
-                    std.debug.print("[QUIC-CLI] Handshake NOT confirmed for connection {}\n", .{i});
-                }
+                // GAP-0200: Debug print removed from hot path for performance
                 i += 1;
                 continue;
             }
@@ -1886,7 +1888,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
                 // This prevents double-free when connection closes later
                 conn_state.conn.destroyStream(stream);
 
-                std.debug.print("[QUIC-CLI] Accepted stream {}\n", .{stream_id});
+                // GAP-0200: Debug print removed from hot path for performance
 
                 // Initialize state for this stream
                 if (!conn_state.streams.contains(stream_id)) {
@@ -1930,9 +1932,10 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
 
                     if (n == 0) break;
 
-                    std.debug.print("[QUIC-CLI] Read {} bytes from stream {}\n", .{ n, stream_id });
+                    // GAP-0200: Debug print removed from hot path for performance
 
                     processStreamBuffer(allocator, &quic_server, conn_state, &stream_count, stream_id, buf[0..n]) catch |err| {
+                        // Keep error logging for debugging issues
                         std.debug.print("[STREAM-POLL] Error processing stream {}: {}\n", .{ stream_id, err });
                     };
 
@@ -3279,8 +3282,9 @@ fn readLineWithPoll(quic_client: *quic.QuicClient, stream: *quic.QuicClientStrea
                 // If we've waited long enough, propagate the timeout/EOF
                 if (std.time.milliTimestamp() - start >= timeout_ms) return err;
                 // Poll transport and retry
-                quic_client.poll(50) catch {};
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                // GAP-0200: Reduced poll/sleep from 50ms to 5ms for higher throughput
+                quic_client.poll(5) catch {};
+                std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
             }
             return err;

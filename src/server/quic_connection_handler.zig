@@ -101,9 +101,10 @@ pub fn handleQuicConnection(
     // Poll the endpoint to process incoming STREAM frames before accepting
     // vendor/quic requires explicit polling to receive packets and populate stream queues
     // Try polling with retries to ensure we receive the client's initial STREAM frame
+    // GAP-0200: Reduced poll timeout from 50ms to 5ms for high throughput
     var poll_attempts: usize = 0;
     while (poll_attempts < 10) : (poll_attempts += 1) {
-        try transport.poll(50); // Poll for up to 50ms
+        try transport.poll(5); // Poll for up to 5ms
         if (conn.inner.hasIncomingStreams()) break;
         if (poll_attempts > 0) {
             log.debug("No streams yet, retrying", &.{
@@ -175,7 +176,8 @@ pub fn handleQuicConnection(
                 if (err == error.EndOfStream) return;
                 if (err == error.WouldBlock) {
                     // No data available yet, poll and retry
-                    try transport.poll(100);
+                    // GAP-0200: Reduced poll timeout from 100ms to 10ms for high throughput
+                    try transport.poll(10);
                     continue;
                 }
                 return err;

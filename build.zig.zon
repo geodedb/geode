@@ -76,9 +76,10 @@
         },
 
         // QUIC v1/v2 protocol implementation
+        // GAP-0200: Updated to v0.1.6 with thread-safety fixes for high-throughput scenarios
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#v0.1.4",
-            .hash = "quic-0.1.1-gBIqUVcGOgC0QeJ9kHHVLvHAwDtcqdKnutcAd6C91rt5",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#v0.1.6",
+            .hash = "quic-0.1.6-gBIqUSb9OQAfY07dHIRbbzYeCl5EV1Try2jut3Q8i1BN",
         },
 
         // =======================================================================
