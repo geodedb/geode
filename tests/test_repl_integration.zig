@@ -155,7 +155,7 @@ test "protocol messages - format validation" {
 
     // Test protocol message formats that would be sent over QUIC
     const test_messages = [_][]const u8{
-        "{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\"}",
+        "{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.1.0\",\"wanted_conformance\":\"min\"}",
         "{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1 AS test\"}",
         "{\"type\":\"BEGIN\"}",
         "{\"type\":\"COMMIT\"}",

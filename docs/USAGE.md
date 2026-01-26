@@ -1,4 +1,4 @@
-# USAGE.md - Geode v0.18.0 User Guide
+# USAGE.md - Geode User Guide
 
 ## Quick Start
 
@@ -378,20 +378,20 @@ geodec "CALL system.resources()"
 
 ## Migration Guide
 
-### From v0.17.0
+### Migration Guide
 
 ```bash
 # 1. Backup existing data
-geode backup --dest /backup/v0.17 --mode full
+geode backup --dest /backup/previous --mode full
 
-# 2. Stop v0.17 server
+# 2. Stop old server
 systemctl stop geoded
 
-# 3. Install v0.18 binaries
-tar -xzf geode-v0.18.0.tar.gz
+# 3. Install new binaries
+tar -xzf geode-v0.1.0.tar.gz
 cp geode/bin/* /usr/local/bin/
 
-# 4. Start v0.18 server
+# 4. Start new server
 systemctl start geoded
 
 # 5. Verify functionality

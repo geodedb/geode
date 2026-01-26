@@ -2,7 +2,7 @@
 
 **Date**: 2025-09-17  
 **Auditor**: ISO-GQL Auditor v1.1  
-**Repository**: geode v0.15.0  
+**Repository**: geode v0.1.0  
 **Standard**: ISO/IEC 39075:2024 (GQL)
 
 ## Executive Summary

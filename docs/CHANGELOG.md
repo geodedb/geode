@@ -1,6 +1,6 @@
 # Changelog
 
-## [v0.17.0] - Grey Cardinal Compliance
+## [v0.1.0] - Grey Cardinal Compliance
 
 ### Added
 

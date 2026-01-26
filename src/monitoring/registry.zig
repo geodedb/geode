@@ -90,7 +90,7 @@ pub const Registry = struct {
 var global_registry: ?Registry = null;
 
 pub fn global() *Registry {
-    // v0.16.0: Monitoring always enabled
+    // Monitoring always enabled
     if (global_registry == null) global_registry = Registry.init();
     return &global_registry.?;
 }

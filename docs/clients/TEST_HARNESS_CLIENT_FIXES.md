@@ -2593,7 +2593,7 @@ After extensive investigation, I've identified that **ALL QUIC clients fail to c
 
 #### Server Configuration:
 ```
-Geode Server v0.16.0
+Geode Server v0.1.0
 QUIC Library: MsQuic v2.4.16
 Listener: 127.0.0.1:9999
 Status: Running, accepting connections

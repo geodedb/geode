@@ -250,7 +250,7 @@ pub fn main() !void {
             "  geodec --format txt \"MATCH (u:User) RETURN u.name\"\n" ++
             "  geodec --server localhost:3141 \"RETURN 1 AS test\"\n" ++
             "\n" ++
-            "Note: v0.16.0 uses QUIC+TLS by default. TCP has been removed.\n" ++
+            "Note: QUIC+TLS is used by default. TCP has been removed.\n" ++
             "\n", .{});
         std.process.exit(0);
     }
@@ -258,13 +258,13 @@ pub fn main() !void {
     if (argv.len < 2) {
         std.debug.print("Error: query text required\n\n", .{});
         std.debug.print("usage: geodec <GQL text> [options]\n", .{});
-        std.debug.print("Note: v0.16.0 uses QUIC+TLS by default. TCP has been removed.\n", .{});
+        std.debug.print("Note: QUIC+TLS is used by default. TCP has been removed.\n", .{});
         std.debug.print("Use 'geodec --help' for detailed usage information.\n", .{});
         std.process.exit(2);
     }
     const text: []const u8 = argv[1];
     var server_address: []const u8 = "127.0.0.1";
-    var server_port: u16 = 3141; // v0.17.0: Default QUIC+TLS port
+    var server_port: u16 = 3141; // Default QUIC+TLS port
     var param_name: ?[]const u8 = null;
     var param_json: ?[]const u8 = null;
     var do_begin = false;
@@ -275,7 +275,7 @@ pub fn main() !void {
     var i: usize = 2;
     var extra_pulls: usize = 0;
     var fmt_txt = false;
-    var use_quic = true; // v0.17.0: QUIC is the only network transport, TCP removed
+    var use_quic = true; // QUIC is the only network transport, TCP removed
     var log_level_arg: ?[]const u8 = null;
     var use_stdio = false;
     var opt_normalize_nfc = false;

@@ -64,7 +64,7 @@ RETURN u.id;
 -- Update existing posts with extended types
 MATCH (p:Post {id: 'post-1'})
 SET p.metadata = Json('{"views": 1250, "engagement_rate": 0.082, "virality_score": 3.2}'),
-    p.content_xml = Xml('<post><p>Just released version 0.18.0 of Geode!</p><ul><li>QUIC support</li><li>TDE encryption</li></ul></post>')
+    p.content_xml = Xml('<post><p>Just released version 0.1.0 of Geode!</p><ul><li>QUIC support</li><li>TDE encryption</li></ul></post>')
 RETURN p.id;
 
 MATCH (p:Post {id: 'post-2'})

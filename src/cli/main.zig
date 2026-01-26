@@ -17,7 +17,7 @@ const json_lib = @import("json");
 const CliHelloMessage = struct {
     type: []const u8 = "HELLO",
     client_name: []const u8 = "geode-cli",
-    client_ver: []const u8 = "0.16.0",
+    client_ver: []const u8 = "0.1.0",
     wanted_conformance: []const u8 = "GQL/1.0",
     username: ?[]const u8 = null,
     password: ?[]const u8 = null,
@@ -763,7 +763,7 @@ fn processProtocolMessage(
         }
 
         // Send HELLO response
-        const hello_response = "{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_ver\":\"0.16.0\",\"conformance\":\"ISO/IEC 39075:2024\"}\n";
+        const hello_response = "{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_ver\":\"0.1.0\",\"conformance\":\"ISO/IEC 39075:2024\"}\n";
         try responder.writeAll(hello_response);
         log.debug("HELLO response sent", &.{});
     } else if (std.mem.eql(u8, type_str, "RUN_GQL")) {
@@ -1261,7 +1261,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             }
 
             // Send HELLO response
-            const hello_response = "{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_ver\":\"0.16.0\",\"conformance\":\"ISO/IEC 39075:2024\"}\n";
+            const hello_response = "{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_ver\":\"0.1.0\",\"conformance\":\"ISO/IEC 39075:2024\"}\n";
             try stream.writeAll(hello_response);
             log.debug("HELLO response sent", &.{});
         } else if (std.mem.eql(u8, type_str, "RUN_GQL")) {
@@ -1704,7 +1704,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         }
     }
 
-    std.debug.print("Geode Server v0.16.0\n", .{});
+    std.debug.print("Geode Server v0.1.0\n", .{});
     std.debug.print("Starting QUIC server...\n", .{});
 
     // Set up data directory
@@ -3423,7 +3423,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     // For testing - simulate a simple shell without full REPL
-    std.debug.print("Geode Shell v0.16.0\n", .{});
+    std.debug.print("Geode Shell v0.1.0\n", .{});
     // GAP-0113: Display TLS certificate status
     if (insecure) {
         std.debug.print("Connected to {s} (insecure mode - TLS verification disabled)\n", .{server});

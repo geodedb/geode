@@ -20,7 +20,7 @@ const json_lib = @import("json");
 const BackupHelloMessage = struct {
     type: []const u8 = "HELLO",
     client_name: []const u8 = "geode-cli",
-    client_ver: []const u8 = "0.16.0",
+    client_ver: []const u8 = "0.1.0",
     wanted_conformance: []const u8 = "GQL/1.0",
     username: ?[]const u8 = null,
     password: ?[]const u8 = null,
@@ -1465,7 +1465,7 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
     const BackupClientHello = struct {
         type: []const u8 = "HELLO",
         client_name: []const u8 = "geode-backup",
-        client_ver: []const u8 = "0.16.0",
+        client_ver: []const u8 = "0.1.0",
         wanted_conformance: []const u8 = "GQL/1.0",
     };
     const hello_json = try json_lib.encode(allocator, BackupClientHello{}, .{});

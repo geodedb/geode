@@ -2,7 +2,6 @@ const std = @import("std");
 
 test "OPTIONAL MATCH null semantics regression check" {
     // This test verifies that OPTIONAL MATCH correctly handles null semantics
-    // as fixed in v0.16.0 (kb/archive/RELEASE_NOTES_v0.16.md#L193-L196)
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

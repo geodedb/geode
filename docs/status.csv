@@ -772,6 +772,7 @@ REQ-GAP-0239,ContainerUnitTests,CursorContainer,TESTED,,,containers,2026-01-25,s
 REQ-GAP-0239,ContainerUnitTests,SignaledQueue,TESTED,,,containers,2026-01-25,src/containers/signaled_queue.zig
 REQ-GAP-0240,TypePromotionUnitTests,ScaleConversion,TESTED,,,eval,2026-01-25,src/eval/type_promotion.zig
 REQ-GAP-0241,CDCCoreUnitTests,CoreEngine,TESTED,,,streaming,2026-01-25,src/cdc/core.zig
+REQ-GAP-0242-REGRESSION-001,BugRegressionTests,ServerSideSyntax,TESTED,,,quality,2026-01-25,geodetestlab/specs/gap_0242_regression_tests.yml
 REQ-GAP-155-156-REGRESSION,SecurityRegressionTests,Testing,TESTED,,,security,2026-01-14,geodetestlab/specs/gap_155_156_regression.yml
 REQ-GAP-ANALYSIS-JANUARY-2026,Gap Analysis Verification Tests,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,EXEMPT,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig

@@ -918,7 +918,7 @@ pub const CDCEngine = struct {
             },
             .malformed_snapshots = snapshots,
             .malformed_hashes = hashes,
-            .version = "v0.15.0",
+            .version = "v0.1.0",
             .timestamp_ms = now_ms,
         };
 

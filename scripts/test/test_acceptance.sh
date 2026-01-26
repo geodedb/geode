@@ -1,7 +1,7 @@
 #!/bin/sh
-# Acceptance test runner for v0.16.0
+# Acceptance test runner
 
-echo "=== Running Acceptance Tests for Geode v0.16.0 ==="
+echo "=== Running Acceptance Tests for Geode ==="
 echo
 
 # Test 1: No feature flags linter

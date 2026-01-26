@@ -52,7 +52,7 @@ The engine enforces protective upper bounds during MATCH evaluation to prevent e
 - Default `max_hops_limit`: 64 (upper bound on variable-length traversal hops) — guards against unbounded or accidental large expansions when query-specified upper bound is higher or absent.
 - Diagnostic code: `ExecutionGuardTrip` (maps to internal engine guard; reported with ISO precedence rules alongside any additional statuses).
 - Policy: Guard trip preserves already produced bindings (up to truncation) and sets deterministic ordering via existing ordering key comparator.
-- Override (future): Environment or session parameters (flagger will emit findings when overridden; not yet exposed in v0.15.0).
+- Override (future): Environment or session parameters (flagger will emit findings when overridden).
 
 Rationale: Provides predictable resource ceilings and governance evidence (CANARY) for controlled execution of bounded quantifiers and high fan-out graphs.
 

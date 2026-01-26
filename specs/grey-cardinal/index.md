@@ -5,7 +5,7 @@ Grey Cardinal tracks priority zero (P0) execution tasks and decision logs for th
 
 ## Current Sprint (December 2024)
 - **Focus**: Time-Series Integration & Storage Optimization
-- **Target**: v0.16.0 release
+- **Target**: v0.1.0 release
 
 ## Epic Structure
 
@@ -148,7 +148,7 @@ Grey Cardinal tracks priority zero (P0) execution tasks and decision logs for th
 1. Performance optimization sprint
 2. Documentation updates
 3. Release candidate testing
-4. v0.16.0 release prep
+4. v0.1.0 release prep
 
 ## Meeting Notes
 

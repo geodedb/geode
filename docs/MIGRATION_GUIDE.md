@@ -1,6 +1,6 @@
 # Migration Guide - Grey Cardinal Compliance
 
-## v0.17.0 (Current)
+## v0.1.0 (Current)
 
 ### Backup Encryption (`GEODE_TDE_KEY`)
 

@@ -21,7 +21,7 @@ services:
       - GEODE_LOG_JSON=true
       - GEODE_DATA_DIR=/data
       - GEODE_CERT_PATH=/certs
-      # Extended type system is enabled by default in v0.18.0
+      # Extended type system is enabled by default
       # All indexes (Patricia, R-tree, HNSW) are automatically available
     healthcheck:
       test: ["CMD", "/usr/local/bin/geodec", "--host", "127.0.0.1", "--port", "3141", "RETURN 1"]

@@ -613,7 +613,7 @@ clean:
 
 # Run build, test, fuzz, bench, strict cross, governance, docker
 ci: clean build test geodetestlab fuzz bench cross-compile-strict no-feature-flags status-generate governance-check docker-ci
-	@echo "CI pipeline completed successfully (v0.18.0)"
+	@echo "CI pipeline completed successfully"
 
 # Strict cross-compilation for CI (fails on any error)
 cross-compile-strict: cross-compile-required

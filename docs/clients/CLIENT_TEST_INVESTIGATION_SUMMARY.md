@@ -185,7 +185,7 @@ The server may be requiring client certificates even when clients don't provide 
 
 ## Test Environment
 
-- **Server**: Geode v0.18.0, listening on localhost:56691
+- **Server**: Geode v0.1.0, listening on localhost:56691
 - **Client**: Python 3.12.11, aioquic 1.2.0
 - **OS**: Linux 6.14.0-34-generic
 - **Date**: October 31, 2025

@@ -221,7 +221,7 @@ test "protocol messages - comprehensive validation" {
         msg: []const u8,
         expected_type: []const u8,
     }{
-        .{ .msg = "{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\"}", .expected_type = "HELLO" },
+        .{ .msg = "{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.1.0\",\"wanted_conformance\":\"min\"}", .expected_type = "HELLO" },
         .{ .msg = "{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1 AS test\"}", .expected_type = "RUN_GQL" },
         .{ .msg = "{\"type\":\"BEGIN\"}", .expected_type = "BEGIN" },
         .{ .msg = "{\"type\":\"COMMIT\"}", .expected_type = "COMMIT" },

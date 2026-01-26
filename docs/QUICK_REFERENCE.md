@@ -371,4 +371,4 @@ alias gstats='geodec "CALL db.stats()"'
 
 ---
 
-*Quick Reference v0.18.0 - Generated 2025-09-29*
+*Quick Reference - Generated 2025-09-29*

@@ -1,4 +1,4 @@
-# REQUIREMENTS — Geode v0.18.0
+# REQUIREMENTS — Geode
 
 This page mirrors GitLab requirement issues. GitLab is the source of truth for status and details.
 
@@ -24,7 +24,7 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 ## GQL Language & Conformance
 - [REQ-DOC-EXPRESSION_OPERATORS: GQL Expression Operators Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/262)
 - [REQ-DOC-TYPE_CONVERSION_FUNCTIONS: Type Conversion Functions Implementation Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/288)
-- [REQ-DOC-UNICODE: UNICODE.md - Geode Unicode Support (v0.18.0) Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/268)
+- [REQ-DOC-UNICODE: UNICODE.md - Geode Unicode Support Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/268)
 - [REQ-DOC-VALUES_MATCH_CHAINING_SPEC: VALUES → MATCH Chaining Technical Specification Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/269)
 - [REQ-DOC-GQL_COMPLIANCE: GQL ISO/IEC 39075:2024 Compliance Guide Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/308)
 - [REQ-DOC-GQL_CONFORMANCE_PROFILE: GQL Conformance Profile — MATCH (subset) Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/291)
@@ -36,7 +36,7 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-BM25_INDEX_OPTIMIZER_INTEGRATION: BM25 IndexOptimizer Integration Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/261)
 - [REQ-DOC-GRAPH_ALGORITHM_PERFORMANCE_ENHANCEMENTS: Graph Algorithm Performance Enhancements Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/264)
 - [REQ-DOC-EVALUATION_PIPELINE: Geode Expression Evaluation Pipeline Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/290)
-- [REQ-DOC-TELEMETRY: Streaming Telemetry (Paging Events) - v0.16.0 Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/286)
+- [REQ-DOC-TELEMETRY: Streaming Telemetry (Paging Events) Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/286)
 - [REQ-DOC-ALL_PHASES_COMPLETION_SUMMARY: All Phases Completion Summary Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/272)
 
 ## Transactions & Session Management
@@ -45,12 +45,12 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-ENHANCED_TRANSACTION_ISOLATION: Enhanced Transaction Isolation Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/307)
 
 ## Transport & Protocol
-- [REQ-DOC-BINARY_PROTOCOL: Binary Protocol — GQL Outcome & Diagnostics Mapping (v0.16.0) Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/260)
+- [REQ-DOC-BINARY_PROTOCOL: Binary Protocol — GQL Outcome & Diagnostics Mapping Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/260)
 - [REQ-DOC-QUIC: Geode QUIC Transport Guide Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/277)
 - [REQ-DOC-QUIC_INTEGRATION_SUMMARY: QUIC/TLS 1.3 Integration — Finalized (vendored module + geode wiring) Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/292)
 
 ## Tooling, Governance & Testing
-- [REQ-DOC-GOVERNANCE: Governance Automation & Evidence Integrity - v0.16.0 Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/263)
+- [REQ-DOC-GOVERNANCE: Governance Automation & Evidence Integrity Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/263)
 - [REQ-DOC-STATUS_LEDGER: CANARY status.csv Requirement Ledger](https://gitlab.com/devnw/codepros/geode/-/issues/293)
 - [REQ-DOC-TESTING: Testing Documentation for Geode Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/287)
 - [REQ-DOC-GEODE_TESTLAB_FIXES: Geode Test Lab Fixes Tracking Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/278)

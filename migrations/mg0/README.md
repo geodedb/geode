@@ -19,7 +19,7 @@ The migration files create a rich social network graph with:
 
 ## Features Demonstrated
 
-### Extended Type System (v0.18.0)
+### Extended Type System
 - **Network Types**: `IpAddr`, `Subnet`, `Mac` for device and network tracking
 - **Geographic Types**: `LatLon`, `Geometry` for spatial data and queries
 - **Vector Types**: `VectorF32` for ML embeddings and similarity search
@@ -73,8 +73,8 @@ The migration files create a rich social network graph with:
 ## Setup Instructions
 
 ### Prerequisites
-- Geode v0.16.0 or later
-- QUIC+TLS enabled (default in v0.16.0+)
+- Geode v0.1.0 or later
+- QUIC+TLS enabled (default)
 - At least 512MB RAM for the dataset
 
 ### Loading the Dataset

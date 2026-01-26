@@ -1,8 +1,8 @@
-# Streaming Telemetry (Paging Events) - v0.16.0
+# Streaming Telemetry (Paging Events)
 
 Geode can emit optional paging telemetry as JSON Lines on stderr. This is disabled by default and gated by environment variables to avoid noisy logs in normal operation.
 
-**v0.16.0 Note**: Transport telemetry now includes QUIC+TLS metrics (handshake latency, stream multiplexing, loss recovery). TCP telemetry has been removed.
+**Note**: Transport telemetry includes QUIC+TLS metrics (handshake latency, stream multiplexing, loss recovery). TCP telemetry has been removed.
 
 Status: optional; single-node; development/ops aid.
 

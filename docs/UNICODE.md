@@ -1,4 +1,4 @@
-# UNICODE.md - Geode Unicode Support (v0.18.0)
+# UNICODE.md - Geode Unicode Support
 
 This document describes the current Unicode facilities available inside Geode, their scope, limitations, and governance traceability via CANARY requirements.
 

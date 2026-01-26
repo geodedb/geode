@@ -1,8 +1,8 @@
-# Governance Automation & Evidence Integrity - v0.16.0
+# Governance Automation & Evidence Integrity
 
 This document consolidates all automation steps, guard scripts, and policies ensuring that Geode's documentation and implementation evidence (**CANARY** system) remain synchronized and drift-resistant.
 
-**v0.16.0 Updates:**
+**Updates:**
 
 - All compile-time feature flags removed from governance checks
 - Status tracking via generated `status.csv` (never hand-edited)

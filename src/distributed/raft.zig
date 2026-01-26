@@ -73,7 +73,7 @@ pub const RaftConfig = struct {
     snapshot_chunk_size: usize = 64 * 1024, // 64KB
 };
 
-/// Raft consensus implementation (simplified for v0.15.0)
+/// Raft consensus implementation
 pub const RaftNode = struct {
     allocator: std.mem.Allocator,
     config: RaftConfig,

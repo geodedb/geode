@@ -120,7 +120,7 @@ try stdout.writeAll("\n");
 // Title lines with proper centered spacing
 try stdout.writeAll("  ");
 try stdout.writeAll(bold);
-try stdout.writeAll("          Welcome to Geode Shell v0.18.0");
+try stdout.writeAll("          Welcome to Geode Shell v0.1.0");
 try stdout.writeAll(reset);
 try stdout.writeAll(green);
 // Pad to match box width

@@ -2,7 +2,7 @@
 
 ## A. Product
 
-- Implementation: Geode v0.15.0 (development)
+- Implementation: Geode v0.1.0
 - Scope: Working toward GQL front‑end + planner/executor for distributed ACID graph DB.
 - **Current Status**: SQL-like query engine with GQL syntax parsing; graph features not yet implemented.
 

@@ -374,7 +374,7 @@ With connection management integration:
 | Pool acquire | 0.5-1ms | 0.1-0.5ms | 0.5-1ms |
 | Concurrent (10 conn) | 200 qps | 800 qps | 500 qps |
 
-*Benchmarks measured on localhost with Geode v0.18.0*
+*Benchmarks measured on localhost with Geode v0.1.0*
 
 ---
 

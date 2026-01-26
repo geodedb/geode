@@ -1,4 +1,4 @@
-# Binary Protocol — GQL Outcome & Diagnostics Mapping (v0.16.0)
+# Binary Protocol — GQL Outcome & Diagnostics Mapping
 
 ## Messages
 
@@ -7,7 +7,7 @@
 - `RUN_GQL` — submit a GQL program (single statement supported currently) plus params.
 - `PULL` — request next page of current result binding table.
 
-**v0.16.0 Transport**: All messages now transmitted over QUIC+TLS. TCP support removed. Frame format remains unchanged but benefits from QUIC stream multiplexing and 0-RTT resumption.
+**Transport**: All messages transmitted over QUIC+TLS. TCP support removed. Frame format benefits from QUIC stream multiplexing and 0-RTT resumption.
 
 ## Status & Diagnostics
 
@@ -229,7 +229,7 @@ Note: Optional server-side paging telemetry logs to `stderr` and does not affect
 
 ## Versioning
 
-This document describes protocol draft for Geode v0.15.0+ (post PROFILE staging change). Wire stability: additive until v0.20.0; removals / incompatible renames require a major bump.
+This document describes protocol draft for Geode (post PROFILE staging change). Wire stability: additive; removals / incompatible renames require a major bump.
 
 ### Change Log (recent)
 
