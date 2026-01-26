@@ -341,9 +341,9 @@ nfpms:
 # =============================================================================
 
 release:
-  # Enable GitLab release creation
-  # Uses CI_JOB_TOKEN for authentication (api scope not required)
-  disable: false
+  # Disable GoReleaser's release publishing - CI_JOB_TOKEN lacks API permissions
+  # GitLab's native release: keyword in .gitlab-ci.yml handles release creation instead
+  disable: true
 
   name_template: "Geode v{{ .Version }}"
 
