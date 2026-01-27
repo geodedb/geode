@@ -424,7 +424,17 @@ snapshot:
       done
 
       docker info || { echo "Docker daemon not available"; exit 1; }
+
+      # Login to GitLab Container Registry
       docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+
+      # Login to Docker Hub if credentials are available
+      if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+        echo "Logging into Docker Hub..."
+        echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+      else
+        echo "Docker Hub credentials not configured, skipping Docker Hub push"
+      fi
 
       # Setup Docker buildx
       echo "Setting up Docker buildx..."
@@ -439,6 +449,8 @@ snapshot:
       curl -sfL https://goreleaser.com/static/run | \
         GORELEASER_KEY="${GORELEASER_KEY:-}" \
         CI_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE" \
+        DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-}" \
+        DOCKERHUB_TOKEN="${DOCKERHUB_TOKEN:-}" \
         HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
         bash -s -- release --snapshot --clean --timeout 120m 2>&1 || {
           echo "GoReleaser failed, checking logs..."
@@ -496,7 +508,17 @@ build-release:
 
       docker info || { echo "Docker daemon not available"; exit 1; }
       docker version
+
+      # Login to GitLab Container Registry
       docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+
+      # Login to Docker Hub if credentials are available
+      if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+        echo "Logging into Docker Hub..."
+        echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+      else
+        echo "Docker Hub credentials not configured, skipping Docker Hub push"
+      fi
 
       # Setup Docker buildx
       echo "Setting up Docker buildx..."
@@ -514,6 +536,8 @@ build-release:
       curl -sfL https://goreleaser.com/static/run | \
         GORELEASER_KEY="${GORELEASER_KEY:-}" \
         CI_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE" \
+        DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-}" \
+        DOCKERHUB_TOKEN="${DOCKERHUB_TOKEN:-}" \
         HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
         bash -s -- release --clean --timeout 120m 2>&1 || {
           echo "GoReleaser failed, checking logs..."
@@ -582,7 +606,19 @@ publish-release:
 
       ### Installation
 
-      **Docker (Recommended)**
+      **Docker Hub (Recommended)**
+      \`\`\`bash
+      docker pull geodedb/geode:${VERSION}
+      docker run -p 3141:3141/udp geodedb/geode:${VERSION}
+      \`\`\`
+
+      **Docker Hub (GPU-enabled with NVIDIA CUDA)**
+      \`\`\`bash
+      docker pull geodedb/geode:${VERSION}-gpu
+      docker run --gpus all -p 3141:3141/udp geodedb/geode:${VERSION}-gpu
+      \`\`\`
+
+      **GitLab Container Registry**
       \`\`\`bash
       docker pull registry.gitlab.com/devnw/codepros/geode/geode:${VERSION}
       docker run -p 3141:3141/udp registry.gitlab.com/devnw/codepros/geode/geode:${VERSION}
