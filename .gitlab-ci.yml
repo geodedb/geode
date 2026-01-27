@@ -460,7 +460,8 @@ bench-gpu:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
     # Install dependencies and Zig (avoid registry auth issues on GPU runners)
-    - apt-get update && apt-get install -y --no-install-recommends curl xz-utils ca-certificates python3
+    # libvulkan-dev is required for GPU compute benchmarks
+    - apt-get update && apt-get install -y --no-install-recommends curl xz-utils ca-certificates python3 libvulkan-dev
     - |
       ZIG_VERSION="0.15.2"
       # Detect architecture and download appropriate Zig binary
