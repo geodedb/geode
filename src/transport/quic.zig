@@ -208,12 +208,14 @@ pub const QuicTransport = struct {
     /// CANARY: REQ=REQ-QUIC-CONN-CLEANUP-002; FEATURE="ConnectionMemoryManagement"; ASPECT=ConnectionListCleanup; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
     /// Remove a connection from tracking, close it, and destroy it.
     /// This should be called after a connection handler completes to prevent resource leaks.
+    /// GAP-0201: Use swapRemove for O(1) removal instead of O(n) orderedRemove
+    /// CANARY: REQ=REQ-PERF-CONN-REMOVE-001; FEATURE="ConnectionRemovalOptimization"; ASPECT=O1Removal; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-26
     pub fn destroyConnection(self: *QuicTransport, conn: *QuicConnection) void {
-        // Remove connection from the tracked list
+        // Remove connection from the tracked list using O(1) swapRemove
         var idx: usize = 0;
         while (idx < self.connections.items.len) {
             if (self.connections.items[idx] == conn) {
-                _ = self.connections.orderedRemove(idx);
+                _ = self.connections.swapRemove(idx);
                 break;
             }
             idx += 1;
@@ -304,12 +306,14 @@ pub const QuicConnection = struct {
 
     /// Remove a stream from tracking and destroy it
     /// CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-001; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
+    /// GAP-0201: Use swapRemove for O(1) removal instead of O(n) orderedRemove
+    /// CANARY: REQ=REQ-PERF-STREAM-REMOVE-001; FEATURE="StreamRemovalOptimization"; ASPECT=O1Removal; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-26
     pub fn destroyStream(self: *QuicConnection, stream: *QuicStream) void {
-        // Remove stream from the tracked list to prevent double-free
+        // Remove stream from the tracked list using O(1) swapRemove
         var idx: usize = 0;
         while (idx < self.streams.items.len) {
             if (self.streams.items[idx] == stream) {
-                _ = self.streams.orderedRemove(idx);
+                _ = self.streams.swapRemove(idx);
                 break;
             }
             idx += 1;

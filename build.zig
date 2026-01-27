@@ -280,6 +280,14 @@ pub fn build(b: *std.Build) void {
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     transport_quic_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
 
+    // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
+    // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    const thread_pool_mod = b.createModule(.{ .root_source_file = b.path("src/transport/thread_pool.zig"), .target = target, .optimize = optimize });
+
+    // Stream Scheduler Module - DRR-based fair stream scheduling (GAP-0201)
+    // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    const stream_scheduler_mod = b.createModule(.{ .root_source_file = b.path("src/transport/stream_scheduler.zig"), .target = target, .optimize = optimize });
+
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
     build_opts.addOption(bool, "enable_llvm_fuzzer", enable_llvm_fuzzer);
@@ -303,6 +311,8 @@ pub fn build(b: *std.Build) void {
     // Transport/QUIC for kms_remote dependency chain (lib -> execution -> procedure_registry -> kms -> kms_remote)
     root_mod.addImport("transport/quic", transport_quic_mod);
     root_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
+    root_mod.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool for query execution
+    root_mod.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR stream scheduling
 
     // Phase 1 External Library Imports (foundation libraries)
     root_mod.addImport("uri", uri_mod);
@@ -903,6 +913,14 @@ pub fn build(b: *std.Build) void {
         hnsw_wal_fuzz_tests.root_module.addImport("hnsw", hnsw_mod);
         const run_hnsw_wal_fuzz = b.addRunArtifact(hnsw_wal_fuzz_tests);
         test_step.dependOn(&run_hnsw_wal_fuzz.step);
+
+        // GAP-0201: Transport layer performance fuzz tests
+        // CANARY: REQ=REQ-PERF-FUZZ-BUILD-001; FEATURE="TransportFuzzing"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+        const transport_perf_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/transport_perf_fuzz.zig"), .target = target, .optimize = .Debug }) });
+        transport_perf_fuzz_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+        transport_perf_fuzz_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
+        const run_transport_perf_fuzz = b.addRunArtifact(transport_perf_fuzz_tests);
+        test_step.dependOn(&run_transport_perf_fuzz.step);
     }
 
     // Attach physiological redo canary tests after test_step defined
@@ -1006,6 +1024,25 @@ pub fn build(b: *std.Build) void {
     // TDE published overhead sync test
     const tde_published_sync_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_tde_published_overhead_sync.zig"), .target = target, .optimize = optimize }) });
     test_step.dependOn(&tde_published_sync_tests.step);
+
+    // GAP-0201: Performance optimization tests (thread pool, DRR scheduler, adaptive backoff)
+    // CANARY: REQ=REQ-PERF-TEST-BUILD-001; FEATURE="PerformanceTests"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    const perf_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_performance_optimizations.zig"), .target = target, .optimize = optimize }) });
+    perf_opt_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    perf_opt_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
+    test_step.dependOn(&perf_opt_tests.step);
+
+    // GAP-0201: Transport throughput benchmark for performance optimization validation
+    // CANARY: REQ=REQ-PERF-BENCH-BUILD-001; FEATURE="ThroughputBenchmark"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    const transport_throughput_bench = b.addExecutable(.{ .name = "bench_transport_throughput", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_transport_throughput.zig"), .target = target, .optimize = optimize }) });
+    transport_throughput_bench.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    transport_throughput_bench.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
+    b.installArtifact(transport_throughput_bench);
+    // Note: Not adding to test_step as it's a manual benchmark run, not automated test
+    const transport_bench_step = b.step("bench-transport", "Run transport layer throughput benchmarks");
+    const run_transport_bench = b.addRunArtifact(transport_throughput_bench);
+    transport_bench_step.dependOn(&run_transport_bench.step);
+
     // Benchmarks (MFA latency + recovery contention) as executables for manual run / CI capture
     const mfa_stepup_latency_bench = b.addExecutable(.{ .name = "bench_mfa_stepup_latency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_stepup_latency.zig"), .target = target, .optimize = optimize }) });
     mfa_stepup_latency_bench.root_module.addImport("security/mfa_risk.zig", mfa_risk_mod);
@@ -1055,6 +1092,8 @@ pub fn build(b: *std.Build) void {
     // Add transport modules to unified geode binary
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
     geode_exe.root_module.addImport("vendor_quic", quic_ext_mod);
+    geode_exe.root_module.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool
+    geode_exe.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
 
     // Add audit CLI module for verification functionality
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
@@ -1216,6 +1255,8 @@ pub fn build(b: *std.Build) void {
     // Transport/QUIC for kms_remote dependency chain (test_harness -> execution -> procedure_registry -> kms -> kms_remote)
     test_harness_mod.addImport("transport/quic", transport_quic_mod);
     test_harness_mod.addImport("vendor_quic", quic_ext_mod);
+    test_harness_mod.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool
+    test_harness_mod.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
     test_harness_mod.addImport("logging", logging_mod);
     test_harness_mod.addImport("json", json_mod);
 

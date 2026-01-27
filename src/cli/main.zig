@@ -609,6 +609,8 @@ fn handleControlStatement(
     try runSimpleStatement(writer, allocator, statement, authenticated_username);
 }
 
+// CANARY: REQ=REQ-PERF-WRITE-STALL-001; FEATURE="WriteStallOptimization"; ASPECT=StreamWrite; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-26
+// GAP-0201: Optimized write stalling - reduced poll timeout and sleep times for higher throughput
 fn writeAllToStream(
     transport: *quic.QuicTransport,
     conn: *quic.QuicConnection,
@@ -617,17 +619,23 @@ fn writeAllToStream(
 ) !void {
     var written: usize = 0;
     var stalled: usize = 0;
-    const max_retries: usize = 200;
-
-    // GAP-0200: Debug print removed from hot path for performance
+    const max_retries: usize = 1000; // Increased retries since we sleep less per retry
+    const initial_sleep_us: u64 = 10; // Start with 10μs (was 1ms)
+    const max_sleep_us: u64 = 100; // Cap at 100μs (was 1ms)
 
     while (written < data.len) {
         const n = conn.inner.writeStream(stream_id, data[written..], false) catch |err| switch (err) {
             error.FlowControlBlocked, error.WouldBlock => {
                 stalled += 1;
                 if (stalled > max_retries) return error.WriteError;
-                transport.poll(5) catch {};
-                std.Thread.sleep(1 * std.time.ns_per_ms);
+                // GAP-0201: Use non-blocking poll, exponential backoff for sleep
+                transport.poll(0) catch {};
+                // Only sleep after multiple consecutive stalls, with exponential backoff
+                if (stalled > 5) {
+                    const backoff: u6 = @intCast(@min(stalled - 5, 4));
+                    const sleep_us: u64 = @min(initial_sleep_us << backoff, max_sleep_us);
+                    std.Thread.sleep(sleep_us * @as(u64, std.time.ns_per_us));
+                }
                 continue;
             },
             else => return err,
@@ -636,8 +644,13 @@ fn writeAllToStream(
         if (n == 0) {
             stalled += 1;
             if (stalled > max_retries) return error.WriteError;
-            transport.poll(5) catch {};
-            std.Thread.sleep(1 * std.time.ns_per_ms);
+            // GAP-0201: Same optimization for zero-write case
+            transport.poll(0) catch {};
+            if (stalled > 5) {
+                const backoff: u6 = @intCast(@min(stalled - 5, 4));
+                const sleep_us: u64 = @min(initial_sleep_us << backoff, max_sleep_us);
+                std.Thread.sleep(sleep_us * @as(u64, std.time.ns_per_us));
+            }
             continue;
         }
 
@@ -1824,20 +1837,30 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     var connection_count: u32 = 0;
     var stream_count: u32 = 0;
     var loop_iteration: u64 = 0;
+    // GAP-0201: Adaptive backoff for high throughput - only sleep when idle
+    // CANARY: REQ=REQ-PERF-ADAPTIVE-BACKOFF-001; FEATURE="AdaptiveBackoff"; ASPECT=MainLoopSleep; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-26
+    var idle_iterations: u32 = 0;
+    const max_idle_before_sleep: u32 = 10; // Start sleeping after 10 idle iterations
+    const min_sleep_us: u64 = 10; // 10μs minimum sleep
+    const max_sleep_us: u64 = 100; // 100μs maximum sleep (was 1ms)
     main_loop: while (true) {
         loop_iteration += 1;
         // GAP-0200: Reduced debug logging frequency from 1000 to 100000 iterations
         if (loop_iteration % 100000 == 0) {
-            std.debug.print("Main loop iteration #{} (conns={}, streams={})\n", .{ loop_iteration, connection_count, stream_count });
+            std.debug.print("Main loop iteration #{} (conns={}, streams={}, idle={})\n", .{ loop_iteration, connection_count, stream_count, idle_iterations });
         }
 
         if (test_exit_after_first and stream_count > 0) break :main_loop;
 
+        // Track if any work was done this iteration
+        var processed_any_data: bool = false;
+
         // Poll to process packets and timers (critical for handshake completion)
         // RFC 9000 §6 mandates timers for loss detection and idle timeout
         // Note: poll() handles both packet processing AND timer events
-        // GAP-0200: Reduced poll timeout from 20ms to 1ms for higher throughput
-        quic_server.poll(1) catch {};
+        // GAP-0201: Reduced poll timeout to 0 when active, use adaptive backoff for idle
+        const poll_timeout: u32 = if (idle_iterations > max_idle_before_sleep) 1 else 0;
+        quic_server.poll(poll_timeout) catch {};
 
         // Try to accept newly-ready connections (non-blocking)
         // Connections become available after QUIC handshake completes
@@ -1932,7 +1955,8 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
 
                     if (n == 0) break;
 
-                    // GAP-0200: Debug print removed from hot path for performance
+                    // GAP-0201: Mark that we processed data - reset idle counter
+                    processed_any_data = true;
 
                     processStreamBuffer(allocator, &quic_server, conn_state, &stream_count, stream_id, buf[0..n]) catch |err| {
                         // Keep error logging for debugging issues
@@ -1946,8 +1970,23 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
             i += 1;
         }
 
-        // Small sleep to prevent busy-waiting
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        // GAP-0201: Adaptive backoff - only sleep when idle to maximize throughput
+        // CANARY: REQ=REQ-PERF-ADAPTIVE-BACKOFF-002; FEATURE="AdaptiveBackoff"; ASPECT=IdleSleep; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-26
+        if (processed_any_data) {
+            // Data was processed - reset idle counter, no sleep needed
+            idle_iterations = 0;
+        } else {
+            // No data processed - increment idle counter
+            idle_iterations += 1;
+            if (idle_iterations > max_idle_before_sleep) {
+                // Exponential backoff up to max_sleep_us
+                // Start at min_sleep_us, double each iteration, cap at max_sleep_us
+                const backoff_multiplier: u6 = @intCast(@min(idle_iterations - max_idle_before_sleep, 4));
+                const sleep_us: u64 = @min(min_sleep_us << backoff_multiplier, max_sleep_us);
+                std.Thread.sleep(sleep_us * @as(u64, std.time.ns_per_us));
+            }
+            // When idle_iterations <= max_idle_before_sleep, no sleep - tight loop for responsiveness
+        }
     }
 }
 // GAP-0138 CODE CLEANUP: Removed dead code runEmbeddedClient function
