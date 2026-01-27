@@ -16,6 +16,7 @@ const quic_transport = @import("transport/quic.zig");
 const thread_pool = @import("transport/thread_pool.zig");
 const cert_gen = @import("../tools/cert_gen.zig");
 const wal_manager = @import("wal_manager.zig");
+const query_ast_cache = @import("query_ast_cache.zig");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
 // const mvcc = @import("server/txn/mvcc.zig");
 // const logger = @import("log/logger.zig");
@@ -90,6 +91,7 @@ const ConnectionContext = struct {
     env_storage_checksum_error: bool,
     env_wal_compact_interval: usize,
     security_manager: ?*geode_auth.SecurityManager,
+    shared_ast_cache: ?*query_ast_cache.SharedAstCache,
 };
 
 // GAP-0202: Callback wrapper for thread pool execution
@@ -112,6 +114,7 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.env_wal_compact_interval,
         false,
         ctx.security_manager,
+        ctx.shared_ast_cache,
     ) catch |err| {
         log.err("Error handling QUIC connection (async)", &.{
             Attr.string("error", @errorName(err)),
@@ -492,7 +495,7 @@ pub fn main() !void {
 
             // CANARY: REQ=REQ-ABAC-WIRE-015; FEATURE="ABAC Enforcement"; ASPECT=QUICCall; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
             // GAP-0165: Pass SecurityManager to handleQuicConnection for ABAC enforcement
-            quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err| {
+            quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
                 log.err("Error handling QUIC connection", &.{
                     Attr.string("error", @errorName(err)),
                 });
@@ -515,7 +518,7 @@ pub fn main() !void {
                         });
                         continue;
                     };
-                    quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err2| {
+                    quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
                         log.err("Error handling QUIC connection", &.{
                             Attr.string("error", @errorName(err2)),
                         });
@@ -542,7 +545,7 @@ pub fn main() !void {
                 // GAP-0202: Create context for async connection handling
                 const ctx = gpa.create(ConnectionContext) catch {
                     log.err("Failed to allocate connection context, handling sync", &.{});
-                    quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err| {
+                    quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
                         log.err("Error handling QUIC connection", &.{
                             Attr.string("error", @errorName(err)),
                         });
@@ -566,6 +569,7 @@ pub fn main() !void {
                     .env_storage_checksum_error = env_storage_checksum_error,
                     .env_wal_compact_interval = env_wal_compact_interval,
                     .security_manager = init_ctx.security_manager,
+                    .shared_ast_cache = init_ctx.shared_ast_cache,
                 };
 
                 // Submit to thread pool for async handling
@@ -627,6 +631,30 @@ pub fn main() !void {
     // GAP-0165: Wire SecurityManager into ServerState for stdio mode ABAC enforcement
     state.security_manager = init_ctx.security_manager;
     state.storage_checksum_error = env_storage_checksum_error;
+    state.query_ast_cache = init_ctx.shared_ast_cache;
+
+    state.query_optimizer_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
+        defer gpa.free(v);
+        if (v.len == 0) break :blk false;
+        if (v[0] == '0') break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
+        break :blk true;
+    } else |_| false;
+
+    // Inline RUN+PULL for small results (configurable).
+    state.inline_results_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS")) |v| blk: {
+        defer gpa.free(v);
+        if (v.len == 0) break :blk true;
+        if (v[0] == '0') break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
+        break :blk true;
+    } else |_| true;
+    state.inline_results_max_rows = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS_MAX_ROWS")) |v| blk: {
+        defer gpa.free(v);
+        break :blk std.fmt.parseInt(usize, v, 10) catch state.inline_results_max_rows;
+    } else |_| state.inline_results_max_rows;
 
     // Initialize query plan cache and optimizer for performance optimization
     var query_optimizer = query_plan_cache.QueryOptimizer.init(gpa, 100); // Cache up to 100 plans

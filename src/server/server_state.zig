@@ -236,6 +236,7 @@ pub const UnionMetrics = struct {
 // Additional imports needed for ServerState (use geode module instead of relative imports)
 const geode = @import("geode");
 const protocol = geode.protocol;
+const execution = @import("../execution.zig");
 const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
 const query_ast_cache = @import("query_ast_cache.zig");
@@ -256,6 +257,14 @@ pub const ServerState = struct {
     page_items: [][]const u8 = &.{}, // each: JSON row fragment {..}
     page_index: usize = 0,
     active_result: bool = false,
+    // Optional value-backed result set for streaming JSON serialization (avoids per-row JSON allocation).
+    active_result_values: ?execution.ExecutionResult = null,
+    // Inline RUN+PULL optimization flag for small results (suppresses next PULL response).
+    inline_pull_pending: bool = false,
+    inline_results_enabled: bool = false,
+    inline_results_max_rows: usize = 32,
+    // Internal suppression flag: when true, QUIC handler skips fallback response.
+    suppress_response: bool = false,
     // Advisory diagnostic flags for current active result set (cleared after first page emission)
     guard_trip: bool = false, // set when ExecutionGuardTrip occurred during evaluation
     // Transaction session state: single active txn baseline
@@ -325,8 +334,8 @@ pub const ServerState = struct {
     query_optimizer: ?*query_plan_cache.QueryOptimizer = null,
     // Query optimizer gating flag (profile/explain always enables it)
     query_optimizer_enabled: bool = false,
-    // Parsed AST cache for hot-path query reuse
-    query_ast_cache: ?*query_ast_cache.QueryAstCache = null,
+    // Parsed AST cache for hot-path query reuse (shared across connections)
+    query_ast_cache: ?*query_ast_cache.SharedAstCache = null,
 
     // Distributed query planner for federation-aware optimization
     distributed_planner: ?*geode.distributed.query_planner.DistributedQueryPlanner = null,
@@ -360,6 +369,12 @@ pub const ServerState = struct {
         self.page_items = &.{};
         self.page_index = 0;
         self.active_result = false;
+        if (self.active_result_values) |*res| {
+            res.deinit(self.allocator);
+            self.active_result_values = null;
+        }
+        self.inline_pull_pending = false;
+        self.suppress_response = false;
         self.last_columns = &.{};
         self.last_order_keys = &.{};
         self.last_ordered = false;

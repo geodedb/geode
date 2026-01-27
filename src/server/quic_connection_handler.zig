@@ -48,6 +48,7 @@ const ErrorResponse = struct {
     @"error": []const u8,
 };
 
+
 // CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedQUICLineReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-01-27
 /// Buffered line reader that avoids per-byte QUIC reads and large per-call allocations.
 const BufferedLineReader = struct {
@@ -172,6 +173,64 @@ const handleBackupRequest = protocol_handler.handleBackupRequest;
 const handleRestoreRequest = protocol_handler.handleRestoreRequest;
 const handleUploadBackupRequest = protocol_handler.handleUploadBackupRequest;
 
+/// Build JSON array for a slice of ExecutionResult rows without per-row allocations.
+fn buildRowsJsonFromResult(
+    allocator: std.mem.Allocator,
+    result: *const execution.ExecutionResult,
+    start: usize,
+    end: usize,
+) ![]u8 {
+    var arr_buf = std.ArrayList(u8).initCapacity(allocator, 256) catch return error.OutOfMemory;
+    errdefer arr_buf.deinit(allocator);
+    const w = arr_buf.writer(allocator);
+    w.writeAll("[") catch {};
+    var i: usize = start;
+    var first = true;
+    while (i < end) : (i += 1) {
+        if (!first) w.writeAll(",") catch {};
+        first = false;
+        const row = result.rows[i];
+        w.writeAll("{") catch {};
+        for (row, 0..) |val, idx| {
+            if (idx > 0) w.writeAll(",") catch {};
+            if (idx < result.columns.len) {
+                w.print("\"{s}\":", .{result.columns[idx]}) catch {};
+            }
+            execution.writeValue(allocator, w, val) catch {};
+        }
+        w.writeAll("}") catch {};
+    }
+    w.writeAll("]") catch {};
+    return arr_buf.toOwnedSlice(allocator) catch "[]";
+}
+
+/// Remove the `,"final":true|false` field from a bindings line for compatibility.
+fn stripFinalFlag(allocator: std.mem.Allocator, line: []u8) []u8 {
+    var s = line;
+    if (std.mem.indexOf(u8, s, ",\"final\":true")) |pos| {
+        const head = s[0..pos];
+        const tail = s[pos + ",\"final\":true".len ..];
+        var joined = std.ArrayList(u8).initCapacity(allocator, 0) catch return line;
+        defer joined.deinit(allocator);
+        joined.appendSlice(allocator, head) catch {};
+        joined.appendSlice(allocator, tail) catch {};
+        const out = joined.toOwnedSlice(allocator) catch line;
+        allocator.free(line);
+        return out;
+    } else if (std.mem.indexOf(u8, s, ",\"final\":false")) |pos2| {
+        const head2 = s[0..pos2];
+        const tail2 = s[pos2 + ",\"final\":false".len ..];
+        var joined2 = std.ArrayList(u8).initCapacity(allocator, 0) catch return line;
+        defer joined2.deinit(allocator);
+        joined2.appendSlice(allocator, head2) catch {};
+        joined2.appendSlice(allocator, tail2) catch {};
+        const out2 = joined2.toOwnedSlice(allocator) catch line;
+        allocator.free(line);
+        return out2;
+    }
+    return line;
+}
+
 // Protocol flag constants
 const F_PROPERTY_ORDER = "U:PropOrder=LexDecl";
 const F_ILLEGAL = "U:PropOrder=Illegal";
@@ -197,6 +256,7 @@ pub fn handleQuicConnection(
     env_wal_compact_interval: usize,
     _force_serialization_failure_unused: bool,
     security_manager: ?*geode_auth.SecurityManager,
+    shared_ast_cache: ?*query_ast_cache.SharedAstCache,
 ) !void {
     _ = env_wal_compact_interval;
     _ = _force_serialization_failure_unused;
@@ -269,16 +329,30 @@ pub fn handleQuicConnection(
         break :blk true;
     } else |_| false;
 
+    // Inline RUN+PULL for small results (configurable).
+    // Enabled by default; set GEODE_INLINE_RESULTS=0 to disable.
+    // CANARY: REQ=REQ-PERF-INLINE-PULL-001; FEATURE="InlineRunPull"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    state.inline_results_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS")) |v| blk: {
+        defer gpa.free(v);
+        if (v.len == 0) break :blk true;
+        if (v[0] == '0') break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
+        break :blk true;
+    } else |_| true;
+    state.inline_results_max_rows = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS_MAX_ROWS")) |v| blk: {
+        defer gpa.free(v);
+        break :blk std.fmt.parseInt(usize, v, 10) catch state.inline_results_max_rows;
+    } else |_| state.inline_results_max_rows;
+
     // Initialize query plan cache and optimizer for performance optimization
     var query_optimizer = query_plan_cache.QueryOptimizer.init(gpa, 100); // Cache up to 100 plans
     defer query_optimizer.deinit();
     state.query_optimizer = &query_optimizer;
 
-    // Initialize per-connection AST cache to avoid repeat parsing.
-    // CANARY: REQ=REQ-PERF-AST-CACHE-002; FEATURE="QueryASTCache"; ASPECT=ConnectionState; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
-    var ast_cache = query_ast_cache.QueryAstCache.init(gpa, 256);
-    defer ast_cache.deinit();
-    state.query_ast_cache = &ast_cache;
+    // Attach shared AST cache for cross-connection reuse.
+    // CANARY: REQ=REQ-PERF-AST-CACHE-003; FEATURE="SharedASTCache"; ASPECT=ConnectionState; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    state.query_ast_cache = shared_ast_cache;
 
     // Initialize distributed query planner for federation-aware optimization
     var federation_manager = geode.distributed.query_planner.FederationManager.init(gpa);
@@ -325,6 +399,9 @@ pub fn handleQuicConnection(
 
         if (response.len > 0) {
             try stream.writeAll(response);
+        } else if (state.suppress_response) {
+            // Intentionally suppress response (e.g., inline RUN+PULL consumed).
+            state.suppress_response = false;
         } else {
             // CRITICAL: Always send a response so client doesn't block forever
             // If processMessage returned empty, send an internal error response
@@ -462,7 +539,11 @@ pub fn processMessage(
                     } },
                     .Ok => |ok| {
                         parse_res_owned = ok;
-                        break :blk .{ .Ok = &parse_res_owned.? };
+                        break :blk .{ .Ok = .{
+                            .cache = null,
+                            .key = 0,
+                            .parse_result = &parse_res_owned.?,
+                        } };
                     },
                 }
             };
@@ -487,8 +568,10 @@ pub fn processMessage(
                     const err_line = protocol.buildErrorLineWithFlagsCustomStatus(gpa, diagnostics.codeName(primary), primary_msg, diagnostics.anchorFor(primary), add_slice, base_flags, null) catch try gpa.dupe(u8, "");
                     return err_line;
                 },
-                .Ok => |parse_res| {
-                    const program = parse_res.program;
+                .Ok => |parse_handle| {
+                    var handle = parse_handle;
+                    defer handle.release();
+                    const program = handle.parse_result.program;
 
                     // Post-parse ORDER BY function call validation (server fallback) when expressions disallowed.
                     if (!g_order_keys_expr) {
@@ -675,7 +758,7 @@ pub fn processMessage(
                             // CANARY: REQ=REQ-QUIC-CATALOG-002; FEATURE="QUICCatalogSingleton"; ASPECT=MainQueryExec; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=engine; UPDATED=2026-01-14
                             // GAP-0180 FIX: Use shared global catalog singleton for all QUIC query execution
                             // Use new modular execution path for ALL queries (with parameter support)
-                            const rows = blk: {
+                            var exec_result = blk: {
                                 // Get global catalog singleton - shared across all QUIC connections
                                 const catalog_instance = execution.ensureCatalogInstance(gpa) catch unreachable;
 
@@ -707,68 +790,53 @@ pub fn processMessage(
                                 };
 
                                 // Execute via new modular execution path
-                                const result = execution.executeQueryWithContext(gpa, q, context) catch break :blk &.{};
+                                const result = execution.executeQueryWithContext(gpa, q, context) catch |err| {
+                                    return protocol.buildErrorLine(gpa, "ExecutionFailed", "Query execution failed", @errorName(err)) catch try gpa.dupe(u8, "");
+                                };
 
-                                // Convert ExecutionResult to JSON rows
-                                var result_rows = std.ArrayList([]const u8).initCapacity(gpa, result.rows.len) catch break :blk &.{};
-                                for (result.rows) |row| {
-                                    var buf = std.ArrayList(u8).initCapacity(gpa, 0) catch continue;
-                                    const w = buf.writer(gpa);
-                                    w.writeAll("{") catch continue;
-                                    for (row, 0..) |val, idx| {
-                                        if (idx > 0) w.writeAll(",") catch continue;
-                                        if (idx < result.columns.len) {
-                                            w.print("\"{s}\":", .{result.columns[idx]}) catch continue;
-                                        }
-                                        query_executor.writeValue(gpa, w, val) catch continue;
-                                    }
-                                    w.writeAll("}") catch continue;
-                                    const json_row = buf.toOwnedSlice(gpa) catch continue;
-                                    result_rows.append(gpa, json_row) catch continue;
-                                }
-
-                                // Set output metadata
-                                var out_cols = gpa.alloc(protocol.SchemaCol, result.columns.len) catch break :blk &.{};
-                                for (result.columns, 0..) |col_name, idx| {
-                                    out_cols[idx] = .{ .name = col_name, .type = "ANY" };
-                                }
-                                cols = out_cols;
-                                ord = false;
-                                oks = &.{};
-
-                                break :blk result_rows.toOwnedSlice(gpa) catch &.{};
+                                break :blk result;
                             };
+                            const rows_len = exec_result.rows.len;
+
+                            // Set output metadata
+                            var out_cols = gpa.alloc(protocol.SchemaCol, exec_result.columns.len) catch return try gpa.dupe(u8, "");
+                            for (exec_result.columns, 0..) |col_name, idx| {
+                                out_cols[idx] = .{ .name = col_name, .type = "ANY" };
+                            }
+                            cols = out_cols;
+                            ord = false;
+                            oks = &.{};
                             // GAP-0079: Capture execution timing metrics
                             if (need_timings) {
                                 const exec_end = std.time.nanoTimestamp();
                                 const total_ns = exec_end - exec_start;
                                 // For new execution path, record aggregate timing (individual stages not yet instrumented)
                                 timings.project_ns = total_ns;
-                                timings.project_rows_out = rows.len;
-                                timings.project_rows_in = rows.len;
+                                timings.project_rows_out = rows_len;
+                                timings.project_rows_in = rows_len;
                                 // Set distinct/sort/limit based on query structure
                                 if (q.ret.distinct) {
                                     timings.distinct_ns = @divTrunc(total_ns, 10); // Approximate 10% for distinct
-                                    timings.distinct_rows_out = rows.len;
+                                    timings.distinct_rows_out = rows_len;
                                 }
                                 if (q.order_by != null) {
                                     timings.sort_ns = @divTrunc(total_ns, 10); // Approximate 10% for sort
-                                    timings.sort_rows_out = rows.len;
+                                    timings.sort_rows_out = rows_len;
                                 }
                                 if (q.offset != null) {
                                     timings.offset_ns = @divTrunc(total_ns, 20); // Approximate 5% for offset
-                                    timings.offset_rows_out = rows.len;
+                                    timings.offset_rows_out = rows_len;
                                 }
                                 if (q.limit != null) {
                                     timings.limit_ns = @divTrunc(total_ns, 20); // Approximate 5% for limit
-                                    timings.limit_rows_out = rows.len;
+                                    timings.limit_rows_out = rows_len;
                                 }
                             }
                             state.last_columns = cols;
                             state.last_ordered = ord;
                             state.last_order_keys = oks;
                             state.last_distinct = q.ret.distinct;
-                            state.page_items = @constCast(rows);
+                            state.page_items = &.{};
                             state.page_index = 0;
                             state.active_result = true;
                             state.guard_trip = (run_code == .ExecutionGuardTrip);
@@ -779,6 +847,38 @@ pub fn processMessage(
                                 break :blk addl_buf[0..1];
                             } else &.{};
                             const schema_line = protocol.buildSchemaLine(gpa, state.last_columns, addl_schema, flags) catch return try gpa.dupe(u8, "");
+
+                            const inline_allowed = state.inline_results_enabled and !explain_mode and !profile_mode and rows_len <= state.inline_results_max_rows;
+                            if (inline_allowed) {
+                                const rows_json = buildRowsJsonFromResult(gpa, &exec_result, 0, rows_len) catch "[]";
+                                defer gpa.free(rows_json);
+                                var addl_rows_buf: [1][]const u8 = undefined;
+                                const addl_rows: []const []const u8 = if (state.guard_trip) blk: {
+                                    addl_rows_buf[0] = "ExecutionGuardTrip";
+                                    break :blk addl_rows_buf[0..1];
+                                } else &.{};
+                                const bindings_raw = protocol.buildBindingsLine(gpa, ord, oks, rows_json, true, addl_rows, flags) catch null;
+                                if (bindings_raw) |br| {
+                                    const bindings_line = stripFinalFlag(gpa, br);
+                                    var comb_inline = std.ArrayList(u8).initCapacity(gpa, 0) catch return schema_line;
+                                    defer comb_inline.deinit(gpa);
+                                    comb_inline.appendSlice(gpa, schema_line) catch {};
+                                    comb_inline.appendSlice(gpa, bindings_line) catch {};
+                                    gpa.free(schema_line);
+                                    gpa.free(bindings_line);
+
+                                    // Inline results emitted; suppress next PULL response.
+                                    state.inline_pull_pending = true;
+                                    state.guard_trip = false;
+                                    state.active_result = false;
+                                    state.active_result_values = null;
+                                    exec_result.deinit(gpa);
+                                    return comb_inline.toOwnedSlice(gpa) catch try gpa.dupe(u8, "");
+                                }
+                            }
+
+                            // Store execution result for streaming PULL.
+                            state.active_result_values = exec_result;
                             if (!explain_mode and !profile_mode) return schema_line;
                             // Build explain chain when requested (emit EXPLAIN frame immediately, THEN return bindings via PULL normally)
                             if (explain_mode) {
@@ -1289,9 +1389,37 @@ pub fn processMessage(
             }
         },
         .PULL => |pl| {
+            if (state.inline_pull_pending) {
+                state.inline_pull_pending = false;
+                state.suppress_response = true;
+                return "";
+            }
             const page_size = if (pl.page_size == 0) 1000 else pl.page_size;
             const start = state.page_index;
-            const end = @min(state.page_index + page_size, state.page_items.len);
+            if (state.active_result_values) |*res| {
+                const total_len = res.rows.len;
+                const end = @min(start + page_size, total_len);
+                const json_rows = buildRowsJsonFromResult(gpa, res, start, end) catch "[]";
+                defer gpa.free(json_rows);
+                state.page_index = end;
+                const is_final = end >= total_len;
+                if (is_final) {
+                    state.active_result = false;
+                    res.deinit(gpa);
+                    state.active_result_values = null;
+                }
+                const flags = computeBaseFlags(state.last_ordered, state.last_distinct);
+                var addl_rows_buf: [1][]const u8 = undefined;
+                const addl_rows: []const []const u8 = if (start == 0 and state.guard_trip) blk: {
+                    addl_rows_buf[0] = "ExecutionGuardTrip";
+                    break :blk addl_rows_buf[0..1];
+                } else &.{};
+                const line = protocol.buildBindingsLine(gpa, state.last_ordered, state.last_order_keys, json_rows, is_final, addl_rows, flags) catch return try gpa.dupe(u8, "");
+                if (start == 0 and state.guard_trip) state.guard_trip = false;
+                return stripFinalFlag(gpa, line);
+            }
+
+            const end = @min(start + page_size, state.page_items.len);
             var arr_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
             const w = arr_buf.writer(gpa);
             w.writeAll("[") catch {};
@@ -1316,30 +1444,7 @@ pub fn processMessage(
             } else &.{};
             const line = protocol.buildBindingsLine(gpa, state.last_ordered, state.last_order_keys, json_rows, is_final, addl_rows, flags) catch return try gpa.dupe(u8, "");
             if (start == 0 and state.guard_trip) state.guard_trip = false; // clear after first emission
-            // Strip ,"final":true/false substring for compatibility
-            var s = line;
-            if (std.mem.indexOf(u8, s, ",\"final\":true")) |pos| {
-                const head = s[0..pos];
-                const tail = s[pos + ",\"final\":true".len ..];
-                var joined = std.ArrayList(u8).initCapacity(gpa, 0) catch return line;
-                defer joined.deinit(gpa);
-                joined.appendSlice(gpa, head) catch {};
-                joined.appendSlice(gpa, tail) catch {};
-                const out = joined.toOwnedSlice(gpa) catch line;
-                gpa.free(line);
-                return out;
-            } else if (std.mem.indexOf(u8, s, ",\"final\":false")) |pos2| {
-                const head2 = s[0..pos2];
-                const tail2 = s[pos2 + ",\"final\":false".len ..];
-                var joined2 = std.ArrayList(u8).initCapacity(gpa, 0) catch return line;
-                defer joined2.deinit(gpa);
-                joined2.appendSlice(gpa, head2) catch {};
-                joined2.appendSlice(gpa, tail2) catch {};
-                const out2 = joined2.toOwnedSlice(gpa) catch line;
-                gpa.free(line);
-                return out2;
-            }
-            return line;
+            return stripFinalFlag(gpa, line);
         },
         .BACKUP => |backup_req| {
             return handleBackupRequest(gpa, state, backup_req);

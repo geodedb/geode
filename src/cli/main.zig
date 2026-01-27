@@ -3270,9 +3270,12 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     };
     log.debug("Client query sent successfully", &.{});
 
+    var recv_buffer = try std.ArrayList(u8).initCapacity(allocator, 0);
+    defer recv_buffer.deinit(allocator);
+
     // Receive first response (SCHEMA line)
     log.debug("Client waiting for schema response", &.{});
-    const schema_response = readLineWithPoll(quic_client, stream, 65536, 5000) catch |err| {
+    const schema_response = readBufferedLineWithPoll(allocator, quic_client, stream, &recv_buffer, 65536, 5000) catch |err| {
         std.debug.print("Error: Failed to receive schema response: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -3286,18 +3289,25 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // Request first page of results (server expects PULL after schema)
-    const pull_msg = "{\"type\":\"PULL\",\"page_size\":1000}\n";
-    stream.writeAll(pull_msg) catch |err| {
-        std.debug.print("Error: Failed to send PULL: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
+    var result_line: []u8 = undefined;
+    var inline_used = false;
+    if (try tryReadBufferedLine(allocator, &recv_buffer)) |inline_line| {
+        result_line = inline_line;
+        inline_used = true;
+    } else {
+        // Request first page of results (server expects PULL after schema)
+        const pull_msg = "{\"type\":\"PULL\",\"page_size\":1000}\n";
+        stream.writeAll(pull_msg) catch |err| {
+            std.debug.print("Error: Failed to send PULL: {}\n", .{err});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
 
-    log.debug("Client waiting for result page", &.{});
-    const result_line = readLineWithPoll(quic_client, stream, 65536, 5000) catch |err| {
-        std.debug.print("Error: Failed to receive result response: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
+        log.debug("Client waiting for result page", &.{});
+        result_line = readBufferedLineWithPoll(allocator, quic_client, stream, &recv_buffer, 65536, 5000) catch |err| {
+            std.debug.print("Error: Failed to receive result response: {}\n", .{err});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    }
     defer allocator.free(result_line);
     log.debug("Client received line", &.{Attr.string("line", result_line)});
 
@@ -3313,6 +3323,60 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         _ = stdout_file.writeAll("\n") catch {};
     }
     _ = stdout_file.writeAll(result_line) catch {};
+    if (inline_used) {
+        log.debug("Inline bindings used; PULL suppressed", &.{});
+    }
+}
+
+fn readBufferedLineWithPoll(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, stream: *quic.QuicClientStream, buffer: *std.ArrayList(u8), max_size: usize, timeout_ms: u64) ![]u8 {
+    const start = std.time.milliTimestamp();
+    while (true) {
+        if (std.mem.indexOfScalar(u8, buffer.items, '\n')) |idx| {
+            return try takeBufferedLine(allocator, buffer, idx);
+        }
+        if (buffer.items.len >= max_size) return error.LineTooLong;
+
+        var temp_buf: [4096]u8 = undefined;
+        const n = stream.read(&temp_buf) catch |err| {
+            if (err == error.WouldBlock) {
+                if (std.time.milliTimestamp() - start >= timeout_ms) return error.WouldBlock;
+                quic_client.poll(5) catch {};
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        if (n == 0) {
+            if (std.time.milliTimestamp() - start >= timeout_ms) return error.WouldBlock;
+            quic_client.poll(5) catch {};
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+            continue;
+        }
+        if (buffer.items.len + n > max_size) return error.LineTooLong;
+        try buffer.appendSlice(allocator, temp_buf[0..n]);
+    }
+}
+
+fn tryReadBufferedLine(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) !?[]u8 {
+    if (std.mem.indexOfScalar(u8, buffer.items, '\n')) |idx| {
+        return try takeBufferedLine(allocator, buffer, idx);
+    }
+    return null;
+}
+
+fn takeBufferedLine(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), idx: usize) ![]u8 {
+    const line_len = idx + 1;
+    const line = try allocator.alloc(u8, line_len);
+    @memcpy(line, buffer.items[0..line_len]);
+
+    const remaining = buffer.items.len - line_len;
+    if (remaining > 0) {
+        std.mem.copyForwards(u8, buffer.items[0..remaining], buffer.items[line_len..]);
+        buffer.items.len = remaining;
+    } else {
+        buffer.items.len = 0;
+    }
+    return line;
 }
 
 fn readLineWithPoll(quic_client: *quic.QuicClient, stream: *quic.QuicClientStream, max_size: usize, timeout_ms: u64) ![]u8 {

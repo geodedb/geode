@@ -5,6 +5,7 @@ const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const index_catalog = @import("index_catalog.zig");
 const wal_manager = @import("wal_manager.zig");
+const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
@@ -39,12 +40,20 @@ pub const InitContext = struct {
     pm_persist: storage_pm.PageManager,
     catalog_inited: bool,
     catalog: storage_catalog.StorageCatalog,
+    // Shared AST cache for cross-connection reuse (optional).
+    shared_ast_cache: ?*query_ast_cache.SharedAstCache = null,
+    shared_ast_cache_storage: ?query_ast_cache.SharedAstCache = null,
     // CANARY: REQ=REQ-ABAC-WIRE-006; FEATURE="ABAC Enforcement"; ASPECT=InitContext; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: SecurityManager instance for RBAC+ABAC enforcement across all connections
     security_manager: ?*geode_auth.SecurityManager = null,
     security_manager_storage: ?geode_auth.SecurityManager = null,
 
     pub fn deinit(self: *InitContext) void {
+        if (self.shared_ast_cache_storage) |*cache| {
+            cache.deinit();
+            self.shared_ast_cache = null;
+            self.shared_ast_cache_storage = null;
+        }
         // CANARY: REQ=REQ-ABAC-WIRE-007; FEATURE="ABAC Enforcement"; ASPECT=Cleanup; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
         // GAP-0165: Clean up SecurityManager on server shutdown
         if (self.security_manager_storage) |*sm| {
@@ -241,6 +250,16 @@ pub fn initialize(
     // Initialize persistent storage and catalog
     const storage = try initializeStorage(allocator, data_dir, catalog_create_name);
 
+    // Initialize shared AST cache (cross-connection) if enabled.
+    const ast_cache_size = blk: {
+        if (std.process.getEnvVarOwned(allocator, "GEODE_AST_CACHE_SIZE")) |v| {
+            defer allocator.free(v);
+            const parsed = std.fmt.parseInt(usize, v, 10) catch 0;
+            break :blk parsed;
+        } else |_| {}
+        break :blk 2048;
+    };
+
     // CANARY: REQ=REQ-ABAC-WIRE-010; FEATURE="ABAC Enforcement"; ASPECT=ServerStartup; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Initialize SecurityManager at server startup if ABAC is enabled
     var ctx = InitContext{
@@ -250,9 +269,16 @@ pub fn initialize(
         .pm_persist = storage.pm_persist,
         .catalog_inited = storage.catalog_inited,
         .catalog = storage.catalog,
+        .shared_ast_cache = null,
+        .shared_ast_cache_storage = null,
         .security_manager = null,
         .security_manager_storage = null,
     };
+
+    if (ast_cache_size > 0) {
+        ctx.shared_ast_cache_storage = query_ast_cache.SharedAstCache.init(allocator, ast_cache_size);
+        ctx.shared_ast_cache = &ctx.shared_ast_cache_storage.?;
+    }
 
     if (env_config.abac_enabled) {
         ctx.security_manager_storage = initializeSecurityManager(allocator) catch |err| blk: {
