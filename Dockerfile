@@ -74,6 +74,16 @@ WORKDIR /home/geode
 # Set default log level (can be overridden with -e LOG_LEVEL=debug)
 ENV LOG_LEVEL=error
 
+# QUIC Performance Optimizations:
+# GSO (Generic Segmentation Offload) is enabled by default on Linux 4.18+
+# To disable GSO (not recommended), set: -e QUIC_GO_DISABLE_GSO=true
+#
+# For optimal QUIC throughput, increase UDP buffer sizes when running:
+#   docker run --sysctl net.core.rmem_max=7340032 --sysctl net.core.wmem_max=7340032 ...
+# Or configure host sysctl settings:
+#   sysctl -w net.core.rmem_max=7340032
+#   sysctl -w net.core.wmem_max=7340032
+
 # Expose ports (QUIC-only + metrics)
 EXPOSE 3141/udp 9091/tcp
 

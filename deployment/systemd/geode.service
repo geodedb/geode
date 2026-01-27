@@ -39,6 +39,16 @@ Environment="GEODE_DATA_DIR=/var/lib/geode"
 Environment="GEODE_LOG_DIR=/var/log/geode"
 Environment="GEODE_CERT_DIR=/etc/geode/certs"
 
+# QUIC Performance Optimizations
+# GSO (Generic Segmentation Offload) is enabled by default on Linux 4.18+
+# Uncomment the following line to disable GSO (not recommended):
+# Environment="QUIC_GO_DISABLE_GSO=true"
+
+# UDP buffer sizes should be configured via sysctl for optimal performance:
+# sysctl -w net.core.rmem_max=7340032
+# sysctl -w net.core.wmem_max=7340032
+# See /etc/sysctl.d/99-geode-quic.conf for persistent configuration
+
 # Working directory
 WorkingDirectory=/var/lib/geode
 

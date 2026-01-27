@@ -200,6 +200,14 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-geode-minio-admin}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-CHANGE-ME-minio-secret-key-12345}
       - S3_BUCKET=${S3_BUCKET:-geode-backups}
+      # QUIC Performance: GSO is enabled by default on Linux 4.18+
+      # Uncomment to disable GSO (not recommended):
+      # - QUIC_GO_DISABLE_GSO=true
+    # QUIC Performance Optimizations - UDP buffer sizes for high-throughput transfers
+    # These sysctls require --privileged or appropriate capabilities
+    sysctls:
+      - net.core.rmem_max=7340032
+      - net.core.wmem_max=7340032
     volumes:
       - geode-data:/data
       - geode-logs:/var/log/geode

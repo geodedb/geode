@@ -127,6 +127,52 @@ fi
 echo "→ Installing OpenSSL development files..."
 sudo apt-get install -y libssl-dev
 
+# Configure QUIC performance optimizations
+echo ""
+echo "=== Configuring QUIC Performance Optimizations ==="
+echo ""
+
+# Increase UDP buffer sizes for high-throughput QUIC transfers
+RMEM_MAX=$(sysctl -n net.core.rmem_max 2>/dev/null || echo "0")
+WMEM_MAX=$(sysctl -n net.core.wmem_max 2>/dev/null || echo "0")
+
+if [ "$RMEM_MAX" -lt 7340032 ] 2>/dev/null; then
+    echo "→ Increasing net.core.rmem_max to 7340032 (7MB)..."
+    sudo sysctl -w net.core.rmem_max=7340032
+    echo "✓ UDP receive buffer max increased"
+else
+    echo "✓ net.core.rmem_max already >= 7MB ($RMEM_MAX)"
+fi
+
+if [ "$WMEM_MAX" -lt 7340032 ] 2>/dev/null; then
+    echo "→ Increasing net.core.wmem_max to 7340032 (7MB)..."
+    sudo sysctl -w net.core.wmem_max=7340032
+    echo "✓ UDP send buffer max increased"
+else
+    echo "✓ net.core.wmem_max already >= 7MB ($WMEM_MAX)"
+fi
+
+# Persist sysctl settings
+SYSCTL_CONF="/etc/sysctl.d/99-geode-quic.conf"
+if [ ! -f "$SYSCTL_CONF" ]; then
+    echo "→ Creating persistent sysctl configuration..."
+    sudo tee "$SYSCTL_CONF" > /dev/null << 'EOF'
+# Geode QUIC Performance Optimizations
+# Increase UDP buffer sizes for high-throughput QUIC transfers
+# These settings allow quic-go to use larger buffers, improving performance
+# on high-bandwidth connections.
+
+# Maximum receive socket buffer size (7MB)
+net.core.rmem_max=7340032
+
+# Maximum send socket buffer size (7MB)
+net.core.wmem_max=7340032
+EOF
+    echo "✓ Persistent sysctl configuration created at $SYSCTL_CONF"
+else
+    echo "✓ Persistent sysctl configuration already exists"
+fi
+
 echo ""
 echo "=== Dependency Installation Complete ==="
 echo ""
@@ -134,6 +180,13 @@ echo "Installed components:"
 echo "  • libmsquic (Microsoft QUIC library)"
 echo "  • Build tools and prerequisites"
 echo "  • OpenSSL development files"
+echo ""
+echo "QUIC Performance Optimizations:"
+echo "  • UDP buffer sizes increased to 7MB (net.core.rmem_max, net.core.wmem_max)"
+echo "  • Generic Segmentation Offload (GSO) enabled automatically on Linux 4.18+"
+echo "  • Path MTU Discovery (DPLPMTUD) enabled by default"
+echo ""
+echo "Note: To disable GSO (not recommended), set QUIC_GO_DISABLE_GSO=true"
 echo ""
 echo "Next steps:"
 echo "  1. Run 'make build' to build Geode"

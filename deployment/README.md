@@ -245,6 +245,72 @@ Then start services on each node:
 sudo systemctl start geode
 ```
 
+## QUIC Performance Optimizations
+
+Geode uses QUIC+TLS for all network communication. For optimal throughput on high-bandwidth connections, configure the following system-level optimizations.
+
+### UDP Buffer Sizes
+
+QUIC transfers can be limited by UDP receive and send buffer sizes. Increase the maximum buffer size to ~7MB:
+
+**Linux:**
+```bash
+# Apply immediately
+sudo sysctl -w net.core.rmem_max=7340032
+sudo sysctl -w net.core.wmem_max=7340032
+
+# Persist across reboots (add to /etc/sysctl.d/99-geode-quic.conf)
+cat << 'EOF' | sudo tee /etc/sysctl.d/99-geode-quic.conf
+# Geode QUIC Performance Optimizations
+net.core.rmem_max=7340032
+net.core.wmem_max=7340032
+EOF
+sudo sysctl --system
+```
+
+**BSD/macOS:**
+```bash
+# Apply immediately (requires ~15% padding, so 7MB becomes ~8MB)
+sudo sysctl -w kern.ipc.maxsockbuf=8441037
+
+# Persist across reboots (add to /etc/sysctl.conf on BSD)
+echo "kern.ipc.maxsockbuf=8441037" | sudo tee -a /etc/sysctl.conf
+```
+
+### Generic Segmentation Offload (GSO)
+
+GSO allows the kernel to batch UDP packets, reducing syscall overhead. It's automatically enabled by quic-go on Linux kernel 4.18+.
+
+- **No configuration required** - GSO is enabled automatically
+- **To disable** (not recommended): Set environment variable `QUIC_GO_DISABLE_GSO=true`
+- **Troubleshooting**: If you encounter GSO-related issues, check your kernel version (`uname -r`) and ensure it's 4.18+
+
+### Path MTU Discovery (DPLPMTUD)
+
+Path MTU Discovery probes the network path to find the optimal packet size, reducing per-packet overhead.
+
+- **Enabled by default** in all Geode clients
+- Sends fewer than 10 probe packets over a connection's lifetime
+- Particularly beneficial on paths supporting MTUs larger than the minimum 1200 bytes
+- Can be disabled per-connection if needed (see client documentation)
+
+### Docker Deployments
+
+When running Geode in Docker, pass sysctl settings:
+
+```bash
+# Single container
+docker run --sysctl net.core.rmem_max=7340032 \
+           --sysctl net.core.wmem_max=7340032 \
+           geode:latest
+
+# Or configure host sysctls (applies to all containers)
+sudo sysctl -w net.core.rmem_max=7340032
+sudo sysctl -w net.core.wmem_max=7340032
+```
+
+For docker-compose, the sysctls are already configured in the default `docker-compose.yml`.
+
 ## Security Hardening
 
 ### TLS Certificates
