@@ -216,9 +216,9 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
     const num_consumers = 4;
     const items_per_producer = config.benchmark_iterations / num_producers;
 
-    var produced = std.atomic.Value(u64).init(0);
-    var consumed = std.atomic.Value(u64).init(0);
-    const target = items_per_producer * num_producers;
+    var produced = std.atomic.Value(usize).init(0);
+    var consumed = std.atomic.Value(usize).init(0);
+    const target: usize = items_per_producer * num_producers;
 
     var threads: [num_producers + num_consumers]std.Thread = undefined;
 
@@ -228,7 +228,7 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
     // Start producers
     for (0..num_producers) |i| {
         threads[i] = try std.Thread.spawn(.{}, struct {
-            fn run(q: *Queue, p: *std.atomic.Value(u64), count: usize) void {
+            fn run(q: *Queue, p: *std.atomic.Value(usize), count: usize) void {
                 for (0..count) |_| {
                     while (!q.tryPush(1)) {
                         std.Thread.sleep(1 * std.time.ns_per_us);
@@ -242,7 +242,7 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
     // Start consumers
     for (0..num_consumers) |i| {
         threads[num_producers + i] = try std.Thread.spawn(.{}, struct {
-            fn run(q: *Queue, c: *std.atomic.Value(u64), t: u64) void {
+            fn run(q: *Queue, c: *std.atomic.Value(usize), t: usize) void {
                 while (c.load(.acquire) < t) {
                     if (q.tryPop()) |_| {
                         _ = c.fetchAdd(1, .release);

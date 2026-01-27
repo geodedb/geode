@@ -403,7 +403,23 @@ test-windows-unit:
   stage: test
   tags:
     - saas-windows-medium-amd64
+  before_script:
+    # Download and install Zig on Windows
+    - |
+      $ZigVersion = "0.15.2"
+      $ZigUrl = "https://ziglang.org/download/${ZigVersion}/zig-x86_64-windows-${ZigVersion}.zip"
+      $ZigZip = "zig.zip"
+      $ZigDir = "zig-${ZigVersion}"
+      if (-not (Test-Path "$ZigDir\zig.exe")) {
+        Write-Host "Downloading Zig ${ZigVersion}..."
+        Invoke-WebRequest -Uri $ZigUrl -OutFile $ZigZip
+        Expand-Archive -Path $ZigZip -DestinationPath . -Force
+        Remove-Item $ZigZip
+        Rename-Item "zig-x86_64-windows-${ZigVersion}" $ZigDir
+      }
+      $env:PATH = "$PWD\$ZigDir;$env:PATH"
   script:
+    - $env:PATH = "$PWD\zig-0.15.2;$env:PATH"
     - zig version
     - zig build --summary all
     - zig build test --summary all
@@ -421,12 +437,26 @@ test-windows-unit:
 
 bench-gpu:
   stage: test
-  image: $ZIG_IMAGE
+  image: debian:bookworm-slim
   tags:
     - gpu
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
+  before_script:
+    # Install dependencies and Zig (avoid registry auth issues on GPU runners)
+    - apt-get update && apt-get install -y --no-install-recommends curl xz-utils ca-certificates python3
+    - |
+      ZIG_VERSION="0.15.2"
+      ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+      if [ ! -f "zig-${ZIG_VERSION}/zig" ]; then
+        curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz
+        tar -xJf /tmp/zig.tar.xz
+        rm /tmp/zig.tar.xz
+      fi
+      export PATH="$PWD/zig-${ZIG_VERSION}:$PATH"
+      zig version
   script:
+    - export PATH="$PWD/zig-0.15.2:$PATH"
     - mkdir -p reports
     - zig build bench-gpu -Doptimize=ReleaseFast --summary all | tee reports/zig_bench_gpu.log
     - |

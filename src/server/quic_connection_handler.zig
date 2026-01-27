@@ -48,7 +48,6 @@ const ErrorResponse = struct {
     @"error": []const u8,
 };
 
-
 // CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedQUICLineReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-01-27
 /// Buffered line reader that avoids per-byte QUIC reads and large per-call allocations.
 const BufferedLineReader = struct {
