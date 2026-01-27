@@ -39,7 +39,10 @@ default:
 variables:
   DOCKER_BUILDKIT: 1
   ZIG_VERSION: "0.15.2"
-  ZIG_IMAGE: "ghcr.io/ziglang/zig:0.15.2"
+  ZIG_IMAGE: "registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}"
+  CI_CATALOG_REGISTRY_USER: "$CI_REGISTRY_USER"
+  CI_CATALOG_REGISTRY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+  DOCKER_AUTH_CONFIG: '{"auths":{"registry.gitlab.com":{"username":"$CI_CATALOG_REGISTRY_USER","password":"$CI_CATALOG_REGISTRY_PASSWORD"}}}'
   GORELEASER_VERSION: "v2.5.0"
   # Git config for CI authentication
   GIT_CONFIG_COUNT: 2
