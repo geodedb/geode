@@ -4,6 +4,7 @@ const ServerState = @import("server_state.zig").ServerState;
 const mvcc = @import("txn/mvcc.zig");
 const eval = geode.eval;
 const wal_mod = @import("wal");
+const wal_manager = @import("wal_manager.zig");
 const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
 const server_flags = @import("server_flags.zig");
@@ -49,8 +50,8 @@ pub fn execInsertValue(state: *ServerState, expr_val: eval.Value) !void {
     // WAL logical insert record (best-effort) for transactional inserts (creator != 0)
     if (creator != 0) {
         if (state.wal_ptr) |wp| {
-            const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
-            _ = wptr.append(creator, .Insert, stored, stored.len) catch {};
+            const wptr: *wal_manager.WalManager = @ptrCast(@alignCast(wp));
+            _ = wptr.append(creator, wal_mod.RecordType.Insert, stored, stored.len) catch {};
         }
     }
 }

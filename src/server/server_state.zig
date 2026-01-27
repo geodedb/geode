@@ -238,6 +238,7 @@ const geode = @import("geode");
 const protocol = geode.protocol;
 const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
+const query_ast_cache = @import("query_ast_cache.zig");
 const txn_mgr = @import("txn");
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Wire ABAC enforcement into server execution paths
@@ -322,6 +323,10 @@ pub const ServerState = struct {
 
     // Query plan cache and optimizer for performance optimization
     query_optimizer: ?*query_plan_cache.QueryOptimizer = null,
+    // Query optimizer gating flag (profile/explain always enables it)
+    query_optimizer_enabled: bool = false,
+    // Parsed AST cache for hot-path query reuse
+    query_ast_cache: ?*query_ast_cache.QueryAstCache = null,
 
     // Distributed query planner for federation-aware optimization
     distributed_planner: ?*geode.distributed.query_planner.DistributedQueryPlanner = null,

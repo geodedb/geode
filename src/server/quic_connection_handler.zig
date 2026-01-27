@@ -4,7 +4,6 @@ const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
 const eval = geode.eval;
 const quic_transport = @import("transport/quic.zig");
-const wal_mod = @import("wal");
 const query_plan_cache = @import("query_plan_cache.zig");
 const ServerState = @import("server_state.zig").ServerState;
 const SessionConfiguration = @import("server_state.zig").SessionConfiguration;
@@ -17,6 +16,8 @@ const server_flags = @import("server_flags.zig");
 const message_handlers = @import("message_handlers.zig");
 const protocol_handler = @import("protocol_handler.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
+const wal_manager = @import("wal_manager.zig");
+const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");
@@ -45,6 +46,112 @@ const ShowFunctionRow = struct { name: []const u8, signature: []const u8, return
 const ErrorResponse = struct {
     status_class: []const u8 = "58000",
     @"error": []const u8,
+};
+
+// CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedQUICLineReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-01-27
+/// Buffered line reader that avoids per-byte QUIC reads and large per-call allocations.
+const BufferedLineReader = struct {
+    allocator: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    stream: *quic_transport.QuicStream,
+    buffer: std.ArrayList(u8),
+    start_index: usize = 0,
+    read_buf: [4096]u8 = undefined,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        transport: *quic_transport.QuicTransport,
+        stream: *quic_transport.QuicStream,
+    ) !BufferedLineReader {
+        return .{
+            .allocator = allocator,
+            .transport = transport,
+            .stream = stream,
+            .buffer = std.ArrayList(u8).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *BufferedLineReader) void {
+        self.buffer.deinit(self.allocator);
+    }
+
+    pub fn nextLine(self: *BufferedLineReader, max_size: usize) ![]u8 {
+        var would_block_attempts: usize = 0;
+        const max_would_block_attempts: usize = 2000;
+
+        while (true) {
+            if (self.findNewline()) |line_end| {
+                return self.extractLine(line_end);
+            }
+
+            const unread_len = self.buffer.items.len - self.start_index;
+            if (unread_len >= max_size) {
+                return error.StreamTooLong;
+            }
+
+            const n = self.stream.read(&self.read_buf) catch |err| {
+                if (err == error.WouldBlock) {
+                    would_block_attempts += 1;
+                    if (would_block_attempts >= max_would_block_attempts) {
+                        return error.Timeout;
+                    }
+                    // Poll without introducing large latency steps per query.
+                    try self.transport.poll(0);
+                    // Brief sleep prevents tight spinning in debug builds.
+                    std.Thread.sleep(100 * std.time.ns_per_us);
+                    continue;
+                }
+                return err;
+            };
+
+            would_block_attempts = 0;
+
+            if (n == 0) {
+                if (self.start_index == self.buffer.items.len) {
+                    return error.EndOfStream;
+                }
+                return error.UnexpectedEndOfStream;
+            }
+
+            try self.buffer.appendSlice(self.allocator, self.read_buf[0..n]);
+        }
+    }
+
+    fn findNewline(self: *BufferedLineReader) ?usize {
+        const unread = self.buffer.items[self.start_index..];
+        const rel_idx = std.mem.indexOfScalar(u8, unread, '\n') orelse return null;
+        // Include the '\n' byte in the returned line.
+        return self.start_index + rel_idx + 1;
+    }
+
+    fn extractLine(self: *BufferedLineReader, line_end: usize) ![]u8 {
+        const line_slice = self.buffer.items[self.start_index..line_end];
+        const result = try self.allocator.alloc(u8, line_slice.len);
+        @memcpy(result, line_slice);
+        self.start_index = line_end;
+        self.compactBuffer();
+        return result;
+    }
+
+    fn compactBuffer(self: *BufferedLineReader) void {
+        if (self.start_index == 0) return;
+
+        const remaining = self.buffer.items.len - self.start_index;
+        if (remaining == 0) {
+            self.buffer.clearRetainingCapacity();
+            self.start_index = 0;
+            return;
+        }
+
+        // Compact when we've consumed a significant prefix to keep searches fast.
+        if (self.start_index < 4096 and self.start_index * 2 < self.buffer.items.len) {
+            return;
+        }
+
+        std.mem.copyForwards(u8, self.buffer.items[0..remaining], self.buffer.items[self.start_index..]);
+        self.buffer.shrinkRetainingCapacity(remaining);
+        self.start_index = 0;
+    }
 };
 
 // Import types and functions from query_executor
@@ -120,13 +227,12 @@ pub fn handleQuicConnection(
     log.debug("Stream accepted successfully", &.{});
     defer stream.close();
 
-    // Initialize WAL
-    var wal = wal_mod.Wal.init(gpa);
-    defer wal.deinit();
-    wal.openFile("/tmp/geode_ephemeral_wal") catch {};
-    if (test_wal_skip_ratio) |ov| {
-        wal.test_skip_ratio_override = ov;
-    }
+    var line_reader = try BufferedLineReader.init(gpa, transport, stream);
+    defer line_reader.deinit();
+
+    // Initialize (or reuse) shared WAL manager.
+    // This removes per-connection WAL open/close overhead.
+    const wal_mgr = try wal_manager.getOrCreateWalManager(gpa, test_wal_skip_ratio);
 
     // Initialize state
     var state = ServerState{
@@ -141,7 +247,7 @@ pub fn handleQuicConnection(
     state.inserted_values = .{};
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.wal_ptr = @ptrCast(wal);
+    state.wal_ptr = @ptrCast(wal_mgr);
     state.spill_sort = env_spill_sort;
     state.spill_distinct = env_spill_distinct;
     state.spill_union = env_spill_union;
@@ -151,10 +257,28 @@ pub fn handleQuicConnection(
     // GAP-0165: Wire SecurityManager into ServerState for QUIC connection ABAC enforcement
     state.security_manager = security_manager;
 
+    // Query optimizer gating: enable only when explicitly requested.
+    // PROFILE/EXPLAIN will still enable it per-query.
+    // CANARY: REQ=REQ-PERF-OPT-GATE-001; FEATURE="OptimizerGating"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    state.query_optimizer_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
+        defer gpa.free(v);
+        if (v.len == 0) break :blk false;
+        if (v[0] == '0') break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
+        break :blk true;
+    } else |_| false;
+
     // Initialize query plan cache and optimizer for performance optimization
     var query_optimizer = query_plan_cache.QueryOptimizer.init(gpa, 100); // Cache up to 100 plans
     defer query_optimizer.deinit();
     state.query_optimizer = &query_optimizer;
+
+    // Initialize per-connection AST cache to avoid repeat parsing.
+    // CANARY: REQ=REQ-PERF-AST-CACHE-002; FEATURE="QueryASTCache"; ASPECT=ConnectionState; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    var ast_cache = query_ast_cache.QueryAstCache.init(gpa, 256);
+    defer ast_cache.deinit();
+    state.query_ast_cache = &ast_cache;
 
     // Initialize distributed query planner for federation-aware optimization
     var federation_manager = geode.distributed.query_planner.FederationManager.init(gpa);
@@ -166,27 +290,13 @@ pub fn handleQuicConnection(
 
     // Process messages
     while (true) {
-        // Poll to ensure stream data is available before reading
-        // vendor/quic requires polling to receive packets into stream inboxes
-        var read_attempts: usize = 0;
-        const line = while (read_attempts < 20) : (read_attempts += 1) {
-            if (stream.readLine(65536)) |l| {
-                break l;
-            } else |err| {
-                if (err == error.EndOfStream) return;
-                if (err == error.WouldBlock) {
-                    // No data available yet, poll and retry
-                    // GAP-0200: Reduced poll timeout from 100ms to 10ms for high throughput
-                    try transport.poll(10);
-                    continue;
-                }
-                return err;
+        const line = line_reader.nextLine(65536) catch |err| {
+            if (err == error.EndOfStream) return;
+            if (err == error.WouldBlock) {
+                try transport.poll(0);
+                continue;
             }
-        } else {
-            log.debug("Failed to read after max poll attempts", &.{
-                Attr.int("max_attempts", 20),
-            });
-            return error.Timeout;
+            return err;
         };
         defer gpa.free(line);
 
@@ -333,8 +443,32 @@ pub fn processMessage(
                 profile_mode = true;
                 text = "";
             }
-            var parse_res = geode.parseGqlOutcome(text, gpa, .{ .ident_order_only = !g_order_keys_expr, .forbid_orderby_calls = !g_order_keys_expr }) catch return try gpa.dupe(u8, "");
-            switch (parse_res) {
+            const parse_opts = geode.ParseOptions{
+                .ident_order_only = !g_order_keys_expr,
+                .forbid_orderby_calls = !g_order_keys_expr,
+            };
+            var parse_res_owned: ?geode.ParseResult = null;
+            const parse_outcome: query_ast_cache.AstParseOutcome = if (state.query_ast_cache) |cache|
+                cache.getOrParse(text, parse_opts) catch return try gpa.dupe(u8, "")
+            else blk: {
+                const outcome = geode.parseGqlOutcome(text, gpa, parse_opts) catch return try gpa.dupe(u8, "");
+                switch (outcome) {
+                    .Err => |er| break :blk .{ .Err = .{
+                        .msg = er.msg,
+                        .line = er.line,
+                        .column = er.column,
+                        .token = er.token,
+                        .has_double_dash_comment = er.has_double_dash_comment,
+                    } },
+                    .Ok => |ok| {
+                        parse_res_owned = ok;
+                        break :blk .{ .Ok = &parse_res_owned.? };
+                    },
+                }
+            };
+            defer if (parse_res_owned) |*res| res.deinit();
+
+            switch (parse_outcome) {
                 .Err => |er| {
                     // Map parser message to diagnostics (IllegalOrderKey, US001) using same helper as later handler
                     var codes_buf: [4]diagnostics.Code = undefined;
@@ -353,45 +487,42 @@ pub fn processMessage(
                     const err_line = protocol.buildErrorLineWithFlagsCustomStatus(gpa, diagnostics.codeName(primary), primary_msg, diagnostics.anchorFor(primary), add_slice, base_flags, null) catch try gpa.dupe(u8, "");
                     return err_line;
                 },
-                .Ok => |_| {},
-            }
-            // Post-parse ORDER BY function call validation (server fallback) when expressions disallowed.
-            if (!g_order_keys_expr and parse_res == .Ok) {
-                const prog = parse_res.Ok.program;
-                // Walk first statement only (tests use single statement queries).
-                if (prog.statements.len > 0) {
-                    const st0 = prog.statements[0];
-                    switch (st0) {
-                        .Query => |qv| if (qv.order_by) |ob| {
-                            var i_fn: usize = 0;
-                            while (i_fn < ob.keys.len) : (i_fn += 1) {
-                                const e = ob.keys[i_fn].expr;
-                                if (e == .Call) {
-                                    const err_line2 = protocol.buildErrorLine(gpa, "IllegalOrderKey", "ORDER BY key must be identifier", diagnostics.anchorFor(.IllegalOrderKey)) catch try gpa.dupe(u8, "");
-                                    return err_line2;
-                                }
+                .Ok => |parse_res| {
+                    const program = parse_res.program;
+
+                    // Post-parse ORDER BY function call validation (server fallback) when expressions disallowed.
+                    if (!g_order_keys_expr) {
+                        // Walk first statement only (tests use single statement queries).
+                        if (program.statements.len > 0) {
+                            const st0 = program.statements[0];
+                            switch (st0) {
+                                .Query => |qv| if (qv.order_by) |ob| {
+                                    var i_fn: usize = 0;
+                                    while (i_fn < ob.keys.len) : (i_fn += 1) {
+                                        const e = ob.keys[i_fn].expr;
+                                        if (e == .Call) {
+                                            const err_line2 = protocol.buildErrorLine(gpa, "IllegalOrderKey", "ORDER BY key must be identifier", diagnostics.anchorFor(.IllegalOrderKey)) catch try gpa.dupe(u8, "");
+                                            return err_line2;
+                                        }
+                                    }
+                                },
+                                else => {},
                             }
-                        },
-                        else => {},
+                        }
                     }
-                }
-            }
-            defer if (parse_res == .Ok) parse_res.Ok.deinit();
-            switch (parse_res) {
-                .Err => |_| return try gpa.dupe(u8, ""),
-                .Ok => |ok| {
+
                     log.debug("Parsed OK", &.{
-                        Attr.int("statements_len", @intCast(ok.program.statements.len)),
+                        Attr.int("statements_len", @intCast(program.statements.len)),
                     });
-                    if (ok.program.statements.len == 0) {
+                    if (program.statements.len == 0) {
                         if (protocol.buildSchemaLine(gpa, &.{}, &.{}, computeBaseFlags(false, false))) |line| return line else |_| return try gpa.dupe(u8, "");
                     }
                     // CANARY: REQ=REQ-MULTI-GRAPH-025; FEATURE="MultiStatementExecution"; ASPECT=SessionPersistence; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=engine; UPDATED=2025-12-22
                     // Execute ALL statements in sequence, maintaining session state between them
                     // Return only the result from the last statement
                     // First, execute all non-final statements for their side effects (like USE GRAPH)
-                    if (ok.program.statements.len > 1) {
-                        for (ok.program.statements[0 .. ok.program.statements.len - 1]) |earlier_st| {
+                    if (program.statements.len > 1) {
+                        for (program.statements[0 .. program.statements.len - 1]) |earlier_st| {
                             log.debug("Executing earlier statement", &.{
                                 Attr.string("type", @tagName(earlier_st)),
                             });
@@ -436,7 +567,7 @@ pub fn processMessage(
                         }
                     }
                     // Now execute the final statement and return its result
-                    const st = ok.program.statements[ok.program.statements.len - 1];
+                    const st = program.statements[program.statements.len - 1];
                     log.debug("Statement type", &.{
                         Attr.string("type", @tagName(st)),
                     });
@@ -444,7 +575,12 @@ pub fn processMessage(
                         .Union => |u_stmt| {
                             var pn: [][]const u8 = &.{};
                             var pr: [][]const eval.Value = &.{};
-                            parseParams(gpa, rq.params_json, &pn, &pr);
+                            // Skip parameter parsing when params are not present to avoid
+                            // JSON parsing and debug logging on the hot path.
+                            // CANARY: REQ=REQ-PERF-PARAM-GATE-001; FEATURE="ParamParseGating"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+                            if (rq.params_json != null) {
+                                parseParams(gpa, rq.params_json, &pn, &pr);
+                            }
                             var metrics: UnionMetrics = .{ .left_in = 0, .right_in = 0, .out = 0, .hash_size = null };
                             var mode: []const u8 = "DISTINCT";
                             const rows = evaluateUnion(gpa, u_stmt, pn, pr, &mode, &metrics) catch &.{};
@@ -473,14 +609,19 @@ pub fn processMessage(
                             log.debug("Entering Query statement handler", &.{});
                             var pn: [][]const u8 = &.{};
                             var pr: [][]const eval.Value = &.{};
-                            log.debug("Before parseParams", &.{
-                                Attr.string("params_json", if (rq.params_json) |p| p else "NULL"),
-                            });
-                            parseParams(gpa, rq.params_json, &pn, &pr);
-                            log.debug("After parseParams", &.{
-                                Attr.int("param_names_len", @intCast(pn.len)),
-                                Attr.int("param_values_len", @intCast(pr.len)),
-                            });
+                            // Skip parameter parsing when params are not present to avoid
+                            // JSON parsing and debug logging on the hot path.
+                            // CANARY: REQ=REQ-PERF-PARAM-GATE-001; FEATURE="ParamParseGating"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+                            if (rq.params_json) |params_json| {
+                                log.debug("Before parseParams", &.{
+                                    Attr.string("params_json", params_json),
+                                });
+                                parseParams(gpa, rq.params_json, &pn, &pr);
+                                log.debug("After parseParams", &.{
+                                    Attr.int("param_names_len", @intCast(pn.len)),
+                                    Attr.int("param_values_len", @intCast(pr.len)),
+                                });
+                            }
                             var ord = false;
                             var oks: [][]const u8 = &.{};
                             var cols: []const protocol.SchemaCol = &.{};
@@ -492,29 +633,42 @@ pub fn processMessage(
                             // CANARY: REQ=REQ-PERF-TIMING-001; FEATURE="ExecutionTiming"; ASPECT=QueryProfiling; STATUS=TESTED; TEST=geodetestlab/specs/explain_profile_unit_tests.yml; OWNER=engine; UPDATED=2026-01-10
                             const exec_start = if (need_timings) std.time.nanoTimestamp() else 0;
 
-                            // Query plan optimization with caching
-                            if (state.query_optimizer) |optimizer| {
-                                const plan = optimizer.optimizeQuery(text, &q) catch null;
-                                if (plan) |p| {
-                                    // Log optimization metrics for PROFILE mode
-                                    if (profile_mode and DEBUG_PROFILE) {
-                                        log.info("Query plan optimized", &.{ Attr.flt("cost", @floatCast(p.estimated_cost)), Attr.int("memory", @intCast(p.memory_requirement)), Attr.int("parallelism", @intCast(p.parallelism_level)) });
+                            // Query plan optimization with caching.
+                            // Gate this work behind PROFILE/EXPLAIN or an explicit env flag.
+                            // CANARY: REQ=REQ-PERF-OPT-GATE-002; FEATURE="OptimizerGating"; ASPECT=PerQueryGate; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+                            const optimizer_enabled = state.query_optimizer_enabled or profile_mode or explain_mode;
+                            if (optimizer_enabled) {
+                                if (state.query_optimizer) |optimizer| {
+                                    const plan = optimizer.optimizeQuery(text, &q) catch null;
+                                    if (plan) |p| {
+                                        // Log optimization metrics for PROFILE mode
+                                        if (profile_mode and DEBUG_PROFILE) {
+                                            log.info("Query plan optimized", &.{ Attr.flt("cost", @floatCast(p.estimated_cost)), Attr.int("memory", @intCast(p.memory_requirement)), Attr.int("parallelism", @intCast(p.parallelism_level)) });
+                                        }
+                                        // Future: Use optimized plan for execution
+                                        // For now, the plan is cached for subsequent identical queries
                                     }
-                                    // Future: Use optimized plan for execution
-                                    // For now, the plan is cached for subsequent identical queries
                                 }
                             }
 
-                            // Distributed query planning for federation queries
-                            if (state.distributed_planner) |dist_planner| {
-                                const distributed_plan = dist_planner.planDistributedQuery(&q) catch null;
-                                if (distributed_plan) |d_plan| {
-                                    // Log distributed optimization metrics for PROFILE mode
-                                    if (profile_mode and DEBUG_PROFILE) {
-                                        log.info("Distributed plan generated", &.{ Attr.flt("cost", @floatCast(d_plan.estimated_cost)), Attr.int("phases", @intCast(d_plan.execution_phases.len)), Attr.int("parallelism", @intCast(d_plan.parallelism_level)) });
+                            // Distributed query planning for federation queries.
+                            // Skip this work when no federation shards are registered.
+                            // CANARY: REQ=REQ-PERF-FED-PLAN-GATE-001; FEATURE="FederationPlanGating"; ASPECT=SingleNodeHotPath; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-27
+                            const federation_enabled = if (state.federation_manager) |fm|
+                                fm.shards.items.len > 0
+                            else
+                                false;
+                            if (federation_enabled) {
+                                if (state.distributed_planner) |dist_planner| {
+                                    const distributed_plan = dist_planner.planDistributedQuery(&q) catch null;
+                                    if (distributed_plan) |d_plan| {
+                                        // Log distributed optimization metrics for PROFILE mode
+                                        if (profile_mode and DEBUG_PROFILE) {
+                                            log.info("Distributed plan generated", &.{ Attr.flt("cost", @floatCast(d_plan.estimated_cost)), Attr.int("phases", @intCast(d_plan.execution_phases.len)), Attr.int("parallelism", @intCast(d_plan.parallelism_level)) });
+                                        }
+                                        // Future: Use distributed plan for federated execution
+                                        // For now, the plan provides optimization insights
                                     }
-                                    // Future: Use distributed plan for federated execution
-                                    // For now, the plan provides optimization insights
                                 }
                             }
 

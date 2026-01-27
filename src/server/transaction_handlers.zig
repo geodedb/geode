@@ -1,6 +1,7 @@
 const std = @import("std");
 const ServerState = @import("server_state.zig").ServerState;
 const wal_mod = @import("wal");
+const wal_manager = @import("wal_manager.zig");
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-001; FEATURE="TransactionUndoLog"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
 const graph_store = @import("../graph_store.zig");
@@ -219,11 +220,9 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
 
         // Append WAL commit record (empty payload) if WAL configured.
         if (state.wal_ptr) |wp| {
-            const wptr: *wal_mod.Wal = @ptrCast(@alignCast(wp));
-            // best-effort: ignore errors in prototype
-            // Append commit record; ignore returned LSN (best-effort prototype)
-            _ = wptr.append(tx.id, .Commit, &.{}, 0) catch {};
-            wptr.fsync() catch {};
+            const wptr: *wal_manager.WalManager = @ptrCast(@alignCast(wp));
+            // Best-effort: ignore errors in prototype.
+            _ = wptr.appendAndFsync(tx.id, wal_mod.RecordType.Commit, &.{}, 0) catch {};
         }
 
         // Periodic WAL checkpoint + compaction after commit
@@ -253,13 +252,12 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
         // Perform checkpoint if needed (after returning success)
         if (do_checkpoint) {
             if (state.wal_ptr) |wp_ck| {
-                const wck: *wal_mod.Wal = @ptrCast(@alignCast(wp_ck));
-                _ = wck.writeCheckpoint() catch {};
-                // Use next_lsn as conservative durable horizon for compaction.
-                const durable = wck.next_lsn;
-                wck.compact(durable) catch {};
-                // Log compaction for observability
-                log.info("WAL compaction triggered", &.{ Attr.int("commits_interval", @intCast(env_wal_compact_interval)), Attr.int("durable_lsn", @intCast(durable)) });
+                const wck: *wal_manager.WalManager = @ptrCast(@alignCast(wp_ck));
+                const durable = wck.checkpointAndCompact() catch null;
+                if (durable) |d_lsn| {
+                    // Log compaction for observability
+                    log.info("WAL compaction triggered", &.{ Attr.int("commits_interval", @intCast(env_wal_compact_interval)), Attr.int("durable_lsn", @intCast(d_lsn)) });
+                }
             }
         }
 

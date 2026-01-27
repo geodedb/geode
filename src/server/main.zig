@@ -7,7 +7,6 @@ const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
 const eval_extended = @import("../eval_extended.zig");
 const exec = geode.exec;
-const wal_mod = @import("wal");
 const storage_pm = @import("storage_page_manager");
 const storage_catalog = @import("storage_catalog");
 const txn_mgr = @import("txn");
@@ -16,6 +15,7 @@ const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic.zig");
 const thread_pool = @import("transport/thread_pool.zig");
 const cert_gen = @import("../tools/cert_gen.zig");
+const wal_manager = @import("wal_manager.zig");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
 // const mvcc = @import("server/txn/mvcc.zig");
 // const logger = @import("log/logger.zig");
@@ -408,7 +408,7 @@ pub fn main() !void {
     defer init_ctx.deinit();
 
     // Extract initialization values for compatibility with existing code
-    const wal = &init_ctx.wal;
+    const wal = init_ctx.wal;
     const env_spill_sort = init_ctx.env_config.spill_sort;
     const env_spill_distinct = init_ctx.env_config.spill_distinct;
     const env_spill_union = init_ctx.env_config.spill_union;
@@ -745,7 +745,7 @@ pub fn main() !void {
     }
     // Flush WAL if present before exiting.
     if (state.wal_ptr) |wp_flush| {
-        const wflush: *wal_mod.Wal = @ptrCast(@alignCast(wp_flush));
+        const wflush: *wal_manager.WalManager = @ptrCast(@alignCast(wp_flush));
         wflush.fsync() catch {};
     }
 }

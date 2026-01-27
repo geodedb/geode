@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const GqlLexer = @import("gql/lexer.zig");
 const GqlParser = @import("gql/parser.zig");
 const heap = @import("storage/heap.zig");
@@ -674,7 +675,7 @@ pub fn buildErrorLineWithFlagsCustomStatus(allocator: std.mem.Allocator, code: [
     return result;
 }
 
-pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !ClientMessage {
+fn parseClientMessageSlow(allocator: std.mem.Allocator, line: []const u8) !ClientMessage {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
     defer parsed.deinit();
     const root = parsed.value;
@@ -808,6 +809,277 @@ pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !Clien
         return .{ .UPLOAD_BACKUP = .{ .size_bytes = size_bytes, .checksum = checksum } };
     }
     return error.Invalid;
+}
+
+// CANARY: REQ=REQ-PERF-PROTO-FASTPARSE-001; FEATURE="ProtocolFastPath"; ASPECT=HotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-01-27
+/// Parse client message with a fast path for common hot-path messages,
+/// falling back to the full JSON parser for correctness.
+pub fn parseClientMessage(allocator: std.mem.Allocator, line: []const u8) !ClientMessage {
+    if (builtin.mode == .Debug) {
+        return parseClientMessageSlow(allocator, line);
+    }
+    if (try parseClientMessageFast(allocator, line)) |msg| {
+        return msg;
+    }
+    return parseClientMessageSlow(allocator, line);
+}
+
+fn parseClientMessageFast(allocator: std.mem.Allocator, line: []const u8) !?ClientMessage {
+    const fields = scanTopLevelFields(line) catch return null;
+    const typ = fields.typ orelse return null;
+
+    if (std.mem.eql(u8, typ, "RUN_GQL")) {
+        const text_slice = fields.text orelse return null;
+        const txt = try allocator.dupe(u8, text_slice);
+        const params_json = if (fields.params_raw) |raw|
+            try allocator.dupe(u8, raw)
+        else
+            null;
+        return .{ .RUN_GQL = .{ .text = txt, .params_json = params_json } };
+    }
+
+    if (std.mem.eql(u8, typ, "PULL")) {
+        const request_id = fields.request_id orelse return null;
+        const page_size = fields.page_size orelse return null;
+        return .{ .PULL = .{ .request_id = request_id, .page_size = page_size } };
+    }
+
+    if (std.mem.eql(u8, typ, "HELLO")) {
+        const cnv = fields.client_name orelse return null;
+        const cvv = fields.client_ver orelse return null;
+        const wcv = fields.wanted_conformance orelse return null;
+
+        const cn = try allocator.dupe(u8, cnv);
+        const cv = try allocator.dupe(u8, cvv);
+        const wc = try allocator.dupe(u8, wcv);
+
+        const username = if (fields.username) |u| try allocator.dupe(u8, u) else null;
+        const password = if (fields.password) |p| try allocator.dupe(u8, p) else null;
+        const tenant_id = if (fields.tenant_id) |t| try allocator.dupe(u8, t) else null;
+
+        return .{ .HELLO = .{
+            .client_name = cn,
+            .client_ver = cv,
+            .wanted_conformance = wc,
+            .username = username,
+            .password = password,
+            .tenant_id = tenant_id,
+        } };
+    }
+
+    // Other message types are less frequent; defer to the full parser.
+    return null;
+}
+
+const FastFields = struct {
+    typ: ?[]const u8 = null,
+    text: ?[]const u8 = null,
+    params_raw: ?[]const u8 = null,
+    client_name: ?[]const u8 = null,
+    client_ver: ?[]const u8 = null,
+    wanted_conformance: ?[]const u8 = null,
+    username: ?[]const u8 = null,
+    password: ?[]const u8 = null,
+    tenant_id: ?[]const u8 = null,
+    request_id: ?u64 = null,
+    page_size: ?usize = null,
+};
+
+const FastParseError = error{NeedSlowPath};
+
+fn scanTopLevelFields(line: []const u8) FastParseError!FastFields {
+    var fields = FastFields{};
+    var i: usize = 0;
+    skipWhitespace(line, &i);
+    if (i >= line.len or line[i] != '{') return FastParseError.NeedSlowPath;
+    i += 1;
+
+    while (true) {
+        skipWhitespace(line, &i);
+        if (i >= line.len) return FastParseError.NeedSlowPath;
+        if (line[i] == '}') break;
+
+        const key = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+        i = key.end;
+
+        skipWhitespace(line, &i);
+        if (i >= line.len or line[i] != ':') return FastParseError.NeedSlowPath;
+        i += 1;
+
+        skipWhitespace(line, &i);
+        if (i >= line.len) return FastParseError.NeedSlowPath;
+
+        if (std.mem.eql(u8, key.value, "type")) {
+            const val = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+            fields.typ = val.value;
+            i = val.end;
+        } else if (std.mem.eql(u8, key.value, "text")) {
+            const val = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+            fields.text = val.value;
+            i = val.end;
+        } else if (std.mem.eql(u8, key.value, "params")) {
+            const span = parseValueSpan(line, i) catch return FastParseError.NeedSlowPath;
+            fields.params_raw = span.slice;
+            i = span.end_index;
+        } else if (std.mem.eql(u8, key.value, "client_name")) {
+            const val = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+            fields.client_name = val.value;
+            i = val.end;
+        } else if (std.mem.eql(u8, key.value, "client_ver")) {
+            const val = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+            fields.client_ver = val.value;
+            i = val.end;
+        } else if (std.mem.eql(u8, key.value, "wanted_conformance")) {
+            const val = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+            fields.wanted_conformance = val.value;
+            i = val.end;
+        } else if (std.mem.eql(u8, key.value, "username")) {
+            const val = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+            fields.username = val.value;
+            i = val.end;
+        } else if (std.mem.eql(u8, key.value, "password")) {
+            const val = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+            fields.password = val.value;
+            i = val.end;
+        } else if (std.mem.eql(u8, key.value, "tenant_id")) {
+            const val = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+            fields.tenant_id = val.value;
+            i = val.end;
+        } else if (std.mem.eql(u8, key.value, "request_id")) {
+            const int_val = parseUnsignedInteger(line, i) catch return FastParseError.NeedSlowPath;
+            fields.request_id = int_val.value;
+            i = int_val.end;
+        } else if (std.mem.eql(u8, key.value, "page_size")) {
+            const int_val = parseUnsignedInteger(line, i) catch return FastParseError.NeedSlowPath;
+            const ps = std.math.cast(usize, int_val.value) orelse return FastParseError.NeedSlowPath;
+            fields.page_size = ps;
+            i = int_val.end;
+        } else {
+            const span = parseValueSpan(line, i) catch return FastParseError.NeedSlowPath;
+            i = span.end_index;
+        }
+
+        skipWhitespace(line, &i);
+        if (i >= line.len) return FastParseError.NeedSlowPath;
+        if (line[i] == ',') {
+            i += 1;
+            continue;
+        }
+        if (line[i] == '}') break;
+        return FastParseError.NeedSlowPath;
+    }
+
+    return fields;
+}
+
+const StringParse = struct {
+    value: []const u8,
+    end: usize,
+};
+
+fn parseStringNoEscape(line: []const u8, start_index: usize) FastParseError!StringParse {
+    if (start_index >= line.len or line[start_index] != '"') return FastParseError.NeedSlowPath;
+    var i = start_index + 1;
+    while (i < line.len) : (i += 1) {
+        const c = line[i];
+        if (c == '\\') return FastParseError.NeedSlowPath;
+        if (c == '"') {
+            return .{
+                .value = line[start_index + 1 .. i],
+                .end = i + 1,
+            };
+        }
+    }
+    return FastParseError.NeedSlowPath;
+}
+
+const IntParse = struct {
+    value: u64,
+    end: usize,
+};
+
+fn parseUnsignedInteger(line: []const u8, start_index: usize) FastParseError!IntParse {
+    var i = start_index;
+    skipWhitespace(line, &i);
+    if (i >= line.len) return FastParseError.NeedSlowPath;
+    if (line[i] == '-') return FastParseError.NeedSlowPath;
+    if (!std.ascii.isDigit(line[i])) return FastParseError.NeedSlowPath;
+
+    var value: u64 = 0;
+    while (i < line.len and std.ascii.isDigit(line[i])) : (i += 1) {
+        const digit: u64 = @intCast(line[i] - '0');
+        value = value * 10 + digit;
+    }
+
+    return .{ .value = value, .end = i };
+}
+
+const ValueSpan = struct {
+    slice: []const u8,
+    end_index: usize,
+};
+
+fn parseValueSpan(line: []const u8, start_index: usize) FastParseError!ValueSpan {
+    var i = start_index;
+    skipWhitespace(line, &i);
+    if (i >= line.len) return FastParseError.NeedSlowPath;
+
+    const value_start = i;
+    const c = line[i];
+    if (c == '"') {
+        const s = parseStringNoEscape(line, i) catch return FastParseError.NeedSlowPath;
+        return .{ .slice = line[value_start..s.end], .end_index = s.end };
+    }
+    if (c == '{' or c == '[') {
+        const end_index = skipCompositeValue(line, i) catch return FastParseError.NeedSlowPath;
+        return .{ .slice = line[value_start..end_index], .end_index = end_index };
+    }
+
+    // Primitive: number, true, false, null
+    while (i < line.len) : (i += 1) {
+        const ch = line[i];
+        if (ch == ',' or ch == '}' or std.ascii.isWhitespace(ch)) break;
+    }
+    if (i == value_start) return FastParseError.NeedSlowPath;
+    return .{ .slice = line[value_start..i], .end_index = i };
+}
+
+fn skipCompositeValue(line: []const u8, start_index: usize) FastParseError!usize {
+    var i = start_index;
+    var depth_obj: i32 = 0;
+    var depth_arr: i32 = 0;
+    var in_string = false;
+
+    while (i < line.len) : (i += 1) {
+        const c = line[i];
+
+        if (in_string) {
+            if (c == '\\') return FastParseError.NeedSlowPath;
+            if (c == '"') in_string = false;
+            continue;
+        }
+
+        switch (c) {
+            '"' => in_string = true,
+            '{' => depth_obj += 1,
+            '}' => {
+                depth_obj -= 1;
+                if (depth_obj == 0 and depth_arr == 0) return i + 1;
+            },
+            '[' => depth_arr += 1,
+            ']' => {
+                depth_arr -= 1;
+                if (depth_obj == 0 and depth_arr == 0) return i + 1;
+            },
+            else => {},
+        }
+    }
+
+    return FastParseError.NeedSlowPath;
+}
+
+fn skipWhitespace(line: []const u8, index: *usize) void {
+    while (index.* < line.len and std.ascii.isWhitespace(line[index.*])) : (index.* += 1) {}
 }
 
 pub fn emitValueAsJson(writer: anytype, value: heap.Value, allocator: std.mem.Allocator) !void {

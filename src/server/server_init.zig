@@ -1,10 +1,10 @@
 const std = @import("std");
-const wal_mod = @import("wal");
 const storage_pm = @import("storage_page_manager");
 const storage_catalog = @import("storage_catalog");
 const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const index_catalog = @import("index_catalog.zig");
+const wal_manager = @import("wal_manager.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
@@ -33,7 +33,7 @@ pub const EnvironmentConfig = struct {
 
 /// Server initialization context containing all initialized resources
 pub const InitContext = struct {
-    wal: wal_mod.Wal,
+    wal: *wal_manager.WalManager,
     env_config: EnvironmentConfig,
     pm_persist_active: bool,
     pm_persist: storage_pm.PageManager,
@@ -57,18 +57,14 @@ pub const InitContext = struct {
         if (self.pm_persist_active) {
             self.pm_persist.deinit();
         }
-        self.wal.deinit();
+        // Shared WAL manager lives across connections; deinit it at shutdown.
+        wal_manager.deinitGlobalWalManager();
     }
 };
 
 /// Initialize WAL (Write-Ahead Log)
-pub fn initializeWAL(allocator: std.mem.Allocator, test_wal_skip_ratio: ?f64) !wal_mod.Wal {
-    var wal = wal_mod.Wal.init(allocator);
-    wal.openFile("/tmp/geode_ephemeral_wal") catch {};
-    if (test_wal_skip_ratio) |ov| {
-        wal.test_skip_ratio_override = ov;
-    }
-    return wal;
+pub fn initializeWAL(allocator: std.mem.Allocator, test_wal_skip_ratio: ?f64) !*wal_manager.WalManager {
+    return wal_manager.getOrCreateWalManager(allocator, test_wal_skip_ratio);
 }
 
 /// Process environment variables and return configuration
@@ -226,6 +222,18 @@ pub fn initialize(
 
     // Apply ORDER BY key policy
     server_flags.setOrderKeysExpr(order_keys_mode_expr);
+
+    // Ensure the execution/catalog singleton uses the server's data directory.
+    // Without this, ensureCatalogInstance() falls back to /tmp, and parallel
+    // test servers can interfere with each other's catalog/graph metadata.
+    // CANARY: REQ=REQ-QUIC-CATALOG-003; FEATURE="CatalogDataDirIsolation"; ASPECT=ServerInit; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    const actual_data_dir = data_dir orelse "./data";
+    std.process.setEnvVar("GEODE_DATA_DIR", actual_data_dir) catch |err| {
+        log.warn("Failed to set GEODE_DATA_DIR", &.{
+            Attr.string("error", @errorName(err)),
+            Attr.string("data_dir", actual_data_dir),
+        });
+    };
 
     // Set data directory for graph storage manager
     graph_storage_mgr.setDataDir(data_dir);
