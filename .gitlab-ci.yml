@@ -12,6 +12,17 @@ include:
       stage: lint
       allow_failure: true
 
+  # APT repository publishing (apt.geodedb.com)
+  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.10.2
+    inputs:
+      apt_domain: apt.geodedb.com
+      job_suffix: apt-geodedb-com
+      vault_auth_role: codepros-ci
+      vault_secret_path: geode/apt
+      package_path: dist/*.deb
+      gpg_key_name: geode.gpg
+      sign_needs: build-release
+
 stages:
   - lint
   - governance
@@ -252,11 +263,162 @@ test-zig-unit:
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   script:
-    - zig build test --summary all
+    - mkdir -p reports
+    - zig build test --summary all | tee reports/zig_test.log
+    - zig build benchmark -Doptimize=ReleaseFast --summary all | tee reports/zig_benchmark.log
+    - zig build bench -Doptimize=ReleaseFast --summary all | tee reports/zig_bench.log
+    - zig build bench-transport -Doptimize=ReleaseFast --summary all | tee reports/zig_bench_transport.log
+    - zig test tests/benchmark_wal_flush_policy.zig -OReleaseFast --summary all | tee reports/zig_wal_flush_policy.log
+    - zig run -OReleaseFast src/tools/run_variance_benches.zig | tee reports/zig_variance_benches.log
+    - |
+      python3 - <<'PY'
+      import json, pathlib
+      logs = [
+          "reports/zig_test.log",
+          "reports/zig_benchmark.log",
+          "reports/zig_bench.log",
+          "reports/zig_bench_transport.log",
+          "reports/zig_wal_flush_policy.log",
+          "reports/zig_variance_benches.log",
+      ]
+      metrics = []
+      perf = []
+      def unit_for(key: str) -> str:
+          if key.endswith("_ns"):
+              return "ns"
+          if key.endswith("_us"):
+              return "us"
+          if key.endswith("_ms"):
+              return "ms"
+          if key.endswith("_s"):
+              return "s"
+          if key.endswith("_qps"):
+              return "qps"
+          if key.endswith("_ratio") or key in ("cv", "ratio"):
+              return "ratio"
+          return "count"
+      for path in logs:
+          p = pathlib.Path(path)
+          if not p.exists():
+              continue
+          for line in p.read_text().splitlines():
+              line = line.strip()
+              if not line.startswith("{") or not line.endswith("}"):
+                  continue
+              try:
+                  obj = json.loads(line)
+                  metrics.append(obj)
+                  bench_name = obj.get("bench") or obj.get("benchmark")
+                  if isinstance(bench_name, str):
+                      for k, v in obj.items():
+                          if k in ("bench", "benchmark"):
+                              continue
+                          if isinstance(v, (int, float)):
+                              perf.append({
+                                  "name": f"{bench_name}.{k}",
+                                  "value": v,
+                                  "unit": unit_for(k),
+                              })
+              except json.JSONDecodeError:
+                  continue
+      out = pathlib.Path("reports/bench_metrics.json")
+      out.write_text(json.dumps(metrics, indent=2))
+      perf_out = pathlib.Path("reports/bench_performance.json")
+      perf_out.write_text(json.dumps(perf, indent=2))
+      PY
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
   # GAP-0219 FIX: Unit tests must block merge on failure
+  allow_failure: false
+  artifacts:
+    when: always
+    paths:
+      - reports/zig_test.log
+      - reports/zig_benchmark.log
+      - reports/zig_bench.log
+      - reports/zig_bench_transport.log
+      - reports/zig_wal_flush_policy.log
+      - reports/zig_variance_benches.log
+      - reports/bench_metrics.json
+      - reports/bench_performance.json
+    expire_in: 1 week
+    reports:
+      performance: reports/bench_performance.json
+
+# =============================================================================
+# Test Stage - GPU Benchmarks (self-hosted gpu runners)
+# =============================================================================
+
+bench-gpu:
+  stage: test
+  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  tags:
+    - gpu
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - mkdir -p reports
+    - zig build bench-gpu -Doptimize=ReleaseFast --summary all | tee reports/zig_bench_gpu.log
+    - |
+      python3 - <<'PY'
+      import json, pathlib
+      logs = ["reports/zig_bench_gpu.log"]
+      metrics = []
+      perf = []
+      def unit_for(key: str) -> str:
+          if key.endswith("_ns"):
+              return "ns"
+          if key.endswith("_us"):
+              return "us"
+          if key.endswith("_ms"):
+              return "ms"
+          if key.endswith("_s"):
+              return "s"
+          if key.endswith("_qps"):
+              return "qps"
+          if key.endswith("_ratio") or key in ("cv", "ratio"):
+              return "ratio"
+          return "count"
+      for path in logs:
+          p = pathlib.Path(path)
+          if not p.exists():
+              continue
+          for line in p.read_text().splitlines():
+              line = line.strip()
+              if not line.startswith("{") or not line.endswith("}"):
+                  continue
+              try:
+                  obj = json.loads(line)
+                  metrics.append(obj)
+                  bench_name = obj.get("bench") or obj.get("benchmark")
+                  if isinstance(bench_name, str):
+                      for k, v in obj.items():
+                          if k in ("bench", "benchmark"):
+                              continue
+                          if isinstance(v, (int, float)):
+                              perf.append({
+                                  "name": f"{bench_name}.{k}",
+                                  "value": v,
+                                  "unit": unit_for(k),
+                              })
+              except json.JSONDecodeError:
+                  continue
+      pathlib.Path("reports/bench_metrics_gpu.json").write_text(json.dumps(metrics, indent=2))
+      pathlib.Path("reports/bench_performance_gpu.json").write_text(json.dumps(perf, indent=2))
+      PY
+  artifacts:
+    when: always
+    paths:
+      - reports/zig_bench_gpu.log
+      - reports/bench_metrics_gpu.json
+      - reports/bench_performance_gpu.json
+    expire_in: 1 week
+    reports:
+      performance: reports/bench_performance_gpu.json
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   allow_failure: false
 
 # =============================================================================
@@ -680,6 +842,12 @@ publish-release:
 # =============================================================================
 # Publish Stage - Package Registry Upload
 # =============================================================================
+# Note: APT repository signing and publishing is handled by the apt-publish
+# component included at the top of this file. The component creates:
+#   - apt-sign-apt-geodedb-com (signs packages)
+#   - apt-repo-apt-geodedb-com (generates repo metadata)
+#   - apt-publish-apt-geodedb-com (uploads to S3)
+# =============================================================================
 
 # Publish packages to GitLab Package Registry (Generic, Debian, RPM)
 publish-packages:
@@ -754,10 +922,14 @@ publish-packages:
     - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-alpha\.\d+|-beta\.\d+|-rc\.\d+)?$/'
 
 # =============================================================================
+# Note: APT repository is published to apt.geodedb.com via S3 (DigitalOcean Spaces)
+# The apt-publish component handles signing and publishing automatically.
+# =============================================================================
+
+# =============================================================================
 # Note: Client libraries have moved to separate repositories:
 #   - Go: https://github.com/codeprosorg/geode-client-go
 #   - Python: https://github.com/codeprosorg/geode-client-python
 #   - Rust: https://github.com/codeprosorg/geode-client-rust
 #   - Test Harness: https://github.com/codeprosorg/geode-test-harness
 # =============================================================================
-
