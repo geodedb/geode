@@ -37,6 +37,8 @@ pub const QuicTransport = struct {
     config: Config,
     endpoint: ?Endpoint = null,
     connections: std.ArrayList(*QuicConnection),
+    // GAP-0202: Mutex for thread-safe connection list access in async mode
+    connections_mutex: std.Thread.Mutex = .{},
     cert_der: ?[]u8 = null,
     key_der: ?[]u8 = null,
 
@@ -181,6 +183,9 @@ pub const QuicTransport = struct {
                 .inner = conn,
                 .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
             };
+            // GAP-0202: Thread-safe connection list append
+            self.connections_mutex.lock();
+            defer self.connections_mutex.unlock();
             try self.connections.append(wrapper);
             return wrapper;
         }
@@ -196,6 +201,9 @@ pub const QuicTransport = struct {
                 .inner = conn,
                 .streams = std.ArrayList(*QuicStream).initCapacity(self.allocator, 0) catch return null,
             };
+            // GAP-0202: Thread-safe connection list append
+            self.connections_mutex.lock();
+            defer self.connections_mutex.unlock();
             self.connections.append(self.allocator, wrapper) catch {
                 self.allocator.destroy(wrapper);
                 return null;
@@ -210,7 +218,10 @@ pub const QuicTransport = struct {
     /// This should be called after a connection handler completes to prevent resource leaks.
     /// GAP-0201: Use swapRemove for O(1) removal instead of O(n) orderedRemove
     /// CANARY: REQ=REQ-PERF-CONN-REMOVE-001; FEATURE="ConnectionRemovalOptimization"; ASPECT=O1Removal; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-26
+    /// GAP-0202: Thread-safe connection removal for async connection handling
     pub fn destroyConnection(self: *QuicTransport, conn: *QuicConnection) void {
+        // GAP-0202: Lock mutex for thread-safe list modification
+        self.connections_mutex.lock();
         // Remove connection from the tracked list using O(1) swapRemove
         var idx: usize = 0;
         while (idx < self.connections.items.len) {
@@ -220,7 +231,8 @@ pub const QuicTransport = struct {
             }
             idx += 1;
         }
-        // Close and cleanup the connection resources
+        self.connections_mutex.unlock();
+        // Close and cleanup the connection resources (outside lock to avoid blocking)
         conn.close();
         // Destroy the wrapper struct
         self.allocator.destroy(conn);

@@ -53,6 +53,7 @@ REQ-ABAC-WIRE-013,ABAC Enforcement,QUICHandler,TESTED,,,security,2026-01-15,src/
 REQ-ABAC-WIRE-014,ABAC Enforcement,QUICState,TESTED,,,security,2026-01-15,src/server/quic_connection_handler.zig
 REQ-ABAC-WIRE-015,ABAC Enforcement,QUICCall,TESTED,,,security,2026-01-15,src/server/main.zig
 REQ-ABAC-WIRE-016,ABAC Enforcement,QUICLoop,TESTED,,,security,2026-01-15,src/server/main.zig
+REQ-ABAC-WIRE-017,ABAC Enforcement,AsyncConnection,IMPL,,,server,2026-01-27,src/server/main.zig
 REQ-ABAC-WIRE-TEST-001,ABAC Enforcement Tests,Testing,TESTED,,,server,2026-01-25,src/server/test_abac_enforcement.zig
 REQ-ABAC-WIRE-TEST-002,ABAC Enforcement Tests,SecurityInit,TESTED,,,security,2026-01-15,src/server/test_abac_enforcement.zig
 REQ-ABAC-WIRE-TEST-003,ABAC Enforcement Tests,EnvConfig,TESTED,,,security,2026-01-15,src/server/test_abac_enforcement.zig
@@ -3024,12 +3025,19 @@ REQ-PERF-004,Performance,MemoryEfficiency,TESTED,,,engine,2026-01-15,tests/test_
 REQ-PERF-005,Performance,ConcurrencyPerf,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-PERF-006,Performance,ThroughputBenchmark,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-PERF-007,Performance,LatencyBenchmark,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
+REQ-PERF-ADAPTIVE-BACKOFF-001,AdaptiveBackoff,MainLoopSleep,IMPL,,,cli,2026-01-26,src/cli/main.zig
+REQ-PERF-ADAPTIVE-BACKOFF-002,AdaptiveBackoff,IdleSleep,IMPL,,,cli,2026-01-26,src/cli/main.zig
 REQ-PERF-AGG-001,Performance,AggregationPerformance,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-PERF-ANALYSIS-001,PerformanceAnalysis,Benchmarking,EXEMPT,,,performance,2025-10-04,tests/benchmark_performance_analysis.zig
 REQ-PERF-ASYNC-001,AsynchronousIO,Performance,TESTED,,,performance,2025-10-04,src/performance/async_io.zig
 REQ-PERF-ASYNC-001,SimpleAsyncIO,Performance,TESTED,,,performance,2026-01-16,src/performance/async_io_simple.zig
 REQ-PERF-ASYNC-001,SimpleAsynchronousIO,Performance,TESTED,,,performance,2025-10-04,src/performance/simple_async_io.zig
+REQ-PERF-ASYNC-CONN-001,AsyncConnectionHandling,ThreadPool,IMPL,,,server,2026-01-27,src/server/main.zig
+REQ-PERF-ASYNC-CONN-002,AsyncConnectionHandling,ThreadPoolInit,IMPL,,,server,2026-01-27,src/server/main.zig
+REQ-PERF-ASYNC-CONN-TEST-001,AsyncConnectionHandling,UnitTests,TESTED,,,server,2026-01-27,src/server/test_async_connection.zig
 REQ-PERF-BATCH-001,Performance,BatchProcessing,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-PERF-BENCH-001,ThroughputBenchmark,ServerSide,IMPL,,,bench,2026-01-26,benchmarks/benchmark_transport_throughput.zig
+REQ-PERF-BENCH-BUILD-001,ThroughputBenchmark,BuildIntegration,IMPL,,,build,2026-01-26,build.zig
 REQ-PERF-CACHE-001,Performance,CachePerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PERF-CACHE-OPT-001,Performance,CacheOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-PERF-CACHE-RATIO-001,CacheHitRatioTracking,UnitTest,TESTED,,,performance,2026-01-10,src/performance/memory_mapped_io.zig
@@ -3040,6 +3048,12 @@ REQ-PERF-COLLECTION-001,OptimizedCollections,Performance,TESTED,,,performance,20
     // CANARY: REQ=REQ-PERF-COLLECTION-001",CollectionOptimization,Integration,TESTED,,,performance,2025-10-04,tests/collection_perf_validation.zig
 "REQ-PERF-COLLECTION-001"" {
     // CANARY: REQ=REQ-PERF-COLLECTION-001",CollectionOptimization,Integration,TESTED,,,performance,2025-10-04,tests/benchmark_collection_optimization.zig
+REQ-PERF-CONN-REMOVE-001,ConnectionRemovalOptimization,O1Removal,IMPL,,,transport,2026-01-26,src/transport/quic.zig
+REQ-PERF-DRR-BUILD-001,DRRScheduler,BuildIntegration,IMPL,,,build,2026-01-26,build.zig
+REQ-PERF-DRR-SCHED-001,DRRScheduler,StreamFairness,IMPL,,,transport,2026-01-26,src/transport/stream_scheduler.zig
+REQ-PERF-DRR-SCHED-002,DRRScheduler,ConnectionScheduler,IMPL,,,transport,2026-01-26,src/transport/stream_scheduler.zig
+REQ-PERF-FUZZ-001,TransportFuzzing,PerformanceOptimizations,IMPL,,,fuzz,2026-01-26,fuzz/targets/transport_perf_fuzz.zig
+REQ-PERF-FUZZ-BUILD-001,TransportFuzzing,BuildIntegration,IMPL,,,build,2026-01-26,build.zig
 REQ-PERF-INDEX-001,Performance,IndexPerformance,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-PERF-INDEX-001,Performance,IndexPerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PERF-INDEX-OPT-001,Performance,IndexOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
@@ -3106,10 +3120,18 @@ REQ-PERF-QUERY-001,Performance,QueryPerformance,TESTED,,,performance,2026-01-16,
 REQ-PERF-QUERY-001,Performance,QueryPerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PERF-QUERY-OPT-001,Performance,QueryOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-PERF-STREAM-001,Performance,StreamProcessing,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-PERF-STREAM-REMOVE-001,StreamRemovalOptimization,O1Removal,IMPL,,,transport,2026-01-26,src/transport/quic.zig
 REQ-PERF-TEST-001,PerfTest,QuerySpeed,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch2_testing.zig
+REQ-PERF-TEST-001,PerformanceTests,UnitTests,IMPL,,,test,2026-01-26,tests/test_performance_optimizations.zig
 REQ-PERF-TEST-002,PerfTest,MemoryUsage,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-PERF-TEST-003,PerfTest,IndexPerf,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch2_testing.zig
+REQ-PERF-TEST-BUILD-001,PerformanceTests,BuildIntegration,IMPL,,,build,2026-01-26,build.zig
+REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,IMPL,,,transport,2026-01-26,src/transport/thread_pool.zig
+REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,IMPL,,,transport,2026-01-26,src/transport/thread_pool.zig
+REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,IMPL,,,transport,2026-01-26,src/transport/thread_pool.zig
+REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-26,build.zig
 REQ-PERF-TIMING-001,ExecutionTiming,QueryProfiling,TESTED,,,engine,2026-01-10,src/server/quic_connection_handler.zig
+REQ-PERF-WRITE-STALL-001,WriteStallOptimization,StreamWrite,IMPL,,,cli,2026-01-26,src/cli/main.zig
 REQ-PHANTOM-READ-001,Phantom Read Prevention,Prevention,TESTED,,,txn,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-PHASE6-001,Phase6Modularization,ModuleSplit,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-PHASE6-002,Phase6Modularization,DependencyGraph,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig

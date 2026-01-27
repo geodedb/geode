@@ -14,6 +14,7 @@ const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic.zig");
+const thread_pool = @import("transport/thread_pool.zig");
 const cert_gen = @import("../tools/cert_gen.zig");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
 // const mvcc = @import("server/txn/mvcc.zig");
@@ -66,6 +67,59 @@ const stdio_message_handler = @import("stdio_message_handler.zig");
 const server_utilities = @import("server_utilities.zig");
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-064; FEATURE="JSON Library Migration"; ASPECT=ServerMain; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-25
 const json_lib = @import("json");
+// CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
+// GAP-0165: Import geode_auth for SecurityManager type in async connection context
+const geode_auth = @import("geode_auth");
+
+// CANARY: REQ=REQ-PERF-ASYNC-CONN-001; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPool; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
+// GAP-0202: Async connection handling context for thread pool execution
+// This struct holds all parameters needed by handleQuicConnection for async execution
+const ConnectionContext = struct {
+    allocator: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    conn: *quic_transport.QuicConnection,
+    result_format_txt: bool,
+    disable_estimates: bool,
+    compact_profile: bool,
+    memcurve_profile: bool,
+    test_wal_skip_ratio: ?f64,
+    env_spill_sort: usize,
+    env_spill_distinct: usize,
+    env_spill_union: usize,
+    env_spill_threshold: usize,
+    env_storage_checksum_error: bool,
+    env_wal_compact_interval: usize,
+    security_manager: ?*geode_auth.SecurityManager,
+};
+
+// GAP-0202: Callback wrapper for thread pool execution
+fn handleConnectionAsync(context: *anyopaque) void {
+    const ctx: *ConnectionContext = @ptrCast(@alignCast(context));
+    quic_connection_handler.handleQuicConnection(
+        ctx.allocator,
+        ctx.transport,
+        ctx.conn,
+        ctx.result_format_txt,
+        ctx.disable_estimates,
+        ctx.compact_profile,
+        ctx.memcurve_profile,
+        ctx.test_wal_skip_ratio,
+        ctx.env_spill_sort,
+        ctx.env_spill_distinct,
+        ctx.env_spill_union,
+        ctx.env_spill_threshold,
+        ctx.env_storage_checksum_error,
+        ctx.env_wal_compact_interval,
+        false,
+        ctx.security_manager,
+    ) catch |err| {
+        log.err("Error handling QUIC connection (async)", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+    // Free the context after handling
+    ctx.allocator.destroy(ctx);
+}
 
 // JSON response types for session parameter operations
 const SessionParamResponse = struct {
@@ -444,7 +498,38 @@ pub fn main() !void {
                 });
             };
         } else {
-            // Production mode: accept connections in a loop
+            // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
+            // GAP-0202: Initialize thread pool for async connection handling
+            // This allows accepting new connections while previous ones are being processed
+            const pool = thread_pool.ThreadPool.init(gpa, .{
+                .num_threads = 0, // Auto-detect based on CPU count
+            }) catch |err| {
+                log.err("Failed to initialize connection thread pool, falling back to sync mode", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                // Fallback to synchronous mode
+                while (true) {
+                    const conn = transport.accept() catch |err2| {
+                        log.warn("Failed to accept QUIC connection", &.{
+                            Attr.string("error", @errorName(err2)),
+                        });
+                        continue;
+                    };
+                    quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err2| {
+                        log.err("Error handling QUIC connection", &.{
+                            Attr.string("error", @errorName(err2)),
+                        });
+                    };
+                }
+                return;
+            };
+            defer pool.deinit();
+
+            log.info("Async connection handling enabled", &.{
+                Attr.int("worker_threads", @intCast(pool.workers.len)),
+            });
+
+            // Production mode: accept connections in a loop and dispatch to thread pool
             while (true) {
                 const conn = transport.accept() catch |err| {
                     log.warn("Failed to accept QUIC connection", &.{
@@ -453,16 +538,49 @@ pub fn main() !void {
                     continue;
                 };
 
-                // QUIC transport uses event-driven callbacks, no polling needed
-                log.debug("Main loop - calling handleQuicConnection", .{});
-
                 // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
-                // GAP-0165: Pass SecurityManager to handleQuicConnection in production loop
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err| {
-                    log.err("Error handling QUIC connection", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
+                // GAP-0202: Create context for async connection handling
+                const ctx = gpa.create(ConnectionContext) catch {
+                    log.err("Failed to allocate connection context, handling sync", &.{});
+                    quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager) catch |err| {
+                        log.err("Error handling QUIC connection", &.{
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                    continue;
                 };
+
+                ctx.* = .{
+                    .allocator = gpa,
+                    .transport = &transport,
+                    .conn = conn,
+                    .result_format_txt = result_format_txt,
+                    .disable_estimates = disable_estimates,
+                    .compact_profile = compact_profile,
+                    .memcurve_profile = memcurve_profile,
+                    .test_wal_skip_ratio = test_wal_skip_ratio,
+                    .env_spill_sort = env_spill_sort,
+                    .env_spill_distinct = env_spill_distinct,
+                    .env_spill_union = env_spill_union,
+                    .env_spill_threshold = env_spill_threshold,
+                    .env_storage_checksum_error = env_storage_checksum_error,
+                    .env_wal_compact_interval = env_wal_compact_interval,
+                    .security_manager = init_ctx.security_manager,
+                };
+
+                // Submit to thread pool for async handling
+                const work_item = thread_pool.WorkItem{
+                    .context = @ptrCast(ctx),
+                    .callback = handleConnectionAsync,
+                };
+
+                if (!pool.submit(work_item)) {
+                    // Queue full - handle synchronously as fallback
+                    log.warn("Thread pool queue full, handling connection sync", &.{});
+                    handleConnectionAsync(@ptrCast(ctx));
+                } else {
+                    log.debug("Connection submitted to thread pool", &.{});
+                }
             }
         }
         return;
