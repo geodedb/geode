@@ -48,11 +48,11 @@ fn benchThreadPoolThroughput(allocator: std.mem.Allocator, config: BenchConfig) 
     });
     defer pool.deinit();
 
-    var counter = std.atomic.Value(u64).init(0);
+    var counter = std.atomic.Value(usize).init(0);
     const target = config.benchmark_iterations;
 
     const Context = struct {
-        counter: *std.atomic.Value(u64),
+        counter: *std.atomic.Value(usize),
     };
 
     var ctx = Context{ .counter = &counter };
@@ -94,7 +94,7 @@ fn benchThreadPoolThroughput(allocator: std.mem.Allocator, config: BenchConfig) 
         if (i > 0 and i % config.report_interval == 0) {
             const current = counter.load(.acquire);
             const elapsed = std.time.nanoTimestamp() - start;
-            const rate = @as(u64, current) * std.time.ns_per_s / @as(u64, @intCast(elapsed));
+            const rate = @as(u64, @intCast(current)) * std.time.ns_per_s / @as(u64, @intCast(elapsed));
             std.debug.print("  Progress: {}/{} ({} ops/sec)\n", .{ current, target, rate });
         }
     }
@@ -107,7 +107,7 @@ fn benchThreadPoolThroughput(allocator: std.mem.Allocator, config: BenchConfig) 
     const end = std.time.nanoTimestamp();
     const total_time = end - start;
     const avg_time = @divFloor(total_time, @as(i128, target));
-    const throughput = @as(u64, target) * std.time.ns_per_s / @as(u64, @intCast(total_time));
+    const throughput = @as(u64, @intCast(target)) * std.time.ns_per_s / @as(u64, @intCast(total_time));
 
     return BenchResults{
         .name = "ThreadPool Throughput",

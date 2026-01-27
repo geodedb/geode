@@ -574,10 +574,10 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
     // Now execute the next query with the current result as bindings
     // For each row in current_result, execute next_query with those bindings
     // GAP-0220 FIX: Use try for proper error propagation
-    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, current_result.rows.len);
     var final_columns: [][]const u8 = &.{};
     // GAP-0220 FIX: Use try for proper error propagation
-    var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, current_result.flags.items.len);
 
     // If current result has no rows, still execute next query once with empty bindings
     if (current_result.rows.len == 0) {
@@ -883,10 +883,10 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
 
         // Chain to next query using the result as bindings (original per-row logic)
         // GAP-0220 FIX: Use try for proper error propagation
-        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, current_result.rows.len);
         var final_columns: [][]const u8 = &.{};
         // GAP-0220 FIX: Use try for proper error propagation
-        var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, current_result.flags.items.len);
 
         for (current_result.rows) |current_row| {
             // Validate that current_row length matches columns length
@@ -1407,7 +1407,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             // Apply WHERE filter if present
             const filtered_result = if (q.where_clause) |where_expr| blk: {
                 // GAP-0220 FIX: Use try for proper error propagation
-                var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+                var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, with_result.rows.len);
 
                 for (with_result.rows) |row| {
                     const env = Env{
@@ -1439,7 +1439,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
             // Apply RETURN clause to transform results
             // GAP-0220 FIX: Use try for proper error propagation
-            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, filtered_result.rows.len);
 
             for (filtered_result.rows) |row| {
                 var return_row = try allocator.alloc(Value, q.ret.items.len);
@@ -1496,7 +1496,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         } else {
             // No WITH clause, just apply WHERE/RETURN to CALL results
             // GAP-0220 FIX: Use try for proper error propagation
-            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, call_result.rows.len);
 
             if (q.where_clause) |where_expr| {
                 for (call_result.rows) |row| {
@@ -1528,7 +1528,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
             // Apply RETURN clause
             // GAP-0220 FIX: Use try for proper error propagation
-            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, filtered_rows.items.len);
 
             for (filtered_rows.items) |row| {
                 var return_row = try allocator.alloc(Value, q.ret.items.len);
@@ -1606,7 +1606,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
         // Now evaluate RETURN using the WITH results as environment
         // GAP-0220 FIX: Use try for proper error propagation
-        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, with_result.rows.len);
 
         for (with_result.rows) |with_row| {
             var return_row = try allocator.alloc(Value, q.ret.items.len);

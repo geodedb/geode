@@ -36,7 +36,7 @@ pub const WalManager = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         const lsn = try self.wal.append(txn_id, typ, payload, payload_len);
-        try self.wal.fsync();
+        try self.wal.flushForRecord(typ);
         return lsn;
     }
 

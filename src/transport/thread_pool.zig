@@ -107,8 +107,8 @@ pub const ThreadPool = struct {
     work_queue: QueueType,
     shutdown: std.atomic.Value(bool),
     active_workers: std.atomic.Value(usize),
-    total_tasks_submitted: std.atomic.Value(u64),
-    total_tasks_completed: std.atomic.Value(u64),
+    total_tasks_submitted: std.atomic.Value(usize),
+    total_tasks_completed: std.atomic.Value(usize),
 
     /// Initialize the thread pool
     pub fn init(allocator: std.mem.Allocator, config: ThreadPoolConfig) !*Self {
@@ -128,8 +128,8 @@ pub const ThreadPool = struct {
             .work_queue = QueueType.init(),
             .shutdown = std.atomic.Value(bool).init(false),
             .active_workers = std.atomic.Value(usize).init(0),
-            .total_tasks_submitted = std.atomic.Value(u64).init(0),
-            .total_tasks_completed = std.atomic.Value(u64).init(0),
+            .total_tasks_submitted = std.atomic.Value(usize).init(0),
+            .total_tasks_completed = std.atomic.Value(usize).init(0),
         };
 
         // Start worker threads
@@ -207,8 +207,8 @@ pub const ThreadPool = struct {
             .num_workers = self.workers.len,
             .active_workers = self.active_workers.load(.acquire),
             .pending_tasks = self.work_queue.len(),
-            .total_submitted = self.total_tasks_submitted.load(.acquire),
-            .total_completed = self.total_tasks_completed.load(.acquire),
+            .total_submitted = @intCast(self.total_tasks_submitted.load(.acquire)),
+            .total_completed = @intCast(self.total_tasks_completed.load(.acquire)),
         };
     }
 

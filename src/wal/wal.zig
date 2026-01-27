@@ -157,6 +157,7 @@ pub const Wal = struct {
     time_window_ms: u32 = 0,
     last_flush_lsn: u64 = 0,
     last_flush_ms: i64 = 0,
+    pending_commit_count: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Wal {
         const list = std.ArrayList(Record).initCapacity(allocator, 0) catch @panic("OOM WAL init");
@@ -202,6 +203,69 @@ pub const Wal = struct {
         }
     }
 
+    fn loadFlushConfig(self: *Wal) void {
+        // Segment rollover size (bytes)
+        if (std.process.getEnvVarOwned(self.allocator, "GEODE_WAL_SEGMENT_SIZE")) |v| {
+            defer self.allocator.free(v);
+            const parsed = std.fmt.parseInt(usize, v, 10) catch 0;
+            if (parsed > 0) {
+                self.segment_limit = parsed;
+            } else {
+                log.warn("Invalid GEODE_WAL_SEGMENT_SIZE; using default", &.{
+                    Attr.string("value", v),
+                    Attr.int("default_bytes", @intCast(self.segment_limit)),
+                });
+            }
+        } else |_| {}
+
+        // Commit flush mode: always | every_n | time_window_ms
+        if (std.process.getEnvVarOwned(self.allocator, "GEODE_WAL_FLUSH_MODE")) |v| {
+            defer self.allocator.free(v);
+            if (std.ascii.eqlIgnoreCase(v, "always")) {
+                self.commit_flush_mode = .always;
+            } else if (std.ascii.eqlIgnoreCase(v, "every_n")) {
+                self.commit_flush_mode = .every_n;
+            } else if (std.ascii.eqlIgnoreCase(v, "time_window_ms")) {
+                self.commit_flush_mode = .time_window_ms;
+            } else {
+                log.warn("Invalid GEODE_WAL_FLUSH_MODE; using default", &.{
+                    Attr.string("value", v),
+                    Attr.string("default", "always"),
+                });
+            }
+        } else |_| {}
+
+        if (std.process.getEnvVarOwned(self.allocator, "GEODE_WAL_FLUSH_EVERY_N")) |v| {
+            defer self.allocator.free(v);
+            const parsed = std.fmt.parseInt(u32, v, 10) catch 0;
+            if (parsed > 0) {
+                self.group_n = parsed;
+            } else {
+                log.warn("Invalid GEODE_WAL_FLUSH_EVERY_N; using default", &.{
+                    Attr.string("value", v),
+                    Attr.int("default", @intCast(self.group_n)),
+                });
+            }
+        } else |_| {}
+
+        if (std.process.getEnvVarOwned(self.allocator, "GEODE_WAL_FLUSH_WINDOW_MS")) |v| {
+            defer self.allocator.free(v);
+            const parsed = std.fmt.parseInt(u32, v, 10) catch 0;
+            if (parsed > 0) {
+                self.time_window_ms = parsed;
+            } else {
+                log.warn("Invalid GEODE_WAL_FLUSH_WINDOW_MS; using default", &.{
+                    Attr.string("value", v),
+                    Attr.int("default", @intCast(self.time_window_ms)),
+                });
+            }
+        } else |_| {}
+
+        if (self.commit_flush_mode == .time_window_ms and self.time_window_ms == 0) {
+            self.time_window_ms = 5;
+        }
+    }
+
     fn openSegment(self: *Wal) !void {
         // Close previous if open
         if (self.file) |*f| f.close();
@@ -223,12 +287,16 @@ pub const Wal = struct {
         self.base_path = try self.allocator.dupe(u8, base_path);
         self.segment_index = 0;
         self.loadEncConfig();
+        self.loadFlushConfig();
         try self.openSegment();
         // Perform lightweight committed txn scan across existing segments (if any)
         self.recovered_committed = try self.scanCommitted();
     }
 
     pub fn deinit(self: *Wal) void {
+        if (self.pending_commit_count > 0) {
+            self.fsync() catch {};
+        }
         if (self.file) |*f| f.close();
         self.buf.deinit(self.allocator);
         if (self.page_lsn_index) |*m| m.deinit();
@@ -536,6 +604,43 @@ pub const Wal = struct {
         if (self.file) |f| try f.sync();
         self.last_flush_lsn = self.next_lsn - 1;
         self.last_flush_ms = std.time.milliTimestamp();
+        self.pending_commit_count = 0;
+    }
+
+    // CANARY: REQ=REQ-GQL-028; FEATURE="WAL Flush Batch"; ASPECT=Durability; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-27
+    pub fn setFlushMode(self: *Wal, mode: CommitFlushMode, group_n: u32, time_window_ms: u32) void {
+        self.commit_flush_mode = mode;
+        if (group_n > 0) self.group_n = group_n;
+        if (time_window_ms > 0) self.time_window_ms = time_window_ms;
+    }
+
+    pub fn flushForRecord(self: *Wal, typ: RecordType) !void {
+        if (typ != .Commit) {
+            try self.fsync();
+            return;
+        }
+
+        switch (self.commit_flush_mode) {
+            .always => try self.fsync(),
+            .every_n => {
+                self.pending_commit_count += 1;
+                if (self.group_n == 0) self.group_n = 1;
+                if (self.pending_commit_count >= self.group_n) {
+                    try self.fsync();
+                }
+            },
+            .time_window_ms => {
+                self.pending_commit_count += 1;
+                if (self.time_window_ms == 0) {
+                    try self.fsync();
+                    return;
+                }
+                const now = std.time.milliTimestamp();
+                if (self.last_flush_ms == 0 or (now - self.last_flush_ms) >= @as(i64, @intCast(self.time_window_ms))) {
+                    try self.fsync();
+                }
+            },
+        }
     }
 
     pub fn writeCheckpoint(self: *Wal) !Lsn {
@@ -1021,4 +1126,60 @@ test "test_parseWalHexKey_all_ff" {
     for (key) |byte| {
         try std.testing.expectEqual(@as(u8, 0xFF), byte);
     }
+}
+
+// =============================================================================
+// WAL Flush Mode Tests
+// =============================================================================
+
+test "test_wal_flush_mode_every_n" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/flush.wal", .{tmp.dir_path});
+    defer std.testing.allocator.free(log_path);
+
+    var w = Wal.init(std.testing.allocator);
+    defer w.deinit();
+    try w.openFile(log_path);
+    w.setFlushMode(.every_n, 2, 0);
+
+    _ = try w.append(1, .Commit, &.{}, 0);
+    try w.flushForRecord(.Commit);
+    try std.testing.expectEqual(@as(u64, 0), w.last_flush_lsn);
+
+    _ = try w.append(1, .Commit, &.{}, 0);
+    try w.flushForRecord(.Commit);
+    try std.testing.expectEqual(@as(u64, 2), w.last_flush_lsn);
+}
+
+test "test_wal_flush_mode_always" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/flush_always.wal", .{tmp.dir_path});
+    defer std.testing.allocator.free(log_path);
+
+    var w = Wal.init(std.testing.allocator);
+    defer w.deinit();
+    try w.openFile(log_path);
+    w.setFlushMode(.always, 0, 0);
+
+    _ = try w.append(1, .Commit, &.{}, 0);
+    try w.flushForRecord(.Commit);
+    try std.testing.expectEqual(@as(u64, 1), w.last_flush_lsn);
+}
+
+test "test_wal_flush_mode_time_window" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/flush_window.wal", .{tmp.dir_path});
+    defer std.testing.allocator.free(log_path);
+
+    var w = Wal.init(std.testing.allocator);
+    defer w.deinit();
+    try w.openFile(log_path);
+    w.setFlushMode(.time_window_ms, 0, 50);
+
+    _ = try w.append(1, .Commit, &.{}, 0);
+    try w.flushForRecord(.Commit);
+    try std.testing.expectEqual(@as(u64, 1), w.last_flush_lsn);
 }

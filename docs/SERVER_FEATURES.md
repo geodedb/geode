@@ -1186,6 +1186,8 @@ Total CANARY markers: 1284 tracking governance compliance
 - `GEODE_WAL_ENCRYPTION`: Enable WAL encryption
 - `GEODE_WAL_SEGMENT_SIZE`: Segment rollover size (default: 1MB)
 - `GEODE_WAL_FLUSH_MODE`: `always`, `every_n`, or `time_window_ms`
+- `GEODE_WAL_FLUSH_EVERY_N`: Commit group size when `GEODE_WAL_FLUSH_MODE=every_n` (default: 10)
+- `GEODE_WAL_FLUSH_WINDOW_MS`: Flush window when `GEODE_WAL_FLUSH_MODE=time_window_ms` (default: 5ms)
 
 **CDC**:
 - `CDC_ENABLED`: Enable change data capture

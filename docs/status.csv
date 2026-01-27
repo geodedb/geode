@@ -1171,7 +1171,9 @@ REQ-GQL-028,WAL Compaction,CorruptPageRecoveryLatency,BENCHED,,,storage,2025-09-
 REQ-GQL-028,WAL Compaction,Storage,TESTED,,,storage,2025-09-27,src/canary.zig
 REQ-GQL-028,WAL Compaction,Storage,TESTED,,,storage,2025-09-27,src/storage/wal_compactor.zig
 REQ-GQL-028,WAL Compaction,WalCompactionVarianceEnvelope,BENCHED,,,storage,2025-09-21,tests/benchmark_wal_compaction_variance.zig
+REQ-GQL-028,WAL Flush Batch,Durability,IMPL,,,storage,2026-01-27,src/wal/wal.zig
 REQ-GQL-028,WAL Flush Batch,WALFlushBatchVarianceEnvelope,BENCHED,,,storage,2025-09-21,tests/benchmark_wal_flush_batch_variance.zig
+REQ-GQL-028,WAL Flush Batch,WALFlushPolicyBench,BENCHED,,,storage,2026-01-27,tests/benchmark_wal_flush_policy.zig
 REQ-GQL-028,WAL I/O Throttle,WALIOThrottleVarianceEnvelope,BENCHED,,,storage,2025-09-21,tests/benchmark_wal_io_throttle_variance.zig
 REQ-GQL-028,WAL Page Flush Queue Depth,QueueDepthInstrumentation,TESTED,,,storage,2025-09-21,src/storage/wal_queue_depth.zig
 REQ-GQL-028,WAL Page Flush Queue Depth,WALPageFlushQueueDepthVarianceEnvelope,BENCHED,,,storage,2025-09-21,tests/benchmark_wal_page_flush_queue_depth_variance.zig
@@ -3028,6 +3030,7 @@ REQ-PERF-007,Performance,LatencyBenchmark,TESTED,,,engine,2026-01-15,tests/test_
 REQ-PERF-ADAPTIVE-BACKOFF-001,AdaptiveBackoff,MainLoopSleep,IMPL,,,cli,2026-01-26,src/cli/main.zig
 REQ-PERF-ADAPTIVE-BACKOFF-002,AdaptiveBackoff,IdleSleep,IMPL,,,cli,2026-01-26,src/cli/main.zig
 REQ-PERF-AGG-001,Performance,AggregationPerformance,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
+REQ-PERF-ALLOC-001,ArenaAlloc,Allocator,TESTED,,,perf,2026-01-27`,docs/PERF_IMP_REV.md
 REQ-PERF-ANALYSIS-001,PerformanceAnalysis,Benchmarking,EXEMPT,,,performance,2025-10-04,tests/benchmark_performance_analysis.zig
 REQ-PERF-AST-CACHE-001,QueryASTCache,ParseHotPath,IMPL,,,engine,2026-01-27,src/server/query_ast_cache.zig
 REQ-PERF-AST-CACHE-003,SharedASTCache,ConnectionState,IMPL,,,engine,2026-01-27,src/server/quic_connection_handler.zig

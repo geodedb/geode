@@ -347,6 +347,74 @@ test-zig-unit:
       performance: reports/bench_performance.json
 
 # =============================================================================
+# Test Stage - Cross-Compilation Build (ReleaseSafe)
+# Ensures all release targets compile before release.
+# =============================================================================
+
+test-cross-build:
+  stage: test
+  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  parallel:
+    matrix:
+      - TARGET: x86_64-linux-gnu
+      - TARGET: x86_64-linux-musl
+      - TARGET: aarch64-linux-gnu
+      - TARGET: aarch64-linux-musl
+      - TARGET: arm-linux-gnueabihf
+      - TARGET: riscv64-linux-gnu
+      - TARGET: x86_64-macos
+      - TARGET: aarch64-macos
+  script:
+    - zig build -Doptimize=ReleaseSafe -Dtarget=$TARGET --summary all
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  allow_failure: false
+
+# =============================================================================
+# Test Stage - Native macOS Build + Unit Tests
+# =============================================================================
+
+test-macos-unit:
+  stage: test
+  tags:
+    - saas-macos-medium-m1
+  script:
+    - zig version
+    - zig build --summary all
+    - zig build test --summary all
+    - zig build -Doptimize=ReleaseSafe --summary all
+    - zig build test -Doptimize=ReleaseSafe --summary all
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  allow_failure: false
+
+# =============================================================================
+# Test Stage - Native Windows Build + Unit Tests
+# =============================================================================
+
+test-windows-unit:
+  stage: test
+  tags:
+    - saas-windows-medium-amd64
+  script:
+    - zig version
+    - zig build --summary all
+    - zig build test --summary all
+    - zig build -Doptimize=ReleaseSafe --summary all
+    - zig build test -Doptimize=ReleaseSafe --summary all
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  allow_failure: false
+
+# =============================================================================
 # Test Stage - GPU Benchmarks (self-hosted gpu runners)
 # =============================================================================
 
