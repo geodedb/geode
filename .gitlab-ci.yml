@@ -39,6 +39,7 @@ default:
 variables:
   DOCKER_BUILDKIT: 1
   ZIG_VERSION: "0.15.2"
+  ZIG_IMAGE: "ghcr.io/ziglang/zig:0.15.2"
   GORELEASER_VERSION: "v2.5.0"
   # Git config for CI authentication
   GIT_CONFIG_COUNT: 2
@@ -234,7 +235,7 @@ governance-req-doc-reports:
 
 governance-conformance-sync:
   stage: governance
-  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   script:
@@ -259,7 +260,7 @@ governance-conformance-sync:
 
 test-zig-unit:
   stage: test
-  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   script:
@@ -353,7 +354,7 @@ test-zig-unit:
 
 test-cross-build:
   stage: test
-  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   parallel:
@@ -420,7 +421,7 @@ test-windows-unit:
 
 bench-gpu:
   stage: test
-  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  image: $ZIG_IMAGE
   tags:
     - gpu
   variables:
@@ -497,7 +498,7 @@ bench-gpu:
 
 test-zig-release-safe:
   stage: test
-  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   script:
@@ -526,7 +527,7 @@ test-zig-release-safe:
 
 test-gql-compliance:
   stage: test
-  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
@@ -568,7 +569,7 @@ test-gql-compliance:
 
 test-geodetestlab-comprehensive:
   stage: test
-  image: registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}
+  image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
