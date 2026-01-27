@@ -50,6 +50,20 @@ pub const QueryOptions = struct {
     param_values: []const value_types.Value = &.{},
     // CANARY: REQ=REQ-MULTI-GRAPH-026; FEATURE="MultiGraphIsolation"; ASPECT=QueryOptionsGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     current_graph: ?[]const u8 = null, // Current graph for multi-graph isolation
+
+    // GAP-0203: Performance optimizations - avoid redundant work per query
+    // CANARY: REQ=REQ-PERF-QUERY-OPT-001; FEATURE="QueryPipelineOptimization"; ASPECT=SkipRedundantWork; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
+
+    /// Pre-validated user role from HELLO authentication. When set, skips password re-verification.
+    pre_validated_role: ?PreValidatedAuth = null,
+
+    /// Skip file-based transaction session loading (QUIC server manages txn state in-memory)
+    skip_txn_session_file: bool = false,
+
+    pub const PreValidatedAuth = struct {
+        role: ?@import("security/user_management.zig").Role,
+        username: ?[]const u8,
+    };
 };
 
 // Main query execution function - ONLY parses and calls real Geode execution
@@ -57,10 +71,23 @@ pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8 {
     return runQueryWithAuth(allocator, query, .{});
 }
 
+// GAP-0203: Track evaluator initialization to avoid redundant per-query calls
+// CANARY: REQ=REQ-PERF-INIT-ONCE-001; FEATURE="InitEvaluatorOnce"; ASPECT=StartupInit; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
+var evaluator_initialized: bool = false;
+
+/// Ensure evaluator is initialized exactly once (idempotent, called from startup or first query)
+pub fn ensureEvaluatorInitialized() void {
+    if (!evaluator_initialized) {
+        execution.initEvaluator();
+        evaluator_initialized = true;
+    }
+}
+
 // Query execution with authentication context
 pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, options: QueryOptions) ![]u8 {
     @setEvalBranchQuota(2000);
-    execution.initEvaluator();
+    // GAP-0203: Use cached initialization flag instead of calling initEvaluator on every query
+    ensureEvaluatorInitialized();
 
     // Parse the query using the actual GQL parser
     // Note: The lexer properly distinguishes between -- comments and -- in patterns like (n)--()
@@ -94,7 +121,12 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     const first_stmt_is_start_txn = parse_result.program.statements.len > 0 and
         parse_result.program.statements[0] == .StartTransaction;
 
-    var transaction_session = txn_session.loadSession(allocator.*) catch null;
+    // GAP-0203: Skip file-based transaction session in QUIC server mode (managed in-memory)
+    // CANARY: REQ=REQ-PERF-TXN-CACHE-001; FEATURE="TxnSessionCache"; ASPECT=SkipFileIO; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
+    var transaction_session: ?txn_session.TransactionSession = if (options.skip_txn_session_file)
+        null
+    else
+        txn_session.loadSession(allocator.*) catch null;
     defer if (transaction_session) |*ts| ts.deinit(allocator.*);
 
     // If we're starting a transaction as the first statement, clear stale sessions
@@ -118,12 +150,18 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     defer session_state.deinit();
 
     // Authenticate user if credentials provided
+    // GAP-0203: Use pre-validated role from HELLO to skip per-query password hashing
+    // CANARY: REQ=REQ-PERF-AUTH-SKIP-001; FEATURE="AuthSkipOptimization"; ASPECT=PreValidatedRole; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
     const user_mgmt = @import("security/user_management.zig");
     var authenticated_user: ?[]const u8 = null;
     var user_role: ?user_mgmt.Role = null;
 
-    if (options.user != null and options.password != null) {
-        // Attempt password-based authentication
+    if (options.pre_validated_role) |pv| {
+        // Fast path: credentials already validated during HELLO handshake
+        authenticated_user = pv.username;
+        user_role = pv.role;
+    } else if (options.user != null and options.password != null) {
+        // Slow path: password-based authentication (CLI mode)
         user_role = user_mgmt.authenticate(options.user.?, options.password.?) catch {
             return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}}", .{});
         };
@@ -278,22 +316,24 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         try flags.append(allocator.*, "GB03:DoubleSolidusComment");
     }
 
-    // Handle transaction session persistence
+    // Handle transaction session persistence (skip file I/O in QUIC server mode)
     // If program has both START TRANSACTION and COMMIT/ROLLBACK, the transaction is complete - clear session
     // If program has only START TRANSACTION, save active session
     // If program has only COMMIT/ROLLBACK, clear session
-    if (has_start_transaction and (has_commit or has_rollback)) {
-        // Transaction started and ended in same program - clear session
-        try txn_session.clearSession(allocator.*);
-    } else if (has_start_transaction) {
-        // Transaction started but not ended - save active session
-        var new_session = try txn_session.TransactionSession.init(allocator.*);
-        new_session.state = .Active;
-        try txn_session.saveSession(allocator.*, new_session);
-        new_session.deinit(allocator.*);
-    } else if (has_commit or has_rollback) {
-        // Transaction ended - clear session
-        try txn_session.clearSession(allocator.*);
+    if (!options.skip_txn_session_file) {
+        if (has_start_transaction and (has_commit or has_rollback)) {
+            // Transaction started and ended in same program - clear session
+            try txn_session.clearSession(allocator.*);
+        } else if (has_start_transaction) {
+            // Transaction started but not ended - save active session
+            var new_session = try txn_session.TransactionSession.init(allocator.*);
+            new_session.state = .Active;
+            try txn_session.saveSession(allocator.*, new_session);
+            new_session.deinit(allocator.*);
+        } else if (has_commit or has_rollback) {
+            // Transaction ended - clear session
+            try txn_session.clearSession(allocator.*);
+        }
     }
 
     // Convert execution result to JSON

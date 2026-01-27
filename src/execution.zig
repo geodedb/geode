@@ -186,14 +186,25 @@ var catalog_instance_mutex = std.Thread.Mutex{};
 
 /// Ensure the global catalog instance is initialized
 /// Returns a pointer to the process-level catalog singleton
-/// Thread-safe via mutex (CWE-543 mitigation)
+/// Thread-safe via double-checked locking with atomic load (CWE-543 mitigation)
+///
+/// GAP-0203: Fast path uses atomic load to avoid mutex contention on every query.
+/// The mutex is only acquired during first-time initialization.
 ///
 /// M2 Note: This singleton is injected into ExecutionContext by entry points (test_harness, CLI)
 /// All execution code accesses catalog via context.catalog, not by calling this function
 pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog {
+    // GAP-0203: Fast path - atomic load avoids mutex lock when already initialized (99.99% of calls)
+    // CANARY: REQ=REQ-PERF-CATALOG-FASTPATH-001; FEATURE="CatalogFastPath"; ASPECT=AtomicLoad; STATUS=IMPL; OWNER=execution; UPDATED=2026-01-27
+    if (@atomicLoad(?*catalog_mod.Catalog, &global_catalog_instance, .acquire)) |instance| {
+        return instance;
+    }
+
+    // Slow path - acquire mutex for initialization
     catalog_instance_mutex.lock();
     defer catalog_instance_mutex.unlock();
 
+    // Double-check under lock (another thread may have initialized while we waited)
     if (global_catalog_instance) |instance| {
         return instance;
     }
@@ -213,7 +224,8 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
 
     // Create the catalog instance with provided allocator
     const instance = try catalog_mod.Catalog.init(allocator, data_dir);
-    global_catalog_instance = instance;
+    // GAP-0203: Atomic store ensures other threads see the fully-initialized instance
+    @atomicStore(?*catalog_mod.Catalog, &global_catalog_instance, instance, .release);
     return instance;
 }
 

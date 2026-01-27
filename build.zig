@@ -640,6 +640,11 @@ pub fn build(b: *std.Build) void {
     integration_tests.root_module.addImport("json", json_mod);
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
+    // GAP-0203: Query pipeline optimization tests and benchmarks
+    const gap0203_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/performance/test_perf_optimizations.zig"), .target = target, .optimize = optimize }) });
+    gap0203_tests.root_module.addImport("geode", root_mod);
+    const run_gap0203_tests = b.addRunArtifact(gap0203_tests);
+
     // Compile Vulkan shaders to SPIR-V (Phase 2)
     const shader_compile_step = b.step("shaders", "Compile Vulkan shaders to SPIR-V");
 
@@ -763,6 +768,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_decimal_tests.step);
     test_step.dependOn(&run_repl_advanced_tests.step);
     test_step.dependOn(&run_integration_tests.step);
+    test_step.dependOn(&run_gap0203_tests.step);
 
     // Extended built-ins CANARY adapter + decimal formatter tests
     const canary_extended_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_extended_builtins.zig"), .target = target, .optimize = optimize }) });

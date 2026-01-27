@@ -22,6 +22,21 @@ var global_key_manager_instance: ?*key_manager_mod.KeyManager = null;
 var global_blind_index_instance: ?*blind_index_mod.BlindIndex = null;
 var global_mutex: std.Thread.Mutex = .{};
 
+// GAP-0203: Global flag to fast-path skip FLE when no encryption is configured
+// CANARY: REQ=REQ-PERF-FLE-SKIP-001; FEATURE="FLESkipOptimization"; ASPECT=GlobalDisable; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
+var fle_has_encrypted_fields: bool = false;
+
+/// Check if FLE has any encrypted fields configured. Returns false when no encryption is active,
+/// allowing callers to skip all FLE processing for non-encrypted deployments.
+pub fn hasEncryptedFields() bool {
+    return fle_has_encrypted_fields;
+}
+
+/// Mark that encrypted fields exist (called when encryption is configured)
+pub fn setHasEncryptedFields(has_fields: bool) void {
+    fle_has_encrypted_fields = has_fields;
+}
+
 // Global current user role for RBAC (thread-local in multi-threaded env)
 var global_current_user_role: ?[]const u8 = null;
 
@@ -175,6 +190,11 @@ pub fn encryptFieldIfNeeded(
     plaintext: []const u8,
     record_id: []const u8,
 ) ![]const u8 {
+    // GAP-0203: Fast path - skip all FLE processing when no encryption is configured
+    if (!fle_has_encrypted_fields) {
+        return plaintext;
+    }
+
     // 1. Get global catalog
     const catalog = try fle_catalog.globalCatalog(ctx.allocator);
 
@@ -260,6 +280,12 @@ pub fn decryptFieldIfNeeded(
     record_id: []const u8,
     check_rbac: bool,
 ) ![]const u8 {
+    // GAP-0203: Fast path - skip all FLE processing when no encryption is configured
+    // CANARY: REQ=REQ-PERF-FLE-SKIP-002; FEATURE="FLESkipOptimization"; ASPECT=DecryptFastPath; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
+    if (!fle_has_encrypted_fields) {
+        return data;
+    }
+
     // 1. Get global catalog
     const catalog = try fle_catalog.globalCatalog(ctx.allocator);
 

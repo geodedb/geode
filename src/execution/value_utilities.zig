@@ -209,38 +209,44 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                     try writer.writeAll("\":");
                     switch (entry.value_ptr.*) {
                         .String => |s| {
-                            // Field-Level Encryption: decrypt if configured
-                            const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                            const user_role = fle_integration.getCurrentUserRole();
-                            // P2-3: Use provided allocator instead of page_allocator
-                            const fle_ctx = fle_integration.EncryptionContext{
-                                .tenant_id = "default",
-                                .schema_name = type_name, // Use actual node type
-                                .allocator = allocator,
-                                .current_user_role = user_role,
-                            };
-                            const record_id_buf = try std.fmt.allocPrint(allocator, "{d}", .{node.id});
-                            defer allocator.free(record_id_buf);
+                            // GAP-0203: Skip FLE entirely when no encrypted fields configured
+                            // CANARY: REQ=REQ-PERF-FLE-SKIP-003; FEATURE="FLESkipOptimization"; ASPECT=NodePropertyWrite; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
+                            if (fle_integration.hasEncryptedFields()) {
+                                // Field-Level Encryption: decrypt if configured
+                                const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+                                const user_role = fle_integration.getCurrentUserRole();
+                                const fle_ctx = fle_integration.EncryptionContext{
+                                    .tenant_id = "default",
+                                    .schema_name = type_name,
+                                    .allocator = allocator,
+                                    .current_user_role = user_role,
+                                };
+                                const record_id_buf = try std.fmt.allocPrint(allocator, "{d}", .{node.id});
+                                defer allocator.free(record_id_buf);
 
-                            const decrypted = fle_integration.decryptFieldIfNeeded(
-                                fle_ctx,
-                                type_name,
-                                entry.key_ptr.*,
-                                s,
-                                record_id_buf,
-                                true, // Check RBAC
-                            ) catch |err| blk_decrypt: {
-                                // For SearchNotPermitted, return redacted placeholder
-                                if (err == fle_integration.fle_aead_mod.Error.SearchNotPermitted) {
-                                    break :blk_decrypt "[REDACTED]";
-                                }
-                                // Fall back to ciphertext on other errors (e.g., AEADAuthFailed)
-                                break :blk_decrypt s;
-                            };
+                                const decrypted = fle_integration.decryptFieldIfNeeded(
+                                    fle_ctx,
+                                    type_name,
+                                    entry.key_ptr.*,
+                                    s,
+                                    record_id_buf,
+                                    true,
+                                ) catch |err| blk_decrypt: {
+                                    if (err == fle_integration.fle_aead_mod.Error.SearchNotPermitted) {
+                                        break :blk_decrypt "[REDACTED]";
+                                    }
+                                    break :blk_decrypt s;
+                                };
 
-                            try writer.writeByte('"');
-                            try writer.writeAll(decrypted);
-                            try writer.writeByte('"');
+                                try writer.writeByte('"');
+                                try writer.writeAll(decrypted);
+                                try writer.writeByte('"');
+                            } else {
+                                // Fast path: no FLE configured, write string directly
+                                try writer.writeByte('"');
+                                try writeJsonEscapedString(writer, s);
+                                try writer.writeByte('"');
+                            }
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),
@@ -297,37 +303,42 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                     const prop_value = entry.value_ptr.*;
                     switch (prop_value) {
                         .String => |s| {
-                            // Field-Level Encryption: decrypt if configured
-                            const type_name = edge.label;
-                            // P2-3: Use provided allocator instead of page_allocator
-                            const fle_ctx = fle_integration.EncryptionContext{
-                                .tenant_id = "default",
-                                .schema_name = type_name, // Use actual edge type
-                                .allocator = allocator,
-                                .current_user_role = fle_integration.getCurrentUserRole(),
-                            };
-                            const record_id_buf = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge.id});
-                            defer allocator.free(record_id_buf);
+                            // GAP-0203: Skip FLE entirely when no encrypted fields configured
+                            // CANARY: REQ=REQ-PERF-FLE-SKIP-004; FEATURE="FLESkipOptimization"; ASPECT=EdgePropertyWrite; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
+                            if (fle_integration.hasEncryptedFields()) {
+                                const type_name = edge.label;
+                                const fle_ctx = fle_integration.EncryptionContext{
+                                    .tenant_id = "default",
+                                    .schema_name = type_name,
+                                    .allocator = allocator,
+                                    .current_user_role = fle_integration.getCurrentUserRole(),
+                                };
+                                const record_id_buf = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge.id});
+                                defer allocator.free(record_id_buf);
 
-                            const decrypted = fle_integration.decryptFieldIfNeeded(
-                                fle_ctx,
-                                type_name,
-                                entry.key_ptr.*,
-                                s,
-                                record_id_buf,
-                                true, // Check RBAC
-                            ) catch |err| blk_decrypt: {
-                                // For SearchNotPermitted, return redacted placeholder
-                                if (err == fle_integration.fle_aead_mod.Error.SearchNotPermitted) {
-                                    break :blk_decrypt "[REDACTED]";
-                                }
-                                // Fall back to ciphertext on other errors (e.g., AEADAuthFailed)
-                                break :blk_decrypt s;
-                            };
+                                const decrypted = fle_integration.decryptFieldIfNeeded(
+                                    fle_ctx,
+                                    type_name,
+                                    entry.key_ptr.*,
+                                    s,
+                                    record_id_buf,
+                                    true,
+                                ) catch |err| blk_decrypt: {
+                                    if (err == fle_integration.fle_aead_mod.Error.SearchNotPermitted) {
+                                        break :blk_decrypt "[REDACTED]";
+                                    }
+                                    break :blk_decrypt s;
+                                };
 
-                            try writer.writeByte('"');
-                            try writer.writeAll(decrypted);
-                            try writer.writeByte('"');
+                                try writer.writeByte('"');
+                                try writer.writeAll(decrypted);
+                                try writer.writeByte('"');
+                            } else {
+                                // Fast path: no FLE configured, write string directly
+                                try writer.writeByte('"');
+                                try writeJsonEscapedString(writer, s);
+                                try writer.writeByte('"');
+                            }
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),
