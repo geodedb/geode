@@ -40,9 +40,9 @@ variables:
   DOCKER_BUILDKIT: 1
   ZIG_VERSION: "0.15.2"
   ZIG_IMAGE: "registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}"
-  CI_CATALOG_REGISTRY_USER: "$CI_REGISTRY_USER"
-  CI_CATALOG_REGISTRY_PASSWORD: "$CI_REGISTRY_PASSWORD"
-  DOCKER_AUTH_CONFIG: '{"auths":{"registry.gitlab.com":{"username":"$CI_CATALOG_REGISTRY_USER","password":"$CI_CATALOG_REGISTRY_PASSWORD"}}}'
+  CI_CATALOG_REGISTRY_USER: "${CI_REGISTRY_USER}"
+  CI_CATALOG_REGISTRY_PASSWORD: "${CI_REGISTRY_PASSWORD}"
+  DOCKER_AUTH_CONFIG: '{"auths":{"registry.gitlab.com":{"username":"${CI_CATALOG_REGISTRY_USER}","password":"${CI_CATALOG_REGISTRY_PASSWORD}"}}}'
   GORELEASER_VERSION: "v2.5.0"
   # Git config for CI authentication
   GIT_CONFIG_COUNT: 2
@@ -992,6 +992,38 @@ publish-packages:
       echo "View packages at: ${CI_PROJECT_URL}/-/packages"
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-alpha\.\d+|-beta\.\d+|-rc\.\d+)?$/'
+
+# =============================================================================
+# Publish Stage - CI Catalog Zig Image
+# =============================================================================
+
+publish-zig-image:
+  stage: publish
+  tags:
+    - saas-linux-medium-amd64
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - |
+      if [ -z "${CI_CATALOG_REGISTRY_USER:-}" ] || [ -z "${CI_CATALOG_REGISTRY_PASSWORD:-}" ]; then
+        echo "CI_CATALOG_REGISTRY_USER/PASSWORD not set; cannot publish Zig image."
+        exit 1
+      fi
+      echo "$CI_CATALOG_REGISTRY_PASSWORD" | docker login registry.gitlab.com -u "$CI_CATALOG_REGISTRY_USER" --password-stdin
+      docker build --pull -f docker/zig/Dockerfile \
+        --build-arg ZIG_VERSION="${ZIG_VERSION}" \
+        -t "${ZIG_IMAGE}" \
+        -t "registry.gitlab.com/devnw/ci-catalog/zig:latest" \
+        .
+      docker push "${ZIG_IMAGE}"
+      docker push "registry.gitlab.com/devnw/ci-catalog/zig:latest"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  allow_failure: false
 
 # =============================================================================
 # Note: APT repository is published to apt.geodedb.com via S3 (DigitalOcean Spaces)
