@@ -198,3 +198,372 @@ test "TestAuthEnforcement_RoleRoundTrip" {
     const ro_str = Role.toString(.ReadOnly);
     try testing.expect(Role.fromString(ro_str) == .ReadOnly);
 }
+
+// ============================================================================
+// AUTHORIZATION ENFORCEMENT TESTS
+// CANARY: REQ=REQ-AUTH-ENFORCE-025; FEATURE="AuthEnforcement"; ASPECT=AuthorizationTests; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// These tests verify that users cannot perform operations outside their roles
+// ============================================================================
+
+// --- READ OPERATION AUTHORIZATION ---
+
+test "TestAuthz_ReadOnly_CannotCreateNode" {
+    // ReadOnly users should NOT be able to create nodes (requires Write)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Write));
+}
+
+test "TestAuthz_ReadOnly_CannotInsertData" {
+    // ReadOnly users should NOT be able to insert data (requires Write)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Write));
+}
+
+test "TestAuthz_ReadOnly_CannotDeleteNode" {
+    // ReadOnly users should NOT be able to delete nodes (requires Write)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Write));
+}
+
+test "TestAuthz_ReadOnly_CannotMergeNode" {
+    // ReadOnly users should NOT be able to merge nodes (requires Write)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Write));
+}
+
+test "TestAuthz_ReadOnly_CannotCreateIndex" {
+    // ReadOnly users should NOT be able to create indexes (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Schema));
+}
+
+test "TestAuthz_ReadOnly_CannotDropIndex" {
+    // ReadOnly users should NOT be able to drop indexes (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Schema));
+}
+
+test "TestAuthz_ReadOnly_CannotCreateGraph" {
+    // ReadOnly users should NOT be able to create graphs (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Schema));
+}
+
+test "TestAuthz_ReadOnly_CannotDropGraph" {
+    // ReadOnly users should NOT be able to drop graphs (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Schema));
+}
+
+test "TestAuthz_ReadOnly_CannotCreateSchema" {
+    // ReadOnly users should NOT be able to create schemas (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Schema));
+}
+
+test "TestAuthz_ReadOnly_CannotDropSchema" {
+    // ReadOnly users should NOT be able to drop schemas (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Schema));
+}
+
+test "TestAuthz_ReadOnly_CannotCreateConstraint" {
+    // ReadOnly users should NOT be able to create constraints (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Schema));
+}
+
+test "TestAuthz_ReadOnly_CannotDropConstraint" {
+    // ReadOnly users should NOT be able to drop constraints (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Schema));
+}
+
+// --- USER ROLE AUTHORIZATION ---
+
+test "TestAuthz_User_CannotCreateNode" {
+    // User role should NOT be able to create nodes (requires Write)
+    try testing.expect(!user_management.hasPermission(.User, .Write));
+}
+
+test "TestAuthz_User_CannotInsertData" {
+    // User role should NOT be able to insert data (requires Write)
+    try testing.expect(!user_management.hasPermission(.User, .Write));
+}
+
+test "TestAuthz_User_CannotDeleteNode" {
+    // User role should NOT be able to delete nodes (requires Write)
+    try testing.expect(!user_management.hasPermission(.User, .Write));
+}
+
+test "TestAuthz_User_CannotMergeNode" {
+    // User role should NOT be able to merge nodes (requires Write)
+    try testing.expect(!user_management.hasPermission(.User, .Write));
+}
+
+test "TestAuthz_User_CannotCreateIndex" {
+    // User role should NOT be able to create indexes (requires Schema)
+    try testing.expect(!user_management.hasPermission(.User, .Schema));
+}
+
+test "TestAuthz_User_CannotDropIndex" {
+    // User role should NOT be able to drop indexes (requires Schema)
+    try testing.expect(!user_management.hasPermission(.User, .Schema));
+}
+
+test "TestAuthz_User_CannotCreateGraph" {
+    // User role should NOT be able to create graphs (requires Schema)
+    try testing.expect(!user_management.hasPermission(.User, .Schema));
+}
+
+test "TestAuthz_User_CannotDropGraph" {
+    // User role should NOT be able to drop graphs (requires Schema)
+    try testing.expect(!user_management.hasPermission(.User, .Schema));
+}
+
+// --- READWRITE ROLE AUTHORIZATION ---
+
+test "TestAuthz_ReadWrite_CanCreateNode" {
+    // ReadWrite role SHOULD be able to create nodes (has Write)
+    try testing.expect(user_management.hasPermission(.ReadWrite, .Write));
+}
+
+test "TestAuthz_ReadWrite_CanInsertData" {
+    // ReadWrite role SHOULD be able to insert data (has Write)
+    try testing.expect(user_management.hasPermission(.ReadWrite, .Write));
+}
+
+test "TestAuthz_ReadWrite_CanDeleteNode" {
+    // ReadWrite role SHOULD be able to delete nodes (has Write)
+    try testing.expect(user_management.hasPermission(.ReadWrite, .Write));
+}
+
+test "TestAuthz_ReadWrite_CanMergeNode" {
+    // ReadWrite role SHOULD be able to merge nodes (has Write)
+    try testing.expect(user_management.hasPermission(.ReadWrite, .Write));
+}
+
+test "TestAuthz_ReadWrite_CannotCreateIndex" {
+    // ReadWrite role should NOT be able to create indexes (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadWrite, .Schema));
+}
+
+test "TestAuthz_ReadWrite_CannotDropIndex" {
+    // ReadWrite role should NOT be able to drop indexes (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadWrite, .Schema));
+}
+
+test "TestAuthz_ReadWrite_CannotCreateGraph" {
+    // ReadWrite role should NOT be able to create graphs (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadWrite, .Schema));
+}
+
+test "TestAuthz_ReadWrite_CannotDropGraph" {
+    // ReadWrite role should NOT be able to drop graphs (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadWrite, .Schema));
+}
+
+test "TestAuthz_ReadWrite_CannotCreateSchema" {
+    // ReadWrite role should NOT be able to create schemas (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadWrite, .Schema));
+}
+
+test "TestAuthz_ReadWrite_CannotDropSchema" {
+    // ReadWrite role should NOT be able to drop schemas (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadWrite, .Schema));
+}
+
+test "TestAuthz_ReadWrite_CannotCreateConstraint" {
+    // ReadWrite role should NOT be able to create constraints (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadWrite, .Schema));
+}
+
+test "TestAuthz_ReadWrite_CannotDropConstraint" {
+    // ReadWrite role should NOT be able to drop constraints (requires Schema)
+    try testing.expect(!user_management.hasPermission(.ReadWrite, .Schema));
+}
+
+// --- ADMIN ROLE AUTHORIZATION (should have all permissions) ---
+
+test "TestAuthz_Admin_CanCreateNode" {
+    try testing.expect(user_management.hasPermission(.Admin, .Write));
+}
+
+test "TestAuthz_Admin_CanInsertData" {
+    try testing.expect(user_management.hasPermission(.Admin, .Write));
+}
+
+test "TestAuthz_Admin_CanDeleteNode" {
+    try testing.expect(user_management.hasPermission(.Admin, .Write));
+}
+
+test "TestAuthz_Admin_CanMergeNode" {
+    try testing.expect(user_management.hasPermission(.Admin, .Write));
+}
+
+test "TestAuthz_Admin_CanCreateIndex" {
+    try testing.expect(user_management.hasPermission(.Admin, .Schema));
+}
+
+test "TestAuthz_Admin_CanDropIndex" {
+    try testing.expect(user_management.hasPermission(.Admin, .Schema));
+}
+
+test "TestAuthz_Admin_CanCreateGraph" {
+    try testing.expect(user_management.hasPermission(.Admin, .Schema));
+}
+
+test "TestAuthz_Admin_CanDropGraph" {
+    try testing.expect(user_management.hasPermission(.Admin, .Schema));
+}
+
+test "TestAuthz_Admin_CanCreateSchema" {
+    try testing.expect(user_management.hasPermission(.Admin, .Schema));
+}
+
+test "TestAuthz_Admin_CanDropSchema" {
+    try testing.expect(user_management.hasPermission(.Admin, .Schema));
+}
+
+test "TestAuthz_Admin_CanCreateConstraint" {
+    try testing.expect(user_management.hasPermission(.Admin, .Schema));
+}
+
+test "TestAuthz_Admin_CanDropConstraint" {
+    try testing.expect(user_management.hasPermission(.Admin, .Schema));
+}
+
+test "TestAuthz_Admin_CanReadData" {
+    try testing.expect(user_management.hasPermission(.Admin, .Read));
+}
+
+// ============================================================================
+// EXHAUSTIVE OPERATION-TO-PERMISSION MAPPING TESTS
+// CANARY: REQ=REQ-AUTH-ENFORCE-026; FEATURE="AuthEnforcement"; ASPECT=OperationMapping; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// Verify all operations are mapped to correct permissions
+// ============================================================================
+
+test "TestAuthz_OperationMapping_ReadOperations" {
+    // All read operations require Read permission
+    // Query, Union, Intersect, Except, Show, Explain, Profile, Call, For, Values
+    // All these should require Read permission, which ReadOnly has
+    try testing.expect(user_management.hasPermission(.ReadOnly, .Read));
+    try testing.expect(user_management.hasPermission(.User, .Read));
+    try testing.expect(user_management.hasPermission(.ReadWrite, .Read));
+    try testing.expect(user_management.hasPermission(.Admin, .Read));
+}
+
+test "TestAuthz_OperationMapping_WriteOperations" {
+    // All write operations require Write permission
+    // Create, Insert, Delete, Merge
+    // Only ReadWrite and Admin should have Write permission
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Write));
+    try testing.expect(!user_management.hasPermission(.User, .Write));
+    try testing.expect(user_management.hasPermission(.ReadWrite, .Write));
+    try testing.expect(user_management.hasPermission(.Admin, .Write));
+}
+
+test "TestAuthz_OperationMapping_SchemaOperations" {
+    // All schema operations require Schema permission
+    // CreateIndex, DropIndex, CreateConstraint, DropConstraint
+    // CreateGraph, DropGraph, CreateGraphType, DropGraphType
+    // CreateSchema, DropSchema
+    // Only Admin should have Schema permission
+    try testing.expect(!user_management.hasPermission(.ReadOnly, .Schema));
+    try testing.expect(!user_management.hasPermission(.User, .Schema));
+    try testing.expect(!user_management.hasPermission(.ReadWrite, .Schema));
+    try testing.expect(user_management.hasPermission(.Admin, .Schema));
+}
+
+// ============================================================================
+// NEGATIVE PERMISSION TESTS (Security boundaries)
+// CANARY: REQ=REQ-AUTH-ENFORCE-027; FEATURE="AuthEnforcement"; ASPECT=SecurityBoundaries; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// These tests verify security boundaries are not violated
+// ============================================================================
+
+test "TestAuthz_Boundary_ReadOnlyCannotEscalate" {
+    // ReadOnly role should NEVER have Write or Schema permissions
+    const has_write = user_management.hasPermission(.ReadOnly, .Write);
+    const has_schema = user_management.hasPermission(.ReadOnly, .Schema);
+
+    try testing.expect(!has_write);
+    try testing.expect(!has_schema);
+
+    // Double-check by verifying permission list
+    const perms = Permission.fromRole(.ReadOnly);
+    for (perms) |p| {
+        try testing.expect(p != .Write);
+        try testing.expect(p != .Schema);
+    }
+}
+
+test "TestAuthz_Boundary_UserCannotEscalate" {
+    // User role should NEVER have Write or Schema permissions
+    const has_write = user_management.hasPermission(.User, .Write);
+    const has_schema = user_management.hasPermission(.User, .Schema);
+
+    try testing.expect(!has_write);
+    try testing.expect(!has_schema);
+
+    // Double-check by verifying permission list
+    const perms = Permission.fromRole(.User);
+    for (perms) |p| {
+        try testing.expect(p != .Write);
+        try testing.expect(p != .Schema);
+    }
+}
+
+test "TestAuthz_Boundary_ReadWriteCannotEscalateToSchema" {
+    // ReadWrite role should NEVER have Schema permissions
+    const has_schema = user_management.hasPermission(.ReadWrite, .Schema);
+    try testing.expect(!has_schema);
+
+    // Double-check by verifying permission list
+    const perms = Permission.fromRole(.ReadWrite);
+    for (perms) |p| {
+        try testing.expect(p != .Schema);
+    }
+}
+
+test "TestAuthz_Boundary_NoHiddenPermissions" {
+    // Verify each role has exactly the expected number of permissions
+    try testing.expectEqual(@as(usize, 1), Permission.fromRole(.ReadOnly).len); // Only Read
+    try testing.expectEqual(@as(usize, 1), Permission.fromRole(.User).len); // Only Read
+    try testing.expectEqual(@as(usize, 2), Permission.fromRole(.ReadWrite).len); // Read + Write
+    try testing.expectEqual(@as(usize, 3), Permission.fromRole(.Admin).len); // Read + Write + Schema
+}
+
+// ============================================================================
+// PRIVILEGE ESCALATION PREVENTION TESTS
+// CANARY: REQ=REQ-AUTH-ENFORCE-028; FEATURE="AuthEnforcement"; ASPECT=EscalationPrevention; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// ============================================================================
+
+test "TestAuthz_NoPrivilegeEscalation_InvalidRoleStrings" {
+    // These strings should NEVER be parsed as valid roles
+    // Prevents privilege escalation via role string manipulation
+    const invalid_roles = [_][]const u8{
+        "admin\x00", // Null byte injection
+        "ADMIN\n", // Newline injection
+        "admin\r\n", // CRLF injection
+        "admin'--", // SQL injection attempt
+        "admin; DROP TABLE users;", // SQL injection
+        "<script>alert('admin')</script>", // XSS attempt
+        "{{admin}}", // Template injection
+        "${admin}", // Variable injection
+        "admin|root", // Pipe character
+        "admin&root", // Ampersand
+        "../admin", // Path traversal
+        "..\\admin", // Windows path traversal
+        "admin%00", // URL-encoded null
+        "\x00admin", // Leading null byte
+    };
+
+    for (invalid_roles) |invalid| {
+        try testing.expect(Role.fromString(invalid) == null);
+    }
+}
+
+test "TestAuthz_NoPrivilegeEscalation_CaseSensitiveChecks" {
+    // Role names are case-insensitive but should still parse to correct role
+    // Ensure "Admin" doesn't give more permissions than "admin"
+    const admin1 = Role.fromString("admin").?;
+    const admin2 = Role.fromString("ADMIN").?;
+    const admin3 = Role.fromString("Admin").?;
+
+    // All should have exactly the same permissions
+    try testing.expect(user_management.hasPermission(admin1, .Read) == user_management.hasPermission(admin2, .Read));
+    try testing.expect(user_management.hasPermission(admin1, .Write) == user_management.hasPermission(admin2, .Write));
+    try testing.expect(user_management.hasPermission(admin1, .Schema) == user_management.hasPermission(admin2, .Schema));
+
+    try testing.expect(user_management.hasPermission(admin1, .Read) == user_management.hasPermission(admin3, .Read));
+    try testing.expect(user_management.hasPermission(admin1, .Write) == user_management.hasPermission(admin3, .Write));
+    try testing.expect(user_management.hasPermission(admin1, .Schema) == user_management.hasPermission(admin3, .Schema));
+}

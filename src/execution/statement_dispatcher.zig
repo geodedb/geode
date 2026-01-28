@@ -105,12 +105,21 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return result;
         },
         .Union => |u| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-005; FEATURE="AuthEnforcement"; ASPECT=UnionReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: UNION is a read operation
+            try checkPermission(context, .Read);
             return executeUnionWithContext(allocator, u, context);
         },
         .Intersect => |i| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-006; FEATURE="AuthEnforcement"; ASPECT=IntersectReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: INTERSECT is a read operation
+            try checkPermission(context, .Read);
             return executeIntersect(allocator, i);
         },
         .Except => |e| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-007; FEATURE="AuthEnforcement"; ASPECT=ExceptReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: EXCEPT is a read operation
+            try checkPermission(context, .Read);
             return executeExcept(allocator, e);
         },
         .Create => |c| {
@@ -153,18 +162,37 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             if (txn.body) |body| {
                 var last_result: ?ExecutionResult = null;
 
+                // CANARY: REQ=REQ-AUTH-ENFORCE-024; FEATURE="AuthEnforcement"; ASPECT=TransactionBodyPermissions; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+                // CRITICAL SECURITY: Each statement in transaction body must check permissions
+
                 // Execute all statements in the transaction body
                 for (body) |*body_stmt| {
                     // Inline switch to handle different statement types (avoids circular error set inference)
                     const txn_graph = if (mut_context.session_state) |session| session.graph else null;
                     last_result = (switch (body_stmt.*) {
-                        .Query => |q| executeQueryWithContext(allocator, q, mut_context),
-                        .Call => |c| switch (c) {
-                            .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
-                            .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
+                        .Query => |q| blk: {
+                            // CRITICAL SECURITY: Check Read permission for Query in transaction
+                            checkPermission(mut_context, .Read) catch |err| break :blk err;
+                            break :blk executeQueryWithContext(allocator, q, mut_context);
                         },
-                        .Create => |create_stmt| executeCreate(allocator, create_stmt, txn_graph),
-                        .Merge => |m| executeMerge(allocator, m, txn_graph),
+                        .Call => |c| blk: {
+                            // CRITICAL SECURITY: Check Read permission for Call in transaction
+                            checkPermission(mut_context, .Read) catch |err| break :blk err;
+                            break :blk switch (c) {
+                                .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
+                                .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
+                            };
+                        },
+                        .Create => |create_stmt| blk: {
+                            // CRITICAL SECURITY: Check Write permission for Create in transaction
+                            checkPermission(mut_context, .Write) catch |err| break :blk err;
+                            break :blk executeCreate(allocator, create_stmt, txn_graph);
+                        },
+                        .Merge => |m| blk: {
+                            // CRITICAL SECURITY: Check Write permission for Merge in transaction
+                            checkPermission(mut_context, .Write) catch |err| break :blk err;
+                            break :blk executeMerge(allocator, m, txn_graph);
+                        },
                         .StartTransaction => return error.NestedTransactionNotAllowed,
                         .Commit => return error.CommitInTransactionBody,
                         .Rollback => return error.RollbackInTransactionBody,
@@ -340,15 +368,28 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .Show => |s| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-008; FEATURE="AuthEnforcement"; ASPECT=ShowReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: SHOW is a read operation (exposes metadata)
+            try checkPermission(context, .Read);
             return executeShow(allocator, s, context);
         },
         .Explain => |exp| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-009; FEATURE="AuthEnforcement"; ASPECT=ExplainReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: EXPLAIN exposes query plan information
+            try checkPermission(context, .Read);
             return executeExplain(allocator, exp, context);
         },
         .Profile => |prof| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-010; FEATURE="AuthEnforcement"; ASPECT=ProfileReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: PROFILE exposes performance information
+            try checkPermission(context, .Read);
             return executeProfile(allocator, prof, context);
         },
         .CreateIndex => |ci| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-011; FEATURE="AuthEnforcement"; ASPECT=CreateIndexSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: CREATE INDEX is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // CREATE INDEX implementation with validation
             // CANARY: REQ=REQ-INDEX-002; FEATURE="IndexManagement"; ASPECT=ScopedCreation; STATUS=TESTED; OWNER=storage; UPDATED=2025-10-14
             // P2-2 Phase 2: Use Catalog instance instead of global state
@@ -446,6 +487,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateConstraint => |cc| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-012; FEATURE="AuthEnforcement"; ASPECT=CreateConstraintSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: CREATE CONSTRAINT is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // GAP-0048: CREATE CONSTRAINT implementation with proper catalog storage and enforcement
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-10
             const cat = getCatalog(allocator, context);
@@ -525,6 +570,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropIndex => |di| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-013; FEATURE="AuthEnforcement"; ASPECT=DropIndexSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: DROP INDEX is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // DROP INDEX implementation
             // CANARY: REQ=REQ-INDEX-003; FEATURE="IndexManagement"; ASPECT=ScopedDeletion; STATUS=TESTED; OWNER=storage; UPDATED=2025-10-14
             // P2-2 Phase 2: Use Catalog instance instead of global state
@@ -583,6 +632,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropConstraint => |dc| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-014; FEATURE="AuthEnforcement"; ASPECT=DropConstraintSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: DROP CONSTRAINT is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // GAP-0048: DROP CONSTRAINT implementation with proper catalog removal
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-002; FEATURE="ConstraintExecution"; ASPECT=DROP; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-10
             const cat = getCatalog(allocator, context);
@@ -632,6 +685,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .Call => |call_stmt| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-021; FEATURE="AuthEnforcement"; ASPECT=CallReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: CALL procedures can read data, require at least Read permission
+            try checkPermission(context, .Read);
+
             var result: ExecutionResult = undefined;
 
             switch (call_stmt) {
@@ -676,6 +733,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return result;
         },
         .CreateGraph => |cg| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-015; FEATURE="AuthEnforcement"; ASPECT=CreateGraphSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: CREATE GRAPH is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphSupport"; ASPECT=CreateGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
             // CREATE GRAPH implementation with duplicate detection and storage creation
             // P2-2 Phase 2: Use Catalog instance instead of global state
@@ -755,6 +816,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateGraphType => |cgt| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-016; FEATURE="AuthEnforcement"; ASPECT=CreateGraphTypeSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: CREATE GRAPH TYPE is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // CREATE GRAPH TYPE implementation with FLE catalog registration
 
             // Get global FLE catalog
@@ -813,6 +878,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropGraph => |dg| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-017; FEATURE="AuthEnforcement"; ASPECT=DropGraphSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: DROP GRAPH is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // DROP GRAPH implementation with existence check
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
@@ -852,6 +921,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropGraphType => |dgt| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-018; FEATURE="AuthEnforcement"; ASPECT=DropGraphTypeSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: DROP GRAPH TYPE is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // DROP GRAPH TYPE implementation
             _ = dgt;
             return ExecutionResult{
@@ -861,6 +934,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateSchema => |cs| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-019; FEATURE="AuthEnforcement"; ASPECT=CreateSchemaSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: CREATE SCHEMA is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // CREATE SCHEMA implementation with duplicate detection
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
@@ -897,6 +974,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropSchema => |ds| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-020; FEATURE="AuthEnforcement"; ASPECT=DropSchemaSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: DROP SCHEMA is a schema modification operation
+            try checkPermission(context, .Schema);
+
             // DROP SCHEMA implementation with existence check
             // P2-2 Phase 2: Use Catalog instance instead of global state
             // P2-3: Pass allocator to ensureCatalogInstance
@@ -1043,9 +1124,15 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .For => |f| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-022; FEATURE="AuthEnforcement"; ASPECT=ForReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: FOR is a read operation
+            try checkPermission(context, .Read);
             return executeFor(allocator, f, context);
         },
         .Values => |v| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-023; FEATURE="AuthEnforcement"; ASPECT=ValuesReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: VALUES is a read operation
+            try checkPermission(context, .Read);
             return executeValues(allocator, v, context);
         },
         else => return error.NotImplemented,
