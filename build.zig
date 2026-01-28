@@ -1556,6 +1556,12 @@ pub fn build(b: *std.Build) void {
     fle_lifecycle_test.root_module.addImport("geode", root_mod);
     test_step.dependOn(&fle_lifecycle_test.step);
 
+    // FLE Enforcement Security Tests - Critical security verification
+    const fle_enforcement_test = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/security/test_fle_enforcement.zig"), .target = target, .optimize = optimize }),
+    });
+    test_step.dependOn(&fle_enforcement_test.step);
+
     // Add unit tests for new modules
     const crypto_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/storage/crypto.zig"), .target = target, .optimize = optimize }),
