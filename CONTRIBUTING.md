@@ -17,6 +17,7 @@ Our CI will **reject any PR** that introduces `page_allocator` into `src/`.
 #### ✅ Proper Allocator Patterns
 
 **1. Function Parameters**
+
 ```zig
 // ✅ GOOD: Thread allocator as first parameter
 pub fn processData(allocator: std.mem.Allocator, value: []const u8) !Result {
@@ -32,6 +33,7 @@ pub fn processData(value: []const u8) !Result {
 ```
 
 **2. Struct Methods**
+
 ```zig
 // ✅ GOOD: Store allocator in struct
 pub const Processor = struct {
@@ -57,6 +59,7 @@ pub const Processor = struct {
 ```
 
 **3. Main Functions**
+
 ```zig
 // ✅ GOOD: Use GeneralPurposeAllocator
 pub fn main() !void {
@@ -77,6 +80,7 @@ pub fn main() !void {
 ```
 
 **4. Global Functions (Without Context)**
+
 ```zig
 // ✅ GOOD: Static GPA with init flag
 var global_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
@@ -91,6 +95,7 @@ pub fn globalUtility() !bool {
 ```
 
 **5. Test Code**
+
 ```zig
 // ✅ GOOD: Use testing.allocator
 test "example test" {
@@ -136,6 +141,7 @@ All significant features and implementations must include CANARY markers for gov
 ```
 
 **Status values:**
+
 - `STUB` - Initial implementation
 - `TESTED` - Has test coverage
 - `BENCHED` - Has performance benchmarks
@@ -153,6 +159,7 @@ Geode targets 98%+ compliance with ISO/IEC 39075:2024 (GQL standard). Always ver
 - **Geodetestlab**: Maintain >90% pass rate
 
 Run tests with:
+
 ```bash
 make test                    # Unit tests
 python3 extended_test_runner.py  # Integration tests
@@ -199,30 +206,167 @@ Report security vulnerabilities privately to the maintainers.
 
 ## Getting Started
 
-1. **Setup Development Environment:**
+### Prerequisites
+
+- **Zig 0.15.1+** - [Download](https://ziglang.org/download/)
+- **Python 3.9+** - For test runner and pre-commit hooks
+- **Git** - For version control
+- **OpenSSL** - For TLS certificate generation
+
+### Quick Setup (Recommended)
+
+The fastest way to set up your development environment:
+
+```bash
+# Clone repository
+git clone https://gitlab.com/devnw/codepros/geode/geode.git
+cd geode
+
+# Run the setup script (installs pre-commit, builds, and tests)
+make setup-dev
+```
+
+This will:
+
+1. Initialize git submodules
+2. Install pre-commit hooks
+3. Build the project
+4. Run the test suite
+
+### Manual Setup
+
+If you prefer manual control:
+
+```bash
+# Clone repository
+git clone https://gitlab.com/devnw/codepros/geode/geode.git
+cd geode
+
+# Initialize submodules
+git submodule update --init --recursive
+
+# Install pre-commit (strongly recommended)
+pip install pre-commit
+pre-commit install
+pre-commit install --hook-type commit-msg
+pre-commit install --hook-type pre-push
+
+# Build
+make build
+
+# Run tests
+make test
+```
+
+### Pre-commit Hooks
+
+This project uses [pre-commit](https://pre-commit.com/) to enforce code quality standards. Pre-commit hooks run automatically before each commit and push.
+
+**Hooks on commit:**
+
+- Trailing whitespace removal
+- End-of-file fixes
+- YAML/JSON/TOML validation
+- Private key detection
+- Zig formatting (`zig fmt`)
+- Zig compilation check (`zig build`)
+- Shell script linting (shellcheck)
+- Python linting (ruff)
+- Markdown linting
+- Dockerfile linting (hadolint)
+- GoReleaser config validation
+
+**Hooks on push (slower checks):**
+
+- Cross-compilation for all required targets
+- Full Zig test suite
+- Feature flags check
+- CANARY marker verification
+
+**Manual commands:**
+
+```bash
+# Run all pre-commit checks
+make pre-commit
+
+# Run all checks including push hooks
+make pre-commit-all
+
+# Update hooks to latest versions
+make pre-commit-update
+
+# Skip hooks temporarily (use sparingly)
+git commit --no-verify -m "message"
+```
+
+### Commit Message Format
+
+We use [Conventional Commits](https://www.conventionalcommits.org/). The pre-commit hook validates commit messages automatically.
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+Co-Authored-By: Your Name <email@example.com>
+```
+
+**Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+
+**Examples:**
+
+```bash
+feat(parser): add support for UNION ALL queries
+fix(storage): resolve memory leak in page cache
+docs(api): update vector operations documentation
+ci(hooks): add cross-compilation pre-push check
+```
+
+### Development Workflow
+
+1. **Create Feature Branch:**
+
    ```bash
-   # Install Zig 0.15.1
-   # Clone repository
-   git clone https://github.com/codeprosorg/geode.git
-   cd geode
-
-   # Build
-   make build
-
-   # Run tests
-   make test
+   git checkout -b feature/your-feature-name
    ```
 
 2. **Make Changes:**
-   - Create feature branch
    - Implement changes following code standards
+   - Add CANARY markers for new features
    - Add tests
    - Update documentation
 
-3. **Submit PR:**
-   - Ensure all checks pass
-   - Write clear commit messages
-   - Update GAP.md for code changes
+3. **Verify Locally:**
+
+   ```bash
+   # Format code
+   make fmt
+
+   # Build and test
+   make build && make test
+
+   # Run pre-commit checks
+   make pre-commit
+   ```
+
+4. **Commit Changes:**
+
+   ```bash
+   # Pre-commit hooks run automatically
+   git add .
+   git commit -m "feat(scope): description"
+   ```
+
+5. **Push and Create PR:**
+
+   ```bash
+   # Pre-push hooks run cross-compilation and tests
+   git push origin feature/your-feature-name
+   ```
+
+6. **Submit PR:**
+   - Ensure all CI checks pass
+   - Write clear PR description
    - Request review
 
 ## Resources

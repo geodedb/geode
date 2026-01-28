@@ -17,6 +17,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 **Complete documentation is available in the [`./docs/`](docs/) directory:**
 
 ### Essential References
+
 - **[Implementation Status](docs/IMPLEMENTATION_STATUS_OCTOBER_2025.md)** - Complete feature status with evidence
 - **[Features Overview](docs/FEATURES_OVERVIEW.md)** - Comprehensive feature catalog
 - **[Development TODO](docs/TODO.md)** - All 7 phases complete (✅ 100%)
@@ -24,17 +25,20 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 - **[Quick Reference](docs/QUICK_REFERENCE.md)** - Essential commands and syntax
 
 ### Technical Documentation
+
 - **[API Reference](docs/API_REFERENCE.md)** - Complete API documentation
 - **[Types & Functions](docs/TYPES_AND_FUNCTIONS.md)** - 50+ specialized data types
 - **[GQL Compliance](docs/GQL_COMPLIANCE.md)** - ISO/IEC 39075:2024 conformance
 - **[Test Runner Fixes](docs/TEST_RUNNER_FIXES_OCTOBER_2025.md)** - Recent test infrastructure improvements (Oct 2025)
 
 ### Enterprise & Security
+
 - **[Advanced Security Features](docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md)** - Enhanced RLS implementation
 - **[KMS Provider System](docs/KMS_PROVIDER_SYSTEM.md)** - Enterprise key management
 - **[User Authentication](docs/USER_AUTH.md)** - RBAC/ABAC with MFA support
 
 ### Advanced Features
+
 - **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
 - **[Real-time Analytics](docs/REAL_TIME_ANALYTICS.md)** - Streaming analytics with ML integration
 - **[Materialized Views](docs/MATERIALIZED_VIEWS.md)** - Enterprise view management
@@ -44,9 +48,11 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 ## 🎯 Implementation Status
 
 ### ✅ ALL TODO.md PHASES COMPLETED (October 16, 2025)
+
 **Total**: ~13,554+ lines of production code across all phases
 
 **Completed Phases**:
+
 1. **Phase 2: Parser Extensions** - Map literals, deep nesting (8+ levels)
 2. **Phase 3: Set Operations** - UNION/INTERSECT/EXCEPT, 22/22 tests passing
 3. **Phase 4: Transaction Isolation** - Phantom read prevention, SSI, 6 isolation levels
@@ -57,6 +63,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 **Details**: See [docs/completion_reports/](docs/completion_reports/) for comprehensive phase reports
 
 ### ✅ ALL MAJOR FEATURES COMPLETED (October 2025)
+
 1. **S3 Cloud Backup** - Production-ready with Digital Ocean Spaces integration
 2. **REPL QUIC Integration** - Real-time interactive shell with comprehensive features
 3. **Vector Operations** - HNSW indexing with 6 distance metrics and SIMD acceleration
@@ -73,6 +80,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 ### 🏗️ Architecture Overview
 
 **Core Components**:
+
 - **Parser/Lexer** (`src/gql/`): 100% ISO GQL compliance (70/70 tests)
 - **Query Planner** (`src/planner/`): Cost-based optimization with statistics
 - **Storage Engine** (`src/storage/`): MVCC, WAL, TDE with <1% overhead
@@ -83,6 +91,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 ## 🧮 Key Data Types
 
 ### **Vector Types** (Fully Implemented)
+
 - **VectorF32**: Single-precision floating-point vectors with SIMD acceleration
 - **VectorI32**: Integer vectors for discrete data and categorical embeddings
 - **HNSW Index Support**: Production-ready with 6 distance metrics
@@ -90,6 +99,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 - **Performance**: <50ns for 8D L2 distance, supports up to 65,535 dimensions
 
 ### **Advanced Types** (Complete)
+
 - **Network Types**: IPv4/IPv6, CIDR, MAC with <1μs parsing
 - **Geographic**: Point, LineString, Polygon with R-tree spatial indexing
 - **Cryptographic**: Hash types, digital signatures, encryption key management
@@ -98,6 +108,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 ## 🧪 Testing & Quality
 
 ### Evidence-Based Development
+
 - **CANARY System**: 1,735 governance markers tracking 2,190+ requirements
 - **Geodetestlab**: 97.4% pass rate (1644/1688 tests passing)
 - **ISO Compliance**: 100% GQL compliance (70/70 official test suite)
@@ -105,6 +116,7 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 - **Status Breakdown**: 81.4% TESTED, 6.0% BENCHED, 7.7% EXEMPT, 5.7% IMPL
 
 ### Test Execution
+
 ```bash
 # Run all tests
 python3 scripts/test/extended_test_runner.py
@@ -120,18 +132,52 @@ make build && make verify-fast
 ```
 
 ### Recent Test Improvements (October 2025)
+
 - **stdin handling** in test runner fixed (critical issue)
 - **Multi-statement execution** in CLI (session management workflows)
 - **Reserved keywords** as parameter names ($count, $name, etc.)
 - **IF NOT EXISTS** support in parameter clauses
 - See [docs/TEST_RUNNER_FIXES_OCTOBER_2025.md](docs/TEST_RUNNER_FIXES_OCTOBER_2025.md) for details
 
-## 🔧 Development Commands
+## 🔧 Development Setup
+
+### Quick Start (Recommended for New Developers)
+
+```bash
+# Clone and setup everything automatically
+git clone https://gitlab.com/devnw/codepros/geode/geode.git
+cd geode
+make setup-dev
+```
+
+This installs pre-commit hooks, builds the project, and runs tests.
+
+### Pre-commit Hooks
+
+This project uses [pre-commit](https://pre-commit.com/) for code quality enforcement:
+
+```bash
+# Install hooks (done automatically by setup-dev)
+make pre-commit-install
+
+# Run all checks manually
+make pre-commit
+
+# Update hooks to latest versions
+make pre-commit-update
+```
+
+**Hooks run on commit:** formatting, linting, compilation checks
+**Hooks run on push:** cross-compilation, full tests, CANARY verification
 
 ### Build & Server
+
 ```bash
 # Build debug version
 make build
+
+# Build release version
+make release
 
 # Start server (QUIC+TLS only)
 ./zig-out/bin/geode serve --listen 0.0.0.0:3141
@@ -143,15 +189,31 @@ make build
 ./zig-out/bin/geode query "RETURN 1 AS x"
 ```
 
+### Common Make Targets
+
+```bash
+make help              # Show all available targets
+make setup-dev         # Full development setup (recommended)
+make build             # Debug build
+make release           # Release build
+make test              # Run unit tests
+make fmt               # Format Zig code
+make pre-commit        # Run pre-commit checks
+make cross-compile     # Cross-compile for all platforms
+make geodetestlab-comprehensive  # Full integration test suite
+```
+
 ## 📋 Code Conventions
 
 ### Language & Style
+
 - **Language**: Zig 0.15.1+
 - **Comments**: Minimal unless required for clarity
 - **CANARY Markers**: Required for all implementations
 - **Memory Safety**: Proper allocation/deallocation patterns
 
 ### Testing Requirements
+
 - **Unit Tests**: All components must have test coverage
 - **Integration Tests**: End-to-end scenario verification  
 - **Regression Tests**: Automated prevention of known issues
@@ -160,12 +222,14 @@ make build
 ## 🎯 Implementation Methodology
 
 ### Evidence-Based Development
+
 1. **CANARY Markers**: All features tracked with governance compliance
 2. **Test-Driven**: Implementation verified through automated testing
 3. **Performance Validation**: Benchmarks required for optimization claims
 4. **Documentation**: All features documented with implementation proof
 
 ### Quality Gates
+
 - **Test Coverage**: Must maintain >90% pass rate (currently 97.4%)
 - **Memory Safety**: Zero memory leaks in test runs
 - **Standards Compliance**: Maintain 100% GQL compliance (70/70 tests)
@@ -180,6 +244,7 @@ Based on [TODO.md](docs/TODO.md), all major development priorities have been suc
 ## 🔧 Unified CLI Architecture
 
 **Complete Migration Achieved**:
+
 - ✅ **Single Binary**: `./zig-out/bin/geode` (unified architecture)
 - ✅ **Zero Subprocess Calls**: Eliminated geodec/geoded spawning
 - ✅ **Server-Only Mode**: All operations require QUIC server connection

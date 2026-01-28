@@ -12,17 +12,20 @@ Geode is a production-ready graph database implementing the **ISO/IEC 39075:2024
 ## 🏆 Key Features
 
 ### **Standards Compliance**
+
 - **100% ISO/IEC 39075:2024 GQL Compliance** - Full standards implementation (70/70 tests)
 - **ACID Transactions** - Full MVCC with Serializable Snapshot Isolation (SSI)
 - **Enterprise Security** - Enhanced RLS, TDE, audit logging, MFA support
 
 ### **Advanced Capabilities**
+
 - **Vector Search** - HNSW indexing with 6 distance metrics and SIMD acceleration
 - **Machine Learning** - Node2Vec, GraphSAGE, DeepWalk graph embeddings
 - **Real-time Analytics** - Streaming pattern detection and anomaly analysis
 - **Distributed Queries** - Federation-aware optimization with load balancing
 
 ### **Performance & Scalability**
+
 - **13.18x I/O Performance** - Memory-mapped operations with optimization
 - **Cost-Based Query Planner** - Statistics-driven optimization
 - **Cloud-Ready** - S3 backup integration with compression
@@ -33,6 +36,7 @@ Geode is a production-ready graph database implementing the **ISO/IEC 39075:2024
 ### **Installation**
 
 #### Using Nix (Recommended)
+
 ```bash
 # Run Geode directly
 nix run github:codeprosorg/geode
@@ -42,6 +46,7 @@ nix develop github:codeprosorg/geode
 ```
 
 #### Traditional Build
+
 ```bash
 # Prerequisites: Zig 0.15.1+
 git clone https://github.com/codeprosorg/geode
@@ -57,6 +62,7 @@ make build
 ### **Basic Usage**
 
 #### Interactive Shell
+
 ```bash
 # Start interactive REPL
 ./zig-out/bin/geode shell
@@ -66,6 +72,7 @@ make build
 ```
 
 #### Query Execution
+
 ```bash
 # Execute single query
 ./zig-out/bin/geode query "CREATE (alice:Person {name: 'Alice', age: 30})"
@@ -82,6 +89,7 @@ make build
 #### Example Queries
 
 **Basic Graph Operations**:
+
 ```gql
 -- Create nodes and relationships
 CREATE (alice:Person {name: 'Alice', age: 30})
@@ -95,6 +103,7 @@ RETURN p1.name, p2.name, r.since
 ```
 
 **Vector Similarity Search**:
+
 ```gql
 -- Create document with embedding
 CREATE (doc:Document {
@@ -110,6 +119,7 @@ ORDER BY similarity DESC
 ```
 
 **Real-time Analytics**:
+
 ```gql
 -- Analyze user activity patterns
 MATCH (user:User)-[:PERFORMED]->(action:Action)
@@ -121,6 +131,7 @@ ORDER BY recent_actions DESC
 ```
 
 **Advanced Query Features (October 2025)**:
+
 ```gql
 -- Variable-length paths: Find friends within 2 hops
 MATCH (alice:Person)-[:KNOWS*1..2]->(friend)
@@ -155,6 +166,7 @@ COMMIT;
 ## 🏗️ Architecture
 
 ### **Core Components**
+
 - **GQL Parser/Lexer** - 100% ISO standard compliance with comprehensive syntax support
 - **Query Planner** - Cost-based optimization with real-time statistics integration
 - **Storage Engine** - MVCC with WAL, TDE encryption, and memory-mapped I/O
@@ -162,6 +174,7 @@ COMMIT;
 - **Transport Layer** - QUIC+TLS for secure, modern network communication
 
 ### **Advanced Features**
+
 - **Vector Processing** - SIMD-accelerated operations with hardware optimization
 - **Machine Learning** - Integrated graph embedding algorithms for AI applications
 - **Security Layer** - Enhanced RLS, policy evaluation, temporal constraints
@@ -170,12 +183,14 @@ COMMIT;
 ## 📊 Performance Benchmarks
 
 ### **Query Performance**
+
 - **Simple Queries**: <1ms execution for indexed operations
 - **Complex Joins**: 60-80% improvement with distributed coordination
 - **Vector Similarity**: 10-100x faster with HNSW vs sequential scan
 - **Full-text Search**: BM25 scoring with 40-60% relevance improvement
 
 ### **Storage Performance**
+
 - **I/O Operations**: 13.18x improvement (5,754μs → 436μs)
 - **Vector Operations**: 8x SIMD speedup for vectors ≥8 dimensions
 - **Transaction Throughput**: SSI with minimal performance overhead
@@ -184,18 +199,21 @@ COMMIT;
 ## 🔐 Security Features
 
 ### **Authentication & Authorization**
+
 - **Enhanced Row-Level Security (RLS)** - Policy-based access control with expression evaluation
 - **RBAC/ABAC** - Role and attribute-based access control
 - **Multi-Factor Authentication** - Integrated MFA support
 - **Session Management** - Secure session handling with timeout controls
 
 ### **Data Protection**
+
 - **Transparent Data Encryption (TDE)** - <1% performance overhead
 - **Key Management System (KMS)** - HashiCorp Vault integration
 - **Audit Logging** - Comprehensive compliance tracking
 - **Data Classification** - 5-level security classification system
 
 ### **Compliance Standards**
+
 - **GDPR** - Data protection regulation compliance
 - **SOX/HIPAA/PCI-DSS** - Financial and healthcare standards
 - **Enterprise Governance** - Audit trails and compliance tracking
@@ -203,18 +221,21 @@ COMMIT;
 ## 🧮 Data Types
 
 ### **Core Types**
+
 - **Numeric** - Int8-64, Float32-64, Decimal128 with precision control
 - **String** - UTF-8 with normalization, case folding, collation
 - **Temporal** - DateTime with timezone, intervals, duration arithmetic
 - **Binary** - Efficient blob storage and retrieval
 
 ### **Advanced Types**
+
 - **Vector Types** - VectorF32/VectorI32 with SIMD acceleration
 - **Network Types** - IPv4/IPv6, CIDR, MAC with <1μs parsing
 - **Geographic** - Point, LineString, Polygon with R-tree indexing
 - **Cryptographic** - Hash types, digital signatures, key management
 
 ### **Specialized Types**
+
 - **JSONB** - Binary JSON with inverted indexing
 - **XML** - Full XML processing with XPath support
 - **Arrays** - Multi-dimensional with element-wise operations
@@ -223,6 +244,7 @@ COMMIT;
 ## 🛠️ Development & Testing
 
 ### **Build System**
+
 ```bash
 # Development build
 make build
@@ -256,16 +278,19 @@ docker run --gpus all --rm geode:gpu
 ```
 
 **Requirements for GPU testing:**
+
 - NVIDIA GPU with CUDA 12.3.2+ support
 - NVIDIA Docker runtime installed
 - Docker configured with `--gpus` flag support
 
 **Verify GPU access:**
+
 ```bash
 docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 ```
 
 ### **Test Coverage**
+
 - **97.4% Test Coverage** (1644/1688 tests passing)
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
 - **CANARY Governance** - 1,735 governance markers tracking 2,190+ requirements
@@ -273,6 +298,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 - **GPU Acceleration** - Optional Vulkan/CUDA-based graph algorithm acceleration
 
 ### **Quality Assurance**
+
 - **Memory Safety** - Zero memory leaks in test runs
 - **Performance Regression** - Automated benchmark validation
 - **Standards Compliance** - Continuous ISO/IEC 39075:2024 verification
@@ -281,17 +307,20 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 ## 📚 Documentation
 
 ### **Essential Guides**
+
 - **[Features Overview](docs/FEATURES_OVERVIEW.md)** - Comprehensive feature catalog
 - **[TODO & Status](docs/TODO.md)** - Development status (all phases complete)
 - **[GQL Compliance](docs/GQL_COMPLIANCE.md)** - ISO/IEC 39075:2024 conformance
 - **[Quick Reference](docs/QUICK_REFERENCE.md)** - Commands and syntax guide
 
 ### **Technical Documentation**
+
 - **[API Reference](docs/API_REFERENCE.md)** - Complete API documentation
 - **[Types & Functions](docs/TYPES_AND_FUNCTIONS.md)** - Data type specifications
 - **[Architecture](docs/CURRENT_ARCHITECTURE.md)** - System architecture overview
 
 ### **Advanced Features**
+
 - **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
 - **[Security Progress](docs/SECURITY_PROGRESS.md)** - Enhanced RLS and compliance
 - **[Real-time Analytics](docs/REAL_TIME_ANALYTICS.md)** - Streaming and pattern detection
@@ -300,6 +329,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 ## 🌐 Use Cases
 
 ### **Primary Applications**
+
 - **Social Networks** - Relationship analysis and recommendation systems
 - **Knowledge Graphs** - Semantic data modeling and intelligent search
 - **Fraud Detection** - Pattern analysis and anomaly detection in financial networks
@@ -307,6 +337,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 - **IoT Networks** - Device relationship mapping and telemetry analysis
 
 ### **Industry Solutions**
+
 - **Financial Services** - Risk analysis, compliance monitoring, transaction networks
 - **Healthcare** - Patient data modeling, research analytics, treatment pathways
 - **E-commerce** - Product recommendations, customer behavior analysis
@@ -316,18 +347,42 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 ## 🤝 Contributing
 
 ### **Development Setup**
-1. **Prerequisites**: Zig 0.15.1+, Git
-2. **Clone Repository**: `git clone https://github.com/codeprosorg/geode`
-3. **Development Environment**: `nix develop` (recommended) or manual setup
-4. **Run Tests**: `make test` to verify setup
+
+**Quick Start (Recommended):**
+
+```bash
+git clone https://gitlab.com/devnw/codepros/geode/geode.git
+cd geode
+make setup-dev  # Installs pre-commit hooks, builds, and tests
+```
+
+**Manual Setup:**
+
+1. **Prerequisites**: Zig 0.15.1+, Python 3.9+, Git
+2. **Clone Repository**: `git clone https://gitlab.com/devnw/codepros/geode/geode.git`
+3. **Install Pre-commit**: `make pre-commit-install`
+4. **Build**: `make build`
+5. **Run Tests**: `make test`
+
+### **Pre-commit Hooks**
+
+This project uses [pre-commit](https://pre-commit.com/) for code quality enforcement:
+
+- **On commit**: Formatting, linting, compilation checks
+- **On push**: Cross-compilation, full test suite
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ### **Contributing Guidelines**
+
 - **CANARY Compliance** - All features must include governance tracking
 - **Test Coverage** - Maintain >90% test pass rate
 - **Documentation** - Update relevant docs with implementation changes
 - **Performance** - No regressions in core operations
+- **Conventional Commits** - Use standard commit message format
 
 ### **Community**
+
 - **Issues** - Report bugs and feature requests via GitHub Issues
 - **Discussions** - Technical discussions and questions
 - **Pull Requests** - Follow contributing guidelines for submissions
