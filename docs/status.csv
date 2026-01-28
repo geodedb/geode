@@ -394,7 +394,9 @@ REQ-CLI-BACKUP-INTEGRATION-001,CLIBackup,RemoteBackup,TESTED,,,claude,2026-01-16
 REQ-CLI-BACKUP-INTEGRATION-001,Remote Backup/Restore Operations,IntegrationTesting,TESTED,,,claude,2025-10-05,tests/test_server_backup_api_integration.zig
 REQ-CLI-BACKUP-LIST-001,CLIBackupList,DirectoryScan,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-COMPAT-001,Legacy Binary Symlinks,ML,IMPL,,,cli,2026-01-14,build.zig
+REQ-CLI-DOT-001,DotGraphOutput,FormatConversion,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
+REQ-CLI-FORMAT-001,QueryOutputFormats,DOT_Table_CSV,TESTED,,,cli,2026-01-28,geodetestlab/specs/query_output_formats.yml
 REQ-CLI-MIGRATE-CREATE-001,CLIMigrateCreate,FileCreation,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-MIGRATE-RUN-001,CLIMigrateRun,MigrationModule,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
@@ -2580,6 +2582,10 @@ REQ-LSP-METADATA-001,MetadataIntegration,Completions,EXEMPT,,,lsp,2026-01-03,src
 REQ-LSP-METADATA-002,MetadataIntegration,ComptimeLists,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-METADATA-003,MetadataIntegration,Hover,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-METADATA-004,MetadataIntegration,Completions,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
+REQ-LSP-REFS-001,References,FindAllRefs,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
+REQ-LSP-SEMTOK-001,SemanticTokens,SyntaxHighlight,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
+REQ-LSP-SIGHEP-001,SignatureHelp,FunctionParams,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
+REQ-LSP-SYMBOLS-001,DocumentSymbols,OutlineView,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
 REQ-M10-CONSTANTS-001,CodeQuality,MAGIC_NUMBERS,EXEMPT,,,core,2025-10-17,src/execution.zig
 REQ-M10-CONSTANTS-002,CodeQuality,MAGIC_NUMBERS,EXEMPT,,,security,2025-10-17,src/security/rls_core.zig
 REQ-M10-CONSTANTS-003,CodeQuality,MAGIC_NUMBERS,EXEMPT,,,security,2025-10-17,src/security/rls_enhanced.zig

@@ -209,6 +209,72 @@ repos:
     pass_filenames: false
     stages: [pre-push]
 
+      # GAP-0160: Status.csv sync check (matches CI governance-status-check)
+  - id: status-csv-check
+    name: status.csv sync check
+    entry: bash
+    args:
+    - -c
+    - |
+      echo "Checking if docs/status.csv is up to date..."
+      python3 tools/status_generate.py --repo . --out /tmp/status_check.csv 2>/dev/null
+      if ! diff -q docs/status.csv /tmp/status_check.csv > /dev/null 2>&1; then
+        echo "✗ docs/status.csv is stale - regenerating..."
+        python3 tools/status_generate.py --repo . --out docs/status.csv
+        echo "✓ Updated docs/status.csv - please stage and commit"
+        exit 1
+      fi
+      echo "✓ docs/status.csv is up to date"
+    language: system
+    files: \.zig$
+    exclude: ^(vendor/|dist/|zig-out/)
+    pass_filenames: false
+    stages: [pre-push]
+
+      # GAP-0225: CANARY marker lint check (matches CI governance-canary-lint)
+  - id: canary-lint
+    name: CANARY marker lint
+    entry: bash
+    args:
+    - -c
+    - |
+      echo "Linting CANARY markers..."
+      python3 tools/canary_lint.py --repo . --fail-on-issues || {
+        echo "✗ CANARY markers have schema violations"
+        echo "Run 'python3 tools/canary_normalize.py --repo .' to fix"
+        exit 1
+      }
+      echo "✓ All CANARY markers conform to schema"
+    language: system
+    files: \.zig$
+    exclude: ^(vendor/|dist/|zig-out/)
+    pass_filenames: false
+    stages: [pre-push]
+
+      # GAP-0227: Canaryscan GAP verification (matches CI governance-canaryscan-verify)
+  - id: canaryscan-verify
+    name: canaryscan GAP verify
+    entry: bash
+    args:
+    - -c
+    - |
+      echo "Verifying GAP_ANALYSIS.md against CANARY markers..."
+      if command -v go &> /dev/null; then
+        cd tools/canaryscan && go build -o /tmp/canaryscan . 2>/dev/null
+        /tmp/canaryscan --root ../.. --verify ../../docs/GAP_ANALYSIS.md || {
+          echo "✗ GAP_ANALYSIS.md contains claims that don't match CANARY markers"
+          exit 1
+        }
+        echo "✓ GAP_ANALYSIS.md verified"
+      else
+        echo "⚠ Go not installed, skipping canaryscan verify"
+      fi
+    language: system
+    files: (\.zig$|GAP_ANALYSIS\.md$)
+    exclude: ^(vendor/|dist/|zig-out/)
+    pass_filenames: false
+    stages: [pre-push]
+
 # =============================================================================
 # CI configuration
 # =============================================================================
@@ -221,5 +287,5 @@ ci:
   autoupdate_branch: ''
   autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
   autoupdate_schedule: weekly
-  skip: [zig-fmt, zig-build, zig-test, cross-compile-check, no-feature-flags, canary-verify]
+  skip: [zig-fmt, zig-build, zig-test, cross-compile-check, no-feature-flags, canary-verify, status-csv-check, canary-lint, canaryscan-verify]
   submodules: false
