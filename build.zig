@@ -388,8 +388,7 @@ pub fn build(b: *std.Build) void {
     // Skip on Windows as OpenSSL is not typically available in CI environments
     geode_exe.linkLibC();
     const is_native = target.query.isNative();
-    const is_windows = target.result.os.tag == .windows;
-    if (is_native and !is_windows) {
+    if (is_native and target.result.os.tag != .windows) {
         geode_exe.linkSystemLibrary("ssl");
         geode_exe.linkSystemLibrary("crypto");
     }
