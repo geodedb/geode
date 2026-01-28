@@ -151,7 +151,10 @@ repos:
       # Cross-compilation check for required targets (fast check)
       - id: cross-compile-check
         name: cross-compile (required targets)
-        entry: bash -c 'make cross-compile-required 2>&1 | tail -20'
+        entry: bash
+        args:
+          - -c
+          - make cross-compile-required 2>&1 | tail -20
         language: system
         files: \.(zig|zon)$
         exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
@@ -181,7 +184,11 @@ repos:
       # Check for TODO/FIXME in committed code (warning only)
       - id: check-todos
         name: check for TODOs/FIXMEs
-        entry: bash -c 'git diff --cached --name-only | xargs grep -l -E "(TODO|FIXME|XXX|HACK)" 2>/dev/null && echo "Warning: Found TODO/FIXME markers in staged files" && exit 0 || exit 0'
+        entry: bash
+        args:
+          - -c
+          - |
+            git diff --cached --name-only | xargs grep -l -E "(TODO|FIXME|XXX|HACK)" 2>/dev/null && echo "Warning: Found TODO/FIXME markers in staged files" && exit 0 || exit 0
         language: system
         pass_filenames: false
         verbose: true
@@ -189,7 +196,13 @@ repos:
       # Verify CANARY markers are valid (optional, for governance)
       - id: canary-verify
         name: CANARY marker verification
-        entry: bash -c 'if [ -x tools/status_generate.py ]; then python3 tools/status_generate.py --repo . --out /dev/null --check 2>&1 || echo "CANARY check skipped"; fi'
+        entry: bash
+        args:
+          - -c
+          - |
+            if [ -x tools/status_generate.py ]; then
+              python3 tools/status_generate.py --repo . --out /dev/null --check 2>&1 || echo "CANARY check skipped"
+            fi
         language: system
         files: \.zig$
         exclude: ^(vendor/|dist/|zig-out/)
