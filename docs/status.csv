@@ -191,6 +191,32 @@ REQ-AUTH-ENFORCE-001,AuthEnforcement,RUN_GQL_Guard,TESTED,,,security,2026-01-28,
 REQ-AUTH-ENFORCE-002,AuthEnforcement,QueryReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
 REQ-AUTH-ENFORCE-003,AuthEnforcement,UnitTests,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
 REQ-AUTH-ENFORCE-004,AuthEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig
+REQ-AUTH-ENFORCE-005,AuthEnforcement,UnionReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-006,AuthEnforcement,IntersectReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-007,AuthEnforcement,ExceptReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-008,AuthEnforcement,ShowReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-009,AuthEnforcement,ExplainReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-010,AuthEnforcement,ProfileReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-011,AuthEnforcement,CreateIndexSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-012,AuthEnforcement,CreateConstraintSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-013,AuthEnforcement,DropIndexSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-014,AuthEnforcement,DropConstraintSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-015,AuthEnforcement,CreateGraphSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-016,AuthEnforcement,CreateGraphTypeSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-017,AuthEnforcement,DropGraphSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-018,AuthEnforcement,DropGraphTypeSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-019,AuthEnforcement,CreateSchemaSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-020,AuthEnforcement,DropSchemaSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-021,AuthEnforcement,CallReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-022,AuthEnforcement,ForReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-023,AuthEnforcement,ValuesReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-024,AuthEnforcement,TransactionBodyPermissions,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-025,AuthEnforcement,AuthorizationTests,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
+REQ-AUTH-ENFORCE-026,AuthEnforcement,OperationMapping,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
+REQ-AUTH-ENFORCE-027,AuthEnforcement,SecurityBoundaries,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
+REQ-AUTH-ENFORCE-028,AuthEnforcement,EscalationPrevention,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
+REQ-AUTH-ENFORCE-029,AuthEnforcement,UnicodeHomographPrevention,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
+REQ-AUTH-ENFORCE-030,AuthEnforcement,ControlCharacterPrevention,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
 REQ-AUTH-GUARD-001,Production Auth Guard,Security,TESTED,,,security,2026-01-15,src/cli/main.zig
 REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,TESTED,,,security,2025-10-16,src/security/geode_auth_lib.zig
 REQ-AUTH-HASH-002,Argon2id_Password_Hashing,Core,TESTED,,,security,2026-01-25,src/security/test_argon2id_hashing.zig
