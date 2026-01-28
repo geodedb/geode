@@ -36,12 +36,45 @@ sudo apt-get install -y \
 source /etc/os-release
 echo "→ Detected Ubuntu version: $VERSION_ID"
 
+# CANARY: REQ=REQ-BUILD-DEPS-001; FEATURE="DepsFallback"; ASPECT=UbuntuVersionFallback; STATUS=IMPL; OWNER=build; UPDATED=2026-01-28
+# Issue #381: Handle newer Ubuntu versions that may not have Microsoft packages yet
+# Microsoft typically supports LTS releases; fallback to latest supported version
+MS_UBUNTU_VERSION="$VERSION_ID"
+MS_SUPPORTED_VERSIONS=("24.04" "22.04" "20.04")
+
+# Check if Microsoft has packages for this Ubuntu version
+check_ms_packages() {
+    local ver=$1
+    wget -q --spider "https://packages.microsoft.com/config/ubuntu/$ver/packages-microsoft-prod.deb" 2>/dev/null
+    return $?
+}
+
+if ! check_ms_packages "$MS_UBUNTU_VERSION"; then
+    echo "⚠ Microsoft packages not available for Ubuntu $MS_UBUNTU_VERSION"
+    echo "  Checking for fallback versions..."
+
+    for fallback_ver in "${MS_SUPPORTED_VERSIONS[@]}"; do
+        if check_ms_packages "$fallback_ver"; then
+            echo "  → Using Microsoft repository for Ubuntu $fallback_ver (fallback)"
+            MS_UBUNTU_VERSION="$fallback_ver"
+            break
+        fi
+    done
+
+    if [ "$MS_UBUNTU_VERSION" = "$VERSION_ID" ]; then
+        echo "⚠ WARNING: No supported Microsoft repository found"
+        echo "  libmsquic may not be installable via apt"
+        echo "  Geode will use vendored QUIC implementation instead"
+        MS_UBUNTU_VERSION=""
+    fi
+fi
+
 # Check if Microsoft repository is already configured
-if ! grep -q "packages.microsoft.com" /etc/apt/sources.list.d/* 2>/dev/null; then
-    echo "→ Configuring Microsoft package repository..."
+if [ -n "$MS_UBUNTU_VERSION" ] && ! grep -q "packages.microsoft.com" /etc/apt/sources.list.d/* 2>/dev/null; then
+    echo "→ Configuring Microsoft package repository (Ubuntu $MS_UBUNTU_VERSION)..."
 
     # Download Microsoft repository keys
-    wget -q "https://packages.microsoft.com/config/ubuntu/$VERSION_ID/packages-microsoft-prod.deb"
+    wget -q "https://packages.microsoft.com/config/ubuntu/$MS_UBUNTU_VERSION/packages-microsoft-prod.deb"
 
     # Register the Microsoft repository
     sudo dpkg -i packages-microsoft-prod.deb
@@ -53,35 +86,51 @@ if ! grep -q "packages.microsoft.com" /etc/apt/sources.list.d/* 2>/dev/null; the
     sudo apt-get update
 
     echo "✓ Microsoft repository configured"
-else
+elif [ -n "$MS_UBUNTU_VERSION" ]; then
     echo "✓ Microsoft repository already configured"
 fi
 
-# Install libmsquic
-if ! dpkg -l | grep -q "^ii.*libmsquic"; then
-    echo "→ Installing libmsquic..."
-    sudo apt-get install -y libmsquic
-    echo "✓ libmsquic installed"
+# Install libmsquic (if Microsoft repository is configured)
+if [ -n "$MS_UBUNTU_VERSION" ]; then
+    if ! dpkg -l | grep -q "^ii.*libmsquic"; then
+        echo "→ Installing libmsquic..."
+        if sudo apt-get install -y libmsquic 2>/dev/null; then
+            echo "✓ libmsquic installed"
+        else
+            echo "⚠ libmsquic installation failed"
+            echo "  Geode will use vendored QUIC implementation instead"
+        fi
+    else
+        echo "✓ libmsquic already installed"
+    fi
 else
-    echo "✓ libmsquic already installed"
+    echo "→ Skipping libmsquic (Microsoft repository not available)"
+    echo "  Geode will use vendored QUIC implementation instead"
 fi
 
-# Verify libmsquic installation
-if ldconfig -p | grep -q libmsquic; then
-    MSQUIC_PATH=$(ldconfig -p | grep libmsquic | head -1 | awk '{print $NF}')
-    echo "✓ libmsquic found at: $MSQUIC_PATH"
-else
-    echo "⚠ WARNING: libmsquic installed but not found in ldconfig cache"
-    echo "  Run: sudo ldconfig"
-fi
+# Verify libmsquic installation (only if MS packages were configured)
+if [ -n "$MS_UBUNTU_VERSION" ]; then
+    if ldconfig -p | grep -q libmsquic; then
+        MSQUIC_PATH=$(ldconfig -p | grep libmsquic | head -1 | awk '{print $NF}')
+        echo "✓ libmsquic found at: $MSQUIC_PATH"
 
-# Create development symlink (Ubuntu package doesn't include it)
-if [ ! -e /usr/lib/x86_64-linux-gnu/libmsquic.so ]; then
-    echo "→ Creating libmsquic.so development symlink..."
-    sudo ln -sf libmsquic.so.2.4.16 /usr/lib/x86_64-linux-gnu/libmsquic.so
-    echo "✓ Development symlink created"
-else
-    echo "✓ Development symlink already exists"
+        # Create development symlink (Ubuntu package doesn't include it)
+        if [ ! -e /usr/lib/x86_64-linux-gnu/libmsquic.so ]; then
+            # Find the actual versioned library
+            MSQUIC_LIB=$(find /usr/lib/x86_64-linux-gnu -name 'libmsquic.so.*' 2>/dev/null | head -1)
+            if [ -n "$MSQUIC_LIB" ]; then
+                MSQUIC_BASENAME=$(basename "$MSQUIC_LIB")
+                echo "→ Creating libmsquic.so development symlink..."
+                sudo ln -sf "$MSQUIC_BASENAME" /usr/lib/x86_64-linux-gnu/libmsquic.so
+                echo "✓ Development symlink created"
+            fi
+        else
+            echo "✓ Development symlink already exists"
+        fi
+    else
+        echo "⚠ WARNING: libmsquic installed but not found in ldconfig cache"
+        echo "  Run: sudo ldconfig"
+    fi
 fi
 
 # Install Zig if not present
