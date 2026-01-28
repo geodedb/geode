@@ -411,6 +411,7 @@ REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,TESTED,,,cli,2026-01
 REQ-CLI-MOD-001,CLI Modularization,SubcommandParsing,TESTED,,,cli,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-CLI-PASSWORD-PROMPT-001,PasswordPrompt,QueryCommand,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-POLICY-CMD-001,Policy CLI Commands,PolicyManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
+REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,TODO,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedBinary,TESTED,,,cli,2026-01-15,src/cli/main.zig
@@ -3224,6 +3225,8 @@ REQ-QUIC-CONN-CLEANUP-003,QUICConnectionCleanup,DestructorPattern,TESTED,,,trans
 REQ-QUIC-CONN-CLEANUP-004,ConnectionMemoryManagement,ProperCleanup,EXEMPT,,,cli,2025-12-28,src/cli/main.zig
 REQ-QUIC-CONN-CLEANUP-005,ConnectionMemoryManagement,GracefulDisconnect,EXEMPT,,,cli,2025-12-28,src/cli/main.zig
 REQ-QUIC-FLOW-001,QUICProtocol,FlowControl,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-QUIC-LOCALHOST-001,LocalhostNormalization,ClientConnect,IMPL,,,transport,2026-01-28,src/transport/quic.zig
+REQ-QUIC-LOCALHOST-002,LocalhostNormalization,ClientConnectEx,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-MSG-001,QUICProtocol,Messaging,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-QUIC-MUTATIONS-001,QUIC Mutation Execution,ServerHandler,TESTED,,,engine,2026-01-09,src/server/quic_connection_handler.zig
 REQ-QUIC-PROTOCOL-001,QUICProtocol,Connection,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch2_misc.zig
@@ -3411,9 +3414,17 @@ REQ-SESSION-SECURITY-003,SessionSecurity,SessionIsolation,TESTED,,,security,2026
 REQ-SET-RETURN-FIX-001,GQLSetOperations,ReturnFix,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-SET-RETURN-FIX-001,SetReturnFix,NoReturnClause,TESTED,,,engine,2025-12-23,src/execution/match_operations.zig
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,EXEMPT,,,distributed,2026-01-09,src/distributed/query_coordinator.zig
+REQ-SHELL-AUTH-001,ShellAuthRequired,HelloAuthCheck,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
+REQ-SHELL-AUTH-002,ShellAuthCredentials,OptionsFields,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
+REQ-SHELL-AUTH-003,ShellAuthHandshake,HelloWithCredentials,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
+REQ-SHELL-AUTH-004,ShellAuthOptions,CLIParsing,IMPL,,,cli,2026-01-28,src/cli/main.zig
+REQ-SHELL-AUTH-005,ShellAuthTests,UnitTests,TESTED,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
 REQ-SHELL-EMPTY-ENTER-001,ShellEmptyEnter,NewlineOnEmptyInput,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-HISTORY-RESET-001,HistoryReset,MetaCommand,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-HISTORY-RESET-002,HistoryReset,GqlExecution,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
+REQ-SHELL-INTERRUPT-001,SourceInterrupt,StateFlag,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
+REQ-SHELL-INTERRUPT-002,SourceInterrupt,LoopCheck,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-003,SourceInterrupt,CheckFunction,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
 REQ-SHELL-TEST-VERIFICATION,Shell Test Requirements Verification,UnitTests,TESTED,,,testing,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-SHELL-TLS-001,Shell TLS Configuration,SecureConnection,TESTED,,,cli,2026-01-15,src/cli/main.zig
 REQ-SHELL-TLS-002,Shell TLS Connection,SecureConnection,EXEMPT,,,cli,2026-01-13,src/cli/main.zig

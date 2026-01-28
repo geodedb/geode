@@ -924,8 +924,8 @@ publish-packages:
 
 # =============================================================================
 # Note: Client libraries have moved to separate repositories:
-#   - Go: https://github.com/codeprosorg/geode-client-go
-#   - Python: https://github.com/codeprosorg/geode-client-python
-#   - Rust: https://github.com/codeprosorg/geode-client-rust
-#   - Test Harness: https://github.com/codeprosorg/geode-test-harness
+#   - Go: https://gitlab.com/devnw/codepros/geode/geode-client-go
+#   - Python: https://gitlab.com/devnw/codepros/geode/geode-client-python
+#   - Rust: https://gitlab.com/devnw/codepros/geode/geode-client-rust
+#   - Test Harness: https://gitlab.com/devnw/codepros/geode/geode-test-harness
 # =============================================================================

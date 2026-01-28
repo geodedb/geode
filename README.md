@@ -49,7 +49,7 @@ nix develop github:codeprosorg/geode
 
 ```bash
 # Prerequisites: Zig 0.15.1+
-git clone https://github.com/codeprosorg/geode
+git clone https://gitlab.com/devnw/codepros/geode/geode
 cd geode
 
 # Build optimized version
@@ -383,7 +383,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ### **Community**
 
-- **Issues** - Report bugs and feature requests via GitHub Issues
+- **Issues** - Report bugs and feature requests via GitLab Issues
 - **Discussions** - Technical discussions and questions
 - **Pull Requests** - Follow contributing guidelines for submissions
 
@@ -396,8 +396,8 @@ Copyright 2024-2025 CodePros
 ## 🔗 Links
 
 - **Documentation**: [./docs/](docs/)
-- **GitHub Repository**: [https://github.com/codeprosorg/geode](https://github.com/codeprosorg/geode)
-- **Issue Tracker**: [GitHub Issues](https://github.com/codeprosorg/geode/issues)
+- **GitLab Repository**: [https://gitlab.com/devnw/codepros/geode/geode](https://gitlab.com/devnw/codepros/geode/geode)
+- **Issue Tracker**: [GitLab Issues](https://gitlab.com/devnw/codepros/geode/geode/issues)
 - **ISO/IEC 39075:2024**: [GQL Standard](https://www.iso.org/standard/76120.html)
 
 ---

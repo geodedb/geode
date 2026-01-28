@@ -378,7 +378,7 @@ ci(hooks): add cross-compilation pre-push check
 
 ## Questions?
 
-Open an issue or discussion on [GitHub](https://github.com/codeprosorg/geode) for questions about contributing.
+Open an issue or discussion on [GitLab](https://gitlab.com/devnw/codepros/geode/geode) for questions about contributing.
 
 ## License
 

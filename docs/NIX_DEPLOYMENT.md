@@ -48,7 +48,7 @@ Nix Configuration Structure
 
 ```bash
 # Clone the repository
-git clone https://github.com/codeprosorg/geode.git
+git clone https://gitlab.com/devnw/codepros/geode/geode.git
 cd geode
 
 # Build default package
@@ -155,7 +155,7 @@ Add to your `configuration.nix`:
   # Import the Geode module
   imports = [
     (fetchGit {
-      url = "https://github.com/codeprosorg/geode";
+      url = "https://gitlab.com/devnw/codepros/geode/geode";
       ref = "main";
     } + "/nix/modules/geode-daemon.nix")
   ];
@@ -163,19 +163,19 @@ Add to your `configuration.nix`:
   # Enable and configure Geode
   services.geode = {
     enable = true;
-    
+
     # Basic network settings
     network = {
       listenAddress = "0.0.0.0";
       quicPort = 3141;
     };
-    
+
     # Performance settings
     performance = {
       maxConnections = 1000;
       memoryLimit = "4GB";
     };
-    
+
     # Enable monitoring
     monitoring.enable = true;
   };
@@ -187,34 +187,34 @@ Add to your `configuration.nix`:
 ```nix
 services.geode = {
   enable = true;
-  
+
   # Network configuration
   network = {
     listenAddress = "0.0.0.0";
     quicPort = 3141;
   };
-  
+
   # Performance tuning for production
   performance = {
     maxConnections = 5000;
     workerThreads = 16;        # Or 0 for auto-detect
     memoryLimit = "16GB";
   };
-  
+
   # Storage configuration
   storage = {
     walSegmentSize = "512MB";   # Larger segments for production
     checkpointInterval = "30m"; # Less frequent checkpoints
     pageSize = 16384;          # Larger pages for better performance
   };
-  
+
   # TLS with real certificates
   tls = {
     generateSelfSigned = false;
     certFile = "/etc/ssl/certs/geode.crt";
     keyFile = "/etc/ssl/private/geode.key";
   };
-  
+
   # Federation for distributed setup
   federation = {
     enable = true;
@@ -224,7 +224,7 @@ services.geode = {
       "coordinator2.prod.com:3141"
     ];
   };
-  
+
   # S3 backups
   backup = {
     enable = true;
@@ -232,38 +232,38 @@ services.geode = {
     s3Region = "us-west-2";
     schedule = "0 2 * * *";   # Daily at 2 AM
   };
-  
+
   # Change Data Capture
   cdc = {
     enable = true;
     webhookUrl = "https://api.prod.com/geode-events";
     retention = "30d";
   };
-  
+
   # Monitoring and metrics
   monitoring = {
     enable = true;
     metricsPort = 9090;
   };
-  
+
   # Logging configuration
   logging = {
     level = "info";           # Use "warn" or "error" for production
     json = true;              # Structured logging
   };
-  
+
   # Environment variables
   environment = {
     GEODE_ENVIRONMENT = "production";
     RUST_LOG = "info";
   };
-  
+
   # Additional configuration
   extraConfig = ''
     # Custom production settings
     query_timeout = "300s"
     connection_timeout = "60s"
-    
+
     # Advanced tuning
     buffer_pool_size = "8GB"
     wal_buffer_size = "256MB"
@@ -278,7 +278,7 @@ systemd.services.geode = {
     CPUQuota = "800%";        # 8 CPU cores max
     IOWeight = 500;           # I/O priority
   };
-  
+
   # Restart policy
   startLimitBurst = 3;
   startLimitIntervalSec = 60;
@@ -327,7 +327,7 @@ services.promtail = {
 # Multi-node cluster setup
 services.geode = {
   enable = true;
-  
+
   federation = {
     enable = true;
     role = "coordinator";     # Primary coordinator
@@ -337,23 +337,23 @@ services.geode = {
       "geode-shard-3.internal:3141"
     ];
   };
-  
+
   # Load balancing
   network = {
     listenAddress = "0.0.0.0";
     quicPort = 3141;
   };
-  
+
   # Shared storage (if using NFS/distributed storage)
   dataDir = "/shared/geode/coordinator";
-  
+
   # High availability settings
   extraConfig = ''
     # Cluster settings
     cluster_heartbeat_interval = "5s"
     cluster_election_timeout = "30s"
     cluster_replication_factor = 3
-    
+
     # Consistency settings
     consistency_level = "quorum"
     read_preference = "primary_preferred"
@@ -366,17 +366,17 @@ services.haproxy = {
   config = ''
     global
         daemon
-        
+
     defaults
         mode tcp
         timeout connect 5000ms
         timeout client 50000ms
         timeout server 50000ms
-        
+
     frontend geode_frontend
         bind *:3141
         default_backend geode_servers
-        
+
     backend geode_servers
         balance roundrobin
         server coord1 geode-coord-1.internal:3141 check
@@ -787,28 +787,28 @@ nix develop .#deploy
 # In your project's flake.nix
 {
   inputs.geode.url = "github:codeprosorg/geode";
-  
+
   outputs = { self, nixpkgs, geode, ... }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
     in {
       devShells.default = pkgs.mkShell {
         inputsFrom = [ geode.devShells.x86_64-linux.default ];
-        
+
         packages = with pkgs; [
           # Your additional tools
           jq
           curl
           postgresql
         ];
-        
+
         shellHook = ''
           echo "🚀 Custom Geode Development Environment"
-          
+
           # Set up local database
           export GEODE_DATA_DIR=./dev-data
           mkdir -p $GEODE_DATA_DIR
-          
+
           # Custom aliases
           alias gd="geode --data-dir=$GEODE_DATA_DIR"
           alias gs="geode serve --data-dir=$GEODE_DATA_DIR"
@@ -910,17 +910,17 @@ systemd.services.geode.serviceConfig = {
   PrivateTmp = true;
   ProtectSystem = "strict";
   ProtectHome = true;
-  
+
   # Kernel protections
   ProtectKernelTunables = true;
   ProtectKernelModules = true;
   ProtectControlGroups = true;
-  
+
   # Resource restrictions
   RestrictRealtime = true;
   RestrictSUIDSGID = true;
   RemoveIPC = true;
-  
+
   # File system access
   ReadWritePaths = [ "/var/lib/geode" "/var/log/geode" ];
   ReadOnlyPaths = [ "/etc/geode" ];
@@ -977,7 +977,7 @@ networking.firewall.extraCommands = ''
   # Rate limiting
   iptables -A INPUT -p udp --dport 3141 -m limit --limit 1000/sec -j ACCEPT
   iptables -A INPUT -p udp --dport 3141 -j DROP
-  
+
   # Geo-blocking (example)
   iptables -A INPUT -p udp --dport 3141 -m geoip --src-cc CN,RU -j DROP
 '';
@@ -1031,7 +1031,7 @@ security.sudo.extraRules = [
 services.prometheus = {
   enable = true;
   port = 9091;
-  
+
   scrapeConfigs = [
     {
       job_name = "geode";
@@ -1048,7 +1048,7 @@ services.prometheus = {
       scrape_timeout = "10s";
       metrics_path = "/metrics";
     }
-    
+
     {
       job_name = "geode-federation";
       static_configs = [
@@ -1059,7 +1059,7 @@ services.prometheus = {
       scrape_interval = "30s";
     }
   ];
-  
+
   rules = [
     ''
       groups:
@@ -1073,7 +1073,7 @@ services.prometheus = {
           annotations:
             summary: "Geode instance is down"
             description: "Geode instance {{ $labels.instance }} has been down for more than 5 minutes."
-            
+
         - alert: GeodeHighMemoryUsage
           expr: (geode_memory_used_bytes / geode_memory_limit_bytes) * 100 > 90
           for: 2m
@@ -1082,7 +1082,7 @@ services.prometheus = {
           annotations:
             summary: "Geode high memory usage"
             description: "Geode instance {{ $labels.instance }} is using {{ $value }}% of available memory."
-            
+
         - alert: GeodeHighConnectionCount
           expr: geode_active_connections > geode_max_connections * 0.9
           for: 1m
@@ -1107,21 +1107,21 @@ services.grafana = {
       http_port = 3000;
       domain = "grafana.example.com";
     };
-    
+
     security = {
       admin_user = "admin";
       admin_password = "$__file{/etc/grafana/admin_password}";
     };
-    
+
     auth.anonymous = {
       enabled = true;
       org_role = "Viewer";
     };
   };
-  
+
   provision = {
     enable = true;
-    
+
     datasources.settings.datasources = [
       {
         name = "Prometheus";
@@ -1131,7 +1131,7 @@ services.grafana = {
         isDefault = true;
       }
     ];
-    
+
     dashboards.settings.providers = [
       {
         name = "geode";
@@ -1196,9 +1196,9 @@ services.loki = {
   enable = true;
   configuration = {
     server.http_listen_port = 3100;
-    
+
     auth_enabled = false;
-    
+
     ingester = {
       lifecycler = {
         address = "127.0.0.1";
@@ -1212,7 +1212,7 @@ services.loki = {
       chunk_target_size = 1048576;
       chunk_retain_period = "30s";
     };
-    
+
     schema_config = {
       configs = [
         {
@@ -1227,19 +1227,19 @@ services.loki = {
         }
       ];
     };
-    
+
     storage_config = {
       boltdb_shipper = {
         active_index_directory = "/var/lib/loki/boltdb-shipper-active";
         cache_location = "/var/lib/loki/boltdb-shipper-cache";
         shared_store = "filesystem";
       };
-      
+
       filesystem = {
         directory = "/var/lib/loki/chunks";
       };
     };
-    
+
     limits_config = {
       reject_old_samples = true;
       reject_old_samples_max_age = "168h";
@@ -1255,11 +1255,11 @@ services.promtail = {
       http_listen_port = 3031;
       grpc_listen_port = 3032;
     };
-    
+
     clients = [
       { url = "http://localhost:3100/loki/api/v1/push"; }
     ];
-    
+
     scrape_configs = [
       {
         job_name = "geode";
@@ -1272,7 +1272,7 @@ services.promtail = {
             };
           }
         ];
-        
+
         pipeline_stages = [
           {
             json = {
@@ -1298,7 +1298,7 @@ services.promtail = {
           }
         ];
       }
-      
+
       {
         job_name = "systemd";
         journal = {
@@ -1309,7 +1309,7 @@ services.promtail = {
             host = "geode-server";
           };
         };
-        
+
         relabel_configs = [
           {
             source_labels = [ "__journal__systemd_unit" ];
@@ -1332,20 +1332,20 @@ services.promtail = {
 # Alertmanager configuration
 services.prometheus.alertmanager = {
   enable = true;
-  
+
   configuration = {
     global = {
       smtp_smarthost = "localhost:587";
       smtp_from = "alerts@example.com";
     };
-    
+
     route = {
       group_by = [ "alertname" ];
       group_wait = "10s";
       group_interval = "10s";
       repeat_interval = "1h";
       receiver = "web.hook";
-      
+
       routes = [
         {
           match = {
@@ -1356,7 +1356,7 @@ services.prometheus.alertmanager = {
         }
       ];
     };
-    
+
     receivers = [
       {
         name = "web.hook";
@@ -1367,7 +1367,7 @@ services.prometheus.alertmanager = {
           }
         ];
       }
-      
+
       {
         name = "critical";
         email_configs = [
@@ -1384,7 +1384,7 @@ services.prometheus.alertmanager = {
             '';
           }
         ];
-        
+
         slack_configs = [
           {
             api_url = "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK";
@@ -1483,13 +1483,13 @@ Enable debug mode for troubleshooting:
 services.geode = {
   enable = true;
   logging.level = "debug";
-  
+
   environment = {
     GEODE_DEBUG = "1";
     RUST_LOG = "debug";
     RUST_BACKTRACE = "1";
   };
-  
+
   extraArgs = [
     "--debug"
     "--verbose"
@@ -1502,33 +1502,33 @@ services.geode = {
 ```nix
 services.geode = {
   enable = true;
-  
+
   performance = {
     maxConnections = 5000;
     workerThreads = 16;           # Set to number of CPU cores
     memoryLimit = "16GB";         # 70-80% of available RAM
   };
-  
+
   storage = {
     walSegmentSize = "1GB";       # Larger for high-write workloads
     checkpointInterval = "1h";    # Less frequent for performance
     pageSize = 32768;            # Larger pages for analytical workloads
   };
-  
+
   extraConfig = ''
     # Performance tuning
     buffer_pool_size = "12GB"     # 75% of memory limit
     wal_buffer_size = "512MB"
     max_wal_size = "4GB"
-    
+
     # Connection pooling
     connection_pool_size = 100
     connection_timeout = "30s"
-    
+
     # Query optimization
     query_cache_size = "1GB"
     query_timeout = "300s"
-    
+
     # I/O optimization
     io_threads = 8
     sync_method = "fsync"
@@ -1542,12 +1542,12 @@ boot.kernel.sysctl = {
   "net.core.rmem_max" = 134217728;
   "net.core.wmem_max" = 134217728;
   "net.ipv4.udp_mem" = "102400 873800 16777216";
-  
+
   # File system tuning
   "vm.dirty_ratio" = 15;
   "vm.dirty_background_ratio" = 5;
   "vm.swappiness" = 1;
-  
+
   # Process limits
   "fs.file-max" = 2097152;
   "kernel.pid_max" = 4194304;

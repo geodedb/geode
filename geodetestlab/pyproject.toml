@@ -52,10 +52,10 @@ dev = [
 geodetestlab = "geodetestlab.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/codeprosorg/geode"
-Repository = "https://github.com/codeprosorg/geode"
-Documentation = "https://github.com/codeprosorg/geode/tree/main/docs"
-"Bug Tracker" = "https://github.com/codeprosorg/geode/issues"
+Homepage = "https://gitlab.com/devnw/codepros/geode/geode"
+Repository = "https://gitlab.com/devnw/codepros/geode/geode"
+Documentation = "https://gitlab.com/devnw/codepros/geode/geode/-/tree/main/docs"
+"Bug Tracker" = "https://gitlab.com/devnw/codepros/geode/geode/-/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

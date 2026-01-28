@@ -24,6 +24,10 @@ pub const ReplLoop = struct {
         show_timing: bool,
         allocator: std.mem.Allocator,
         transport: *const repl_dispatch.Transport,
+        // CANARY: REQ=REQ-SHELL-AUTH-002; FEATURE="ShellAuthCredentials"; ASPECT=OptionsFields; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+        // Issue #387: Optional credentials for authenticated servers
+        username: ?[]const u8 = null,
+        password: ?[]const u8 = null,
     };
 
     pub fn run(opts: Options) !void {
@@ -62,7 +66,38 @@ pub const ReplLoop = struct {
         var session = try repl_dispatch.ClientSession.init(opts.allocator, opts.server, opts.transport);
         defer session.deinit();
         try session.connect();
-        try session.hello();
+
+        // CANARY: REQ=REQ-SHELL-AUTH-003; FEATURE="ShellAuthHandshake"; ASPECT=HelloWithCredentials; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+        // Issue #387: Use authenticated hello if credentials are provided, otherwise standard hello
+        if (opts.username != null and opts.password != null) {
+            const auth_result = try session.helloWithAuth(opts.username.?, opts.password.?);
+            if (!auth_result.success) {
+                const stderr_file = platform.getStderrHandle();
+                if (auth_result.error_message) |msg| {
+                    try stderr_file.writeAll("Error [GEODE-E0021]: Authentication failed: ");
+                    try stderr_file.writeAll(msg);
+                    try stderr_file.writeAll("\n");
+                    opts.allocator.free(msg);
+                } else {
+                    try stderr_file.writeAll("Error [GEODE-E0021]: Authentication failed\n");
+                }
+                std.process.exit(21);
+            }
+            if (auth_result.session_token) |token| {
+                opts.allocator.free(token);
+            }
+        } else {
+            session.hello() catch |err| {
+                if (err == error.AuthenticationRequired) {
+                    const stderr_file = platform.getStderrHandle();
+                    try stderr_file.writeAll("Error [GEODE-E0022]: Server requires authentication.\n");
+                    try stderr_file.writeAll("Use --username/-U and --password/-P options to provide credentials.\n");
+                    try stderr_file.writeAll("Example: geode shell --server localhost:3141 -U myuser -P mypassword\n");
+                    std.process.exit(22);
+                }
+                return err;
+            };
+        }
 
         var state = ReplState{
             .allocator = opts.allocator,
@@ -125,6 +160,9 @@ pub const ReplState = struct {
     last_visual_lines: usize = 0, // Track previous render's visual line count
     last_cursor_row: usize = 0, // Track which row the cursor was on (0 = first line)
     current_graph: ?[]const u8 = null, // Current graph context
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-001; FEATURE="SourceInterrupt"; ASPECT=StateFlag; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // Issue #390: Flag to signal interrupt during /source execution
+    interrupt_requested: bool = false,
 
     pub fn deinit(self: *ReplState) void {
         if (self.current_graph) |g| self.allocator.free(g);

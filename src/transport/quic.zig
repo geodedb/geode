@@ -458,6 +458,13 @@ pub const QuicClient = struct {
     }
 
     pub fn connectInsecure(self: *QuicClient, address: []const u8, port: u16, allow_insecure: bool) !void {
+        // CANARY: REQ=REQ-QUIC-LOCALHOST-001; FEATURE="LocalhostNormalization"; ASPECT=ClientConnect; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-28
+        // Issue #382: Normalize "localhost" to "127.0.0.1" for consistent DNS/TLS handling
+        const normalized_address = if (std.mem.eql(u8, address, "localhost"))
+            "127.0.0.1"
+        else
+            address;
+
         // ALPN is stored in struct field to persist beyond this function call
         // Create QUIC configuration for client using simplified public API
         // Note: Detailed RFC 9000 parameters use library defaults
@@ -490,14 +497,21 @@ pub const QuicClient = struct {
         self.endpoint = try Endpoint.init(self.allocator, "0.0.0.0:0", &quic_config);
 
         // Create server address string
-        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
+        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ normalized_address, port });
         defer self.allocator.free(server_addr);
 
         // Connect to server using public API
-        self.connection = try api.connect(&self.endpoint.?, server_addr, address);
+        self.connection = try api.connect(&self.endpoint.?, server_addr, normalized_address);
     }
 
     pub fn connectEx(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {
+        // CANARY: REQ=REQ-QUIC-LOCALHOST-002; FEATURE="LocalhostNormalization"; ASPECT=ClientConnectEx; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-28
+        // Issue #382: Normalize "localhost" to "127.0.0.1" for consistent DNS/TLS handling
+        const normalized_address = if (std.mem.eql(u8, address, "localhost"))
+            "127.0.0.1"
+        else
+            address;
+
         // Create QUIC configuration for client with custom certificates using simplified public API
         var quic_config = VendorQuicConfig{
             .version = .v1,
@@ -528,11 +542,11 @@ pub const QuicClient = struct {
         self.endpoint = try Endpoint.init(self.allocator, "0.0.0.0:0", &quic_config);
 
         // Create server address string
-        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ address, port });
+        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ normalized_address, port });
         defer self.allocator.free(server_addr);
 
         // Connect to server using public API
-        self.connection = try api.connect(&self.endpoint.?, server_addr, address);
+        self.connection = try api.connect(&self.endpoint.?, server_addr, normalized_address);
     }
 
     pub fn waitForHandshake(self: *QuicClient, timeout_secs: u32) !void {

@@ -8,10 +8,10 @@ All client libraries are maintained in separate repositories:
 
 | Client | Repository | Status | Best For |
 |--------|------------|--------|----------|
-| **Go** | [geode-client-go](https://github.com/codeprosorg/geode-client-go) | Production | High-performance servers, CLI tools |
-| **Python** | [geode-client-python](https://github.com/codeprosorg/geode-client-python) | Beta | Data science, web apps, scripting |
-| **Rust** | [geode-client-rust](https://github.com/codeprosorg/geode-client-rust) | Alpha | Maximum performance, systems programming |
-| **Zig** | [geode-client-zig](https://github.com/codeprosorg/geode-client-zig) | Alpha | Native integration, systems programming |
+| **Go** | [geode-client-go](https://gitlab.com/devnw/codepros/geode/geode-client-go) | Production | High-performance servers, CLI tools |
+| **Python** | [geode-client-python](https://gitlab.com/devnw/codepros/geode/geode-client-python) | Beta | Data science, web apps, scripting |
+| **Rust** | [geode-client-rust](https://gitlab.com/devnw/codepros/geode/geode-client-rust) | Alpha | Maximum performance, systems programming |
+| **Zig** | [geode-client-zig](https://gitlab.com/devnw/codepros/geode/geode-client-zig) | Alpha | Native integration, systems programming |
 
 ## Features Supported
 
@@ -79,7 +79,7 @@ All client libraries are maintained in separate repositories:
 ### Go Client
 
 ```bash
-go get github.com/codeprosorg/geode-client-go
+go get gitlab.com/devnw/codepros/geode/geode-client-go
 ```
 
 ```go
@@ -88,7 +88,7 @@ package main
 import (
     "context"
     "log"
-    gql "github.com/codeprosorg/geode-client-go"
+    gql "gitlab.com/devnw/codepros/geode/geode-client-go"
 )
 
 func main() {
@@ -144,7 +144,7 @@ asyncio.run(main())
 Add to `Cargo.toml`:
 ```toml
 [dependencies]
-geode-client = { git = "https://github.com/codeprosorg/geode-client-rust" }
+geode-client = { git = "https://gitlab.com/devnw/codepros/geode/geode-client-rust" }
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
 ### Zig Client
 
 ```bash
-git clone https://github.com/codeprosorg/geode-client-zig
+git clone https://gitlab.com/devnw/codepros/geode/geode-client-zig
 ```
 
 ```zig

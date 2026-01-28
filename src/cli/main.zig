@@ -4,6 +4,9 @@ const build_options = @import("build_options");
 const audit_cli = @import("audit_cli");
 const geode = @import("geode");
 const Value = geode.value_types.Value;
+// CANARY: REQ=REQ-CLI-REFACTOR-001; FEATURE="CLI Library Migration"; ASPECT=FlagParsing; STATUS=TODO; OWNER=cli; UPDATED=2026-01-28
+// TODO: Migrate to devnw/zig/cli library for improved flag management, automatic help generation,
+// shell completions, and type-safe configuration. See https://gitlab.com/devnw/zig/cli
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("cli");
@@ -2020,6 +2023,8 @@ fn printShellUsage() void {
         "\n" ++
         "Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
+        "  -U, --username <user>  Username for authentication\n" ++
+        "  -P, --password <pass>  Password for authentication\n" ++
         "  --insecure             Skip TLS certificate verification\n" ++
         "  --ca-cert <path>       CA certificate path for server verification\n" ++
         "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
@@ -2029,12 +2034,17 @@ fn printShellUsage() void {
         "  --keymap <mode>        Keymap mode: emacs|vi (default: emacs)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
+        "Authentication:\n" ++
+        "  If the server requires authentication, use -U and -P to provide credentials.\n" ++
+        "  Both username and password must be provided together.\n" ++
+        "\n" ++
         "TLS Certificate Options:\n" ++
         "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
         "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode shell\n" ++
+        "  geode shell --server localhost:3141 -U admin -P secret\n" ++
         "  geode shell --server localhost:3141 --insecure\n" ++
         "  geode shell --ca-cert /etc/ssl/ca.crt --server secure.example.com:3141\n" ++
         "  geode shell --no-history --format json\n" ++
@@ -4012,6 +4022,10 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var ca_cert_path: ?[]const u8 = null;
     var client_cert_path: ?[]const u8 = null;
     var client_key_path: ?[]const u8 = null;
+    // CANARY: REQ=REQ-SHELL-AUTH-004; FEATURE="ShellAuthOptions"; ASPECT=CLIParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // Issue #387: Authentication credentials for shell command
+    var username: ?[]const u8 = null;
+    var password: ?[]const u8 = null;
 
     const stdin_handle = getStdinHandle();
     const stdin_is_tty = switch (builtin.os.tag) {
@@ -4110,11 +4124,33 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             // Just skip the log level value - shell command doesn't use it but we need to consume it
             i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--username") or std.mem.eql(u8, argv[i], "-U")) {
+            // Issue #387: Username for authentication
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --username/-U requires a username\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            username = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--password") or std.mem.eql(u8, argv[i], "-P")) {
+            // Issue #387: Password for authentication
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --password/-P requires a password\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            password = argv[i + 1];
+            i += 1;
         } else {
             std.debug.print("Error: unknown option '{s}'\n", .{argv[i]});
             std.debug.print("Run 'geode shell --help' to see available options\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
+    }
+
+    // Issue #387: Validate that if one of username/password is provided, both must be
+    if ((username != null) != (password != null)) {
+        std.debug.print("Error: Both --username/-U and --password/-P must be provided for authentication\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
     if (non_interactive) {
@@ -4181,6 +4217,9 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         .show_timing = false, // Default to off, can be toggled in REPL with \timing on
         .allocator = allocator,
         .transport = &quic_transport, // Use real QUIC transport
+        // Issue #387: Pass authentication credentials to REPL
+        .username = username,
+        .password = password,
     };
 
     repl_loop.ReplLoop.run(options) catch |err| {

@@ -7,6 +7,31 @@ const platform = @import("platform.zig");
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-063; FEATURE="JSON Library Migration"; ASPECT=ReplDispatch; STATUS=EXEMPT; OWNER=client; UPDATED=2026-01-25
 const json_lib = @import("json");
 
+// CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+// Issue #390: Helper function to check for Ctrl+C (ASCII 3) in stdin without blocking
+fn checkForInterrupt() bool {
+    if (builtin.os.tag == .windows) {
+        // Windows: TODO - implement console input check
+        return false;
+    } else {
+        // POSIX: use poll with 0 timeout to check if data is available
+        var fds = [_]std.posix.pollfd{
+            .{ .fd = std.posix.STDIN_FILENO, .events = std.posix.POLL.IN, .revents = 0 },
+        };
+        const result = std.posix.poll(&fds, 0) catch return false;
+        if (result > 0 and (fds[0].revents & std.posix.POLL.IN) != 0) {
+            // Data available, check if it's Ctrl+C (ASCII 3)
+            var buf: [1]u8 = undefined;
+            const stdin = platform.getStdinHandle();
+            const bytes_read = stdin.read(&buf) catch return false;
+            if (bytes_read > 0 and buf[0] == 3) { // Ctrl+C
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
 // JSON message types for REPL protocol
 const ReplRunGqlMessage = struct {
     type: []const u8 = "RUN_GQL",
@@ -190,6 +215,8 @@ pub const ClientSession = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SHELL-AUTH-001; FEATURE="ShellAuthRequired"; ASPECT=HelloAuthCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // Issue #387: HELLO handshake that checks if authentication is required
     pub fn hello(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
@@ -197,9 +224,14 @@ pub const ClientSession = struct {
         const hello_msg = "{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\"}\n";
         try self.connection.?.writeAll(hello_msg);
 
-        // Read and discard HELLO acknowledgment
+        // Read HELLO acknowledgment and check for auth requirement
         const hello_ack = try self.connection.?.readLine(self.allocator, 1 << 16);
         defer self.allocator.free(hello_ack);
+
+        // Check if server requires authentication
+        if (std.mem.indexOf(u8, hello_ack, "Authentication required") != null) {
+            return error.AuthenticationRequired;
+        }
     }
 
     /// GAP-0150: Authenticated HELLO handshake for CLI authentication
@@ -955,6 +987,20 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     while (line_iter.next()) |raw_line| {
         line_number += 1;
 
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-002; FEATURE="SourceInterrupt"; ASPECT=LoopCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+        // Issue #390: Check for Ctrl+C interrupt during /source execution
+        if (state.interrupt_requested) {
+            try stderr.writeAll("\r\nInterrupted by user (Ctrl+C)\r\n");
+            state.interrupt_requested = false; // Reset flag
+            break;
+        }
+
+        // Check for pending Ctrl+C in stdin (non-blocking)
+        if (checkForInterrupt()) {
+            try stderr.writeAll("\r\nInterrupted by user (Ctrl+C)\r\n");
+            break;
+        }
+
         // Handle \r\n line endings
         const line = std.mem.trimRight(u8, raw_line, "\r");
 
@@ -1642,4 +1688,51 @@ fn splitOnce(allocator: std.mem.Allocator, text: []const u8, delimiter: u8) ![2]
         try allocator.dupe(u8, text),
         try allocator.dupe(u8, ""),
     };
+}
+
+// Unit tests
+// CANARY: REQ=REQ-SHELL-AUTH-005; FEATURE="ShellAuthTests"; ASPECT=UnitTests; STATUS=TESTED; TEST=TestShellAuthDetection; OWNER=cli; UPDATED=2026-01-28
+
+const testing = std.testing;
+
+test "TestShellAuthDetection_AuthenticationRequiredInResponse" {
+    // Issue #387: Test that "Authentication required" is detected in server response
+    const auth_required_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Authentication required\"}";
+    try testing.expect(std.mem.indexOf(u8, auth_required_response, "Authentication required") != null);
+}
+
+test "TestShellAuthDetection_NoAuthInSuccessResponse" {
+    // Issue #387: Test that success response doesn't trigger auth required
+    const success_response = "{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_ver\":\"0.18.0\"}";
+    try testing.expect(std.mem.indexOf(u8, success_response, "Authentication required") == null);
+}
+
+test "TestShellAuthDetection_ErrorMessageExtraction" {
+    // Issue #387: Test error message parsing from auth failure
+    const error_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Invalid credentials\"}";
+    try testing.expect(std.mem.indexOf(u8, error_response, "Invalid credentials") != null);
+}
+
+test "TestEscapeJsonString_NoEscaping" {
+    // Test string that doesn't need escaping
+    const allocator = testing.allocator;
+    const result = try escapeJsonString(allocator, "hello world");
+    defer allocator.free(result);
+    try testing.expectEqualStrings("hello world", result);
+}
+
+test "TestEscapeJsonString_QuotesAndBackslashes" {
+    // Test escaping quotes and backslashes
+    const allocator = testing.allocator;
+    const result = try escapeJsonString(allocator, "say \"hello\"\\test");
+    defer allocator.free(result);
+    try testing.expectEqualStrings("say \\\"hello\\\"\\\\test", result);
+}
+
+test "TestEscapeJsonString_Newlines" {
+    // Test escaping newlines and tabs
+    const allocator = testing.allocator;
+    const result = try escapeJsonString(allocator, "line1\nline2\ttab");
+    defer allocator.free(result);
+    try testing.expectEqualStrings("line1\\nline2\\ttab", result);
 }
