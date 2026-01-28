@@ -490,7 +490,7 @@ fn printQueryUsage() void {
         "  --ca-cert <path>       CA certificate path for server verification\n" ++
         "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
         "  --client-key <path>    Client private key path for mutual TLS\n" ++
-        "  --format <fmt>         Output format: json|table|csv (default: json)\n" ++
+        "  --format <fmt>         Output format: json|table|csv|dot (default: json)\n" ++
         "  --json-param <name> <value>  Add JSON parameter\n" ++
         "  --page-size <n>        Page size for results (default: 1000)\n" ++
         "  --timeout <secs>       Connection timeout in seconds (default: 10)\n" ++

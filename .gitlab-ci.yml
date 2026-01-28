@@ -725,7 +725,8 @@ publish-release:
     - saas-linux-medium-amd64
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:
-    - build-release
+    - job: build-release
+      artifacts: true
   script:
     - |
       echo "Publishing release ${CI_COMMIT_TAG}"
