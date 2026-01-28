@@ -269,13 +269,14 @@ dockers:
       - "--label=org.opencontainers.image.version={{.Version}}"
 
   # GPU-enabled images (NVIDIA CUDA) - GitLab Registry
+  # Note: GPU images are x86_64 only - NVIDIA CUDA doesn't support ARM64 well under QEMU
   - id: geode-gpu-amd64
     ids:
       - geode
     goos: linux
     goarch: amd64
     image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-amd64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu"
     dockerfile: Dockerfile.release.gpu
     use: buildx
     build_flag_templates:
@@ -288,23 +289,6 @@ dockers:
       - "--label=org.opencontainers.image.description=Geode Graph Database with GPU acceleration (NVIDIA CUDA)"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
 
-  - id: geode-gpu-arm64
-    ids:
-      - geode
-    goos: linux
-    goarch: arm64
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-arm64"
-    dockerfile: Dockerfile.release.gpu
-    use: buildx
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}-gpu"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-
   # GPU-enabled images (NVIDIA CUDA) - Docker Hub
   - id: geode-dockerhub-gpu-amd64
     ids:
@@ -312,7 +296,7 @@ dockers:
     goos: linux
     goarch: amd64
     image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu-amd64"
+      - "docker.io/geodedb/geode:{{ .Version }}-gpu"
     dockerfile: Dockerfile.release.gpu
     use: buildx
     skip_push: "{{ if .IsSnapshot }}true{{ end }}"
@@ -326,24 +310,6 @@ dockers:
       - "--label=org.opencontainers.image.source=https://gitlab.com/devnw/codepros/geode/geode"
       - "--label=org.opencontainers.image.description=Geode Graph Database with GPU acceleration (NVIDIA CUDA)"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
-
-  - id: geode-dockerhub-gpu-arm64
-    ids:
-      - geode
-    goos: linux
-    goarch: arm64
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu-arm64"
-    dockerfile: Dockerfile.release.gpu
-    use: buildx
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}-gpu"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
 
 # =============================================================================
 # Docker Manifests - Multi-arch tags
@@ -425,41 +391,25 @@ docker_manifests:
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
     skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
-  # GitLab Registry GPU manifests
+  # GPU tags - x86_64 only (NVIDIA CUDA doesn't support ARM64 cross-compilation)
+  # Note: GPU images don't need manifests since they're single-arch (amd64 only)
   - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:gpu"
     image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-amd64"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-arm64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu"
 
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu"
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-amd64"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-arm64"
-
-  # Docker Hub GPU manifests
   - name_template: "docker.io/geodedb/geode:gpu"
     image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu-amd64"
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu-arm64"
+      - "docker.io/geodedb/geode:{{ .Version }}-gpu"
     skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
-  - name_template: "docker.io/geodedb/geode:{{ .Version }}-gpu"
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu-amd64"
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu-arm64"
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
-
-  # Major.Minor GPU tags
   - name_template: "docker.io/geodedb/geode:v{{ .Major }}.{{ .Minor }}-gpu"
     image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu-amd64"
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu-arm64"
+      - "docker.io/geodedb/geode:{{ .Version }}-gpu"
     skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
   - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}-gpu"
     image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-amd64"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-arm64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu"
 
 # =============================================================================
 # System Packages - nFPM (deb, rpm, apk)
