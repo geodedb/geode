@@ -266,58 +266,6 @@ test-zig-unit:
   script:
     - mkdir -p reports
     - zig build test --summary all | tee reports/zig_test.log
-    # Benchmarks removed - run separately when needed, not in CI
-    - |
-      python3 - <<'PY'
-      import json, pathlib
-      logs = [
-          "reports/zig_test.log",
-      ]
-      metrics = []
-      perf = []
-      def unit_for(key: str) -> str:
-          if key.endswith("_ns"):
-              return "ns"
-          if key.endswith("_us"):
-              return "us"
-          if key.endswith("_ms"):
-              return "ms"
-          if key.endswith("_s"):
-              return "s"
-          if key.endswith("_qps"):
-              return "qps"
-          if key.endswith("_ratio") or key in ("cv", "ratio"):
-              return "ratio"
-          return "count"
-      for path in logs:
-          p = pathlib.Path(path)
-          if not p.exists():
-              continue
-          for line in p.read_text().splitlines():
-              line = line.strip()
-              if not line.startswith("{") or not line.endswith("}"):
-                  continue
-              try:
-                  obj = json.loads(line)
-                  metrics.append(obj)
-                  bench_name = obj.get("bench") or obj.get("benchmark")
-                  if isinstance(bench_name, str):
-                      for k, v in obj.items():
-                          if k in ("bench", "benchmark"):
-                              continue
-                          if isinstance(v, (int, float)):
-                              perf.append({
-                                  "name": f"{bench_name}.{k}",
-                                  "value": v,
-                                  "unit": unit_for(k),
-                              })
-              except json.JSONDecodeError:
-                  continue
-      out = pathlib.Path("reports/bench_metrics.json")
-      out.write_text(json.dumps(metrics, indent=2))
-      perf_out = pathlib.Path("reports/bench_performance.json")
-      perf_out.write_text(json.dumps(perf, indent=2))
-      PY
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -327,13 +275,6 @@ test-zig-unit:
     when: always
     paths:
       - reports/zig_test.log
-      - reports/zig_benchmark.log
-      - reports/zig_bench.log
-      - reports/zig_bench_transport.log
-      - reports/zig_wal_flush_policy.log
-      - reports/zig_variance_benches.log
-      - reports/bench_metrics.json
-      - reports/bench_performance.json
     expire_in: 1 week
     reports:
       performance: reports/bench_performance.json
