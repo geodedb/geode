@@ -768,6 +768,941 @@ fn findVariablePatternPosition(text: []const u8, name: []const u8) ?protocol.Pos
     return null;
 }
 
+// ============================================================================
+// Document Symbols Provider
+// CANARY: REQ=REQ-LSP-SYMBOLS-001; FEATURE="DocumentSymbols"; ASPECT=OutlineView; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-27
+// ============================================================================
+
+/// Provide document symbols for outline view
+pub fn provideDocumentSymbols(allocator: Allocator, doc: *const Document) ![]protocol.DocumentSymbol {
+    var symbols = std.ArrayList(protocol.DocumentSymbol).initCapacity(allocator, 16) catch return error.OutOfMemory;
+    errdefer symbols.deinit(allocator);
+
+    // Try to parse the document
+    const outcome = geode.parseGqlOutcome(doc.text, allocator, .{}) catch {
+        // Fall back to text-based symbol extraction on parse errors
+        return try extractSymbolsFromText(allocator, doc);
+    };
+
+    switch (outcome) {
+        .Ok => |result| {
+            defer {
+                var res = result;
+                res.deinit();
+            }
+
+            // Extract symbols from the AST
+            for (result.program.statements) |stmt| {
+                try extractSymbolsFromStatement(allocator, &symbols, doc, stmt);
+            }
+        },
+        .Err => {
+            // Fall back to text-based extraction
+            return try extractSymbolsFromText(allocator, doc);
+        },
+    }
+
+    return symbols.toOwnedSlice(allocator);
+}
+
+fn extractSymbolsFromStatement(allocator: Allocator, symbols: *std.ArrayList(protocol.DocumentSymbol), doc: *const Document, stmt: anytype) !void {
+    switch (stmt) {
+        .Query => |query| {
+            try extractSymbolsFromQuery(allocator, symbols, doc, query);
+        },
+        .Union => |union_q| {
+            try extractSymbolsFromQuery(allocator, symbols, doc, union_q.first);
+            for (union_q.tails) |part| {
+                try extractSymbolsFromQuery(allocator, symbols, doc, part.query);
+            }
+        },
+        else => {},
+    }
+}
+
+fn extractSymbolsFromQuery(allocator: Allocator, symbols: *std.ArrayList(protocol.DocumentSymbol), doc: *const Document, query: anytype) !void {
+    // Extract from LET bindings
+    for (query.let_bindings) |binding| {
+        if (findSymbolPosition(doc.text, binding.variable, .let_binding)) |pos| {
+            try symbols.append(allocator, .{
+                .name = binding.variable,
+                .detail = "LET binding",
+                .kind = .Variable,
+                .range = pos.range,
+                .selectionRange = pos.selectionRange,
+            });
+        }
+    }
+
+    for (query.inline_let_bindings) |binding| {
+        if (findSymbolPosition(doc.text, binding.variable, .let_binding)) |pos| {
+            try symbols.append(allocator, .{
+                .name = binding.variable,
+                .detail = "LET binding",
+                .kind = .Variable,
+                .range = pos.range,
+                .selectionRange = pos.selectionRange,
+            });
+        }
+    }
+
+    // Extract from MATCH patterns
+    for (query.match.chains) |chain| {
+        // Path variable
+        if (chain.name) |name| {
+            if (findSymbolPosition(doc.text, name, .path_pattern)) |pos| {
+                try symbols.append(allocator, .{
+                    .name = name,
+                    .detail = "Path variable",
+                    .kind = .Variable,
+                    .range = pos.range,
+                    .selectionRange = pos.selectionRange,
+                });
+            }
+        }
+
+        // Head node
+        if (chain.head) |head| {
+            if (head.name) |name| {
+                const label_detail = if (head.labels.len > 0)
+                    head.labels[0]
+                else
+                    "Node";
+                if (findSymbolPosition(doc.text, name, .node_pattern)) |pos| {
+                    try symbols.append(allocator, .{
+                        .name = name,
+                        .detail = label_detail,
+                        .kind = .Variable,
+                        .range = pos.range,
+                        .selectionRange = pos.selectionRange,
+                    });
+                }
+            }
+        }
+
+        // Hops (relationships and nodes)
+        for (chain.hops) |hop| {
+            // Left node
+            if (hop.left.name) |name| {
+                const label_detail = if (hop.left.labels.len > 0)
+                    hop.left.labels[0]
+                else
+                    "Node";
+                if (findSymbolPosition(doc.text, name, .node_pattern)) |pos| {
+                    try symbols.append(allocator, .{
+                        .name = name,
+                        .detail = label_detail,
+                        .kind = .Variable,
+                        .range = pos.range,
+                        .selectionRange = pos.selectionRange,
+                    });
+                }
+            }
+
+            // Relationship
+            if (hop.rel.name) |name| {
+                const type_detail = if (hop.rel.types.len > 0)
+                    hop.rel.types[0]
+                else
+                    "Relationship";
+                if (findSymbolPosition(doc.text, name, .rel_pattern)) |pos| {
+                    try symbols.append(allocator, .{
+                        .name = name,
+                        .detail = type_detail,
+                        .kind = .Property,
+                        .range = pos.range,
+                        .selectionRange = pos.selectionRange,
+                    });
+                }
+            }
+
+            // Right node
+            if (hop.right.name) |name| {
+                const label_detail = if (hop.right.labels.len > 0)
+                    hop.right.labels[0]
+                else
+                    "Node";
+                if (findSymbolPosition(doc.text, name, .node_pattern)) |pos| {
+                    try symbols.append(allocator, .{
+                        .name = name,
+                        .detail = label_detail,
+                        .kind = .Variable,
+                        .range = pos.range,
+                        .selectionRange = pos.selectionRange,
+                    });
+                }
+            }
+        }
+    }
+
+    // Extract from WITH clause aliases
+    if (query.with_clause) |with| {
+        for (with.items) |item| {
+            if (item.alias) |alias| {
+                if (findSymbolPosition(doc.text, alias, .with_alias)) |pos| {
+                    try symbols.append(allocator, .{
+                        .name = alias,
+                        .detail = "WITH alias",
+                        .kind = .Variable,
+                        .range = pos.range,
+                        .selectionRange = pos.selectionRange,
+                    });
+                }
+            }
+        }
+    }
+
+    // Extract from RETURN aliases
+    for (query.ret.items) |item| {
+        if (item.alias) |alias| {
+            if (findSymbolPosition(doc.text, alias, .return_alias)) |pos| {
+                try symbols.append(allocator, .{
+                    .name = alias,
+                    .detail = "RETURN alias",
+                    .kind = .Variable,
+                    .range = pos.range,
+                    .selectionRange = pos.selectionRange,
+                });
+            }
+        }
+    }
+
+    // Recurse into next query
+    if (query.next_query) |next| {
+        try extractSymbolsFromQuery(allocator, symbols, doc, next.*);
+    }
+}
+
+const SymbolSearchType = enum {
+    node_pattern,
+    rel_pattern,
+    path_pattern,
+    with_alias,
+    return_alias,
+    let_binding,
+};
+
+const SymbolPositionResult = struct {
+    range: protocol.Range,
+    selectionRange: protocol.Range,
+};
+
+fn findSymbolPosition(text: []const u8, name: []const u8, search_type: SymbolSearchType) ?SymbolPositionResult {
+    var line: u32 = 0;
+    var line_start: usize = 0;
+    var i: usize = 0;
+    var in_string = false;
+    var string_char: u8 = 0;
+
+    while (i < text.len) {
+        // Track newlines
+        if (text[i] == '\n') {
+            line += 1;
+            line_start = i + 1;
+            i += 1;
+            continue;
+        }
+
+        // Skip strings
+        if (!in_string and (text[i] == '\'' or text[i] == '"')) {
+            in_string = true;
+            string_char = text[i];
+            i += 1;
+            continue;
+        }
+        if (in_string) {
+            if (text[i] == string_char and (i == 0 or text[i - 1] != '\\')) {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Check for pattern based on type
+        const found_pos: ?usize = switch (search_type) {
+            .node_pattern => findNodePatternForSymbol(text, i, name),
+            .rel_pattern => findRelPatternForSymbol(text, i, name),
+            .path_pattern => findPathPatternForSymbol(text, i, name),
+            .with_alias, .return_alias => findAliasPatternForSymbol(text, i, name),
+            .let_binding => findLetPatternForSymbol(text, i, name),
+        };
+
+        if (found_pos) |pos| {
+            const char_start: u32 = @intCast(pos - line_start);
+            const char_end: u32 = char_start + @as(u32, @intCast(name.len));
+            return SymbolPositionResult{
+                .range = .{
+                    .start = .{ .line = line, .character = char_start },
+                    .end = .{ .line = line, .character = char_end },
+                },
+                .selectionRange = .{
+                    .start = .{ .line = line, .character = char_start },
+                    .end = .{ .line = line, .character = char_end },
+                },
+            };
+        }
+
+        i += 1;
+    }
+
+    return null;
+}
+
+fn findNodePatternForSymbol(text: []const u8, pos: usize, name: []const u8) ?usize {
+    if (pos >= text.len or text[pos] != '(') return null;
+    var i = pos + 1;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    if (i + name.len > text.len) return null;
+    if (!std.mem.eql(u8, text[i .. i + name.len], name)) return null;
+    const end = i + name.len;
+    if (end >= text.len) return null;
+    const next = text[end];
+    if (next == ')' or next == ':' or next == ' ' or next == '\t' or next == '{') return i;
+    return null;
+}
+
+fn findRelPatternForSymbol(text: []const u8, pos: usize, name: []const u8) ?usize {
+    if (pos >= text.len or text[pos] != '[') return null;
+    var i = pos + 1;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    if (i + name.len > text.len) return null;
+    if (!std.mem.eql(u8, text[i .. i + name.len], name)) return null;
+    const end = i + name.len;
+    if (end >= text.len) return null;
+    const next = text[end];
+    if (next == ']' or next == ':' or next == ' ' or next == '\t' or next == '{' or next == '*') return i;
+    return null;
+}
+
+fn findPathPatternForSymbol(text: []const u8, pos: usize, name: []const u8) ?usize {
+    // Look for "name = (" pattern
+    if (pos + name.len + 3 > text.len) return null;
+    if (!std.mem.eql(u8, text[pos .. pos + name.len], name)) return null;
+    var i = pos + name.len;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    if (i >= text.len or text[i] != '=') return null;
+    i += 1;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    if (i >= text.len or text[i] != '(') return null;
+    // Check word boundary before name
+    if (pos > 0 and std.ascii.isAlphanumeric(text[pos - 1])) return null;
+    return pos;
+}
+
+fn findAliasPatternForSymbol(text: []const u8, pos: usize, name: []const u8) ?usize {
+    // Look for "AS name" pattern
+    if (pos + 2 > text.len) return null;
+    if (!std.ascii.eqlIgnoreCase(text[pos .. pos + 2], "AS")) return null;
+    var i = pos + 2;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    if (i + name.len > text.len) return null;
+    if (!std.mem.eql(u8, text[i .. i + name.len], name)) return null;
+    const end = i + name.len;
+    if (end < text.len and std.ascii.isAlphanumeric(text[end])) return null;
+    return i;
+}
+
+fn findLetPatternForSymbol(text: []const u8, pos: usize, name: []const u8) ?usize {
+    if (pos + 3 > text.len) return null;
+    if (!std.ascii.eqlIgnoreCase(text[pos .. pos + 3], "LET")) return null;
+    var i = pos + 3;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    // Skip $ if present
+    if (i < text.len and text[i] == '$') i += 1;
+    if (i + name.len > text.len) return null;
+    if (!std.mem.eql(u8, text[i .. i + name.len], name)) return null;
+    const end = i + name.len;
+    if (end < text.len and std.ascii.isAlphanumeric(text[end])) return null;
+    return i;
+}
+
+/// Fallback text-based symbol extraction when parsing fails
+fn extractSymbolsFromText(allocator: Allocator, doc: *const Document) ![]protocol.DocumentSymbol {
+    var symbols = std.ArrayList(protocol.DocumentSymbol).initCapacity(allocator, 16) catch return error.OutOfMemory;
+    errdefer symbols.deinit(allocator);
+
+    var line: u32 = 0;
+    var line_start: usize = 0;
+    var i: usize = 0;
+    var in_string = false;
+    var string_char: u8 = 0;
+
+    while (i < doc.text.len) {
+        if (doc.text[i] == '\n') {
+            line += 1;
+            line_start = i + 1;
+            i += 1;
+            continue;
+        }
+
+        // Skip strings
+        if (!in_string and (doc.text[i] == '\'' or doc.text[i] == '"')) {
+            in_string = true;
+            string_char = doc.text[i];
+            i += 1;
+            continue;
+        }
+        if (in_string) {
+            if (doc.text[i] == string_char and (i == 0 or doc.text[i - 1] != '\\')) {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Look for (varname pattern
+        if (doc.text[i] == '(' and i + 1 < doc.text.len) {
+            var j = i + 1;
+            while (j < doc.text.len and (doc.text[j] == ' ' or doc.text[j] == '\t')) j += 1;
+            if (j < doc.text.len and (std.ascii.isAlphabetic(doc.text[j]) or doc.text[j] == '_')) {
+                const name_start = j;
+                while (j < doc.text.len and (std.ascii.isAlphanumeric(doc.text[j]) or doc.text[j] == '_')) j += 1;
+                const name = doc.text[name_start..j];
+                if (name.len > 0 and j < doc.text.len and (doc.text[j] == ')' or doc.text[j] == ':' or doc.text[j] == ' ' or doc.text[j] == '{')) {
+                    const char_start: u32 = @intCast(name_start - line_start);
+                    const char_end: u32 = char_start + @as(u32, @intCast(name.len));
+                    try symbols.append(allocator, .{
+                        .name = name,
+                        .detail = "Node",
+                        .kind = .Variable,
+                        .range = .{
+                            .start = .{ .line = line, .character = char_start },
+                            .end = .{ .line = line, .character = char_end },
+                        },
+                        .selectionRange = .{
+                            .start = .{ .line = line, .character = char_start },
+                            .end = .{ .line = line, .character = char_end },
+                        },
+                    });
+                }
+            }
+        }
+
+        // Look for [varname pattern
+        if (doc.text[i] == '[' and i + 1 < doc.text.len) {
+            var j = i + 1;
+            while (j < doc.text.len and (doc.text[j] == ' ' or doc.text[j] == '\t')) j += 1;
+            if (j < doc.text.len and (std.ascii.isAlphabetic(doc.text[j]) or doc.text[j] == '_')) {
+                const name_start = j;
+                while (j < doc.text.len and (std.ascii.isAlphanumeric(doc.text[j]) or doc.text[j] == '_')) j += 1;
+                const name = doc.text[name_start..j];
+                if (name.len > 0 and j < doc.text.len and (doc.text[j] == ']' or doc.text[j] == ':' or doc.text[j] == ' ' or doc.text[j] == '{' or doc.text[j] == '*')) {
+                    const char_start: u32 = @intCast(name_start - line_start);
+                    const char_end: u32 = char_start + @as(u32, @intCast(name.len));
+                    try symbols.append(allocator, .{
+                        .name = name,
+                        .detail = "Relationship",
+                        .kind = .Property,
+                        .range = .{
+                            .start = .{ .line = line, .character = char_start },
+                            .end = .{ .line = line, .character = char_end },
+                        },
+                        .selectionRange = .{
+                            .start = .{ .line = line, .character = char_start },
+                            .end = .{ .line = line, .character = char_end },
+                        },
+                    });
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    return symbols.toOwnedSlice(allocator);
+}
+
+// ============================================================================
+// Signature Help Provider
+// CANARY: REQ=REQ-LSP-SIGHEP-001; FEATURE="SignatureHelp"; ASPECT=FunctionParams; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-27
+// ============================================================================
+
+/// Provide signature help for function calls
+pub fn provideSignatureHelp(allocator: Allocator, doc: *const Document, line: u32, character: u32) !?protocol.SignatureHelp {
+    const offset = doc.getOffset(line, character) orelse return null;
+
+    // Find the opening parenthesis and function name
+    var paren_depth: i32 = 0;
+    var comma_count: u32 = 0;
+    var paren_pos: ?usize = null;
+    var i: usize = offset;
+    var in_string = false;
+    var string_char: u8 = 0;
+
+    // Scan backwards to find the opening paren
+    while (i > 0) {
+        i -= 1;
+        const c = doc.text[i];
+
+        // Handle strings (scanning backwards)
+        if (!in_string and (c == '\'' or c == '"')) {
+            // Check if this is the end of a string
+            var quote_count: usize = 0;
+            var j = i;
+            while (j > 0 and doc.text[j] == c) {
+                quote_count += 1;
+                j -= 1;
+            }
+            if (quote_count % 2 == 1) {
+                in_string = true;
+                string_char = c;
+            }
+            continue;
+        }
+        if (in_string and c == string_char) {
+            in_string = false;
+            continue;
+        }
+        if (in_string) continue;
+
+        if (c == ')') {
+            paren_depth += 1;
+        } else if (c == '(') {
+            if (paren_depth == 0) {
+                paren_pos = i;
+                break;
+            }
+            paren_depth -= 1;
+        } else if (c == ',' and paren_depth == 0) {
+            comma_count += 1;
+        }
+    }
+
+    const open_paren = paren_pos orelse return null;
+
+    // Find function name before the paren
+    var name_end = open_paren;
+    while (name_end > 0 and (doc.text[name_end - 1] == ' ' or doc.text[name_end - 1] == '\t')) {
+        name_end -= 1;
+    }
+
+    var name_start = name_end;
+    while (name_start > 0 and (std.ascii.isAlphanumeric(doc.text[name_start - 1]) or doc.text[name_start - 1] == '_')) {
+        name_start -= 1;
+    }
+
+    if (name_start == name_end) return null;
+
+    const func_name = doc.text[name_start..name_end];
+
+    // Look up function in metadata
+    const fn_info = language_metadata.findFunction(func_name) orelse return null;
+
+    // Build parameter list
+    var params = std.ArrayList(protocol.ParameterInformation).initCapacity(allocator, 8) catch return error.OutOfMemory;
+    defer params.deinit(allocator);
+
+    for (fn_info.params) |param| {
+        var param_label = std.ArrayList(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+        defer param_label.deinit(allocator);
+
+        try param_label.appendSlice(allocator, param.name);
+        try param_label.appendSlice(allocator, ": ");
+        try param_label.appendSlice(allocator, param.type_name);
+        if (param.optional) {
+            try param_label.append(allocator, '?');
+        }
+
+        try params.append(allocator, .{
+            .label = try allocator.dupe(u8, param_label.items),
+            .documentation = null,
+        });
+    }
+
+    // Build signature label
+    var sig_label = std.ArrayList(u8).initCapacity(allocator, 128) catch return error.OutOfMemory;
+    defer sig_label.deinit(allocator);
+
+    try sig_label.appendSlice(allocator, fn_info.name);
+    try sig_label.append(allocator, '(');
+    for (fn_info.params, 0..) |param, idx| {
+        if (idx > 0) try sig_label.appendSlice(allocator, ", ");
+        try sig_label.appendSlice(allocator, param.name);
+        try sig_label.appendSlice(allocator, ": ");
+        try sig_label.appendSlice(allocator, param.type_name);
+        if (param.optional) try sig_label.append(allocator, '?');
+    }
+    try sig_label.appendSlice(allocator, ") → ");
+    try sig_label.appendSlice(allocator, fn_info.return_type);
+
+    // Create signature
+    const signatures = try allocator.alloc(protocol.SignatureInformation, 1);
+    signatures[0] = .{
+        .label = try allocator.dupe(u8, sig_label.items),
+        .documentation = .{
+            .kind = .plaintext,
+            .value = fn_info.doc,
+        },
+        .parameters = try allocator.dupe(protocol.ParameterInformation, params.items),
+        .activeParameter = if (comma_count < fn_info.params.len) comma_count else null,
+    };
+
+    return protocol.SignatureHelp{
+        .signatures = signatures,
+        .activeSignature = 0,
+        .activeParameter = if (comma_count < fn_info.params.len) comma_count else null,
+    };
+}
+
+// ============================================================================
+// References Provider
+// CANARY: REQ=REQ-LSP-REFS-001; FEATURE="References"; ASPECT=FindAllRefs; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-27
+// ============================================================================
+
+/// Find all references to a symbol in the document
+pub fn provideReferences(allocator: Allocator, doc: *const Document, line: u32, character: u32, include_declaration: bool) ![]protocol.Location {
+    _ = include_declaration; // We always include declarations in our simple implementation
+
+    const offset = doc.getOffset(line, character) orelse return &[_]protocol.Location{};
+    const word = doc.getWordAt(offset) orelse return &[_]protocol.Location{};
+
+    // Skip if it's a keyword, function, or type
+    if (language_metadata.findKeyword(word) != null) return &[_]protocol.Location{};
+    if (language_metadata.findFunction(word) != null) return &[_]protocol.Location{};
+    if (language_metadata.findType(word) != null) return &[_]protocol.Location{};
+
+    var locations = std.ArrayList(protocol.Location).initCapacity(allocator, 16) catch return error.OutOfMemory;
+    errdefer locations.deinit(allocator);
+
+    // Text-based search for all occurrences
+    var current_line: u32 = 0;
+    var line_start: usize = 0;
+    var i: usize = 0;
+    var in_string = false;
+    var string_char: u8 = 0;
+
+    while (i < doc.text.len) {
+        if (doc.text[i] == '\n') {
+            current_line += 1;
+            line_start = i + 1;
+            i += 1;
+            continue;
+        }
+
+        // Skip strings
+        if (!in_string and (doc.text[i] == '\'' or doc.text[i] == '"')) {
+            in_string = true;
+            string_char = doc.text[i];
+            i += 1;
+            continue;
+        }
+        if (in_string) {
+            if (doc.text[i] == string_char and (i == 0 or doc.text[i - 1] != '\\')) {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Skip comments
+        if (i + 1 < doc.text.len) {
+            if ((doc.text[i] == '-' and doc.text[i + 1] == '-') or
+                (doc.text[i] == '/' and doc.text[i + 1] == '/'))
+            {
+                while (i < doc.text.len and doc.text[i] != '\n') i += 1;
+                continue;
+            }
+            if (doc.text[i] == '/' and doc.text[i + 1] == '*') {
+                i += 2;
+                while (i + 1 < doc.text.len and !(doc.text[i] == '*' and doc.text[i + 1] == '/')) {
+                    if (doc.text[i] == '\n') {
+                        current_line += 1;
+                        line_start = i + 1;
+                    }
+                    i += 1;
+                }
+                i += 2;
+                continue;
+            }
+        }
+
+        // Check for word boundary and match
+        if (i + word.len <= doc.text.len) {
+            const at_word_start = i == 0 or !std.ascii.isAlphanumeric(doc.text[i - 1]) and doc.text[i - 1] != '_';
+            if (at_word_start and std.mem.eql(u8, doc.text[i .. i + word.len], word)) {
+                const end_pos = i + word.len;
+                const at_word_end = end_pos >= doc.text.len or (!std.ascii.isAlphanumeric(doc.text[end_pos]) and doc.text[end_pos] != '_');
+
+                if (at_word_end) {
+                    try locations.append(allocator, .{
+                        .uri = doc.uri,
+                        .range = .{
+                            .start = .{
+                                .line = current_line,
+                                .character = @intCast(i - line_start),
+                            },
+                            .end = .{
+                                .line = current_line,
+                                .character = @intCast(end_pos - line_start),
+                            },
+                        },
+                    });
+                    i = end_pos;
+                    continue;
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    return locations.toOwnedSlice(allocator);
+}
+
+// ============================================================================
+// Semantic Tokens Provider
+// CANARY: REQ=REQ-LSP-SEMTOK-001; FEATURE="SemanticTokens"; ASPECT=SyntaxHighlight; STATUS=IMPL; OWNER=lsp; UPDATED=2026-01-27
+// ============================================================================
+
+/// Token types for semantic highlighting
+const TokenType = enum(u32) {
+    keyword = 0,
+    function = 1,
+    variable = 2,
+    parameter = 3,
+    type_ = 4,
+    property = 5,
+    string = 6,
+    number = 7,
+    comment = 8,
+    operator = 9,
+    label = 10,
+};
+
+/// Token modifiers for semantic highlighting
+const TokenModifier = enum(u32) {
+    definition = 0,
+    defaultLibrary = 1,
+    readonly = 2,
+};
+
+/// Provide semantic tokens for syntax highlighting
+pub fn provideSemanticTokensFull(allocator: Allocator, doc: *const Document) !protocol.SemanticTokens {
+    var tokens = std.ArrayList(u32).initCapacity(allocator, 256) catch return error.OutOfMemory;
+    errdefer tokens.deinit(allocator);
+
+    var prev_line: u32 = 0;
+    var prev_char: u32 = 0;
+    var current_line: u32 = 0;
+    var line_start: usize = 0;
+    var i: usize = 0;
+
+    // Track defined variables for definition modifier
+    var defined_vars = std.StringHashMap(void).init(allocator);
+    defer defined_vars.deinit();
+
+    while (i < doc.text.len) {
+        if (doc.text[i] == '\n') {
+            current_line += 1;
+            line_start = i + 1;
+            i += 1;
+            continue;
+        }
+
+        // Handle comments
+        if (i + 1 < doc.text.len) {
+            if ((doc.text[i] == '-' and doc.text[i + 1] == '-') or
+                (doc.text[i] == '/' and doc.text[i + 1] == '/'))
+            {
+                const start_char: u32 = @intCast(i - line_start);
+                const comment_start = i;
+                while (i < doc.text.len and doc.text[i] != '\n') i += 1;
+                const comment_len: u32 = @intCast(i - comment_start);
+
+                try addToken(allocator, &tokens, current_line, start_char, comment_len, .comment, 0, &prev_line, &prev_char);
+                continue;
+            }
+            if (doc.text[i] == '/' and doc.text[i + 1] == '*') {
+                const start_line = current_line;
+                const start_char: u32 = @intCast(i - line_start);
+                const comment_start = i;
+                i += 2;
+                while (i + 1 < doc.text.len and !(doc.text[i] == '*' and doc.text[i + 1] == '/')) {
+                    if (doc.text[i] == '\n') {
+                        current_line += 1;
+                        line_start = i + 1;
+                    }
+                    i += 1;
+                }
+                if (i + 1 < doc.text.len) i += 2;
+
+                // For multi-line comments, only emit one token for first line
+                if (start_line == current_line) {
+                    const comment_len: u32 = @intCast(i - comment_start);
+                    try addToken(allocator, &tokens, start_line, start_char, comment_len, .comment, 0, &prev_line, &prev_char);
+                }
+                continue;
+            }
+        }
+
+        // Handle strings
+        if (doc.text[i] == '\'' or doc.text[i] == '"') {
+            const quote = doc.text[i];
+            const start_char: u32 = @intCast(i - line_start);
+            const string_start = i;
+            i += 1;
+            while (i < doc.text.len and doc.text[i] != quote) {
+                if (doc.text[i] == '\\' and i + 1 < doc.text.len) {
+                    i += 2;
+                } else if (doc.text[i] == '\n') {
+                    // Multi-line string - emit token for current line only
+                    const string_len: u32 = @intCast(i - string_start);
+                    try addToken(allocator, &tokens, current_line, start_char, string_len, .string, 0, &prev_line, &prev_char);
+                    current_line += 1;
+                    line_start = i + 1;
+                    i += 1;
+                    continue;
+                } else {
+                    i += 1;
+                }
+            }
+            if (i < doc.text.len) i += 1;
+            const string_len: u32 = @intCast(i - string_start);
+            try addToken(allocator, &tokens, current_line, start_char, string_len, .string, 0, &prev_line, &prev_char);
+            continue;
+        }
+
+        // Handle parameters ($name)
+        if (doc.text[i] == '$') {
+            const start_char: u32 = @intCast(i - line_start);
+            const param_start = i;
+            i += 1;
+            while (i < doc.text.len and (std.ascii.isAlphanumeric(doc.text[i]) or doc.text[i] == '_')) {
+                i += 1;
+            }
+            const param_len: u32 = @intCast(i - param_start);
+            if (param_len > 1) {
+                try addToken(allocator, &tokens, current_line, start_char, param_len, .parameter, 0, &prev_line, &prev_char);
+            }
+            continue;
+        }
+
+        // Handle numbers
+        if (std.ascii.isDigit(doc.text[i]) or (doc.text[i] == '.' and i + 1 < doc.text.len and std.ascii.isDigit(doc.text[i + 1]))) {
+            const start_char: u32 = @intCast(i - line_start);
+            const num_start = i;
+            // Integer or float
+            while (i < doc.text.len and (std.ascii.isDigit(doc.text[i]) or doc.text[i] == '.' or doc.text[i] == 'e' or doc.text[i] == 'E' or doc.text[i] == '-' or doc.text[i] == '+')) {
+                i += 1;
+            }
+            const num_len: u32 = @intCast(i - num_start);
+            try addToken(allocator, &tokens, current_line, start_char, num_len, .number, 0, &prev_line, &prev_char);
+            continue;
+        }
+
+        // Handle identifiers
+        if (std.ascii.isAlphabetic(doc.text[i]) or doc.text[i] == '_') {
+            const start_char: u32 = @intCast(i - line_start);
+            const id_start = i;
+            while (i < doc.text.len and (std.ascii.isAlphanumeric(doc.text[i]) or doc.text[i] == '_')) {
+                i += 1;
+            }
+            const identifier = doc.text[id_start..i];
+            const id_len: u32 = @intCast(identifier.len);
+
+            // Check if it's a label (preceded by colon in node/rel pattern)
+            var is_label = false;
+            if (id_start > 0) {
+                var j = id_start - 1;
+                while (j > 0 and (doc.text[j] == ' ' or doc.text[j] == '\t')) j -= 1;
+                if (doc.text[j] == ':') {
+                    // Check if we're in a node or relationship pattern
+                    var k = j;
+                    while (k > 0) {
+                        k -= 1;
+                        if (doc.text[k] == '(' or doc.text[k] == '[') {
+                            is_label = true;
+                            break;
+                        }
+                        if (doc.text[k] == ')' or doc.text[k] == ']' or doc.text[k] == '\n') {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (is_label) {
+                try addToken(allocator, &tokens, current_line, start_char, id_len, .label, 0, &prev_line, &prev_char);
+            } else if (language_metadata.findFunction(identifier) != null) {
+                // Function - check if followed by (
+                var j = i;
+                while (j < doc.text.len and (doc.text[j] == ' ' or doc.text[j] == '\t')) j += 1;
+                if (j < doc.text.len and doc.text[j] == '(') {
+                    try addToken(allocator, &tokens, current_line, start_char, id_len, .function, 1 << @intFromEnum(TokenModifier.defaultLibrary), &prev_line, &prev_char);
+                } else {
+                    // Could be a variable named same as function
+                    try addToken(allocator, &tokens, current_line, start_char, id_len, .variable, 0, &prev_line, &prev_char);
+                }
+            } else if (language_metadata.findKeyword(identifier) != null) {
+                try addToken(allocator, &tokens, current_line, start_char, id_len, .keyword, 0, &prev_line, &prev_char);
+            } else if (language_metadata.findType(identifier) != null) {
+                try addToken(allocator, &tokens, current_line, start_char, id_len, .type_, 0, &prev_line, &prev_char);
+            } else {
+                // Check if this is a variable definition (in node/rel pattern or after AS)
+                var is_definition = false;
+                if (id_start > 0) {
+                    var j = id_start - 1;
+                    while (j > 0 and (doc.text[j] == ' ' or doc.text[j] == '\t')) j -= 1;
+                    if (doc.text[j] == '(' or doc.text[j] == '[') {
+                        is_definition = !defined_vars.contains(identifier);
+                    }
+                }
+
+                // Check if it's a property access (preceded by .)
+                var is_property = false;
+                if (id_start > 0) {
+                    var j = id_start - 1;
+                    while (j > 0 and (doc.text[j] == ' ' or doc.text[j] == '\t')) j -= 1;
+                    if (doc.text[j] == '.') {
+                        is_property = true;
+                    }
+                }
+
+                if (is_property) {
+                    try addToken(allocator, &tokens, current_line, start_char, id_len, .property, 0, &prev_line, &prev_char);
+                } else {
+                    const modifier: u32 = if (is_definition) 1 << @intFromEnum(TokenModifier.definition) else 0;
+                    if (is_definition) {
+                        try defined_vars.put(identifier, {});
+                    }
+                    try addToken(allocator, &tokens, current_line, start_char, id_len, .variable, modifier, &prev_line, &prev_char);
+                }
+            }
+            continue;
+        }
+
+        i += 1;
+    }
+
+    return protocol.SemanticTokens{
+        .data = try tokens.toOwnedSlice(allocator),
+    };
+}
+
+fn addToken(
+    allocator: Allocator,
+    tokens: *std.ArrayList(u32),
+    line: u32,
+    char: u32,
+    length: u32,
+    token_type: TokenType,
+    modifiers: u32,
+    prev_line: *u32,
+    prev_char: *u32,
+) !void {
+    const delta_line = line - prev_line.*;
+    const delta_char = if (delta_line == 0) char - prev_char.* else char;
+
+    try tokens.append(allocator, delta_line);
+    try tokens.append(allocator, delta_char);
+    try tokens.append(allocator, length);
+    try tokens.append(allocator, @intFromEnum(token_type));
+    try tokens.append(allocator, modifiers);
+
+    prev_line.* = line;
+    prev_char.* = char;
+}
+
 /// Format a GQL document with proper keyword casing, indentation, and spacing.
 /// If options is null, uses default options (which enables property map folding).
 pub fn provideFormatting(allocator: Allocator, doc: *const Document) !?[]const u8 {
@@ -1581,4 +2516,156 @@ test "provideFormatting - variable names preserved" {
     try std.testing.expect(result != null);
     // Variable names should preserve original case
     try std.testing.expect(std.mem.indexOf(u8, result.?, "myNode") != null);
+}
+
+// ============================================================================
+// Unit Tests for Document Symbols
+// ============================================================================
+
+test "provideDocumentSymbols - extracts node variables" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "MATCH (n:Person) RETURN n", 1);
+    defer doc.deinit();
+
+    const symbols = try provideDocumentSymbols(allocator, doc);
+    defer allocator.free(symbols);
+
+    try std.testing.expect(symbols.len >= 1);
+    try std.testing.expectEqualStrings("n", symbols[0].name);
+    try std.testing.expect(symbols[0].kind == .Variable);
+}
+
+test "provideDocumentSymbols - extracts relationship variables" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "MATCH (a)-[r:KNOWS]->(b) RETURN r", 1);
+    defer doc.deinit();
+
+    const symbols = try provideDocumentSymbols(allocator, doc);
+    defer allocator.free(symbols);
+
+    // Should have at least a, r, b
+    try std.testing.expect(symbols.len >= 2);
+}
+
+test "provideDocumentSymbols - multiple node patterns" {
+    const allocator = std.testing.allocator;
+    // Valid GQL with multiple nodes
+    const doc = try Document.init(allocator, "file:///test.gql", "MATCH (a:Person)-[r]->(b:Company) RETURN a, b", 1);
+    defer doc.deinit();
+
+    const symbols = try provideDocumentSymbols(allocator, doc);
+    defer allocator.free(symbols);
+
+    // Should extract multiple symbols
+    try std.testing.expect(symbols.len >= 2);
+}
+
+// ============================================================================
+// Unit Tests for Signature Help
+// ============================================================================
+
+test "provideSignatureHelp - function with params" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "RETURN count(", 1);
+    defer doc.deinit();
+
+    const sig = try provideSignatureHelp(allocator, doc, 0, 13);
+
+    if (sig) |s| {
+        defer {
+            for (s.signatures) |si| {
+                allocator.free(si.label);
+                if (si.parameters) |ps| {
+                    for (ps) |p| allocator.free(p.label);
+                    allocator.free(ps);
+                }
+            }
+            allocator.free(s.signatures);
+        }
+
+        try std.testing.expect(s.signatures.len == 1);
+        try std.testing.expect(std.mem.startsWith(u8, s.signatures[0].label, "count("));
+    } else {
+        try std.testing.expect(false); // Should have returned signature
+    }
+}
+
+test "provideSignatureHelp - returns null for non-function" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "RETURN n", 1);
+    defer doc.deinit();
+
+    const sig = try provideSignatureHelp(allocator, doc, 0, 7);
+    try std.testing.expect(sig == null);
+}
+
+// ============================================================================
+// Unit Tests for References
+// ============================================================================
+
+test "provideReferences - finds all variable occurrences" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "MATCH (n) WHERE n.age > 21 RETURN n", 1);
+    defer doc.deinit();
+
+    // Position at first 'n' (offset ~7)
+    const refs = try provideReferences(allocator, doc, 0, 7, true);
+    defer allocator.free(refs);
+
+    // Should find 'n' 3 times
+    try std.testing.expect(refs.len == 3);
+}
+
+test "provideReferences - skips keywords" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "MATCH (n) RETURN n", 1);
+    defer doc.deinit();
+
+    // Position at 'MATCH' keyword
+    const refs = try provideReferences(allocator, doc, 0, 0, true);
+    defer allocator.free(refs);
+
+    // Should return empty for keywords
+    try std.testing.expect(refs.len == 0);
+}
+
+// ============================================================================
+// Unit Tests for Semantic Tokens
+// ============================================================================
+
+test "provideSemanticTokensFull - basic tokens" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "MATCH (n) RETURN n", 1);
+    defer doc.deinit();
+
+    const tokens = try provideSemanticTokensFull(allocator, doc);
+    defer allocator.free(tokens.data);
+
+    // Should have tokens - data is delta-encoded in groups of 5
+    try std.testing.expect(tokens.data.len > 0);
+    try std.testing.expect(tokens.data.len % 5 == 0);
+}
+
+test "provideSemanticTokensFull - parameters" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "RETURN $param", 1);
+    defer doc.deinit();
+
+    const tokens = try provideSemanticTokensFull(allocator, doc);
+    defer allocator.free(tokens.data);
+
+    // Should have at least 2 tokens (RETURN keyword, $param parameter)
+    try std.testing.expect(tokens.data.len >= 10);
+}
+
+test "provideSemanticTokensFull - comments" {
+    const allocator = std.testing.allocator;
+    const doc = try Document.init(allocator, "file:///test.gql", "// comment\nRETURN 1", 1);
+    defer doc.deinit();
+
+    const tokens = try provideSemanticTokensFull(allocator, doc);
+    defer allocator.free(tokens.data);
+
+    // Should have tokens for comment and RETURN keyword
+    try std.testing.expect(tokens.data.len >= 10);
 }

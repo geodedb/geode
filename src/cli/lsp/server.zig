@@ -19,9 +19,13 @@ pub const ServerCapabilities = struct {
         triggerCharacters: []const []const u8 = &[_][]const u8{ ".", ":", "$" },
     } = .{},
     definitionProvider: bool = true,
-    referencesProvider: bool = false,
+    referencesProvider: bool = true,
     documentFormattingProvider: bool = true,
-    documentSymbolProvider: bool = false,
+    documentSymbolProvider: bool = true,
+    signatureHelpProvider: ?struct {
+        triggerCharacters: []const []const u8 = &[_][]const u8{ "(", "," },
+    } = .{},
+    semanticTokensProvider: bool = true,
 };
 
 pub const Server = struct {
@@ -113,6 +117,14 @@ pub const Server = struct {
             try self.handleDefinition(id, params);
         } else if (std.mem.eql(u8, method, "textDocument/formatting")) {
             try self.handleFormatting(id, params);
+        } else if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
+            try self.handleDocumentSymbol(id, params);
+        } else if (std.mem.eql(u8, method, "textDocument/signatureHelp")) {
+            try self.handleSignatureHelp(id, params);
+        } else if (std.mem.eql(u8, method, "textDocument/references")) {
+            try self.handleReferences(id, params);
+        } else if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
+            try self.handleSemanticTokensFull(id, params);
         } else {
             try self.sendError(id, @intFromEnum(protocol.ErrorCode.MethodNotFound), "Method not found");
         }
@@ -172,6 +184,8 @@ pub const Server = struct {
         try caps.put("hoverProvider", .{ .bool = capabilities.hoverProvider });
         try caps.put("definitionProvider", .{ .bool = capabilities.definitionProvider });
         try caps.put("documentFormattingProvider", .{ .bool = capabilities.documentFormattingProvider });
+        try caps.put("documentSymbolProvider", .{ .bool = capabilities.documentSymbolProvider });
+        try caps.put("referencesProvider", .{ .bool = capabilities.referencesProvider });
 
         var completion = std.json.ObjectMap.init(self.allocator);
         defer completion.deinit();
@@ -182,6 +196,41 @@ pub const Server = struct {
         try triggers.append(.{ .string = "$" });
         try completion.put("triggerCharacters", .{ .array = triggers });
         try caps.put("completionProvider", .{ .object = completion });
+
+        // Signature help provider
+        var sig_help = std.json.ObjectMap.init(self.allocator);
+        defer sig_help.deinit();
+        var sig_triggers = std.json.Array.init(self.allocator);
+        defer sig_triggers.deinit();
+        try sig_triggers.append(.{ .string = "(" });
+        try sig_triggers.append(.{ .string = "," });
+        try sig_help.put("triggerCharacters", .{ .array = sig_triggers });
+        try caps.put("signatureHelpProvider", .{ .object = sig_help });
+
+        // Semantic tokens provider
+        var sem_tokens = std.json.ObjectMap.init(self.allocator);
+        defer sem_tokens.deinit();
+        try sem_tokens.put("full", .{ .bool = true });
+
+        var legend = std.json.ObjectMap.init(self.allocator);
+        defer legend.deinit();
+
+        var token_types = std.json.Array.init(self.allocator);
+        defer token_types.deinit();
+        for (protocol.SemanticTokenTypes.types) |t| {
+            try token_types.append(.{ .string = t });
+        }
+        try legend.put("tokenTypes", .{ .array = token_types });
+
+        var token_modifiers = std.json.Array.init(self.allocator);
+        defer token_modifiers.deinit();
+        for (protocol.SemanticTokenTypes.modifiers) |m| {
+            try token_modifiers.append(.{ .string = m });
+        }
+        try legend.put("tokenModifiers", .{ .array = token_modifiers });
+
+        try sem_tokens.put("legend", .{ .object = legend });
+        try caps.put("semanticTokensProvider", .{ .object = sem_tokens });
 
         try result.put("capabilities", .{ .object = caps });
 
@@ -455,6 +504,280 @@ pub const Server = struct {
         } else {
             try self.sendResult(id, .null);
         }
+    }
+
+    fn handleDocumentSymbol(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
+        if (params == null) {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
+            return;
+        }
+
+        const text_document = params.?.object.get("textDocument").?.object;
+        const uri = text_document.get("uri").?.string;
+
+        const doc = self.documents.get(uri) orelse {
+            try self.sendResult(id, .{ .array = std.json.Array.init(self.allocator) });
+            return;
+        };
+
+        const symbols = features.provideDocumentSymbols(self.allocator, doc) catch {
+            try self.sendResult(id, .{ .array = std.json.Array.init(self.allocator) });
+            return;
+        };
+        defer self.allocator.free(symbols);
+
+        var array = std.json.Array.init(self.allocator);
+        defer array.deinit();
+
+        for (symbols) |sym| {
+            var obj = std.json.ObjectMap.init(self.allocator);
+            defer obj.deinit();
+
+            try obj.put("name", .{ .string = sym.name });
+            try obj.put("kind", .{ .integer = @intFromEnum(sym.kind) });
+
+            if (sym.detail) |d| {
+                try obj.put("detail", .{ .string = d });
+            }
+
+            var range = std.json.ObjectMap.init(self.allocator);
+            defer range.deinit();
+            var start_pos = std.json.ObjectMap.init(self.allocator);
+            defer start_pos.deinit();
+            try start_pos.put("line", .{ .integer = sym.range.start.line });
+            try start_pos.put("character", .{ .integer = sym.range.start.character });
+            var end_pos = std.json.ObjectMap.init(self.allocator);
+            defer end_pos.deinit();
+            try end_pos.put("line", .{ .integer = sym.range.end.line });
+            try end_pos.put("character", .{ .integer = sym.range.end.character });
+            try range.put("start", .{ .object = start_pos });
+            try range.put("end", .{ .object = end_pos });
+            try obj.put("range", .{ .object = range });
+
+            var sel_range = std.json.ObjectMap.init(self.allocator);
+            defer sel_range.deinit();
+            var sel_start = std.json.ObjectMap.init(self.allocator);
+            defer sel_start.deinit();
+            try sel_start.put("line", .{ .integer = sym.selectionRange.start.line });
+            try sel_start.put("character", .{ .integer = sym.selectionRange.start.character });
+            var sel_end = std.json.ObjectMap.init(self.allocator);
+            defer sel_end.deinit();
+            try sel_end.put("line", .{ .integer = sym.selectionRange.end.line });
+            try sel_end.put("character", .{ .integer = sym.selectionRange.end.character });
+            try sel_range.put("start", .{ .object = sel_start });
+            try sel_range.put("end", .{ .object = sel_end });
+            try obj.put("selectionRange", .{ .object = sel_range });
+
+            try array.append(.{ .object = obj });
+        }
+
+        var response = std.json.ObjectMap.init(self.allocator);
+        defer response.deinit();
+        try response.put("jsonrpc", .{ .string = "2.0" });
+        try response.put("id", id);
+        try response.put("result", .{ .array = array });
+        try self.sendJsonValue(.{ .object = response });
+    }
+
+    fn handleSignatureHelp(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
+        if (params == null) {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
+            return;
+        }
+
+        const text_document = params.?.object.get("textDocument").?.object;
+        const uri = text_document.get("uri").?.string;
+        const position = params.?.object.get("position").?.object;
+        const line = @as(u32, @intCast(position.get("line").?.integer));
+        const character = @as(u32, @intCast(position.get("character").?.integer));
+
+        const doc = self.documents.get(uri) orelse {
+            try self.sendResult(id, .null);
+            return;
+        };
+
+        const sig_help = features.provideSignatureHelp(self.allocator, doc, line, character) catch {
+            try self.sendResult(id, .null);
+            return;
+        };
+
+        if (sig_help) |sh| {
+            defer {
+                for (sh.signatures) |sig| {
+                    self.allocator.free(sig.label);
+                    if (sig.parameters) |ps| {
+                        for (ps) |p| {
+                            self.allocator.free(p.label);
+                        }
+                        self.allocator.free(ps);
+                    }
+                }
+                self.allocator.free(sh.signatures);
+            }
+
+            var response = std.json.ObjectMap.init(self.allocator);
+            defer response.deinit();
+            try response.put("jsonrpc", .{ .string = "2.0" });
+            try response.put("id", id);
+
+            var result = std.json.ObjectMap.init(self.allocator);
+            defer result.deinit();
+
+            var sigs = std.json.Array.init(self.allocator);
+            defer sigs.deinit();
+
+            for (sh.signatures) |sig| {
+                var sig_obj = std.json.ObjectMap.init(self.allocator);
+                defer sig_obj.deinit();
+
+                try sig_obj.put("label", .{ .string = sig.label });
+
+                if (sig.documentation) |doc_content| {
+                    var doc_obj = std.json.ObjectMap.init(self.allocator);
+                    defer doc_obj.deinit();
+                    try doc_obj.put("kind", .{ .string = doc_content.kind.toString() });
+                    try doc_obj.put("value", .{ .string = doc_content.value });
+                    try sig_obj.put("documentation", .{ .object = doc_obj });
+                }
+
+                if (sig.parameters) |ps| {
+                    var params_arr = std.json.Array.init(self.allocator);
+                    defer params_arr.deinit();
+
+                    for (ps) |p| {
+                        var param_obj = std.json.ObjectMap.init(self.allocator);
+                        defer param_obj.deinit();
+                        try param_obj.put("label", .{ .string = p.label });
+                        try params_arr.append(.{ .object = param_obj });
+                    }
+                    try sig_obj.put("parameters", .{ .array = params_arr });
+                }
+
+                if (sig.activeParameter) |ap| {
+                    try sig_obj.put("activeParameter", .{ .integer = ap });
+                }
+
+                try sigs.append(.{ .object = sig_obj });
+            }
+
+            try result.put("signatures", .{ .array = sigs });
+            if (sh.activeSignature) |as| {
+                try result.put("activeSignature", .{ .integer = as });
+            }
+            if (sh.activeParameter) |ap| {
+                try result.put("activeParameter", .{ .integer = ap });
+            }
+
+            try response.put("result", .{ .object = result });
+            try self.sendJsonValue(.{ .object = response });
+        } else {
+            try self.sendResult(id, .null);
+        }
+    }
+
+    fn handleReferences(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
+        if (params == null) {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
+            return;
+        }
+
+        const text_document = params.?.object.get("textDocument").?.object;
+        const uri = text_document.get("uri").?.string;
+        const position = params.?.object.get("position").?.object;
+        const line = @as(u32, @intCast(position.get("line").?.integer));
+        const character = @as(u32, @intCast(position.get("character").?.integer));
+
+        // Check for includeDeclaration in context
+        var include_decl = true;
+        if (params.?.object.get("context")) |ctx| {
+            if (ctx.object.get("includeDeclaration")) |inc| {
+                include_decl = inc.bool;
+            }
+        }
+
+        const doc = self.documents.get(uri) orelse {
+            try self.sendResult(id, .{ .array = std.json.Array.init(self.allocator) });
+            return;
+        };
+
+        const locations = features.provideReferences(self.allocator, doc, line, character, include_decl) catch {
+            try self.sendResult(id, .{ .array = std.json.Array.init(self.allocator) });
+            return;
+        };
+        defer self.allocator.free(locations);
+
+        var array = std.json.Array.init(self.allocator);
+        defer array.deinit();
+
+        for (locations) |loc| {
+            var obj = std.json.ObjectMap.init(self.allocator);
+            defer obj.deinit();
+
+            try obj.put("uri", .{ .string = loc.uri });
+
+            var range = std.json.ObjectMap.init(self.allocator);
+            defer range.deinit();
+            var start_pos = std.json.ObjectMap.init(self.allocator);
+            defer start_pos.deinit();
+            try start_pos.put("line", .{ .integer = loc.range.start.line });
+            try start_pos.put("character", .{ .integer = loc.range.start.character });
+            var end_pos = std.json.ObjectMap.init(self.allocator);
+            defer end_pos.deinit();
+            try end_pos.put("line", .{ .integer = loc.range.end.line });
+            try end_pos.put("character", .{ .integer = loc.range.end.character });
+            try range.put("start", .{ .object = start_pos });
+            try range.put("end", .{ .object = end_pos });
+            try obj.put("range", .{ .object = range });
+
+            try array.append(.{ .object = obj });
+        }
+
+        var response = std.json.ObjectMap.init(self.allocator);
+        defer response.deinit();
+        try response.put("jsonrpc", .{ .string = "2.0" });
+        try response.put("id", id);
+        try response.put("result", .{ .array = array });
+        try self.sendJsonValue(.{ .object = response });
+    }
+
+    fn handleSemanticTokensFull(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
+        if (params == null) {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
+            return;
+        }
+
+        const text_document = params.?.object.get("textDocument").?.object;
+        const uri = text_document.get("uri").?.string;
+
+        const doc = self.documents.get(uri) orelse {
+            try self.sendResult(id, .null);
+            return;
+        };
+
+        const sem_tokens = features.provideSemanticTokensFull(self.allocator, doc) catch {
+            try self.sendResult(id, .null);
+            return;
+        };
+        defer self.allocator.free(sem_tokens.data);
+
+        var response = std.json.ObjectMap.init(self.allocator);
+        defer response.deinit();
+        try response.put("jsonrpc", .{ .string = "2.0" });
+        try response.put("id", id);
+
+        var result = std.json.ObjectMap.init(self.allocator);
+        defer result.deinit();
+
+        var data_arr = std.json.Array.init(self.allocator);
+        defer data_arr.deinit();
+
+        for (sem_tokens.data) |val| {
+            try data_arr.append(.{ .integer = val });
+        }
+
+        try result.put("data", .{ .array = data_arr });
+        try response.put("result", .{ .object = result });
+        try self.sendJsonValue(.{ .object = response });
     }
 
     fn sendDiagnostics(self: *Server, uri: []const u8) !void {
