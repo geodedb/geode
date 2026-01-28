@@ -58,6 +58,11 @@ const encryptPropertyIfNeeded = execution.encryptPropertyIfNeeded;
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     switch (stmt) {
         .Query => |q| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-002; FEATURE="AuthEnforcement"; ASPECT=QueryReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: Check Read permission for all query operations
+            // This ensures unauthenticated users cannot read data when auth is enabled
+            try checkPermission(context, .Read);
+
             // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled
             if (context.strict_offset_validation and q.offset != null and q.order_by == null) {
                 return ExecutionError.UnorderedPagination;

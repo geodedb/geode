@@ -492,6 +492,17 @@ pub fn processMessage(
             return protocol.buildBindingsLine(gpa, false, &.{}, ok, true, &.{}, flags) catch try gpa.dupe(u8, "");
         },
         .RUN_GQL => |rq| {
+            // CANARY: REQ=REQ-AUTH-ENFORCE-001; FEATURE="AuthEnforcement"; ASPECT=RUN_GQL_Guard; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+            // CRITICAL SECURITY: Enforce authentication BEFORE any query processing
+            // Issue #387: Unauthenticated clients MUST NOT be able to execute queries
+            const user_mgmt = geode.user_management;
+            if (user_mgmt.isAuthEnabled() and state.authenticated_role == null) {
+                // Authentication required but user not authenticated - reject immediately
+                log.warn("Rejecting unauthenticated RUN_GQL request", &.{});
+                const error_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Authentication required. Use authenticated HELLO first.\"}\n";
+                return try gpa.dupe(u8, error_response);
+            }
+
             state.resetResult();
             var text = rq.text;
             // Detect EXPLAIN / EXPLAIN CALIBRATED / PROFILE prefixes; track modes then strip

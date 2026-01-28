@@ -11,7 +11,6 @@
 ///   const mod_test = @import("modularization_test_util.zig");
 ///   var ctx = try mod_test.TestContext.init(testing.allocator);
 ///   defer ctx.deinit();
-
 const std = @import("std");
 const testing = std.testing;
 
@@ -43,11 +42,7 @@ pub const TestContext = struct {
         // Note: In real implementation, mkdtemp would be called
         // For now, create a unique dir name
         const timestamp = std.time.milliTimestamp();
-        const dir_name = try std.fmt.allocPrint(
-            self.arena.allocator(),
-            "/tmp/geode_test_{d}",
-            .{timestamp}
-        );
+        const dir_name = try std.fmt.allocPrint(self.arena.allocator(), "/tmp/geode_test_{d}", .{timestamp});
 
         std.fs.cwd().makeDir(dir_name) catch |err| {
             if (err != error.PathAlreadyExists) return err;
@@ -67,7 +62,7 @@ pub const TestContext = struct {
         // Clean up temp directory if created
         if (self.temp_dir) |dir| {
             std.fs.cwd().deleteTree(dir) catch |err| {
-                std.debug.print("Warning: Failed to clean up test dir {s}: {}\n", .{dir, err});
+                std.debug.print("Warning: Failed to clean up test dir {s}: {}\n", .{ dir, err });
             };
         }
         self.arena.deinit();
@@ -280,10 +275,7 @@ pub fn MockBuilder(comptime Interface: type) type {
 // =============================================================================
 
 /// Helper to create isolated module test
-pub fn moduleTest(
-    comptime name: []const u8,
-    comptime test_fn: fn(*TestContext) anyerror!void
-) fn() anyerror!void {
+pub fn moduleTest(comptime name: []const u8, comptime test_fn: fn (*TestContext) anyerror!void) fn () anyerror!void {
     return struct {
         fn run() anyerror!void {
             var ctx = try TestContext.init(testing.allocator);
@@ -371,7 +363,7 @@ pub const StateVerifier = struct {
         var failed: usize = 0;
         for (self.checks.items) |check| {
             if (!check.passed) {
-                std.debug.print("✗ {s}: {s}\n", .{check.name, check.message});
+                std.debug.print("✗ {s}: {s}\n", .{ check.name, check.message });
                 failed += 1;
             } else {
                 std.debug.print("✓ {s}\n", .{check.name});
@@ -379,7 +371,7 @@ pub const StateVerifier = struct {
         }
 
         if (failed > 0) {
-            std.debug.print("\n{d}/{d} checks failed\n", .{failed, self.checks.items.len});
+            std.debug.print("\n{d}/{d} checks failed\n", .{ failed, self.checks.items.len });
             return error.VerificationFailed;
         }
     }

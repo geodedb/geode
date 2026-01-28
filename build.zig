@@ -1743,6 +1743,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&rls_test.step);
 
+    // CANARY: REQ=REQ-AUTH-ENFORCE-004; FEATURE="AuthEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+    // CRITICAL SECURITY: Authentication enforcement tests - verify permission checking and role management
+    const auth_enforcement_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/security/test_auth_enforcement.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    auth_enforcement_test_mod.addImport("logging", logging_mod);
+    const auth_enforcement_tests = b.addTest(.{ .root_module = auth_enforcement_test_mod });
+    test_step.dependOn(&auth_enforcement_tests.step);
+
     const audit_chain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize });
     audit_chain_test_mod.addImport("audit", audit_security_mod);
     audit_chain_test_mod.addImport("rls", rls_mod);

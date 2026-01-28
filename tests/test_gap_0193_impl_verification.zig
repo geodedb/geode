@@ -21,13 +21,13 @@ test "GAP-0193: REQ-MULTI-GRAPH-003 - Graph store node/edge tagging" {
 // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=test_gap_0193_impl_verification.zig; OWNER=engine; UPDATED=2026-01-15
 test "GAP-0193: REQ-MULTI-GRAPH-004 - Graph store create node" {
     try testing.expect(@hasDecl(geode.graph_store.GraphStore, "createNode") or
-                       @hasDecl(geode.graph_store.GraphStore, "addNode"));
+        @hasDecl(geode.graph_store.GraphStore, "addNode"));
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=TESTED; TEST=test_gap_0193_impl_verification.zig; OWNER=engine; UPDATED=2026-01-15
 test "GAP-0193: REQ-MULTI-GRAPH-005 - Graph store create edge" {
     try testing.expect(@hasDecl(geode.graph_store.GraphStore, "createEdge") or
-                       @hasDecl(geode.graph_store.GraphStore, "addEdge"));
+        @hasDecl(geode.graph_store.GraphStore, "addEdge"));
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=test_gap_0193_impl_verification.zig; OWNER=engine; UPDATED=2026-01-15

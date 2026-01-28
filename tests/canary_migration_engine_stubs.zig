@@ -68,7 +68,7 @@ test "TestCANARY_REQ_GQL_087_DownReversalSafety" {
     defer exec.deinit();
     const cfg = migrate.MigrationConfig{ .migrations_dir = tmp.path };
 
-    try migrate.applyUpMigrations(&alloc, cfg, &.{ "002_create_person.gql" }, exec.executor());
+    try migrate.applyUpMigrations(&alloc, cfg, &.{"002_create_person.gql"}, exec.executor());
     try migrate.applyDownMigrations(&alloc, cfg, &.{}, exec.executor());
 
     const rows = try migrate.statusReport(&alloc, cfg);
@@ -93,7 +93,7 @@ test "TestCANARY_REQ_GQL_087_ChecksumValidation_and_PlanDryRun" {
     var exec = ExecRecorder.init(alloc);
     defer exec.deinit();
     const cfg = migrate.MigrationConfig{ .migrations_dir = tmp.path };
-    try migrate.applyUpMigrations(&alloc, cfg, &.{ "002_second.gql" }, exec.executor());
+    try migrate.applyUpMigrations(&alloc, cfg, &.{"002_second.gql"}, exec.executor());
 
     const rows = try migrate.statusReport(&alloc, cfg);
     defer migrate.freeStatusRows(alloc, rows);
@@ -109,7 +109,7 @@ test "TestCANARY_REQ_GQL_087_ChecksumValidation_and_PlanDryRun" {
     const ok = try migrate.checksumValidate(&alloc, cfg, manifest);
     try std.testing.expect(ok);
 
-    const plan = try migrate.planDryRun(&alloc, cfg, &.{ "003_third.gql" });
+    const plan = try migrate.planDryRun(&alloc, cfg, &.{"003_third.gql"});
     defer {
         alloc.free(plan.up);
         alloc.free(plan.down);

@@ -3,7 +3,6 @@
 /// This test demonstrates how to use the modularization test utilities
 /// to test modules in isolation. It serves as both documentation and
 /// verification that the test utilities work correctly.
-
 const std = @import("std");
 const testing = std.testing;
 const mod_test = @import("modularization_test_util.zig");
@@ -14,9 +13,9 @@ const mod_test = @import("modularization_test_util.zig");
 
 /// Example interface that a module might implement
 const StorageInterface = struct {
-    writeFn: *const fn(*anyopaque, []const u8, []const u8) anyerror!void,
-    readFn: *const fn(*anyopaque, []const u8) anyerror![]const u8,
-    deleteFn: *const fn(*anyopaque, []const u8) anyerror!void,
+    writeFn: *const fn (*anyopaque, []const u8, []const u8) anyerror!void,
+    readFn: *const fn (*anyopaque, []const u8) anyerror![]const u8,
+    deleteFn: *const fn (*anyopaque, []const u8) anyerror!void,
 };
 
 // =============================================================================
@@ -117,7 +116,8 @@ const MockStorage = struct {
                 .write => |exp| {
                     if (call == .write) {
                         if (std.mem.eql(u8, call.write.key, exp.key) and
-                            std.mem.eql(u8, call.write.value, exp.value)) {
+                            std.mem.eql(u8, call.write.value, exp.value))
+                        {
                             return true;
                         }
                     }

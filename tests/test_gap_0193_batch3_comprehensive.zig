@@ -228,8 +228,7 @@ test "GAP-0193: Engine - Query planning" {
 
 // CANARY: REQ=REQ-INTTEST-E2E-001; FEATURE="IntegrationTesting"; ASPECT=E2E; STATUS=TESTED; OWNER=testing; UPDATED=2026-01-16
 test "GAP-0193: IntegrationTesting - E2E workflow" {
-    var result = try geode.parse(testing.allocator,
-        "CREATE (a:Start)-[:STEP1]->(b:Mid)-[:STEP2]->(c:End) RETURN a, b, c", .{});
+    var result = try geode.parse(testing.allocator, "CREATE (a:Start)-[:STEP1]->(b:Mid)-[:STEP2]->(c:End) RETURN a, b, c", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

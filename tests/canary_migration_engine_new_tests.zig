@@ -45,7 +45,7 @@ test "TestCANARY_REQ_GQL_087_ObservabilityMetrics" {
     const cfg = migrate.MigrationConfig{ .migrations_dir = tmp.path };
 
     const m0 = try migrate.metricsSnapshot(&alloc, cfg);
-    try migrate.applyUpMigrations(&alloc, cfg, &.{ "002_more.gql" }, exec.executor());
+    try migrate.applyUpMigrations(&alloc, cfg, &.{"002_more.gql"}, exec.executor());
     const m1 = try migrate.metricsSnapshot(&alloc, cfg);
     try std.testing.expect(m1.applied_total >= m0.applied_total);
 }
@@ -61,7 +61,7 @@ test "TestCANARY_REQ_GQL_087_CliParityStatusCommand" {
 
     var exec = ExecRecorder.init(alloc);
     defer exec.deinit();
-    try migrate.applyUpMigrations(&alloc, cfg, &.{ "002_status.gql" }, exec.executor());
+    try migrate.applyUpMigrations(&alloc, cfg, &.{"002_status.gql"}, exec.executor());
 
     const before = try migrate.statusReport(&alloc, cfg);
     defer migrate.freeStatusRows(alloc, before);

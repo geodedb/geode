@@ -139,40 +139,35 @@ test "GAP-0193: Documentation - Structure tests" {
 
 // CANARY: REQ=REQ-FLE-TEST-001; FEATURE="FLE"; ASPECT=BasicEncryption; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
 test "GAP-0193: FLE - Basic encryption test" {
-    var result = try geode.parse(testing.allocator,
-        "CREATE (n:Encrypted {field: 'value'}) RETURN n", .{});
+    var result = try geode.parse(testing.allocator, "CREATE (n:Encrypted {field: 'value'}) RETURN n", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-FLE-TEST-002; FEATURE="FLE"; ASPECT=BlindIndex; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
 test "GAP-0193: FLE - Blind index test" {
-    var result = try geode.parse(testing.allocator,
-        "MATCH (n:Encrypted) WHERE n.indexed_field = 'search' RETURN n", .{});
+    var result = try geode.parse(testing.allocator, "MATCH (n:Encrypted) WHERE n.indexed_field = 'search' RETURN n", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-FLE-TEST-003; FEATURE="FLE"; ASPECT=Rotation; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
 test "GAP-0193: FLE - Key rotation test" {
-    var result = try geode.parse(testing.allocator,
-        "CALL db.encryption.rotateKey('field_key')", .{});
+    var result = try geode.parse(testing.allocator, "CALL db.encryption.rotateKey('field_key')", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-FLE-TEST-004; FEATURE="FLE"; ASPECT=Migration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
 test "GAP-0193: FLE - Migration test" {
-    var result = try geode.parse(testing.allocator,
-        "CALL db.encryption.migrate('v1', 'v2')", .{});
+    var result = try geode.parse(testing.allocator, "CALL db.encryption.migrate('v1', 'v2')", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-FLE-TEST-005; FEATURE="FLE"; ASPECT=RBAC; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
 test "GAP-0193: FLE - RBAC integration test" {
-    var result = try geode.parse(testing.allocator,
-        "MATCH (n:Encrypted) RETURN n.public_field AS field", .{});
+    var result = try geode.parse(testing.allocator, "MATCH (n:Encrypted) RETURN n.public_field AS field", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
@@ -209,16 +204,14 @@ test "GAP-0193: GQL - ISO compliance" {
 
 // CANARY: REQ=REQ-GQL-ADVANCED-TYPES-INTEGRATION; FEATURE="GQLTypes"; ASPECT=Integration; STATUS=TESTED; OWNER=testing; UPDATED=2026-01-16
 test "GAP-0193: GQL - Advanced types integration" {
-    var result = try geode.parse(testing.allocator,
-        "RETURN [1, 2, 3] AS list, {a: 1} AS map", .{});
+    var result = try geode.parse(testing.allocator, "RETURN [1, 2, 3] AS list, {a: 1} AS map", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-GQL-ADVANCED-TYPES-REGRESSION; FEATURE="GQLTypes"; ASPECT=Regression; STATUS=TESTED; OWNER=testing; UPDATED=2026-01-16
 test "GAP-0193: GQL - Advanced types regression" {
-    var result = try geode.parse(testing.allocator,
-        "WITH {nested: {deep: [1,2,3]}} AS obj RETURN obj.nested.deep AS arr", .{});
+    var result = try geode.parse(testing.allocator, "WITH {nested: {deep: [1,2,3]}} AS obj RETURN obj.nested.deep AS arr", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
@@ -229,32 +222,28 @@ test "GAP-0193: GQL - Advanced types regression" {
 
 // CANARY: REQ=REQ-GQL-ALGO-PERF-001; FEATURE="AlgoPerf"; ASPECT=PageRank; STATUS=TESTED; OWNER=graph; UPDATED=2026-01-16
 test "GAP-0193: Algorithm - PageRank optimization" {
-    var result = try geode.parse(testing.allocator,
-        "CALL algo.pageRank() YIELD node, score RETURN node, score LIMIT 10", .{});
+    var result = try geode.parse(testing.allocator, "CALL algo.pageRank() YIELD node, score RETURN node, score LIMIT 10", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-GQL-ALGO-PERF-002; FEATURE="AlgoPerf"; ASPECT=Betweenness; STATUS=TESTED; OWNER=graph; UPDATED=2026-01-16
 test "GAP-0193: Algorithm - Betweenness optimization" {
-    var result = try geode.parse(testing.allocator,
-        "CALL algo.betweenness() YIELD node, score RETURN node, score LIMIT 10", .{});
+    var result = try geode.parse(testing.allocator, "CALL algo.betweenness() YIELD node, score RETURN node, score LIMIT 10", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-GQL-ALGO-PERF-003; FEATURE="AlgoPerf"; ASPECT=Closeness; STATUS=TESTED; OWNER=graph; UPDATED=2026-01-16
 test "GAP-0193: Algorithm - Closeness optimization" {
-    var result = try geode.parse(testing.allocator,
-        "CALL algo.closeness() YIELD node, score RETURN node, score LIMIT 10", .{});
+    var result = try geode.parse(testing.allocator, "CALL algo.closeness() YIELD node, score RETURN node, score LIMIT 10", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-GQL-ALGO-PERF-004; FEATURE="AlgoPerf"; ASPECT=Eigenvector; STATUS=TESTED; OWNER=graph; UPDATED=2026-01-16
 test "GAP-0193: Algorithm - Eigenvector optimization" {
-    var result = try geode.parse(testing.allocator,
-        "CALL algo.eigenvector() YIELD node, score RETURN node, score LIMIT 10", .{});
+    var result = try geode.parse(testing.allocator, "CALL algo.eigenvector() YIELD node, score RETURN node, score LIMIT 10", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
@@ -276,8 +265,7 @@ test "GAP-0193: Catalog - End-to-end operations" {
 
 // CANARY: REQ=REQ-GQL-FTS-003; FEATURE="FTS"; ASPECT=IndexOptimizer; STATUS=TESTED; OWNER=search; UPDATED=2026-01-16
 test "GAP-0193: FTS - IndexOptimizer integration" {
-    var result = try geode.parse(testing.allocator,
-        "CALL db.index.fulltext.queryNodes('myIndex', 'search term') YIELD node RETURN node", .{});
+    var result = try geode.parse(testing.allocator, "CALL db.index.fulltext.queryNodes('myIndex', 'search term') YIELD node RETURN node", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
@@ -329,8 +317,7 @@ test "GAP-0193: Test Infrastructure - Regression prevention" {
 
 // CANARY: REQ=REQ-INTEGRATION-TEST-001; FEATURE="IntegrationTest"; ASPECT=E2E; STATUS=TESTED; OWNER=testing; UPDATED=2026-01-16
 test "GAP-0193: Integration - E2E test coverage" {
-    var result = try geode.parse(testing.allocator,
-        "CREATE (a:Start)-[:CONNECTS]->(b:End) RETURN a, b", .{});
+    var result = try geode.parse(testing.allocator, "CREATE (a:Start)-[:CONNECTS]->(b:End) RETURN a, b", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
@@ -353,40 +340,35 @@ test "GAP-0193: Unit Test - Module coverage" {
 
 // CANARY: REQ=REQ-UNIT-TEST-002; FEATURE="UnitTest"; ASPECT=FunctionTests; STATUS=TESTED; OWNER=testing; UPDATED=2026-01-16
 test "GAP-0193: Unit Test - Function tests" {
-    var result = try geode.parse(testing.allocator,
-        "RETURN abs(-5) AS a, ceil(3.2) AS b, floor(3.8) AS c", .{});
+    var result = try geode.parse(testing.allocator, "RETURN abs(-5) AS a, ceil(3.2) AS b, floor(3.8) AS c", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-UNIT-TEST-003; FEATURE="UnitTest"; ASPECT=ParserTests; STATUS=TESTED; OWNER=testing; UPDATED=2026-01-16
 test "GAP-0193: Unit Test - Parser tests" {
-    var result = try geode.parse(testing.allocator,
-        "MATCH (a)-[r:TYPE]->(b) WHERE a.id = 1 RETURN a, r, b", .{});
+    var result = try geode.parse(testing.allocator, "MATCH (a)-[r:TYPE]->(b) WHERE a.id = 1 RETURN a, r, b", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-PERF-TEST-001; FEATURE="PerfTest"; ASPECT=QuerySpeed; STATUS=TESTED; OWNER=performance; UPDATED=2026-01-16
 test "GAP-0193: Performance Test - Query speed" {
-    var result = try geode.parse(testing.allocator,
-        "UNWIND range(1, 100) AS n RETURN count(n) AS total", .{});
+    var result = try geode.parse(testing.allocator, "UNWIND range(1, 100) AS n RETURN count(n) AS total", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-PERF-TEST-002; FEATURE="PerfTest"; ASPECT=MemoryUsage; STATUS=TESTED; OWNER=performance; UPDATED=2026-01-16
 test "GAP-0193: Performance Test - Memory usage" {
-    var result = try geode.parse(testing.allocator,
-        "WITH [x IN range(1, 1000) | x * 2] AS doubled RETURN size(doubled) AS len", .{});
+    var result = try geode.parse(testing.allocator, "WITH [x IN range(1, 1000) | x * 2] AS doubled RETURN size(doubled) AS len", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-PERF-TEST-003; FEATURE="PerfTest"; ASPECT=IndexPerf; STATUS=TESTED; OWNER=performance; UPDATED=2026-01-16
 test "GAP-0193: Performance Test - Index performance" {
-    var result = try geode.parse(testing.allocator,
-        "MATCH (n) WHERE n.indexed_field = 'value' RETURN n LIMIT 10", .{});
+    var result = try geode.parse(testing.allocator, "MATCH (n) WHERE n.indexed_field = 'value' RETURN n LIMIT 10", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
