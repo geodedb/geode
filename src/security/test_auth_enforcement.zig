@@ -656,3 +656,139 @@ test "TestAuthz_NoPrivilegeEscalation_SpecialUnicodeCategories" {
     try testing.expect(Role.fromString("ⓐdmin") == null); // Circled a
     try testing.expect(Role.fromString("🄰dmin") == null); // Squared latin capital A
 }
+
+// ============================================================================
+// ASCII AND UNICODE CONTROL CHARACTER TESTS
+// CANARY: REQ=REQ-AUTH-ENFORCE-030; FEATURE="AuthEnforcement"; ASPECT=ControlCharacterPrevention; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// These tests verify all control characters are rejected in role strings
+// ============================================================================
+
+test "TestAuthz_NoPrivilegeEscalation_ASCIIControlChars_C0" {
+    // C0 control characters (U+0000 to U+001F) - common attack vectors
+    try testing.expect(Role.fromString("admin\x00") == null); // NUL - null byte injection
+    try testing.expect(Role.fromString("\x00admin") == null); // Leading NUL
+    try testing.expect(Role.fromString("ad\x00min") == null); // Mid NUL
+    try testing.expect(Role.fromString("admin\x01") == null); // SOH
+    try testing.expect(Role.fromString("admin\x02") == null); // STX
+    try testing.expect(Role.fromString("admin\x03") == null); // ETX
+    try testing.expect(Role.fromString("admin\x04") == null); // EOT
+    try testing.expect(Role.fromString("admin\x05") == null); // ENQ
+    try testing.expect(Role.fromString("admin\x06") == null); // ACK
+    try testing.expect(Role.fromString("admin\x07") == null); // BEL
+    try testing.expect(Role.fromString("admin\x08") == null); // BS (backspace)
+    try testing.expect(Role.fromString("admin\x09") == null); // HT (tab)
+    try testing.expect(Role.fromString("admin\x0A") == null); // LF (newline)
+    try testing.expect(Role.fromString("admin\x0B") == null); // VT (vertical tab)
+    try testing.expect(Role.fromString("admin\x0C") == null); // FF (form feed)
+    try testing.expect(Role.fromString("admin\x0D") == null); // CR (carriage return)
+    try testing.expect(Role.fromString("admin\x0E") == null); // SO
+    try testing.expect(Role.fromString("admin\x0F") == null); // SI
+    try testing.expect(Role.fromString("admin\x10") == null); // DLE
+    try testing.expect(Role.fromString("admin\x11") == null); // DC1
+    try testing.expect(Role.fromString("admin\x12") == null); // DC2
+    try testing.expect(Role.fromString("admin\x13") == null); // DC3
+    try testing.expect(Role.fromString("admin\x14") == null); // DC4
+    try testing.expect(Role.fromString("admin\x15") == null); // NAK
+    try testing.expect(Role.fromString("admin\x16") == null); // SYN
+    try testing.expect(Role.fromString("admin\x17") == null); // ETB
+    try testing.expect(Role.fromString("admin\x18") == null); // CAN
+    try testing.expect(Role.fromString("admin\x19") == null); // EM
+    try testing.expect(Role.fromString("admin\x1A") == null); // SUB (Ctrl+Z)
+    try testing.expect(Role.fromString("admin\x1B") == null); // ESC (escape)
+    try testing.expect(Role.fromString("admin\x1C") == null); // FS
+    try testing.expect(Role.fromString("admin\x1D") == null); // GS
+    try testing.expect(Role.fromString("admin\x1E") == null); // RS
+    try testing.expect(Role.fromString("admin\x1F") == null); // US
+}
+
+test "TestAuthz_NoPrivilegeEscalation_ASCIIControlChars_DEL" {
+    // DEL character (U+007F)
+    try testing.expect(Role.fromString("admin\x7F") == null); // DEL
+    try testing.expect(Role.fromString("\x7Fadmin") == null); // Leading DEL
+}
+
+test "TestAuthz_NoPrivilegeEscalation_UnicodeControlChars_C1" {
+    // C1 control characters (U+0080 to U+009F)
+    try testing.expect(Role.fromString("admin\u{0080}") == null); // PAD
+    try testing.expect(Role.fromString("admin\u{0081}") == null); // HOP
+    try testing.expect(Role.fromString("admin\u{0082}") == null); // BPH
+    try testing.expect(Role.fromString("admin\u{0083}") == null); // NBH
+    try testing.expect(Role.fromString("admin\u{0084}") == null); // IND
+    try testing.expect(Role.fromString("admin\u{0085}") == null); // NEL (Next Line)
+    try testing.expect(Role.fromString("admin\u{0086}") == null); // SSA
+    try testing.expect(Role.fromString("admin\u{0087}") == null); // ESA
+    try testing.expect(Role.fromString("admin\u{0088}") == null); // HTS
+    try testing.expect(Role.fromString("admin\u{0089}") == null); // HTJ
+    try testing.expect(Role.fromString("admin\u{008A}") == null); // VTS
+    try testing.expect(Role.fromString("admin\u{008B}") == null); // PLD
+    try testing.expect(Role.fromString("admin\u{008C}") == null); // PLU
+    try testing.expect(Role.fromString("admin\u{008D}") == null); // RI
+    try testing.expect(Role.fromString("admin\u{008E}") == null); // SS2
+    try testing.expect(Role.fromString("admin\u{008F}") == null); // SS3
+    try testing.expect(Role.fromString("admin\u{0090}") == null); // DCS
+    try testing.expect(Role.fromString("admin\u{0091}") == null); // PU1
+    try testing.expect(Role.fromString("admin\u{0092}") == null); // PU2
+    try testing.expect(Role.fromString("admin\u{0093}") == null); // STS
+    try testing.expect(Role.fromString("admin\u{0094}") == null); // CCH
+    try testing.expect(Role.fromString("admin\u{0095}") == null); // MW
+    try testing.expect(Role.fromString("admin\u{0096}") == null); // SPA
+    try testing.expect(Role.fromString("admin\u{0097}") == null); // EPA
+    try testing.expect(Role.fromString("admin\u{0098}") == null); // SOS
+    try testing.expect(Role.fromString("admin\u{0099}") == null); // SGCI
+    try testing.expect(Role.fromString("admin\u{009A}") == null); // SCI
+    try testing.expect(Role.fromString("admin\u{009B}") == null); // CSI
+    try testing.expect(Role.fromString("admin\u{009C}") == null); // ST
+    try testing.expect(Role.fromString("admin\u{009D}") == null); // OSC
+    try testing.expect(Role.fromString("admin\u{009E}") == null); // PM
+    try testing.expect(Role.fromString("admin\u{009F}") == null); // APC
+}
+
+test "TestAuthz_NoPrivilegeEscalation_WhitespaceVariants" {
+    // Various whitespace characters that might bypass trimming
+    try testing.expect(Role.fromString("admin ") == null); // Regular space (U+0020)
+    try testing.expect(Role.fromString(" admin") == null); // Leading space
+    try testing.expect(Role.fromString("admin\u{00A0}") == null); // Non-breaking space
+    try testing.expect(Role.fromString("admin\u{1680}") == null); // Ogham space mark
+    try testing.expect(Role.fromString("admin\u{2000}") == null); // En quad
+    try testing.expect(Role.fromString("admin\u{2001}") == null); // Em quad
+    try testing.expect(Role.fromString("admin\u{2002}") == null); // En space
+    try testing.expect(Role.fromString("admin\u{2003}") == null); // Em space
+    try testing.expect(Role.fromString("admin\u{2004}") == null); // Three-per-em space
+    try testing.expect(Role.fromString("admin\u{2005}") == null); // Four-per-em space
+    try testing.expect(Role.fromString("admin\u{2006}") == null); // Six-per-em space
+    try testing.expect(Role.fromString("admin\u{2007}") == null); // Figure space
+    try testing.expect(Role.fromString("admin\u{2008}") == null); // Punctuation space
+    try testing.expect(Role.fromString("admin\u{2009}") == null); // Thin space
+    try testing.expect(Role.fromString("admin\u{200A}") == null); // Hair space
+    try testing.expect(Role.fromString("admin\u{202F}") == null); // Narrow no-break space
+    try testing.expect(Role.fromString("admin\u{205F}") == null); // Medium mathematical space
+    try testing.expect(Role.fromString("admin\u{3000}") == null); // Ideographic space
+}
+
+test "TestAuthz_NoPrivilegeEscalation_LineAndParagraphSeparators" {
+    // Line and paragraph separators
+    try testing.expect(Role.fromString("admin\u{2028}") == null); // Line separator
+    try testing.expect(Role.fromString("admin\u{2029}") == null); // Paragraph separator
+}
+
+test "TestAuthz_NoPrivilegeEscalation_TagCharacters" {
+    // Unicode tag characters (U+E0000 to U+E007F) - deprecated but still exist
+    try testing.expect(Role.fromString("admin\u{E0001}") == null); // Language tag
+    try testing.expect(Role.fromString("admin\u{E0020}") == null); // Tag space
+    try testing.expect(Role.fromString("admin\u{E0041}") == null); // Tag latin capital A
+}
+
+test "TestAuthz_NoPrivilegeEscalation_InterlinearAnnotations" {
+    // Interlinear annotation characters
+    try testing.expect(Role.fromString("admin\u{FFF9}") == null); // Interlinear annotation anchor
+    try testing.expect(Role.fromString("admin\u{FFFA}") == null); // Interlinear annotation separator
+    try testing.expect(Role.fromString("admin\u{FFFB}") == null); // Interlinear annotation terminator
+}
+
+test "TestAuthz_NoPrivilegeEscalation_ReplacementAndSpecials" {
+    // Replacement and special characters
+    try testing.expect(Role.fromString("admin\u{FFFC}") == null); // Object replacement character
+    try testing.expect(Role.fromString("admin\u{FFFD}") == null); // Replacement character
+    try testing.expect(Role.fromString("admin\u{FFFE}") == null); // Invalid (byte order mark reversed)
+    try testing.expect(Role.fromString("admin\u{FFFF}") == null); // Invalid character
+}
