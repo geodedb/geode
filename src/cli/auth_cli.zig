@@ -5,7 +5,7 @@ const auth_state = geode.auth_state;
 fn printOut(comptime fmt: []const u8, args: anytype) void {
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout = std.io.getStdOut();
     stdout.writeAll(msg) catch {};
 }
 
