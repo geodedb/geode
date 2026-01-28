@@ -562,17 +562,22 @@ snapshot:
       docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
 
       # Login to Docker Hub if credentials are available
+      # Note: If variables are "protected", they're only available on protected branches/tags
       SKIP_DOCKERHUB="true"
+      echo "Checking Docker Hub credentials..."
+      echo "DOCKERHUB_USERNAME set: $([ -n \"${DOCKERHUB_USERNAME:-}\" ] && echo 'yes' || echo 'no')"
       if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-        echo "Logging into Docker Hub..."
+        echo "Logging into Docker Hub as ${DOCKERHUB_USERNAME}..."
         if echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin; then
           SKIP_DOCKERHUB="false"
-          echo "Docker Hub login successful"
+          echo "Docker Hub login successful - images will be pushed to docker.io/geodedb/geode"
         else
-          echo "Docker Hub login failed, will skip Docker Hub push"
+          echo "WARNING: Docker Hub login failed, will skip Docker Hub push"
         fi
       else
-        echo "Docker Hub credentials not configured, skipping Docker Hub push"
+        echo "WARNING: Docker Hub credentials not available for this ref"
+        echo "  - If using protected variables, ensure this tag/branch is protected"
+        echo "  - Or set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN without 'Protect variable'"
       fi
       export SKIP_DOCKERHUB
 
@@ -653,17 +658,22 @@ build-release:
       docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
 
       # Login to Docker Hub if credentials are available
+      # Note: If variables are "protected", they're only available on protected branches/tags
       SKIP_DOCKERHUB="true"
+      echo "Checking Docker Hub credentials..."
+      echo "DOCKERHUB_USERNAME set: $([ -n \"${DOCKERHUB_USERNAME:-}\" ] && echo 'yes' || echo 'no')"
       if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-        echo "Logging into Docker Hub..."
+        echo "Logging into Docker Hub as ${DOCKERHUB_USERNAME}..."
         if echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin; then
           SKIP_DOCKERHUB="false"
-          echo "Docker Hub login successful"
+          echo "Docker Hub login successful - images will be pushed to docker.io/geodedb/geode"
         else
-          echo "Docker Hub login failed, will skip Docker Hub push"
+          echo "WARNING: Docker Hub login failed, will skip Docker Hub push"
         fi
       else
-        echo "Docker Hub credentials not configured, skipping Docker Hub push"
+        echo "WARNING: Docker Hub credentials not available for this ref"
+        echo "  - If using protected variables, ensure this tag/branch is protected"
+        echo "  - Or set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN without 'Protect variable'"
       fi
       export SKIP_DOCKERHUB
 
