@@ -1,0 +1,212 @@
+# Pre-commit configuration for Geode Graph Database
+# https://pre-commit.com/
+#
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+# Update hooks: pre-commit autoupdate
+
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # =============================================================================
+  # Standard pre-commit hooks (best practices)
+  # =============================================================================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Formatting
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
+      - id: end-of-file-fixer
+        exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/|.*\.bin$|.*\.der$|.*\.pem$)
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: ^(vendor/|dist/|zig-out/)
+
+      # Syntax validation
+      - id: check-yaml
+        args: [--unsafe]  # Allow custom tags
+        exclude: ^(vendor/|dist/)
+      - id: check-json
+        exclude: ^(vendor/|dist/|zig-out/)
+      - id: check-toml
+      - id: check-xml
+        exclude: ^(vendor/|dist/)
+
+      # Security
+      - id: detect-private-key
+        exclude: ^(certs/|test.*certs/|.*test.*\.pem$)
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+        exclude: ^(vendor/|dist/|docs/kb/)
+
+      # Git hygiene
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: destroyed-symlinks
+
+      # Code quality
+      - id: check-executables-have-shebangs
+        exclude: ^(vendor/|dist/|zig-out/)
+      - id: check-shebang-scripts-are-executable
+        exclude: ^(vendor/|dist/)
+
+  # =============================================================================
+  # Shell script linting
+  # =============================================================================
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        args: [--severity=warning]
+        exclude: ^(vendor/|dist/)
+
+  # =============================================================================
+  # Python linting (for test scripts and tools)
+  # =============================================================================
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        exclude: ^(vendor/|dist/)
+      - id: ruff-format
+        exclude: ^(vendor/|dist/)
+
+  # =============================================================================
+  # Markdown linting
+  # =============================================================================
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.43.0
+    hooks:
+      - id: markdownlint
+        args: [--fix, --disable, MD013, MD033, MD041, MD024, --]
+        exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md)
+
+  # =============================================================================
+  # YAML formatting
+  # =============================================================================
+  - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
+    rev: v2.14.0
+    hooks:
+      - id: pretty-format-yaml
+        args: [--autofix, --indent, '2']
+        exclude: ^(vendor/|dist/|geodetestlab/specs/|\.gitlab-ci\.yml|docker-compose.*\.yml)
+
+  # =============================================================================
+  # Dockerfile linting
+  # =============================================================================
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.13.1-beta
+    hooks:
+      - id: hadolint-docker
+        args: [--ignore, DL3008, --ignore, DL3013, --ignore, DL3018]
+        exclude: ^(vendor/|dist/)
+
+  # =============================================================================
+  # Commit message validation (Conventional Commits)
+  # =============================================================================
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.1.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+  # =============================================================================
+  # GoReleaser config validation
+  # =============================================================================
+  - repo: https://github.com/goreleaser/goreleaser
+    rev: v2.5.1
+    hooks:
+      - id: goreleaser-check
+
+  # =============================================================================
+  # Local/Custom hooks for Zig
+  # =============================================================================
+  - repo: local
+    hooks:
+      # Zig formatting check
+      - id: zig-fmt
+        name: zig fmt (check)
+        entry: zig fmt --check
+        language: system
+        files: \.zig$
+        exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
+        pass_filenames: false
+        args: [src/, tests/, build.zig]
+
+      # Zig build check (compilation)
+      - id: zig-build
+        name: zig build (compilation check)
+        entry: zig build
+        language: system
+        files: \.(zig|zon)$
+        exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
+        pass_filenames: false
+        stages: [pre-commit]
+
+      # Cross-compilation check for required targets (fast check)
+      - id: cross-compile-check
+        name: cross-compile (required targets)
+        entry: bash -c 'make cross-compile-required 2>&1 | tail -20'
+        language: system
+        files: \.(zig|zon)$
+        exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
+        pass_filenames: false
+        stages: [pre-push]  # Only on push, too slow for commit
+
+      # Quick unit tests
+      - id: zig-test
+        name: zig build test
+        entry: zig build test
+        language: system
+        files: \.(zig|zon)$
+        exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
+        pass_filenames: false
+        stages: [pre-push]  # Only on push, may be slow
+
+      # No feature flags check
+      - id: no-feature-flags
+        name: no feature flags check
+        entry: python3 tools/no_feature_flags_check.py --repo .
+        language: system
+        files: \.zig$
+        exclude: ^(vendor/|dist/|zig-out/)
+        pass_filenames: false
+        stages: [pre-push]
+
+      # Check for TODO/FIXME in committed code (warning only)
+      - id: check-todos
+        name: check for TODOs/FIXMEs
+        entry: bash -c 'git diff --cached --name-only | xargs grep -l -E "(TODO|FIXME|XXX|HACK)" 2>/dev/null && echo "Warning: Found TODO/FIXME markers in staged files" && exit 0 || exit 0'
+        language: system
+        pass_filenames: false
+        verbose: true
+
+      # Verify CANARY markers are valid (optional, for governance)
+      - id: canary-verify
+        name: CANARY marker verification
+        entry: bash -c 'if [ -x tools/status_generate.py ]; then python3 tools/status_generate.py --repo . --out /dev/null --check 2>&1 || echo "CANARY check skipped"; fi'
+        language: system
+        files: \.zig$
+        exclude: ^(vendor/|dist/|zig-out/)
+        pass_filenames: false
+        stages: [pre-push]
+
+# =============================================================================
+# CI configuration
+# =============================================================================
+ci:
+  autofix_prs: true
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    For more info see https://pre-commit.ci
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: [zig-fmt, zig-build, zig-test, cross-compile-check, no-feature-flags, canary-verify]
+  submodules: false

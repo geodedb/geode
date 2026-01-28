@@ -35,6 +35,7 @@ endif
 .PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
 # Note: client-test-harness moved to separate repository (geode-test-harness)
 .PHONY: deps deps-check
+.PHONY: pre-commit pre-commit-install pre-commit-update pre-commit-all setup-dev
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 all: sub build test cross-test no-feature-flags status-generate geodetestlab
@@ -90,6 +91,12 @@ help:
 	@echo "  make dev-logs           - View development logs"
 	@echo "  make dev-clean          - Clean development environment"
 	@echo "  make dev-monitoring     - Start with monitoring stack"
+	@echo ""
+	@echo "Pre-commit hooks:"
+	@echo "  make setup-dev          - Full development setup (recommended)"
+	@echo "  make pre-commit-install - Install pre-commit hooks"
+	@echo "  make pre-commit         - Run pre-commit on all files"
+	@echo "  make pre-commit-update  - Update hooks to latest versions"
 	@echo ""
 	@echo "Utility targets:"
 	@echo "  make cert-gen    - Generate TLS certificates"
@@ -603,6 +610,59 @@ fmt:
 	$(ZIG) fmt src/
 	$(ZIG) fmt tests/
 	$(ZIG) fmt build.zig
+
+# =============================================================================
+# Pre-commit hooks
+# =============================================================================
+
+# Run pre-commit on all files
+pre-commit:
+	@if command -v pre-commit >/dev/null 2>&1; then \
+		pre-commit run --all-files; \
+	else \
+		echo "pre-commit not installed. Run 'make pre-commit-install' first."; \
+		exit 1; \
+	fi
+
+# Install pre-commit hooks
+pre-commit-install:
+	@if ! command -v pre-commit >/dev/null 2>&1; then \
+		echo "Installing pre-commit..."; \
+		pip3 install --user pre-commit || pip install --user pre-commit; \
+	fi
+	@echo "Installing pre-commit hooks..."
+	pre-commit install
+	pre-commit install --hook-type commit-msg
+	pre-commit install --hook-type pre-push
+	@echo "✓ Pre-commit hooks installed"
+
+# Update pre-commit hooks to latest versions
+pre-commit-update:
+	@if command -v pre-commit >/dev/null 2>&1; then \
+		pre-commit autoupdate; \
+	else \
+		echo "pre-commit not installed. Run 'make pre-commit-install' first."; \
+		exit 1; \
+	fi
+
+# Run all pre-commit checks (including push hooks)
+pre-commit-all:
+	@if command -v pre-commit >/dev/null 2>&1; then \
+		pre-commit run --all-files --hook-stage pre-commit; \
+		pre-commit run --all-files --hook-stage pre-push; \
+	else \
+		echo "pre-commit not installed. Run 'make pre-commit-install' first."; \
+		exit 1; \
+	fi
+
+# Full development setup
+setup-dev:
+	@if [ -x scripts/setup-dev.sh ]; then \
+		./scripts/setup-dev.sh; \
+	else \
+		echo "scripts/setup-dev.sh not found"; \
+		exit 1; \
+	fi
 
 # Clean build artifacts
 clean:
