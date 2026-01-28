@@ -3585,6 +3585,21 @@ REQ-SYNTAX-GEN-001,VSCodeSyntaxGeneration,MetadataDerived,EXEMPT,,,tooling,2026-
 REQ-SYNTAX-GEN-002,VSCodeSyntaxGeneration,BuildTarget,EXEMPT,,,tooling,2026-01-03,build.zig
 REQ-SYNTAX-VIM-001,VimSyntaxGeneration,MetadataDerived,EXEMPT,,,tooling,2026-01-03,scripts/generate_vim_syntax.zig
 REQ-SYNTAX-VIM-002,VimSyntaxGeneration,BuildTarget,EXEMPT,,,tooling,2026-01-03,build.zig
+REQ-TDE-ENFORCE-001,TDEEnforcement,UnitTests,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-002,TDEEnforcement,CoreTests,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-003,TDEEnforcement,WALEncryption,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-004,TDEEnforcement,PageEncryption,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-005,TDEEnforcement,StateEnforcement,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-006,TDEEnforcement,AlgorithmVerification,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-007,TDEEnforcement,DiskEncryption,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-008,TDEEnforcement,BackupEncryption,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-009,TDEEnforcement,KeyHierarchy,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-010,TDEEnforcement,BypassDetection,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-011,TDEEnforcement,NonceUniqueness,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-012,TDEEnforcement,MemorySecurity,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-013,TDEEnforcement,Verification,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-014,TDEEnforcement,PerformanceThreshold,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
+REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig
 REQ-TDE-KEYUNWRAP-001,AES-GCM Key Unwrapping,SECURITY,TESTED,,,security,2026-01-15,src/storage/crypto_enhanced.zig
 REQ-TDE-KEYWRAP-001,AES-GCM Key Wrapping,SECURITY,TESTED,,,security,2026-01-15,src/storage/crypto_enhanced.zig
 REQ-TDE-KMS-001,KMSIntegration,AWS,TESTED,,,security,2026-01-15,src/storage/crypto.zig
