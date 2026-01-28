@@ -511,10 +511,14 @@ nfpms:
           - libssl3
         recommends:
           - libvulkan1
+        # Issue #379: Ensure compatibility with newer Ubuntu versions (25.04+)
+        # Using gzip compression for maximum compatibility
+        compression: gzip
       rpm:
         dependencies:
           - ca-certificates
           - openssl-libs
+        compression: gzip
       apk:
         dependencies:
           - ca-certificates
