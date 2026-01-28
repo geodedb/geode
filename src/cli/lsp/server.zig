@@ -318,17 +318,13 @@ pub const Server = struct {
         defer if (hover) |h| self.allocator.free(h.contents.value);
 
         if (hover) |h| {
+            // Build response - don't use defer deinit as objects are nested
             var response = std.json.ObjectMap.init(self.allocator);
-            defer response.deinit();
-
             try response.put("jsonrpc", .{ .string = "2.0" });
             try response.put("id", id);
 
             var result = std.json.ObjectMap.init(self.allocator);
-            defer result.deinit();
-
             var contents = std.json.ObjectMap.init(self.allocator);
-            defer contents.deinit();
             try contents.put("kind", .{ .string = h.contents.kind.toString() });
             try contents.put("value", .{ .string = h.contents.value });
 
@@ -371,11 +367,11 @@ pub const Server = struct {
         }
 
         var array = std.json.Array.init(self.allocator);
-        defer array.deinit();
+        // Note: Don't defer deinit - objects are owned by the response
 
         for (items) |item| {
+            // Build completion item - don't use defer as objects are stored in array
             var obj = std.json.ObjectMap.init(self.allocator);
-            defer obj.deinit();
 
             try obj.put("label", .{ .string = item.label });
             if (item.kind) |k| {
@@ -392,8 +388,6 @@ pub const Server = struct {
         }
 
         var response = std.json.ObjectMap.init(self.allocator);
-        defer response.deinit();
-
         try response.put("jsonrpc", .{ .string = "2.0" });
         try response.put("id", id);
         try response.put("result", .{ .array = array });
@@ -527,11 +521,11 @@ pub const Server = struct {
         defer self.allocator.free(symbols);
 
         var array = std.json.Array.init(self.allocator);
-        defer array.deinit();
+        // Note: Don't defer deinit here - the objects are owned by the response
 
         for (symbols) |sym| {
+            // Build symbol object - don't use defer as objects are stored in array
             var obj = std.json.ObjectMap.init(self.allocator);
-            defer obj.deinit();
 
             try obj.put("name", .{ .string = sym.name });
             try obj.put("kind", .{ .integer = @intFromEnum(sym.kind) });
@@ -540,28 +534,24 @@ pub const Server = struct {
                 try obj.put("detail", .{ .string = d });
             }
 
+            // Build range object
             var range = std.json.ObjectMap.init(self.allocator);
-            defer range.deinit();
             var start_pos = std.json.ObjectMap.init(self.allocator);
-            defer start_pos.deinit();
             try start_pos.put("line", .{ .integer = sym.range.start.line });
             try start_pos.put("character", .{ .integer = sym.range.start.character });
             var end_pos = std.json.ObjectMap.init(self.allocator);
-            defer end_pos.deinit();
             try end_pos.put("line", .{ .integer = sym.range.end.line });
             try end_pos.put("character", .{ .integer = sym.range.end.character });
             try range.put("start", .{ .object = start_pos });
             try range.put("end", .{ .object = end_pos });
             try obj.put("range", .{ .object = range });
 
+            // Build selection range object
             var sel_range = std.json.ObjectMap.init(self.allocator);
-            defer sel_range.deinit();
             var sel_start = std.json.ObjectMap.init(self.allocator);
-            defer sel_start.deinit();
             try sel_start.put("line", .{ .integer = sym.selectionRange.start.line });
             try sel_start.put("character", .{ .integer = sym.selectionRange.start.character });
             var sel_end = std.json.ObjectMap.init(self.allocator);
-            defer sel_end.deinit();
             try sel_end.put("line", .{ .integer = sym.selectionRange.end.line });
             try sel_end.put("character", .{ .integer = sym.selectionRange.end.character });
             try sel_range.put("start", .{ .object = sel_start });
@@ -572,7 +562,6 @@ pub const Server = struct {
         }
 
         var response = std.json.ObjectMap.init(self.allocator);
-        defer response.deinit();
         try response.put("jsonrpc", .{ .string = "2.0" });
         try response.put("id", id);
         try response.put("result", .{ .array = array });
@@ -615,26 +604,20 @@ pub const Server = struct {
                 self.allocator.free(sh.signatures);
             }
 
+            // Build response - don't use defer deinit as objects are nested in the response
             var response = std.json.ObjectMap.init(self.allocator);
-            defer response.deinit();
             try response.put("jsonrpc", .{ .string = "2.0" });
             try response.put("id", id);
 
             var result = std.json.ObjectMap.init(self.allocator);
-            defer result.deinit();
-
             var sigs = std.json.Array.init(self.allocator);
-            defer sigs.deinit();
 
             for (sh.signatures) |sig| {
                 var sig_obj = std.json.ObjectMap.init(self.allocator);
-                defer sig_obj.deinit();
-
                 try sig_obj.put("label", .{ .string = sig.label });
 
                 if (sig.documentation) |doc_content| {
                     var doc_obj = std.json.ObjectMap.init(self.allocator);
-                    defer doc_obj.deinit();
                     try doc_obj.put("kind", .{ .string = doc_content.kind.toString() });
                     try doc_obj.put("value", .{ .string = doc_content.value });
                     try sig_obj.put("documentation", .{ .object = doc_obj });
@@ -642,11 +625,9 @@ pub const Server = struct {
 
                 if (sig.parameters) |ps| {
                     var params_arr = std.json.Array.init(self.allocator);
-                    defer params_arr.deinit();
 
                     for (ps) |p| {
                         var param_obj = std.json.ObjectMap.init(self.allocator);
-                        defer param_obj.deinit();
                         try param_obj.put("label", .{ .string = p.label });
                         try params_arr.append(.{ .object = param_obj });
                     }
@@ -707,22 +688,19 @@ pub const Server = struct {
         defer self.allocator.free(locations);
 
         var array = std.json.Array.init(self.allocator);
-        defer array.deinit();
+        // Note: Don't defer deinit - objects are owned by the response
 
         for (locations) |loc| {
+            // Build location object - don't use defer as objects are stored in array
             var obj = std.json.ObjectMap.init(self.allocator);
-            defer obj.deinit();
 
             try obj.put("uri", .{ .string = loc.uri });
 
             var range = std.json.ObjectMap.init(self.allocator);
-            defer range.deinit();
             var start_pos = std.json.ObjectMap.init(self.allocator);
-            defer start_pos.deinit();
             try start_pos.put("line", .{ .integer = loc.range.start.line });
             try start_pos.put("character", .{ .integer = loc.range.start.character });
             var end_pos = std.json.ObjectMap.init(self.allocator);
-            defer end_pos.deinit();
             try end_pos.put("line", .{ .integer = loc.range.end.line });
             try end_pos.put("character", .{ .integer = loc.range.end.character });
             try range.put("start", .{ .object = start_pos });
@@ -733,7 +711,6 @@ pub const Server = struct {
         }
 
         var response = std.json.ObjectMap.init(self.allocator);
-        defer response.deinit();
         try response.put("jsonrpc", .{ .string = "2.0" });
         try response.put("id", id);
         try response.put("result", .{ .array = array });
@@ -760,16 +737,13 @@ pub const Server = struct {
         };
         defer self.allocator.free(sem_tokens.data);
 
+        // Build response - don't use defer deinit as objects are nested
         var response = std.json.ObjectMap.init(self.allocator);
-        defer response.deinit();
         try response.put("jsonrpc", .{ .string = "2.0" });
         try response.put("id", id);
 
         var result = std.json.ObjectMap.init(self.allocator);
-        defer result.deinit();
-
         var data_arr = std.json.Array.init(self.allocator);
-        defer data_arr.deinit();
 
         for (sem_tokens.data) |val| {
             try data_arr.append(.{ .integer = val });
