@@ -522,6 +522,7 @@ fn printQueryUsage() void {
         "  geode query --ca-cert /etc/ssl/ca.crt --server secure.example.com:3141 \"RETURN 1\"\n" ++
         "  geode query --ca-cert /etc/ssl/ca.crt --client-cert /etc/ssl/client.crt --client-key /etc/ssl/client.key --server secure.example.com:3141 \"RETURN 1\"\n" ++
         "  geode query --format table \"MATCH (u:User) RETURN u.name, u.email\"\n" ++
+        "  geode query --format dot \"MATCH (a)-[r]->(b) RETURN a, r, b\" | dot -Tpng -o graph.png\n" ++
         "  geode query --json-param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
         "  geode query --server remote:3141 --timeout 5 --retry 3 \"RETURN 1 AS x\"\n" ++
         "  echo \"RETURN 1 AS x\" | geode query -\n" ++
@@ -3215,7 +3216,6 @@ fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query
 }
 
 fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8) !void {
-    _ = format;
 
     // Get a stream for communication
     var stream = quic_client.getStream() catch |err| {
@@ -3316,15 +3316,385 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // Output schema then first page of results
+    // Output results based on format
     var stdout_file = std.fs.File{ .handle = getStdoutHandle() };
-    _ = stdout_file.writeAll(schema_response) catch {};
-    if (schema_response.len > 0 and schema_response[schema_response.len - 1] != '\n') {
-        _ = stdout_file.writeAll("\n") catch {};
+
+    if (std.mem.eql(u8, format, "dot")) {
+        // DOT format: Convert JSON results to Graphviz DOT format
+        try outputDotFormat(allocator, result_line, &stdout_file);
+    } else if (std.mem.eql(u8, format, "table")) {
+        // Table format: Parse JSON and render as ASCII table
+        try outputTableFormat(allocator, schema_response, result_line, &stdout_file);
+    } else if (std.mem.eql(u8, format, "csv")) {
+        // CSV format: Parse JSON and render as CSV
+        try outputCsvFormat(allocator, schema_response, result_line, &stdout_file);
+    } else {
+        // JSON format (default): Output raw JSON from server
+        _ = stdout_file.writeAll(schema_response) catch {};
+        if (schema_response.len > 0 and schema_response[schema_response.len - 1] != '\n') {
+            _ = stdout_file.writeAll("\n") catch {};
+        }
+        _ = stdout_file.writeAll(result_line) catch {};
     }
-    _ = stdout_file.writeAll(result_line) catch {};
+
     if (inline_used) {
         log.debug("Inline bindings used; PULL suppressed", &.{});
+    }
+}
+
+// CANARY: REQ=REQ-CLI-DOT-001; FEATURE="DotGraphOutput"; ASPECT=FormatConversion; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+/// Output query results in Graphviz DOT format
+fn outputDotFormat(allocator: std.mem.Allocator, result_line: []const u8, stdout: *std.fs.File) !void {
+    // Parse the BINDINGS response to extract rows
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, result_line, .{}) catch {
+        // If parsing fails, output empty graph
+        _ = stdout.writeAll("digraph G {\n  rankdir=LR;\n  node [shape=ellipse];\n}\n") catch {};
+        return;
+    };
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+    const rows = if (root.get("rows")) |r| r.array else std.json.Array.init(allocator);
+
+    // Start DOT graph
+    _ = stdout.writeAll("digraph G {\n") catch {};
+    _ = stdout.writeAll("  rankdir=LR;\n") catch {};
+    _ = stdout.writeAll("  node [shape=ellipse, style=filled, fillcolor=lightblue];\n") catch {};
+    _ = stdout.writeAll("  edge [fontsize=10];\n") catch {};
+    _ = stdout.writeAll("\n") catch {};
+
+    // Track nodes and relationships we've seen to avoid duplicates
+    var seen_nodes = std.StringHashMap(void).init(allocator);
+    defer seen_nodes.deinit();
+    var seen_edges = std.StringHashMap(void).init(allocator);
+    defer seen_edges.deinit();
+
+    // Process each row
+    for (rows.items) |row| {
+        if (row != .array) continue;
+
+        // Each column in the row could be a node, relationship, or scalar value
+        for (row.array.items) |col| {
+            if (col != .object) continue;
+
+            const obj = col.object;
+
+            // Check if this is a node (has _labels)
+            if (obj.get("_labels")) |labels_val| {
+                const node_id = getNodeId(obj) orelse continue;
+
+                // Only output if we haven't seen this node
+                if (!seen_nodes.contains(node_id)) {
+                    try seen_nodes.put(node_id, {});
+
+                    // Get label for display
+                    const label = getNodeLabel(allocator, obj, labels_val) catch node_id;
+                    defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
+
+                    // Output node definition
+                    _ = stdout.writeAll("  \"") catch {};
+                    _ = stdout.writeAll(node_id) catch {};
+                    _ = stdout.writeAll("\" [label=\"") catch {};
+                    _ = stdout.writeAll(label) catch {};
+                    _ = stdout.writeAll("\"];\n") catch {};
+                }
+            }
+            // Check if this is a relationship (has _type)
+            else if (obj.get("_type")) |type_val| {
+                const rel_type = if (type_val == .string) type_val.string else "RELATED";
+                const start_id = if (obj.get("_start")) |s| (if (s == .string) s.string else null) else null;
+                const end_id = if (obj.get("_end")) |e| (if (e == .string) e.string else null) else null;
+
+                if (start_id != null and end_id != null) {
+                    // Create edge key for deduplication
+                    const edge_key = std.fmt.allocPrint(allocator, "{s}-{s}->{s}", .{ start_id.?, rel_type, end_id.? }) catch continue;
+                    defer allocator.free(edge_key);
+
+                    if (!seen_edges.contains(edge_key)) {
+                        try seen_edges.put(try allocator.dupe(u8, edge_key), {});
+
+                        // Output edge
+                        _ = stdout.writeAll("  \"") catch {};
+                        _ = stdout.writeAll(start_id.?) catch {};
+                        _ = stdout.writeAll("\" -> \"") catch {};
+                        _ = stdout.writeAll(end_id.?) catch {};
+                        _ = stdout.writeAll("\" [label=\"") catch {};
+                        _ = stdout.writeAll(rel_type) catch {};
+                        _ = stdout.writeAll("\"];\n") catch {};
+                    }
+                }
+            }
+        }
+    }
+
+    // End DOT graph
+    _ = stdout.writeAll("}\n") catch {};
+}
+
+fn getNodeId(obj: std.json.ObjectMap) ?[]const u8 {
+    // Try _id first, then id, then element_id
+    if (obj.get("_id")) |id| {
+        return if (id == .string) id.string else null;
+    }
+    if (obj.get("id")) |id| {
+        return if (id == .string) id.string else null;
+    }
+    if (obj.get("element_id")) |id| {
+        return if (id == .string) id.string else null;
+    }
+    return null;
+}
+
+fn getNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels_val: std.json.Value) ![]const u8 {
+    var label_parts = std.ArrayList(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+    defer label_parts.deinit(allocator);
+
+    // Add labels
+    if (labels_val == .array) {
+        for (labels_val.array.items, 0..) |lbl, i| {
+            if (i > 0) try label_parts.append(allocator, ':');
+            if (lbl == .string) {
+                try label_parts.appendSlice(allocator, lbl.string);
+            }
+        }
+    }
+
+    // Add a display property if available (name, title, etc.)
+    const display_props = [_][]const u8{ "name", "title", "label", "username", "email" };
+    for (display_props) |prop| {
+        if (obj.get(prop)) |val| {
+            if (val == .string and val.string.len > 0) {
+                try label_parts.appendSlice(allocator, "\\n");
+                try label_parts.appendSlice(allocator, val.string);
+                break;
+            }
+        }
+    }
+
+    if (label_parts.items.len == 0) {
+        // Fall back to node ID
+        return getNodeId(obj) orelse "node";
+    }
+
+    return try allocator.dupe(u8, label_parts.items);
+}
+
+/// Output query results in ASCII table format
+fn outputTableFormat(allocator: std.mem.Allocator, schema_response: []const u8, result_line: []const u8, stdout: *std.fs.File) !void {
+    // Parse schema to get column names
+    var schema_parsed = std.json.parseFromSlice(std.json.Value, allocator, schema_response, .{}) catch {
+        // Fall back to JSON if we can't parse
+        _ = stdout.writeAll(result_line) catch {};
+        return;
+    };
+    defer schema_parsed.deinit();
+
+    const schema_obj = schema_parsed.value.object;
+    const columns = if (schema_obj.get("columns")) |c| c.array else std.json.Array.init(allocator);
+
+    // Parse result rows
+    var result_parsed = std.json.parseFromSlice(std.json.Value, allocator, result_line, .{}) catch {
+        _ = stdout.writeAll(result_line) catch {};
+        return;
+    };
+    defer result_parsed.deinit();
+
+    const result_obj = result_parsed.value.object;
+    const rows = if (result_obj.get("rows")) |r| r.array else std.json.Array.init(allocator);
+
+    // Calculate column widths
+    var col_widths = try allocator.alloc(usize, columns.items.len);
+    defer allocator.free(col_widths);
+
+    // Initialize with header widths
+    for (columns.items, 0..) |col, i| {
+        col_widths[i] = if (col == .string) col.string.len else 5;
+    }
+
+    // Check each row for max widths
+    for (rows.items) |row| {
+        if (row != .array) continue;
+        for (row.array.items, 0..) |cell, i| {
+            if (i >= col_widths.len) break;
+            const cell_width = getJsonValueDisplayWidth(cell);
+            if (cell_width > col_widths[i]) {
+                col_widths[i] = @min(cell_width, 50); // Cap at 50 chars
+            }
+        }
+    }
+
+    // Print header separator
+    try printTableSeparator(stdout, col_widths);
+
+    // Print header row
+    _ = stdout.writeAll("| ") catch {};
+    for (columns.items, 0..) |col, i| {
+        const name = if (col == .string) col.string else "?";
+        _ = stdout.writeAll(name) catch {};
+        const padding = col_widths[i] - name.len;
+        for (0..padding) |_| _ = stdout.writeAll(" ") catch {};
+        _ = stdout.writeAll(" | ") catch {};
+    }
+    _ = stdout.writeAll("\n") catch {};
+
+    // Print separator
+    try printTableSeparator(stdout, col_widths);
+
+    // Print data rows
+    for (rows.items) |row| {
+        if (row != .array) continue;
+        _ = stdout.writeAll("| ") catch {};
+        for (0..columns.items.len) |i| {
+            const cell = if (i < row.array.items.len) row.array.items[i] else std.json.Value.null;
+            const cell_str = try formatJsonValueCompact(allocator, cell);
+            defer allocator.free(cell_str);
+
+            // Truncate if too long
+            const display_len = @min(cell_str.len, col_widths[i]);
+            _ = stdout.writeAll(cell_str[0..display_len]) catch {};
+
+            const padding = col_widths[i] - display_len;
+            for (0..padding) |_| _ = stdout.writeAll(" ") catch {};
+            _ = stdout.writeAll(" | ") catch {};
+        }
+        _ = stdout.writeAll("\n") catch {};
+    }
+
+    // Print footer separator
+    try printTableSeparator(stdout, col_widths);
+
+    // Print row count
+    const row_count_str = try std.fmt.allocPrint(allocator, "({d} row{s})\n", .{ rows.items.len, if (rows.items.len == 1) "" else "s" });
+    defer allocator.free(row_count_str);
+    _ = stdout.writeAll(row_count_str) catch {};
+}
+
+fn printTableSeparator(stdout: *std.fs.File, col_widths: []const usize) !void {
+    _ = stdout.writeAll("+") catch {};
+    for (col_widths) |width| {
+        for (0..width + 2) |_| _ = stdout.writeAll("-") catch {};
+        _ = stdout.writeAll("+") catch {};
+    }
+    _ = stdout.writeAll("\n") catch {};
+}
+
+fn getJsonValueDisplayWidth(val: std.json.Value) usize {
+    return switch (val) {
+        .null => 4,
+        .bool => |b| if (b) 4 else 5,
+        .integer => |i| blk: {
+            var buf: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{i}) catch break :blk 10;
+            break :blk s.len;
+        },
+        .float => |f| blk: {
+            var buf: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d:.6}", .{f}) catch break :blk 10;
+            break :blk s.len;
+        },
+        .string => |s| s.len,
+        .array => 10,
+        .object => 10,
+        .number_string => |s| s.len,
+    };
+}
+
+fn formatJsonValueCompact(allocator: std.mem.Allocator, val: std.json.Value) ![]u8 {
+    return switch (val) {
+        .null => try allocator.dupe(u8, "null"),
+        .bool => |b| try allocator.dupe(u8, if (b) "true" else "false"),
+        .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .float => |f| try std.fmt.allocPrint(allocator, "{d:.6}", .{f}),
+        .string => |s| try allocator.dupe(u8, s),
+        .array => try allocator.dupe(u8, "[...]"),
+        .object => blk: {
+            // For objects, try to show a useful summary
+            const obj = val.object;
+            if (obj.get("_labels")) |_| {
+                // It's a node
+                if (obj.get("name")) |n| {
+                    if (n == .string) break :blk try allocator.dupe(u8, n.string);
+                }
+                break :blk try allocator.dupe(u8, "(node)");
+            }
+            if (obj.get("_type")) |t| {
+                // It's a relationship
+                if (t == .string) break :blk try std.fmt.allocPrint(allocator, "[:{s}]", .{t.string});
+                break :blk try allocator.dupe(u8, "[rel]");
+            }
+            break :blk try allocator.dupe(u8, "{...}");
+        },
+        .number_string => |s| try allocator.dupe(u8, s),
+    };
+}
+
+/// Output query results in CSV format
+fn outputCsvFormat(allocator: std.mem.Allocator, schema_response: []const u8, result_line: []const u8, stdout: *std.fs.File) !void {
+    // Parse schema to get column names
+    var schema_parsed = std.json.parseFromSlice(std.json.Value, allocator, schema_response, .{}) catch {
+        _ = stdout.writeAll(result_line) catch {};
+        return;
+    };
+    defer schema_parsed.deinit();
+
+    const schema_obj = schema_parsed.value.object;
+    const columns = if (schema_obj.get("columns")) |c| c.array else std.json.Array.init(allocator);
+
+    // Parse result rows
+    var result_parsed = std.json.parseFromSlice(std.json.Value, allocator, result_line, .{}) catch {
+        _ = stdout.writeAll(result_line) catch {};
+        return;
+    };
+    defer result_parsed.deinit();
+
+    const result_obj = result_parsed.value.object;
+    const rows = if (result_obj.get("rows")) |r| r.array else std.json.Array.init(allocator);
+
+    // Print header row
+    for (columns.items, 0..) |col, i| {
+        if (i > 0) _ = stdout.writeAll(",") catch {};
+        if (col == .string) {
+            try writeCsvValue(stdout, col.string);
+        }
+    }
+    _ = stdout.writeAll("\n") catch {};
+
+    // Print data rows
+    for (rows.items) |row| {
+        if (row != .array) continue;
+        for (0..columns.items.len) |i| {
+            if (i > 0) _ = stdout.writeAll(",") catch {};
+            const cell = if (i < row.array.items.len) row.array.items[i] else std.json.Value.null;
+            const cell_str = try formatJsonValueCompact(allocator, cell);
+            defer allocator.free(cell_str);
+            try writeCsvValue(stdout, cell_str);
+        }
+        _ = stdout.writeAll("\n") catch {};
+    }
+}
+
+fn writeCsvValue(stdout: *std.fs.File, value: []const u8) !void {
+    // Check if quoting is needed
+    var needs_quotes = false;
+    for (value) |c| {
+        if (c == ',' or c == '"' or c == '\n' or c == '\r') {
+            needs_quotes = true;
+            break;
+        }
+    }
+
+    if (needs_quotes) {
+        _ = stdout.writeAll("\"") catch {};
+        for (value) |c| {
+            if (c == '"') {
+                _ = stdout.writeAll("\"\"") catch {}; // Escape quotes by doubling
+            } else {
+                _ = stdout.write(&[_]u8{c}) catch {};
+            }
+        }
+        _ = stdout.writeAll("\"") catch {};
+    } else {
+        _ = stdout.writeAll(value) catch {};
     }
 }
 
