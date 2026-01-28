@@ -230,23 +230,23 @@ pub const SignatureHelp = struct {
 // Semantic Tokens
 pub const SemanticTokenTypes = struct {
     pub const types = [_][]const u8{
-        "keyword",    // 0
-        "function",   // 1
-        "variable",   // 2
-        "parameter",  // 3
-        "type",       // 4
-        "property",   // 5
-        "string",     // 6
-        "number",     // 7
-        "comment",    // 8
-        "operator",   // 9
-        "label",      // 10
+        "keyword", // 0
+        "function", // 1
+        "variable", // 2
+        "parameter", // 3
+        "type", // 4
+        "property", // 5
+        "string", // 6
+        "number", // 7
+        "comment", // 8
+        "operator", // 9
+        "label", // 10
     };
 
     pub const modifiers = [_][]const u8{
-        "definition",     // 0
+        "definition", // 0
         "defaultLibrary", // 1
-        "readonly",       // 2
+        "readonly", // 2
     };
 };
 
