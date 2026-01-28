@@ -266,23 +266,12 @@ test-zig-unit:
   script:
     - mkdir -p reports
     - zig build test --summary all | tee reports/zig_test.log
-    - zig build benchmark -Doptimize=ReleaseFast --summary all | tee reports/zig_benchmark.log
-    - zig build bench -Doptimize=ReleaseFast --summary all | tee reports/zig_bench.log
-    # bench-transport has concurrent queue tests that can be flaky in CI
-    - timeout 120 zig build bench-transport -Doptimize=ReleaseFast --summary all | tee reports/zig_bench_transport.log || echo "bench-transport timed out or failed (non-blocking)"
-    # WAL flush policy test requires build system for module path resolution
-    - echo "WAL flush policy benchmark skipped (requires zig build)" | tee reports/zig_wal_flush_policy.log
-    - zig run -OReleaseFast src/tools/run_variance_benches.zig | tee reports/zig_variance_benches.log
+    # Benchmarks removed - run separately when needed, not in CI
     - |
       python3 - <<'PY'
       import json, pathlib
       logs = [
           "reports/zig_test.log",
-          "reports/zig_benchmark.log",
-          "reports/zig_bench.log",
-          "reports/zig_bench_transport.log",
-          "reports/zig_wal_flush_policy.log",
-          "reports/zig_variance_benches.log",
       ]
       metrics = []
       perf = []
