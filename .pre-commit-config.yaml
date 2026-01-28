@@ -116,18 +116,18 @@ repos:
         stages: [commit-msg]
 
   # =============================================================================
-  # GoReleaser config validation
-  # =============================================================================
-  - repo: https://github.com/goreleaser/goreleaser
-    rev: v2.5.1
-    hooks:
-      - id: goreleaser-check
-
-  # =============================================================================
-  # Local/Custom hooks for Zig
+  # Local/Custom hooks for Zig and GoReleaser
   # =============================================================================
   - repo: local
     hooks:
+      # GoReleaser config validation (local hook since goreleaser repo doesn't have pre-commit support)
+      - id: goreleaser-check
+        name: goreleaser check
+        entry: goreleaser check
+        language: system
+        files: \.goreleaser\.ya?ml$
+        pass_filenames: false
+
       # Zig formatting check
       - id: zig-fmt
         name: zig fmt (check)
