@@ -1754,6 +1754,16 @@ pub fn build(b: *std.Build) void {
     const auth_enforcement_tests = b.addTest(.{ .root_module = auth_enforcement_test_mod });
     test_step.dependOn(&auth_enforcement_tests.step);
 
+    // CANARY: REQ=REQ-TDE-ENFORCE-015; FEATURE="TDEEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+    // CRITICAL SECURITY: TDE enforcement tests - verify all disk writes are encrypted when TDE is enabled
+    const tde_enforcement_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/security/test_tde_enforcement.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const tde_enforcement_tests = b.addTest(.{ .root_module = tde_enforcement_test_mod });
+    test_step.dependOn(&tde_enforcement_tests.step);
+
     const audit_chain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize });
     audit_chain_test_mod.addImport("audit", audit_security_mod);
     audit_chain_test_mod.addImport("rls", rls_mod);
