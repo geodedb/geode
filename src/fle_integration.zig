@@ -181,6 +181,39 @@ pub fn getRotationStatus(
     };
 }
 
+/// Check if a field requires encryption according to the FLE catalog
+/// This is used by fail-secure logic to determine if encryption failure should abort writes
+/// CANARY: REQ=REQ-FLE-FAILSECURE-004; FEATURE="FLEFailSecure"; ASPECT=EncryptionCheck; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+pub fn fieldRequiresEncryption(type_name: []const u8, field_name: []const u8) bool {
+    // Fast path - if no encrypted fields are configured globally, nothing requires encryption
+    if (!fle_has_encrypted_fields) {
+        return false;
+    }
+
+    // Use a static allocator for catalog lookup
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    // Get global catalog - FAIL-SECURE: if we can't access catalog, assume encryption IS required
+    // This prevents bypassing encryption by causing catalog errors
+    const catalog = fle_catalog.globalCatalog(allocator) catch {
+        std.log.warn("SECURITY: Cannot access FLE catalog - assuming field {s}.{s} requires encryption (fail-secure)", .{ type_name, field_name });
+        return true; // FAIL-SECURE: Assume encryption required on catalog error
+    };
+
+    // Check if type exists
+    const type_meta = catalog.getType(type_name) orelse {
+        return false; // Type not in catalog = not configured for encryption
+    };
+
+    // Check if field is marked as encrypted
+    const field_meta = type_meta.getField(field_name) orelse {
+        return false; // Field not in catalog = not configured for encryption
+    };
+
+    return field_meta.isEncrypted();
+}
+
 /// Encrypt a field value if encryption is enabled for this field
 /// Returns the original value if encryption is not configured
 pub fn encryptFieldIfNeeded(
@@ -438,15 +471,23 @@ fn makeAAD(
 }
 
 /// Check RBAC permission to read plaintext for a field
+/// SECURITY FIX: Fail-secure on catalog errors (deny access instead of grant)
+/// CANARY: REQ=REQ-FLE-FAILSECURE-005; FEATURE="FLEFailSecure"; ASPECT=CatalogErrorDenyAccess; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 fn canReadPlaintext(
     ctx: EncryptionContext,
     type_name: []const u8,
     field_name: []const u8,
 ) bool {
     // Get global catalog
-    const catalog = fle_catalog.globalCatalog(ctx.allocator) catch return true;
+    // SECURITY FIX: On catalog error, DENY access (fail-secure)
+    // Previous behavior returned true, allowing access on catalog errors - INSECURE!
+    const catalog = fle_catalog.globalCatalog(ctx.allocator) catch {
+        std.log.warn("SECURITY: Cannot access FLE catalog for {s}.{s} - denying plaintext access (fail-secure)", .{ type_name, field_name });
+        return false; // FAIL-SECURE: Deny access on catalog error
+    };
 
     // Get field metadata
+    // If type/field not in catalog, it's not FLE-protected, so allow access
     const type_meta = catalog.getType(type_name) orelse return true;
     const field_meta = type_meta.getField(field_name) orelse return true;
 

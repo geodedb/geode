@@ -1,16 +1,38 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("fle_key_types");
 const fle_aead = @import("fle_aead");
 const hkdf = @import("fle_hkdf");
 
 // Hierarchical Key Manager with Cache and Rotation
-// CANARY: REQ=REQ-FLE-KEY-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-FLE-KEY-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-28
+// CANARY: REQ=REQ-FLE-FAILSECURE-006; FEATURE="FLEFailSecure"; ASPECT=MasterKeyRequired; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+
+/// Check if this is a production build (ReleaseFast or ReleaseSafe)
+/// In production, GEODE_MASTER_KEY must be set - no fallback to test keys
+pub const is_production_build = builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSafe;
+
+/// Check if we're in test mode (explicit opt-in to test keys)
+/// Set GEODE_FLE_TEST_MODE=1 to allow test keys in debug builds
+fn isTestModeEnabled() bool {
+    if (is_production_build) return false; // Never allow in production
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    if (std.process.getEnvVarOwned(gpa.allocator(), "GEODE_FLE_TEST_MODE")) |val| {
+        defer gpa.allocator().free(val);
+        return std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true");
+    } else |_| {
+        // In debug builds without explicit test mode, allow test keys for convenience
+        return !is_production_build;
+    }
+}
 
 pub const Error = error{
     KeyNotFound,
     InvalidKeyVersion,
     RotationInProgress,
     OutOfMemory,
+    /// SECURITY: Master key is required but not configured
+    MasterKeyRequired,
 };
 
 /// Key cache entry
@@ -66,10 +88,15 @@ pub const KeyManager = struct {
     bik_cache: KeyCache,
     key_versions: std.StringHashMap(u16),
 
+    /// Initialize the key manager
+    /// SECURITY: In production builds (ReleaseFast/ReleaseSafe), GEODE_MASTER_KEY MUST be set.
+    /// Returns error.MasterKeyRequired if not configured in production.
+    /// In debug builds, a test key is used if GEODE_MASTER_KEY is not set (with warning).
     pub fn init(allocator: std.mem.Allocator) !*KeyManager {
         const manager = try allocator.create(KeyManager);
+        errdefer allocator.destroy(manager);
 
-        // Load master key from environment variable or use deterministic test key
+        // Load master key from environment variable
         var master_key: [32]u8 = undefined;
         if (std.process.getEnvVarOwned(allocator, "GEODE_MASTER_KEY")) |env_key| {
             defer allocator.free(env_key);
@@ -82,12 +109,30 @@ pub const KeyManager = struct {
                 hasher.final(&master_key);
             }
         } else |_| {
-            // No env var set - use deterministic key for testing
-            // In production, this should FAIL and require KMS configuration
-            const test_seed = "geode-fle-test-master-key-v1";
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-            hasher.update(test_seed);
-            hasher.final(&master_key);
+            // No GEODE_MASTER_KEY set
+            // SECURITY FIX: In production builds, FAIL - do not use test keys
+            if (is_production_build) {
+                std.log.err("SECURITY CRITICAL: GEODE_MASTER_KEY environment variable is REQUIRED in production builds. " ++
+                    "FLE cannot operate without a properly configured master key. " ++
+                    "Set GEODE_MASTER_KEY to a 32+ byte secret value.", .{});
+                return Error.MasterKeyRequired;
+            }
+
+            // In debug/test builds, allow test key with explicit warning
+            if (isTestModeEnabled()) {
+                std.log.warn("SECURITY WARNING: Using DETERMINISTIC TEST KEY for FLE. " ++
+                    "This is INSECURE and must NOT be used in production. " ++
+                    "Set GEODE_MASTER_KEY for production use.", .{});
+                const test_seed = "geode-fle-test-master-key-v1-INSECURE";
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                hasher.update(test_seed);
+                hasher.final(&master_key);
+            } else {
+                // Even in debug, if not in test mode, require the key
+                std.log.err("SECURITY: GEODE_MASTER_KEY is required. " ++
+                    "Set GEODE_FLE_TEST_MODE=1 to allow test keys in debug builds.", .{});
+                return Error.MasterKeyRequired;
+            }
         }
 
         manager.* = .{

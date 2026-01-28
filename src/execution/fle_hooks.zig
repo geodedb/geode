@@ -2,22 +2,39 @@ const std = @import("std");
 const fle_integration = @import("../fle_integration.zig");
 
 // Field-Level Encryption Execution Hooks
-// CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-28
+// CANARY: REQ=REQ-FLE-FAILSECURE-001; FEATURE="FLEFailSecure"; ASPECT=SECURITY; STATUS=TESTED; TEST=src/security/test_fle_enforcement.zig; OWNER=security; UPDATED=2026-01-28
+
+/// Error type for FLE hooks - fail-secure behavior
+pub const FLEHookError = error{
+    /// Encryption failed and cannot proceed safely
+    EncryptionFailed,
+    /// Field was marked for encryption but encryption could not be performed
+    EncryptionRequired,
+    /// Memory allocation failed
+    OutOfMemory,
+};
 
 /// Helper function to encrypt node property value if needed before storing
 /// Returns the potentially encrypted value to store
+/// SECURITY: Fails securely - returns error if encryption is required but fails
+/// CANARY: REQ=REQ-FLE-FAILSECURE-002; FEATURE="FLEFailSecure"; ASPECT=EncryptionRequired; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 pub fn encryptPropertyIfNeeded(
     allocator: std.mem.Allocator,
     node_labels: [][]const u8,
     field_name: []const u8,
     plaintext_value: []const u8,
     node_id: u64,
-) ![]const u8 {
+) (FLEHookError || std.mem.Allocator.Error)![]const u8 {
     // Get node type from first label
     if (node_labels.len == 0) {
         return plaintext_value; // No type, cannot check encryption
     }
     const node_type = node_labels[0];
+
+    // Check if this field requires encryption BEFORE attempting encryption
+    // This allows us to distinguish between "no encryption needed" and "encryption failed"
+    const requires_encryption = fle_integration.fieldRequiresEncryption(node_type, field_name);
 
     // Create encryption context
     const ctx = fle_integration.EncryptionContext{
@@ -37,8 +54,14 @@ pub fn encryptPropertyIfNeeded(
         plaintext_value,
         record_id,
     ) catch |err| {
-        // If encryption fails, log and return original value
-        std.debug.print("Warning: Failed to encrypt field {s}.{s}: {}\n", .{ node_type, field_name, err });
+        // SECURITY FIX: If encryption is REQUIRED for this field but fails,
+        // we MUST NOT write plaintext to disk. Return an error instead.
+        if (requires_encryption) {
+            std.log.err("SECURITY: Encryption REQUIRED for field {s}.{s} but failed: {}. Refusing to write plaintext.", .{ node_type, field_name, err });
+            return FLEHookError.EncryptionRequired;
+        }
+        // If field doesn't require encryption, this is just a warning
+        std.log.warn("FLE encryption check failed for non-encrypted field {s}.{s}: {}", .{ node_type, field_name, err });
         return plaintext_value;
     };
 
@@ -47,13 +70,18 @@ pub fn encryptPropertyIfNeeded(
 
 /// Helper function to encrypt edge property value if needed before storing
 /// Returns the potentially encrypted value to store
+/// SECURITY: Fails securely - returns error if encryption is required but fails
+/// CANARY: REQ=REQ-FLE-FAILSECURE-003; FEATURE="FLEFailSecure"; ASPECT=EdgeEncryptionRequired; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 pub fn encryptEdgePropertyIfNeeded(
     allocator: std.mem.Allocator,
     edge_type: []const u8,
     field_name: []const u8,
     plaintext_value: []const u8,
     edge_id: u64,
-) ![]const u8 {
+) (FLEHookError || std.mem.Allocator.Error)![]const u8 {
+    // Check if this field requires encryption BEFORE attempting encryption
+    const requires_encryption = fle_integration.fieldRequiresEncryption(edge_type, field_name);
+
     // Create encryption context
     const ctx = fle_integration.EncryptionContext{
         .tenant_id = "default",
@@ -72,8 +100,14 @@ pub fn encryptEdgePropertyIfNeeded(
         plaintext_value,
         record_id,
     ) catch |err| {
-        // If encryption fails, log and return original value
-        std.debug.print("Warning: Failed to encrypt edge property {s}.{s}: {}\n", .{ edge_type, field_name, err });
+        // SECURITY FIX: If encryption is REQUIRED for this field but fails,
+        // we MUST NOT write plaintext to disk. Return an error instead.
+        if (requires_encryption) {
+            std.log.err("SECURITY: Encryption REQUIRED for edge property {s}.{s} but failed: {}. Refusing to write plaintext.", .{ edge_type, field_name, err });
+            return FLEHookError.EncryptionRequired;
+        }
+        // If field doesn't require encryption, this is just a warning
+        std.log.warn("FLE encryption check failed for non-encrypted edge property {s}.{s}: {}", .{ edge_type, field_name, err });
         return plaintext_value;
     };
 
