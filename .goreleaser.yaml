@@ -201,7 +201,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
     dockerfile: Dockerfile.release
     use: buildx
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/amd64"
@@ -222,7 +222,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
     dockerfile: Dockerfile.release
     use: buildx
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/arm64"
@@ -241,7 +241,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-amd64"
     dockerfile: Dockerfile.release.alpine
     use: buildx
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/amd64"
@@ -259,7 +259,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
     dockerfile: Dockerfile.release.alpine
     use: buildx
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/arm64"
@@ -299,7 +299,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-gpu"
     dockerfile: Dockerfile.release.gpu
     use: buildx
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/amd64"
@@ -357,39 +357,39 @@ docker_manifests:
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
 
   - name_template: "docker.io/geodedb/geode:latest"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
 
   # Major.Minor tag for Docker Hub (e.g., v0.18 for v0.18.1)
   - name_template: "docker.io/geodedb/geode:v{{ .Major }}.{{ .Minor }}"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
 
   # Major tag for Docker Hub (e.g., v0 for v0.18.1)
   - name_template: "docker.io/geodedb/geode:v{{ .Major }}"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
 
   - name_template: "docker.io/geodedb/geode:alpine"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
 
   - name_template: "docker.io/geodedb/geode:{{ .Version }}-alpine"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
 
   # GPU tags - x86_64 only (NVIDIA CUDA doesn't support ARM64 cross-compilation)
   # Note: GPU images don't need manifests since they're single-arch (amd64 only)
@@ -400,12 +400,12 @@ docker_manifests:
   - name_template: "docker.io/geodedb/geode:gpu"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-gpu"
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
 
   - name_template: "docker.io/geodedb/geode:v{{ .Major }}.{{ .Minor }}-gpu"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-gpu"
-    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
 
   - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}-gpu"
     image_templates:

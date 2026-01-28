@@ -560,12 +560,19 @@ snapshot:
       docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
 
       # Login to Docker Hub if credentials are available
+      SKIP_DOCKERHUB="true"
       if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
         echo "Logging into Docker Hub..."
-        echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+        if echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin; then
+          SKIP_DOCKERHUB="false"
+          echo "Docker Hub login successful"
+        else
+          echo "Docker Hub login failed, will skip Docker Hub push"
+        fi
       else
         echo "Docker Hub credentials not configured, skipping Docker Hub push"
       fi
+      export SKIP_DOCKERHUB
 
       # Setup Docker buildx
       echo "Setting up Docker buildx..."
@@ -577,11 +584,11 @@ snapshot:
       curl -sfL https://goreleaser.com/static/run | bash -s -- --version
 
       # Run GoReleaser in snapshot mode (120m timeout for 8-target cross-compilation)
+      echo "SKIP_DOCKERHUB=${SKIP_DOCKERHUB}"
       curl -sfL https://goreleaser.com/static/run | \
         GORELEASER_KEY="${GORELEASER_KEY:-}" \
         CI_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE" \
-        DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-}" \
-        DOCKERHUB_TOKEN="${DOCKERHUB_TOKEN:-}" \
+        SKIP_DOCKERHUB="$SKIP_DOCKERHUB" \
         HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
         bash -s -- release --snapshot --clean --timeout 120m 2>&1 || {
           echo "GoReleaser failed, checking logs..."
@@ -644,12 +651,19 @@ build-release:
       docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
 
       # Login to Docker Hub if credentials are available
+      SKIP_DOCKERHUB="true"
       if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
         echo "Logging into Docker Hub..."
-        echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+        if echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin; then
+          SKIP_DOCKERHUB="false"
+          echo "Docker Hub login successful"
+        else
+          echo "Docker Hub login failed, will skip Docker Hub push"
+        fi
       else
         echo "Docker Hub credentials not configured, skipping Docker Hub push"
       fi
+      export SKIP_DOCKERHUB
 
       # Setup Docker buildx
       echo "Setting up Docker buildx..."
@@ -664,11 +678,11 @@ build-release:
 
       # Run GoReleaser to build artifacts (release publishing disabled in .goreleaser.yaml)
       echo "Running GoReleaser build..."
+      echo "SKIP_DOCKERHUB=${SKIP_DOCKERHUB}"
       curl -sfL https://goreleaser.com/static/run | \
         GORELEASER_KEY="${GORELEASER_KEY:-}" \
         CI_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE" \
-        DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-}" \
-        DOCKERHUB_TOKEN="${DOCKERHUB_TOKEN:-}" \
+        SKIP_DOCKERHUB="$SKIP_DOCKERHUB" \
         HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
         bash -s -- release --clean --timeout 120m 2>&1 || {
           echo "GoReleaser failed, checking logs..."
