@@ -486,6 +486,7 @@ fn printQueryUsage() void {
         "\n" ++
         "Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
+        "  -g, --graph <name>     Graph to query against (auto-prepends USE GRAPH)\n" ++
         "  --insecure             Skip TLS certificate verification\n" ++
         "  --ca-cert <path>       CA certificate path for server verification\n" ++
         "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
@@ -499,7 +500,7 @@ fn printQueryUsage() void {
         "  --commit               Commit transaction\n" ++
         "  --rollback             Rollback transaction\n" ++
         "  -U, --user <username>  Authenticate as user\n" ++
-        "  -P, --password <pass>  Authentication password\n" ++
+        "  -P, --password [pass]  Authentication password (prompted if not provided)\n" ++
         "  --no-saved-session     Don't auto-load saved session token\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
@@ -507,17 +508,35 @@ fn printQueryUsage() void {
         "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
         "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
         "\n" ++
+        "Authentication:\n" ++
+        "  For authenticated servers, provide both --user and --password:\n" ++
+        "    geode query --user geode --password yourpassword \"RETURN 1\"\n" ++
+        "    geode query -U geode -P \"RETURN 1\"  # (prompts for password)\n" ++
+        "\n" ++
+        "  Environment variables are NOT used for authentication.\n" ++
+        "  The default admin username is 'geode' (not 'admin').\n" ++
+        "\n" ++
         "Session Management:\n" ++
         "  By default, queries auto-load saved session from ~/.geode/credentials.json\n" ++
         "  Use --no-saved-session to require explicit credentials\n" ++
-        "  Username is always required for authenticated queries\n" ++
         "\n" ++
         "Arguments:\n" ++
         "  <query>                GQL query string\n" ++
         "  -                      Read query from stdin\n" ++
         "\n" ++
         "Examples:\n" ++
+        "  # Basic query (no auth)\n" ++
         "  geode query \"MATCH (n) RETURN n LIMIT 10\"\n" ++
+        "\n" ++
+        "  # Authenticated query (use 'geode' as default admin user)\n" ++
+        "  geode query --user geode --password changeme \"RETURN 1 AS x\"\n" ++
+        "  geode query -U geode -P \"RETURN 1 AS x\"  # prompts for password\n" ++
+        "\n" ++
+        "  # Query a specific graph\n" ++
+        "  geode query --graph mydb \"MATCH (n) RETURN count(n)\"\n" ++
+        "  geode query -g firewall \"MATCH (r:Rule) RETURN r.name\"\n" ++
+        "\n" ++
+        "  # Connection options\n" ++
         "  geode query --server localhost:3141 --insecure \"RETURN 1 AS x\"\n" ++
         "  geode query --ca-cert /etc/ssl/ca.crt --server secure.example.com:3141 \"RETURN 1\"\n" ++
         "  geode query --ca-cert /etc/ssl/ca.crt --client-cert /etc/ssl/client.crt --client-key /etc/ssl/client.key --server secure.example.com:3141 \"RETURN 1\"\n" ++
@@ -1848,10 +1867,6 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     const max_sleep_us: u64 = 100; // 100μs maximum sleep (was 1ms)
     main_loop: while (true) {
         loop_iteration += 1;
-        // GAP-0200: Reduced debug logging frequency from 1000 to 100000 iterations
-        if (loop_iteration % 100000 == 0) {
-            std.debug.print("Main loop iteration #{} (conns={}, streams={}, idle={})\n", .{ loop_iteration, connection_count, stream_count, idle_iterations });
-        }
 
         if (test_exit_after_first and stream_count > 0) break :main_loop;
 
@@ -2867,6 +2882,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var timeout_secs: u32 = 10; // Default 10 second timeout
     var retry_count: u32 = 0; // Default no retries
     var use_saved_session = true; // Auto-load saved session by default
+    // CANARY: REQ=REQ-CLI-GRAPH-FLAG-001; FEATURE="GraphFlag"; ASPECT=QueryCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // Issue #393: Add --graph flag to specify which graph to query against
+    var graph: ?[]const u8 = null;
     // GAP-0113: TLS certificate verification options
     var ca_cert_path: ?[]const u8 = null;
     var client_cert_path: ?[]const u8 = null;
@@ -2877,6 +2895,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         const arg = argv[i];
         if (std.mem.eql(u8, arg, "--no-saved-session")) {
             use_saved_session = false;
+        } else if (std.mem.eql(u8, arg, "--graph") or std.mem.eql(u8, arg, "-g")) {
+            // CANARY: REQ=REQ-CLI-GRAPH-FLAG-002; FEATURE="GraphFlag"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --graph requires a graph name\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            graph = argv[i + 1];
+            i += 1;
         } else if (std.mem.eql(u8, arg, "--server")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --server requires a server address\n", .{});
@@ -2925,12 +2951,19 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             user = argv[i + 1];
             i += 1;
         } else if (std.mem.eql(u8, arg, "--password") or std.mem.eql(u8, arg, "-P")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --password requires a password\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            // CANARY: REQ=REQ-CLI-PASSWORD-PROMPT-001; FEATURE="PasswordPrompt"; ASPECT=QueryCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+            // Issue #385: If no password provided after -P, prompt interactively
+            if (i + 1 >= argv.len or std.mem.startsWith(u8, argv[i + 1], "-")) {
+                // No value provided, prompt for password
+                const prompted_password = promptPassword(allocator, "Password: ") catch |err| {
+                    std.debug.print("Error reading password: {s}\n", .{@errorName(err)});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                };
+                password = prompted_password;
+            } else {
+                password = argv[i + 1];
+                i += 1;
             }
-            password = argv[i + 1];
-            i += 1;
         } else if (std.mem.eql(u8, arg, "--token")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --token requires an API token\n", .{});
@@ -3087,7 +3120,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     const server_addr = server orelse "127.0.0.1:3141";
 
     // GAP-0113: Execute query via QUIC connection with optional certificate verification
-    try executeQuicQuery(allocator, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password, ca_cert_path, client_cert_path, client_key_path);
+    // CANARY: REQ=REQ-CLI-GRAPH-FLAG-003; FEATURE="GraphFlag"; ASPECT=ExecuteWithGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    try executeQuicQuery(allocator, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password, ca_cert_path, client_cert_path, client_key_path, graph);
 }
 
 /// Escape a string for safe embedding in JSON
@@ -3149,7 +3183,8 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
 // GAP-0113 SECURITY FIX: Add TLS certificate verification support
 // CANARY: REQ=REQ-TLS-CERT-002; FEATURE="TLSCertVerification"; ASPECT=Core; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-12
-fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {
+// CANARY: REQ=REQ-CLI-GRAPH-FLAG-004; FEATURE="GraphFlag"; ASPECT=ExecuteQuicQuery; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8, graph: ?[]const u8) !void {
     const stderr = std.fs.File{ .handle = getStderrHandle() };
 
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
@@ -3194,7 +3229,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query
             const handshake_err = quic_client.waitForHandshake(handshake_timeout);
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
-                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password);
+                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph);
             } else |_| {
                 last_error = "connection timeout";
             }
@@ -3215,7 +3250,8 @@ fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
-fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8) !void {
+// CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8, graph: ?[]const u8) !void {
 
     // Get a stream for communication
     var stream = quic_client.getStream() catch |err| {
@@ -3250,14 +3286,35 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     log.debug("Client received HELLO response", &.{Attr.string("response", hello_response)});
 
     // Check for authentication errors
+    // CANARY: REQ=REQ-CLI-AUTH-HELP-001; FEATURE="AuthHelpMessage"; ASPECT=ImprovedErrorMessage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // Issue #389: Provide helpful guidance when authentication fails
     if (std.mem.indexOf(u8, hello_response, "\"type\":\"ERROR\"") != null or std.mem.indexOf(u8, hello_response, "Authentication failed") != null) {
-        std.debug.print("Error: {s}\n", .{hello_response});
+        std.debug.print("Error: {s}\n\n", .{hello_response});
+        if (std.mem.indexOf(u8, hello_response, "Authentication required") != null) {
+            std.debug.print("Hint: This server requires authentication. Use:\n", .{});
+            std.debug.print("  geode query --user geode --password <password> \"<query>\"\n", .{});
+            std.debug.print("  geode query -U geode -P \"<query>\"  # prompts for password\n\n", .{});
+        } else if (std.mem.indexOf(u8, hello_response, "Authentication failed") != null) {
+            std.debug.print("Hint: Check your username and password. The default admin user is 'geode'.\n", .{});
+            std.debug.print("  geode query --user geode --password <password> \"<query>\"\n\n", .{});
+        }
         std.process.exit(@intFromEnum(ExitCode.auth_error));
+    }
+
+    // CANARY: REQ=REQ-CLI-GRAPH-FLAG-006; FEATURE="GraphFlag"; ASPECT=PrependUseGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // If a graph is specified, prepend "USE GRAPH graphname;" to the query
+    var final_query: []const u8 = query_text;
+    var allocated_query: ?[]u8 = null;
+    defer if (allocated_query) |q| allocator.free(q);
+
+    if (graph) |g| {
+        allocated_query = try std.fmt.allocPrint(allocator, "USE GRAPH {s}; {s}", .{ g, query_text });
+        final_query = allocated_query.?;
     }
 
     // Send query using the server's protocol format (RUN_GQL message)
     // CANARY: REQ=REQ-LIB-MIGRATION-JSON-029; FEATURE="JSON Library Migration"; ASPECT=RunGqlMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-    const run_gql_struct = CliRunGqlMessage{ .text = query_text };
+    const run_gql_struct = CliRunGqlMessage{ .text = final_query };
     const query_json = try json_lib.encode(allocator, run_gql_struct, .{});
     defer allocator.free(query_json);
     const query_msg = try std.fmt.allocPrint(allocator, "{s}\n", .{query_json});

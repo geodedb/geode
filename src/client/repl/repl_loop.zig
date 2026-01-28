@@ -470,6 +470,19 @@ fn processInput(state: *ReplState) !void {
         // Check for complete statement (after processing all input)
         if (last_action == .execute) {
             const input = state.buffer.items;
+
+            // CANARY: REQ=REQ-SHELL-EMPTY-ENTER-001; FEATURE="ShellEmptyEnter"; ASPECT=NewlineOnEmptyInput; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+            // Issue #394: If empty line and no continuation mode, just print newline and continue
+            // This allows users to hit enter on empty line without triggering parser/lexer
+            if (input.len == 0 and !state.is_continuation) {
+                const stdout = platform.getStdoutHandle();
+                try stdout.writeAll("\r\n");
+                state.last_visual_lines = 0;
+                state.last_cursor_row = 0;
+                state.content_changed = true;
+                break :outer; // Exit input loop for new prompt with newline
+            }
+
             if (input.len > 0) {
                 // Check for backslash-newline continuation (line ends with \ and is not a meta-command)
                 // This allows multi-line input by typing \ at the end of a line
@@ -513,6 +526,9 @@ fn processInput(state: *ReplState) !void {
                     state.last_visual_lines = 0; // Reset for fresh prompt
                     state.last_cursor_row = 0; // Reset cursor row tracking
                     state.content_changed = true;
+                    // CANARY: REQ=REQ-SHELL-HISTORY-RESET-001; FEATURE="HistoryReset"; ASPECT=MetaCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+                    // Issue #386: Reset history index after command execution
+                    state.history_index = null;
                 } else {
                     // Build complete multi-line input
                     if (state.is_continuation) {
@@ -545,10 +561,14 @@ fn processInput(state: *ReplState) !void {
 
                         // Execute GQL
                         repl_dispatch.executeGql(state, complete_input) catch |err| {
-                            const stderr = platform.getStderrHandle();
-                            stderr.writeAll("REPL error: ") catch {};
-                            stderr.writeAll(@errorName(err)) catch {};
-                            stderr.writeAll("\r\n") catch {};
+                            // CANARY: REQ=REQ-SHELL-WOULDBLOCK-001; FEATURE="SuppressWouldBlock"; ASPECT=ReplLoopError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+                            // Issue #388: Don't display WouldBlock errors - these are normal async I/O behavior
+                            if (err != error.WouldBlock) {
+                                const stderr = platform.getStderrHandle();
+                                stderr.writeAll("REPL error: ") catch {};
+                                stderr.writeAll(@errorName(err)) catch {};
+                                stderr.writeAll("\r\n") catch {};
+                            }
                         };
 
                         // Reset for next input
@@ -559,6 +579,9 @@ fn processInput(state: *ReplState) !void {
                         state.last_visual_lines = 0; // Reset for fresh prompt
                         state.last_cursor_row = 0; // Reset cursor row tracking
                         state.content_changed = true;
+                        // CANARY: REQ=REQ-SHELL-HISTORY-RESET-002; FEATURE="HistoryReset"; ASPECT=GqlExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+                        // Issue #386: Reset history index after command execution
+                        state.history_index = null;
                     } else {
                         // Statement is not complete - enter continuation mode
                         state.is_continuation = true;

@@ -815,9 +815,13 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
 
     // Execute query via QUIC
     state.session.runGql(gql) catch |err| {
-        try stderr.writeAll("Error executing query: ");
-        try stderr.writeAll(@errorName(err));
-        try stderr.writeAll("\r\n");
+        // CANARY: REQ=REQ-SHELL-WOULDBLOCK-002; FEATURE="SuppressWouldBlock"; ASPECT=RunGqlError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+        // Issue #388: Don't display WouldBlock errors - normal async I/O behavior
+        if (err != error.WouldBlock) {
+            try stderr.writeAll("Error executing query: ");
+            try stderr.writeAll(@errorName(err));
+            try stderr.writeAll("\r\n");
+        }
         return;
     };
 
@@ -853,9 +857,13 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                     return; // Error was displayed
                 }
             }
-            try stderr.writeAll("Error fetching results: ");
-            try stderr.writeAll(@errorName(err));
-            try stderr.writeAll("\r\n");
+            // CANARY: REQ=REQ-SHELL-WOULDBLOCK-003; FEATURE="SuppressWouldBlock"; ASPECT=PullAllError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+            // Issue #388: Don't display WouldBlock errors - normal async I/O behavior
+            if (err != error.WouldBlock) {
+                try stderr.writeAll("Error fetching results: ");
+                try stderr.writeAll(@errorName(err));
+                try stderr.writeAll("\r\n");
+            }
             return;
         };
     }
@@ -979,10 +987,13 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
                         const use_stmt = std.fmt.allocPrint(state.allocator, "USE GRAPH {s};", .{use_args}) catch continue;
                         defer state.allocator.free(use_stmt);
                         executeGql(state, use_stmt) catch |err| {
-                            var buf: [256]u8 = undefined;
-                            const msg = std.fmt.bufPrint(&buf, "Error at line {d}: {s}\r\n", .{ line_number, @errorName(err) }) catch continue;
-                            stderr.writeAll(msg) catch {};
-                            error_count += 1;
+                            // CANARY: REQ=REQ-SHELL-WOULDBLOCK-004; FEATURE="SuppressWouldBlock"; ASPECT=SourceUseError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+                            if (err != error.WouldBlock) {
+                                var buf: [256]u8 = undefined;
+                                const msg = std.fmt.bufPrint(&buf, "Error at line {d}: {s}\r\n", .{ line_number, @errorName(err) }) catch continue;
+                                stderr.writeAll(msg) catch {};
+                                error_count += 1;
+                            }
                         };
                     }
                 }
@@ -1030,10 +1041,13 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
             }
 
             executeGql(state, stmt) catch |err| {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "Error at line {d}: {s}\r\n", .{ line_number, @errorName(err) }) catch continue;
-                stderr.writeAll(msg) catch {};
-                error_count += 1;
+                // CANARY: REQ=REQ-SHELL-WOULDBLOCK-005; FEATURE="SuppressWouldBlock"; ASPECT=SourceGqlError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+                if (err != error.WouldBlock) {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "Error at line {d}: {s}\r\n", .{ line_number, @errorName(err) }) catch continue;
+                    stderr.writeAll(msg) catch {};
+                    error_count += 1;
+                }
             };
 
             statement_count += 1;
