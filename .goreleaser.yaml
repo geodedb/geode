@@ -112,6 +112,9 @@ changelog:
 # =============================================================================
 # Docker Images - Multi-Architecture
 # =============================================================================
+# Publishes to both GitLab Container Registry and Docker Hub.
+# Docker Hub push requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN CI variables.
+# Reference: https://goreleaser.com/customization/docker/#keeping-docker-images-updated-for-current-major
 
 dockers:
   # Debian-based images - GitLab Registry
@@ -188,6 +191,7 @@ dockers:
       - "--label=org.opencontainers.image.version={{.Version}}"
 
   # Docker Hub images - Debian-based
+  # Requires: docker login docker.io before running goreleaser
   - id: geode-dockerhub-debian-amd64
     ids:
       - geode
@@ -197,7 +201,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
     dockerfile: Dockerfile.release
     use: buildx
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/amd64"
@@ -218,7 +222,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
     dockerfile: Dockerfile.release
     use: buildx
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/arm64"
@@ -237,7 +241,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-amd64"
     dockerfile: Dockerfile.release.alpine
     use: buildx
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/amd64"
@@ -255,7 +259,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
     dockerfile: Dockerfile.release.alpine
     use: buildx
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/arm64"
@@ -311,7 +315,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-gpu-amd64"
     dockerfile: Dockerfile.release.gpu
     use: buildx
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/amd64"
@@ -332,7 +336,7 @@ dockers:
       - "docker.io/geodedb/geode:{{ .Version }}-gpu-arm64"
     dockerfile: Dockerfile.release.gpu
     use: buildx
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--platform=linux/arm64"
@@ -344,6 +348,9 @@ dockers:
 # =============================================================================
 # Docker Manifests - Multi-arch tags
 # =============================================================================
+# Creates multi-architecture manifest lists for both registries.
+# Tags follow semantic versioning with major/minor tracking for updates.
+# Reference: https://goreleaser.com/customization/docker/#keeping-docker-images-updated-for-current-major
 
 docker_manifests:
   # GitLab Registry manifests
@@ -357,12 +364,14 @@ docker_manifests:
       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
 
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}.{{ .Minor }}"
+  # Major.Minor tag (e.g., v0.18 for v0.18.1)
+  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}"
     image_templates:
       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
 
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Major }}"
+  # Major tag (e.g., v0 for v0.18.1)
+  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}"
     image_templates:
       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
@@ -377,42 +386,44 @@ docker_manifests:
       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64"
       - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64"
 
-  # Docker Hub manifests
+  # Docker Hub manifests - pushed on tag releases only
   - name_template: "docker.io/geodedb/geode:{{ .Version }}"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
   - name_template: "docker.io/geodedb/geode:latest"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
-  - name_template: "docker.io/geodedb/geode:{{ .Major }}.{{ .Minor }}"
+  # Major.Minor tag for Docker Hub (e.g., v0.18 for v0.18.1)
+  - name_template: "docker.io/geodedb/geode:v{{ .Major }}.{{ .Minor }}"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
-  - name_template: "docker.io/geodedb/geode:{{ .Major }}"
+  # Major tag for Docker Hub (e.g., v0 for v0.18.1)
+  - name_template: "docker.io/geodedb/geode:v{{ .Major }}"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
   - name_template: "docker.io/geodedb/geode:alpine"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
   - name_template: "docker.io/geodedb/geode:{{ .Version }}-alpine"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
   # GitLab Registry GPU manifests
   - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:gpu"
@@ -430,13 +441,25 @@ docker_manifests:
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-gpu-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-gpu-arm64"
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
 
   - name_template: "docker.io/geodedb/geode:{{ .Version }}-gpu"
     image_templates:
       - "docker.io/geodedb/geode:{{ .Version }}-gpu-amd64"
       - "docker.io/geodedb/geode:{{ .Version }}-gpu-arm64"
-    skip_push: auto
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+
+  # Major.Minor GPU tags
+  - name_template: "docker.io/geodedb/geode:v{{ .Major }}.{{ .Minor }}-gpu"
+    image_templates:
+      - "docker.io/geodedb/geode:{{ .Version }}-gpu-amd64"
+      - "docker.io/geodedb/geode:{{ .Version }}-gpu-arm64"
+    skip_push: "{{ if .IsSnapshot }}true{{ end }}"
+
+  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}-gpu"
+    image_templates:
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-amd64"
+      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu-arm64"
 
 # =============================================================================
 # System Packages - nFPM (deb, rpm, apk)

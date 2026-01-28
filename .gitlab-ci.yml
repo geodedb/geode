@@ -47,6 +47,14 @@ variables:
   GIT_CONFIG_VALUE_0: "https://gitlab.com/"
   GIT_CONFIG_KEY_1: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf"
   GIT_CONFIG_VALUE_1: "git@gitlab.com:"
+  # =============================================================================
+  # Docker Hub Configuration (required for release builds)
+  # Set these as CI/CD variables in GitLab project settings:
+  #   DOCKERHUB_USERNAME - Docker Hub username (e.g., "geodedb")
+  #   DOCKERHUB_TOKEN    - Docker Hub access token (NOT password)
+  # When set, GoReleaser will push images to docker.io/geodedb/geode
+  # Reference: https://goreleaser.com/customization/docker/
+  # =============================================================================
 
 # =============================================================================
 # Governance Stage - Status and Feature Flag Checks
