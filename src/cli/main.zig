@@ -3354,7 +3354,20 @@ fn outputDotFormat(allocator: std.mem.Allocator, result_line: []const u8, stdout
     defer parsed.deinit();
 
     const root = parsed.value.object;
-    const rows = if (root.get("rows")) |r| r.array else std.json.Array.init(allocator);
+    // Try result.rows first (standard response), then rows directly (alternative format)
+    const rows = blk: {
+        if (root.get("result")) |inner| {
+            if (inner == .object) {
+                if (inner.object.get("rows")) |r| {
+                    if (r == .array) break :blk r.array;
+                }
+            }
+        }
+        if (root.get("rows")) |r| {
+            if (r == .array) break :blk r.array;
+        }
+        break :blk std.json.Array.init(allocator);
+    };
 
     // Start DOT graph
     _ = stdout.writeAll("digraph G {\n") catch {};
@@ -3365,64 +3378,37 @@ fn outputDotFormat(allocator: std.mem.Allocator, result_line: []const u8, stdout
 
     // Track nodes and relationships we've seen to avoid duplicates
     var seen_nodes = std.StringHashMap(void).init(allocator);
-    defer seen_nodes.deinit();
+    defer {
+        // Free all keys before deinit
+        var key_iter = seen_nodes.keyIterator();
+        while (key_iter.next()) |key| {
+            allocator.free(key.*);
+        }
+        seen_nodes.deinit();
+    }
     var seen_edges = std.StringHashMap(void).init(allocator);
-    defer seen_edges.deinit();
+    defer {
+        // Free all keys before deinit
+        var key_iter = seen_edges.keyIterator();
+        while (key_iter.next()) |key| {
+            allocator.free(key.*);
+        }
+        seen_edges.deinit();
+    }
 
     // Process each row
+    // Rows can be arrays or objects with column names as keys
     for (rows.items) |row| {
-        if (row != .array) continue;
-
-        // Each column in the row could be a node, relationship, or scalar value
-        for (row.array.items) |col| {
-            if (col != .object) continue;
-
-            const obj = col.object;
-
-            // Check if this is a node (has _labels)
-            if (obj.get("_labels")) |labels_val| {
-                const node_id = getNodeId(obj) orelse continue;
-
-                // Only output if we haven't seen this node
-                if (!seen_nodes.contains(node_id)) {
-                    try seen_nodes.put(node_id, {});
-
-                    // Get label for display
-                    const label = getNodeLabel(allocator, obj, labels_val) catch node_id;
-                    defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
-
-                    // Output node definition
-                    _ = stdout.writeAll("  \"") catch {};
-                    _ = stdout.writeAll(node_id) catch {};
-                    _ = stdout.writeAll("\" [label=\"") catch {};
-                    _ = stdout.writeAll(label) catch {};
-                    _ = stdout.writeAll("\"];\n") catch {};
-                }
+        // Process values based on row type
+        if (row == .array) {
+            for (row.array.items) |col| {
+                try processDotValue(allocator, col, &seen_nodes, &seen_edges, stdout);
             }
-            // Check if this is a relationship (has _type)
-            else if (obj.get("_type")) |type_val| {
-                const rel_type = if (type_val == .string) type_val.string else "RELATED";
-                const start_id = if (obj.get("_start")) |s| (if (s == .string) s.string else null) else null;
-                const end_id = if (obj.get("_end")) |e| (if (e == .string) e.string else null) else null;
-
-                if (start_id != null and end_id != null) {
-                    // Create edge key for deduplication
-                    const edge_key = std.fmt.allocPrint(allocator, "{s}-{s}->{s}", .{ start_id.?, rel_type, end_id.? }) catch continue;
-                    defer allocator.free(edge_key);
-
-                    if (!seen_edges.contains(edge_key)) {
-                        try seen_edges.put(try allocator.dupe(u8, edge_key), {});
-
-                        // Output edge
-                        _ = stdout.writeAll("  \"") catch {};
-                        _ = stdout.writeAll(start_id.?) catch {};
-                        _ = stdout.writeAll("\" -> \"") catch {};
-                        _ = stdout.writeAll(end_id.?) catch {};
-                        _ = stdout.writeAll("\" [label=\"") catch {};
-                        _ = stdout.writeAll(rel_type) catch {};
-                        _ = stdout.writeAll("\"];\n") catch {};
-                    }
-                }
+        } else if (row == .object) {
+            // Iterate over all values in the object
+            var iter = row.object.iterator();
+            while (iter.next()) |entry| {
+                try processDotValue(allocator, entry.value_ptr.*, &seen_nodes, &seen_edges, stdout);
             }
         }
     }
@@ -3431,21 +3417,91 @@ fn outputDotFormat(allocator: std.mem.Allocator, result_line: []const u8, stdout
     _ = stdout.writeAll("}\n") catch {};
 }
 
-fn getNodeId(obj: std.json.ObjectMap) ?[]const u8 {
-    // Try _id first, then id, then element_id
-    if (obj.get("_id")) |id| {
-        return if (id == .string) id.string else null;
+/// Process a single value for DOT output (node or relationship)
+fn processDotValue(allocator: std.mem.Allocator, col: std.json.Value, seen_nodes: *std.StringHashMap(void), seen_edges: *std.StringHashMap(void), stdout: *std.fs.File) !void {
+    if (col != .object) return;
+
+    const obj = col.object;
+
+    // Check if this is a node (has labels array)
+    // Server returns: {id: int, labels: [...], properties: {...}}
+    if (obj.get("labels")) |labels_val| {
+        const node_id = getDotNodeId(allocator, obj) orelse return;
+        defer allocator.free(node_id);
+
+        // Only output if we haven't seen this node
+        if (!seen_nodes.contains(node_id)) {
+            try seen_nodes.put(try allocator.dupe(u8, node_id), {});
+
+            // Get label for display
+            const label = getDotNodeLabel(allocator, obj, labels_val) catch node_id;
+            defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
+
+            // Output node definition
+            _ = stdout.writeAll("  \"") catch {};
+            _ = stdout.writeAll(node_id) catch {};
+            _ = stdout.writeAll("\" [label=\"") catch {};
+            _ = stdout.writeAll(label) catch {};
+            _ = stdout.writeAll("\"];\n") catch {};
+        }
     }
+    // Check if this is a relationship (has type and from/to)
+    // Server returns: {id: int, type: string, from: int, to: int, properties: {...}}
+    else if (obj.get("type")) |type_val| {
+        if (type_val != .string) return;
+        const rel_type = type_val.string;
+
+        // Try "from"/"to" first (server format), then "start_node"/"end_node" (alternative)
+        const start_id = getDotIdString(allocator, obj.get("from")) orelse
+            getDotIdString(allocator, obj.get("start_node")) orelse return;
+        defer allocator.free(start_id);
+        const end_id = getDotIdString(allocator, obj.get("to")) orelse
+            getDotIdString(allocator, obj.get("end_node")) orelse return;
+        defer allocator.free(end_id);
+
+        // Create edge key for deduplication
+        const edge_key = std.fmt.allocPrint(allocator, "{s}-{s}->{s}", .{ start_id, rel_type, end_id }) catch return;
+        defer allocator.free(edge_key);
+
+        if (!seen_edges.contains(edge_key)) {
+            try seen_edges.put(try allocator.dupe(u8, edge_key), {});
+
+            // Output edge
+            _ = stdout.writeAll("  \"") catch {};
+            _ = stdout.writeAll(start_id) catch {};
+            _ = stdout.writeAll("\" -> \"") catch {};
+            _ = stdout.writeAll(end_id) catch {};
+            _ = stdout.writeAll("\" [label=\"") catch {};
+            _ = stdout.writeAll(rel_type) catch {};
+            _ = stdout.writeAll("\"];\n") catch {};
+        }
+    }
+}
+
+/// Convert a JSON value to a string ID (handles both string and integer IDs)
+fn getDotIdString(allocator: std.mem.Allocator, val: ?std.json.Value) ?[]const u8 {
+    const v = val orelse return null;
+    if (v == .string) return allocator.dupe(u8, v.string) catch null;
+    if (v == .integer) return std.fmt.allocPrint(allocator, "{d}", .{v.integer}) catch null;
+    return null;
+}
+
+/// Get node ID as string (handles id field being int or string)
+fn getDotNodeId(allocator: std.mem.Allocator, obj: std.json.ObjectMap) ?[]const u8 {
+    // Try id first (server uses "id"), then _id, then element_id
     if (obj.get("id")) |id| {
-        return if (id == .string) id.string else null;
+        return getDotIdString(allocator, id);
+    }
+    if (obj.get("_id")) |id| {
+        return getDotIdString(allocator, id);
     }
     if (obj.get("element_id")) |id| {
-        return if (id == .string) id.string else null;
+        return getDotIdString(allocator, id);
     }
     return null;
 }
 
-fn getNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels_val: std.json.Value) ![]const u8 {
+fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels_val: std.json.Value) ![]const u8 {
     var label_parts = std.ArrayList(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
     defer label_parts.deinit(allocator);
 
@@ -3460,23 +3516,56 @@ fn getNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels_va
     }
 
     // Add a display property if available (name, title, etc.)
+    // Properties might be at top level or inside a "properties" object
     const display_props = [_][]const u8{ "name", "title", "label", "username", "email" };
-    for (display_props) |prop| {
-        if (obj.get(prop)) |val| {
-            if (val == .string and val.string.len > 0) {
-                try label_parts.appendSlice(allocator, "\\n");
-                try label_parts.appendSlice(allocator, val.string);
-                break;
+
+    // First check properties object (server format)
+    if (obj.get("properties")) |props_val| {
+        if (props_val == .object) {
+            for (display_props) |prop| {
+                if (props_val.object.get(prop)) |val| {
+                    if (val == .string and val.string.len > 0) {
+                        try label_parts.appendSlice(allocator, "\\n");
+                        try label_parts.appendSlice(allocator, val.string);
+                        break;
+                    }
+                }
+            }
+        }
+    } else {
+        // Fall back to top-level properties (legacy format)
+        for (display_props) |prop| {
+            if (obj.get(prop)) |val| {
+                if (val == .string and val.string.len > 0) {
+                    try label_parts.appendSlice(allocator, "\\n");
+                    try label_parts.appendSlice(allocator, val.string);
+                    break;
+                }
             }
         }
     }
 
     if (label_parts.items.len == 0) {
         // Fall back to node ID
-        return getNodeId(obj) orelse "node";
+        const id = getDotNodeId(allocator, obj) orelse return try allocator.dupe(u8, "node");
+        return id;
     }
 
     return try allocator.dupe(u8, label_parts.items);
+}
+
+/// Extract column name from either string or object format
+/// Server may return columns as strings or as objects with {name, type}
+fn getColumnName(col: std.json.Value) []const u8 {
+    // String format: columns are just names
+    if (col == .string) return col.string;
+    // Object format: {name: "col_name", type: "text"}
+    if (col == .object) {
+        if (col.object.get("name")) |name_val| {
+            if (name_val == .string) return name_val.string;
+        }
+    }
+    return "?";
 }
 
 /// Output query results in ASCII table format
@@ -3490,9 +3579,22 @@ fn outputTableFormat(allocator: std.mem.Allocator, schema_response: []const u8, 
     defer schema_parsed.deinit();
 
     const schema_obj = schema_parsed.value.object;
-    const columns = if (schema_obj.get("columns")) |c| c.array else std.json.Array.init(allocator);
+    // Try result.columns first (standard response), then columns directly (alternative format)
+    const columns = blk: {
+        if (schema_obj.get("result")) |inner| {
+            if (inner == .object) {
+                if (inner.object.get("columns")) |c| {
+                    if (c == .array) break :blk c.array;
+                }
+            }
+        }
+        if (schema_obj.get("columns")) |c| {
+            if (c == .array) break :blk c.array;
+        }
+        break :blk std.json.Array.init(allocator);
+    };
 
-    // Parse result rows
+    // Parse result rows - handle nested result.rows structure
     var result_parsed = std.json.parseFromSlice(std.json.Value, allocator, result_line, .{}) catch {
         _ = stdout.writeAll(result_line) catch {};
         return;
@@ -3500,7 +3602,20 @@ fn outputTableFormat(allocator: std.mem.Allocator, schema_response: []const u8, 
     defer result_parsed.deinit();
 
     const result_obj = result_parsed.value.object;
-    const rows = if (result_obj.get("rows")) |r| r.array else std.json.Array.init(allocator);
+    // Try result.rows first (standard response), then rows directly (alternative format)
+    const rows = blk: {
+        if (result_obj.get("result")) |inner| {
+            if (inner == .object) {
+                if (inner.object.get("rows")) |r| {
+                    if (r == .array) break :blk r.array;
+                }
+            }
+        }
+        if (result_obj.get("rows")) |r| {
+            if (r == .array) break :blk r.array;
+        }
+        break :blk std.json.Array.init(allocator);
+    };
 
     // Calculate column widths
     var col_widths = try allocator.alloc(usize, columns.items.len);
@@ -3508,17 +3623,30 @@ fn outputTableFormat(allocator: std.mem.Allocator, schema_response: []const u8, 
 
     // Initialize with header widths
     for (columns.items, 0..) |col, i| {
-        col_widths[i] = if (col == .string) col.string.len else 5;
+        const name = getColumnName(col);
+        col_widths[i] = if (name.len > 0) name.len else 5;
     }
 
     // Check each row for max widths
+    // Rows can be either arrays or objects with column names as keys
     for (rows.items) |row| {
-        if (row != .array) continue;
-        for (row.array.items, 0..) |cell, i| {
-            if (i >= col_widths.len) break;
-            const cell_width = getJsonValueDisplayWidth(cell);
-            if (cell_width > col_widths[i]) {
-                col_widths[i] = @min(cell_width, 50); // Cap at 50 chars
+        if (row == .array) {
+            for (row.array.items, 0..) |cell, i| {
+                if (i >= col_widths.len) break;
+                const cell_width = getJsonValueDisplayWidth(cell);
+                if (cell_width > col_widths[i]) {
+                    col_widths[i] = @min(cell_width, 50); // Cap at 50 chars
+                }
+            }
+        } else if (row == .object) {
+            for (columns.items, 0..) |col, i| {
+                const col_name = getColumnName(col);
+                if (row.object.get(col_name)) |cell| {
+                    const cell_width = getJsonValueDisplayWidth(cell);
+                    if (cell_width > col_widths[i]) {
+                        col_widths[i] = @min(cell_width, 50); // Cap at 50 chars
+                    }
+                }
             }
         }
     }
@@ -3529,9 +3657,9 @@ fn outputTableFormat(allocator: std.mem.Allocator, schema_response: []const u8, 
     // Print header row
     _ = stdout.writeAll("| ") catch {};
     for (columns.items, 0..) |col, i| {
-        const name = if (col == .string) col.string else "?";
+        const name = getColumnName(col);
         _ = stdout.writeAll(name) catch {};
-        const padding = col_widths[i] - name.len;
+        const padding = col_widths[i] -| name.len;
         for (0..padding) |_| _ = stdout.writeAll(" ") catch {};
         _ = stdout.writeAll(" | ") catch {};
     }
@@ -3541,11 +3669,20 @@ fn outputTableFormat(allocator: std.mem.Allocator, schema_response: []const u8, 
     try printTableSeparator(stdout, col_widths);
 
     // Print data rows
+    // Rows can be either arrays or objects with column names as keys
     for (rows.items) |row| {
-        if (row != .array) continue;
         _ = stdout.writeAll("| ") catch {};
-        for (0..columns.items.len) |i| {
-            const cell = if (i < row.array.items.len) row.array.items[i] else std.json.Value.null;
+        for (columns.items, 0..) |col, i| {
+            const col_name = getColumnName(col);
+            const cell = blk: {
+                if (row == .array) {
+                    break :blk if (i < row.array.items.len) row.array.items[i] else std.json.Value.null;
+                } else if (row == .object) {
+                    break :blk row.object.get(col_name) orelse std.json.Value.null;
+                } else {
+                    break :blk std.json.Value.null;
+                }
+            };
             const cell_str = try formatJsonValueCompact(allocator, cell);
             defer allocator.free(cell_str);
 
@@ -3553,7 +3690,7 @@ fn outputTableFormat(allocator: std.mem.Allocator, schema_response: []const u8, 
             const display_len = @min(cell_str.len, col_widths[i]);
             _ = stdout.writeAll(cell_str[0..display_len]) catch {};
 
-            const padding = col_widths[i] - display_len;
+            const padding = col_widths[i] -| display_len;
             for (0..padding) |_| _ = stdout.writeAll(" ") catch {};
             _ = stdout.writeAll(" | ") catch {};
         }
@@ -3638,7 +3775,20 @@ fn outputCsvFormat(allocator: std.mem.Allocator, schema_response: []const u8, re
     defer schema_parsed.deinit();
 
     const schema_obj = schema_parsed.value.object;
-    const columns = if (schema_obj.get("columns")) |c| c.array else std.json.Array.init(allocator);
+    // Try result.columns first (standard response), then columns directly (alternative format)
+    const columns = blk: {
+        if (schema_obj.get("result")) |inner| {
+            if (inner == .object) {
+                if (inner.object.get("columns")) |c| {
+                    if (c == .array) break :blk c.array;
+                }
+            }
+        }
+        if (schema_obj.get("columns")) |c| {
+            if (c == .array) break :blk c.array;
+        }
+        break :blk std.json.Array.init(allocator);
+    };
 
     // Parse result rows
     var result_parsed = std.json.parseFromSlice(std.json.Value, allocator, result_line, .{}) catch {
@@ -3648,23 +3798,44 @@ fn outputCsvFormat(allocator: std.mem.Allocator, schema_response: []const u8, re
     defer result_parsed.deinit();
 
     const result_obj = result_parsed.value.object;
-    const rows = if (result_obj.get("rows")) |r| r.array else std.json.Array.init(allocator);
+    // Try result.rows first (standard response), then rows directly (alternative format)
+    const rows = blk: {
+        if (result_obj.get("result")) |inner| {
+            if (inner == .object) {
+                if (inner.object.get("rows")) |r| {
+                    if (r == .array) break :blk r.array;
+                }
+            }
+        }
+        if (result_obj.get("rows")) |r| {
+            if (r == .array) break :blk r.array;
+        }
+        break :blk std.json.Array.init(allocator);
+    };
 
     // Print header row
     for (columns.items, 0..) |col, i| {
         if (i > 0) _ = stdout.writeAll(",") catch {};
-        if (col == .string) {
-            try writeCsvValue(stdout, col.string);
-        }
+        const name = getColumnName(col);
+        try writeCsvValue(stdout, name);
     }
     _ = stdout.writeAll("\n") catch {};
 
     // Print data rows
+    // Rows can be either arrays or objects with column names as keys
     for (rows.items) |row| {
-        if (row != .array) continue;
-        for (0..columns.items.len) |i| {
+        for (columns.items, 0..) |col, i| {
             if (i > 0) _ = stdout.writeAll(",") catch {};
-            const cell = if (i < row.array.items.len) row.array.items[i] else std.json.Value.null;
+            const col_name = getColumnName(col);
+            const cell = blk: {
+                if (row == .array) {
+                    break :blk if (i < row.array.items.len) row.array.items[i] else std.json.Value.null;
+                } else if (row == .object) {
+                    break :blk row.object.get(col_name) orelse std.json.Value.null;
+                } else {
+                    break :blk std.json.Value.null;
+                }
+            };
             const cell_str = try formatJsonValueCompact(allocator, cell);
             defer allocator.free(cell_str);
             try writeCsvValue(stdout, cell_str);
