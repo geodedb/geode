@@ -127,6 +127,14 @@ pub const GraphStore = struct {
     // Multi-tenancy: tenant_id scopes all data operations
     tenant_id: []const u8,
     schema_name: []const u8,
+    // CANARY: REQ=REQ-PERF-LABEL-INDEX-001; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+    // Issue #391: Label-based index for O(1) node lookups instead of O(n) full table scans
+    // Maps "graph_name:label" composite key to list of node IDs
+    label_index: std.StringHashMap(std.ArrayList(u64)),
+    // CANARY: REQ=REQ-PERF-EDGE-ADJ-001; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+    // Issue #392: Adjacency lists for fast edge lookups during DELETE DETACH
+    outgoing_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // from_node_id -> edge_ids
+    incoming_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // to_node_id -> edge_ids
 
     /// Initialize GraphStore with default tenant
     pub fn init(allocator: std.mem.Allocator) GraphStore {
@@ -143,6 +151,10 @@ pub const GraphStore = struct {
             .next_edge_id = 1,
             .tenant_id = tenant_id,
             .schema_name = schema_name,
+            // Issue #391, #392: Initialize performance optimization indexes
+            .label_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
+            .outgoing_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
+            .incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
         };
     }
 
@@ -167,6 +179,27 @@ pub const GraphStore = struct {
         // Deinit the hashmaps
         self.nodes.deinit();
         self.edges.deinit();
+
+        // Issue #391: Clean up label index
+        var label_iter = self.label_index.iterator();
+        while (label_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.label_index.deinit();
+
+        // Issue #392: Clean up adjacency indexes
+        var out_iter = self.outgoing_edges.iterator();
+        while (out_iter.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.outgoing_edges.deinit();
+
+        var in_iter = self.incoming_edges.iterator();
+        while (in_iter.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.incoming_edges.deinit();
     }
 
     pub fn clearNodes(self: *GraphStore) void {
@@ -320,7 +353,79 @@ pub const GraphStore = struct {
         };
 
         try self.nodes.put(id, node);
+
+        // CANARY: REQ=REQ-PERF-LABEL-INDEX-002; FEATURE="LabelBasedIndex"; ASPECT=IndexMaintenance; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+        // Issue #391: Maintain label index for fast MERGE lookups
+        for (labels) |label| {
+            try self.addToLabelIndex(graph_name, label, id);
+        }
+
         return id;
+    }
+
+    // Issue #391: Helper to add node to label index
+    fn addToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
+        // Create composite key "graph_name:label"
+        const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+
+        const result = try self.label_index.getOrPut(key);
+        if (!result.found_existing) {
+            result.value_ptr.* = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+        } else {
+            // Key already exists, free the newly allocated one
+            self.allocator.free(key);
+        }
+        try result.value_ptr.append(self.allocator, node_id);
+    }
+
+    // CANARY: REQ=REQ-PERF-LABEL-INDEX-003; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+    // Issue #391: Get nodes by label and graph (O(1) lookup instead of O(n) scan)
+    pub fn getNodesByLabel(self: *const GraphStore, graph_name: []const u8, label: []const u8) ?[]const u64 {
+        // Create composite key "graph_name:label"
+        var key_buf: [512]u8 = undefined;
+        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return null;
+
+        if (self.label_index.get(key)) |list| {
+            return list.items;
+        }
+        return null;
+    }
+
+    // Issue #391: Get nodes that have ALL specified labels in a graph
+    pub fn getNodesByLabels(self: *const GraphStore, graph_name: []const u8, labels: []const []const u8) !std.ArrayList(u64) {
+        var result = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+
+        if (labels.len == 0) {
+            return result;
+        }
+
+        // Start with nodes that have the first label
+        const first_nodes = self.getNodesByLabel(graph_name, labels[0]) orelse return result;
+
+        // For each candidate node, check if it has all other labels
+        for (first_nodes) |node_id| {
+            if (self.nodes.get(node_id)) |node| {
+                var has_all = true;
+                for (labels[1..]) |required_label| {
+                    var found = false;
+                    for (node.labels) |node_label| {
+                        if (std.mem.eql(u8, required_label, node_label)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        has_all = false;
+                        break;
+                    }
+                }
+                if (has_all) {
+                    try result.append(self.allocator, node_id);
+                }
+            }
+        }
+
+        return result;
     }
 
     // Backward-compatible createNode that uses "default" graph
@@ -524,6 +629,10 @@ pub const GraphStore = struct {
 
         try self.edges.put(id, edge);
 
+        // CANARY: REQ=REQ-PERF-EDGE-ADJ-002; FEATURE="EdgeAdjacencyIndex"; ASPECT=IndexMaintenance; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+        // Issue #392: Maintain adjacency indexes for fast DELETE DETACH
+        try self.addToAdjacencyIndex(from_id, to_id, id);
+
         // Save to persistent storage
         self.saveToFile() catch |err| {
             log.err("CRITICAL: Failed to persist graph store", &.{
@@ -532,6 +641,55 @@ pub const GraphStore = struct {
         };
 
         return id;
+    }
+
+    // Issue #392: Helper to maintain adjacency indexes
+    fn addToAdjacencyIndex(self: *GraphStore, from_id: u64, to_id: u64, edge_id: u64) !void {
+        // Add to outgoing edges for from_id
+        const out_result = try self.outgoing_edges.getOrPut(from_id);
+        if (!out_result.found_existing) {
+            out_result.value_ptr.* = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+        }
+        try out_result.value_ptr.append(self.allocator, edge_id);
+
+        // Add to incoming edges for to_id
+        const in_result = try self.incoming_edges.getOrPut(to_id);
+        if (!in_result.found_existing) {
+            in_result.value_ptr.* = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+        }
+        try in_result.value_ptr.append(self.allocator, edge_id);
+    }
+
+    // CANARY: REQ=REQ-PERF-EDGE-ADJ-003; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+    // Issue #392: Get all edges connected to a node (O(1) lookup instead of O(edges) scan)
+    pub fn getEdgesForNode(self: *const GraphStore, node_id: u64) std.ArrayList(u64) {
+        var result = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+
+        // Get outgoing edges
+        if (self.outgoing_edges.get(node_id)) |outgoing| {
+            for (outgoing.items) |edge_id| {
+                result.append(self.allocator, edge_id) catch continue;
+            }
+        }
+
+        // Get incoming edges
+        if (self.incoming_edges.get(node_id)) |incoming| {
+            for (incoming.items) |edge_id| {
+                // Avoid duplicates for self-loops
+                var already_added = false;
+                for (result.items) |existing_id| {
+                    if (existing_id == edge_id) {
+                        already_added = true;
+                        break;
+                    }
+                }
+                if (!already_added) {
+                    result.append(self.allocator, edge_id) catch continue;
+                }
+            }
+        }
+
+        return result;
     }
 
     // Backward-compatible createEdge that uses "default" graph
@@ -1901,4 +2059,125 @@ pub fn deinitGlobalStore() void {
         }
         initialized = false;
     }
+}
+
+// Unit tests for label index functionality
+// CANARY: REQ=REQ-PERF-LABEL-INDEX-005; FEATURE="LabelBasedIndex"; ASPECT=UnitTests; STATUS=TESTED; TEST=TestLabelIndexBasic; OWNER=perf; UPDATED=2026-01-28
+
+const testing = std.testing;
+
+test "TestLabelIndexBasic" {
+    // Issue #391: Test that label index is maintained during node creation
+    var store = GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create a node with label "Person"
+    var labels = [_][]const u8{"Person"};
+    const node_id = try store.createNodeWithGraph(&labels, "test_graph");
+
+    // Verify we can look up by label
+    const result = store.getNodesByLabel("test_graph", "Person");
+    try testing.expect(result != null);
+    try testing.expect(result.?.len == 1);
+    try testing.expect(result.?[0] == node_id);
+}
+
+test "TestLabelIndexMultipleNodes" {
+    // Issue #391: Test index with multiple nodes having same label
+    var store = GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Person"};
+    const node1 = try store.createNodeWithGraph(&labels, "test_graph");
+    const node2 = try store.createNodeWithGraph(&labels, "test_graph");
+    const node3 = try store.createNodeWithGraph(&labels, "test_graph");
+
+    const result = store.getNodesByLabel("test_graph", "Person");
+    try testing.expect(result != null);
+    try testing.expect(result.?.len == 3);
+
+    // Check all nodes are present
+    var found1 = false;
+    var found2 = false;
+    var found3 = false;
+    for (result.?) |id| {
+        if (id == node1) found1 = true;
+        if (id == node2) found2 = true;
+        if (id == node3) found3 = true;
+    }
+    try testing.expect(found1 and found2 and found3);
+}
+
+test "TestLabelIndexDifferentGraphs" {
+    // Issue #391: Test that label index respects graph isolation
+    var store = GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Person"};
+    _ = try store.createNodeWithGraph(&labels, "graph1");
+    _ = try store.createNodeWithGraph(&labels, "graph2");
+    _ = try store.createNodeWithGraph(&labels, "graph1");
+
+    // Query graph1 - should have 2 nodes
+    const result1 = store.getNodesByLabel("graph1", "Person");
+    try testing.expect(result1 != null);
+    try testing.expect(result1.?.len == 2);
+
+    // Query graph2 - should have 1 node
+    const result2 = store.getNodesByLabel("graph2", "Person");
+    try testing.expect(result2 != null);
+    try testing.expect(result2.?.len == 1);
+}
+
+test "TestGetNodesByLabels" {
+    // Issue #391: Test getting nodes with multiple labels
+    var store = GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create node with multiple labels
+    var labels1 = [_][]const u8{ "Person", "Employee" };
+    const node1 = try store.createNodeWithGraph(&labels1, "test_graph");
+
+    // Create node with only Person label
+    var labels2 = [_][]const u8{"Person"};
+    _ = try store.createNodeWithGraph(&labels2, "test_graph");
+
+    // Query for nodes with both Person AND Employee
+    var query_labels = [_][]const u8{ "Person", "Employee" };
+    var result = try store.getNodesByLabels("test_graph", &query_labels);
+    defer result.deinit(testing.allocator);
+
+    try testing.expect(result.items.len == 1);
+    try testing.expect(result.items[0] == node1);
+}
+
+test "TestEdgeAdjacencyIndex" {
+    // Issue #392: Test edge adjacency index for DELETE DETACH optimization
+    var store = GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Node"};
+    const node1 = try store.createNodeWithGraph(&labels, "test_graph");
+    const node2 = try store.createNodeWithGraph(&labels, "test_graph");
+    const node3 = try store.createNodeWithGraph(&labels, "test_graph");
+
+    // Create edges
+    _ = try store.createEdgeWithGraph(node1, node2, "CONNECTS", "test_graph");
+    _ = try store.createEdgeWithGraph(node1, node3, "CONNECTS", "test_graph");
+    _ = try store.createEdgeWithGraph(node2, node3, "LINKS", "test_graph");
+
+    // Test outgoing edges from node1
+    const outgoing1 = store.outgoing_edges.get(node1);
+    try testing.expect(outgoing1 != null);
+    try testing.expect(outgoing1.?.items.len == 2);
+
+    // Test incoming edges to node3
+    const incoming3 = store.incoming_edges.get(node3);
+    try testing.expect(incoming3 != null);
+    try testing.expect(incoming3.?.items.len == 2);
+
+    // Test getEdgesForNode
+    var edges_for_node1 = store.getEdgesForNode(node1);
+    defer edges_for_node1.deinit(testing.allocator);
+    try testing.expect(edges_for_node1.items.len == 2);
 }

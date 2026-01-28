@@ -1841,6 +1841,8 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-020; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteMerge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
+// CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+// Issue #391: Optimized MERGE using label index instead of O(n) full table scan
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
@@ -1852,63 +1854,66 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
         // Look for existing node matching the pattern (filtered by graph)
         var found_node: ?*graph_store.Node = null;
-        var node_iter = store.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const node = entry.value_ptr;
 
-            // Filter by graph - only consider nodes from the current graph
-            if (!std.mem.eql(u8, node.graph_name, target_graph)) continue;
+        // Issue #391: Use label index for O(1) lookup instead of O(n) full table scan
+        if (node_pattern.labels.len > 0) {
+            // Get candidate nodes from label index
+            var candidates = store.getNodesByLabels(target_graph, node_pattern.labels) catch blk: {
+                // Fallback to empty if index lookup fails
+                break :blk std.ArrayList(u64).initCapacity(allocator, 0) catch unreachable;
+            };
+            defer candidates.deinit(allocator);
 
-            // Check if labels match
-            var labels_match = true;
-            for (node_pattern.labels) |required_label| {
-                var has_label = false;
-                for (node.labels) |node_label| {
-                    if (std.mem.eql(u8, required_label, node_label)) {
-                        has_label = true;
-                        break;
-                    }
-                }
-                if (!has_label) {
-                    labels_match = false;
-                    break;
-                }
-            }
+            // Check candidates for property match
+            for (candidates.items) |node_id| {
+                if (store.nodes.getPtr(node_id)) |node| {
+                    // Verify graph match (should always match if index is correct)
+                    if (!std.mem.eql(u8, node.graph_name, target_graph)) continue;
 
-            if (!labels_match) continue;
-
-            // Check if properties match (if properties are specified)
-            if (node_pattern.props != null and node_pattern.props.?.len > 0) {
-                var props_match = true;
-                for (node_pattern.props.?) |prop| {
-                    // For MERGE, we need to evaluate the property value
-                    // This is simplified - just check for string literals for now
-                    if (prop.value.* == .String) {
-                        const expected_val = prop.value.String;
-                        if (node.properties.get(prop.key)) |actual_val| {
-                            if (actual_val == .String) {
-                                if (!std.mem.eql(u8, actual_val.String, expected_val)) {
+                    // Check if properties match (if properties are specified)
+                    if (node_pattern.props != null and node_pattern.props.?.len > 0) {
+                        var props_match = true;
+                        for (node_pattern.props.?) |prop| {
+                            // For MERGE, we need to evaluate the property value
+                            // This is simplified - just check for string literals for now
+                            if (prop.value.* == .String) {
+                                const expected_val = prop.value.String;
+                                if (node.properties.get(prop.key)) |actual_val| {
+                                    if (actual_val == .String) {
+                                        if (!std.mem.eql(u8, actual_val.String, expected_val)) {
+                                            props_match = false;
+                                            break;
+                                        }
+                                    } else {
+                                        props_match = false;
+                                        break;
+                                    }
+                                } else {
                                     props_match = false;
                                     break;
                                 }
-                            } else {
-                                props_match = false;
-                                break;
                             }
-                        } else {
-                            props_match = false;
+                        }
+                        if (props_match) {
+                            found_node = node;
                             break;
                         }
+                    } else {
+                        // If no properties specified, match on labels alone
+                        found_node = node;
+                        break;
                     }
                 }
-                if (props_match) {
+            }
+        } else {
+            // No labels specified - fall back to full scan (rare case)
+            var node_iter = store.nodes.iterator();
+            while (node_iter.next()) |entry| {
+                const node = entry.value_ptr;
+                if (std.mem.eql(u8, node.graph_name, target_graph)) {
                     found_node = node;
                     break;
                 }
-            } else if (labels_match) {
-                // If no properties specified, match on labels alone
-                found_node = node;
-                break;
             }
         }
 

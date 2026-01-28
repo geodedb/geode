@@ -3076,6 +3076,9 @@ REQ-PERF-CONN-REMOVE-001,ConnectionRemovalOptimization,O1Removal,IMPL,,,transpor
 REQ-PERF-DRR-BUILD-001,DRRScheduler,BuildIntegration,IMPL,,,build,2026-01-26,build.zig
 REQ-PERF-DRR-SCHED-001,DRRScheduler,StreamFairness,IMPL,,,transport,2026-01-26,src/transport/stream_scheduler.zig
 REQ-PERF-DRR-SCHED-002,DRRScheduler,ConnectionScheduler,IMPL,,,transport,2026-01-26,src/transport/stream_scheduler.zig
+REQ-PERF-EDGE-ADJ-001,EdgeAdjacencyIndex,EdgeLookup,IMPL,,,perf,2026-01-28,src/graph_store.zig
+REQ-PERF-EDGE-ADJ-002,EdgeAdjacencyIndex,IndexMaintenance,IMPL,,,perf,2026-01-28,src/graph_store.zig
+REQ-PERF-EDGE-ADJ-003,EdgeAdjacencyIndex,EdgeLookup,IMPL,,,perf,2026-01-28,src/graph_store.zig
 REQ-PERF-FED-PLAN-GATE-001,FederationPlanGating,SingleNodeHotPath,IMPL,,,distributed,2026-01-27,src/server/quic_connection_handler.zig
 REQ-PERF-FLE-SKIP-001,FLESkipOptimization,GlobalDisable,IMPL,,,perf,2026-01-27,src/fle_integration.zig
 REQ-PERF-FLE-SKIP-002,FLESkipOptimization,DecryptFastPath,IMPL,,,perf,2026-01-27,src/fle_integration.zig
@@ -3109,9 +3112,15 @@ REQ-PERF-JSON-001,OptimizedJSON,Testing,TESTED,,,performance,2025-10-04,src/perf
     // CANARY: REQ=REQ-PERF-JSON-001",JSONPerformanceValidation,Integration,TESTED,,,performance,2025-10-04,tests/json_perf_validation.zig
 "REQ-PERF-JSON-001"" {
     // CANARY: REQ=REQ-PERF-JSON-001",OptimizedJSON,Integration,TESTED,,,performance,2025-10-04,src/performance/test_json_optimization.zig
+REQ-PERF-LABEL-INDEX-001,LabelBasedIndex,NodeLookup,IMPL,,,perf,2026-01-28,src/graph_store.zig
+REQ-PERF-LABEL-INDEX-002,LabelBasedIndex,IndexMaintenance,IMPL,,,perf,2026-01-28,src/graph_store.zig
+REQ-PERF-LABEL-INDEX-003,LabelBasedIndex,NodeLookup,IMPL,,,perf,2026-01-28,src/graph_store.zig
+REQ-PERF-LABEL-INDEX-004,LabelBasedIndex,MergeOptimization,IMPL,,,perf,2026-01-28,src/execution/crud_operations.zig
+REQ-PERF-LABEL-INDEX-005,LabelBasedIndex,UnitTests,TESTED,,,perf,2026-01-28,src/graph_store.zig
 REQ-PERF-LAZY-001,Performance,LazyEvaluation,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-PERF-LOG-GATE-001,HotPathLogGating,DebugLogControl,IMPL,,,perf,2026-01-27,src/cli/main.zig
 REQ-PERF-MEMORY-OPT-001,Performance,MemoryOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
+REQ-PERF-MERGE-TESTS-001,MergePerformanceTests,TestSpec,TESTED,,,perf,2026-01-28,geodetestlab/specs/merge_performance_january_2026.yml
 REQ-PERF-MMAP-001,MemoryMappedIO,Performance,TESTED,,,performance,2025-10-04,src/performance/memory_mapped_io.zig
 REQ-PERF-OPT-GATE-001,OptimizerGating,HotPath,IMPL,,,engine,2026-01-27,src/server/quic_connection_handler.zig
 REQ-PERF-OPT-GATE-002,OptimizerGating,PerQueryGate,IMPL,,,engine,2026-01-27,src/server/quic_connection_handler.zig
