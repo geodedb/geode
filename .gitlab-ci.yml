@@ -270,7 +270,7 @@ test-zig-unit:
     - zig build bench -Doptimize=ReleaseFast --summary all | tee reports/zig_bench.log
     # bench-transport has concurrent queue tests that can be flaky in CI
     - timeout 120 zig build bench-transport -Doptimize=ReleaseFast --summary all | tee reports/zig_bench_transport.log || echo "bench-transport timed out or failed (non-blocking)"
-    - zig test tests/benchmark_wal_flush_policy.zig -OReleaseFast --summary all | tee reports/zig_wal_flush_policy.log
+    - zig test tests/benchmark_wal_flush_policy.zig -OReleaseFast | tee reports/zig_wal_flush_policy.log
     - zig run -OReleaseFast src/tools/run_variance_benches.zig | tee reports/zig_variance_benches.log
     - |
       python3 - <<'PY'
