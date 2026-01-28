@@ -1,11 +1,15 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const auth_state = geode.auth_state;
 
 fn printOut(comptime fmt: []const u8, args: anytype) void {
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    const stdout = std.io.getStdOut();
+    const stdout = if (builtin.os.tag == .windows)
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+    else
+        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     stdout.writeAll(msg) catch {};
 }
 
