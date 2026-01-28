@@ -385,9 +385,11 @@ pub fn build(b: *std.Build) void {
 
     // Link with OpenSSL for QUIC/TLS crypto operations (external library)
     // Only link system libraries for native builds (not cross-compilation)
+    // Skip on Windows as OpenSSL is not typically available in CI environments
     geode_exe.linkLibC();
     const is_native = target.query.isNative();
-    if (is_native) {
+    const is_windows = target.result.os.tag == .windows;
+    if (is_native and !is_windows) {
         geode_exe.linkSystemLibrary("ssl");
         geode_exe.linkSystemLibrary("crypto");
     }
@@ -745,10 +747,12 @@ pub fn build(b: *std.Build) void {
     // Note: transport/quic comes through the geode module (root_mod) which already has it
     // No separate transport/quic import needed here to avoid duplicate module conflicts
 
-    // Link with OpenSSL
+    // Link with OpenSSL (skip on Windows where it's not available in CI)
     custom_tests.linkLibC();
-    custom_tests.linkSystemLibrary("ssl");
-    custom_tests.linkSystemLibrary("crypto");
+    if (target.result.os.tag != .windows) {
+        custom_tests.linkSystemLibrary("ssl");
+        custom_tests.linkSystemLibrary("crypto");
+    }
     if (target.result.os.tag == .linux) {
         custom_tests.linkSystemLibrary("dl");
     }
@@ -1595,8 +1599,11 @@ pub fn build(b: *std.Build) void {
     stress_storage_massive.root_module.addImport("page_vacuum", vacuum_mod);
     stress_storage_massive.root_module.addImport("commit_coordinator", commit_coord_mod);
     stress_storage_massive.linkLibC(); // WAL uses libc
-    stress_storage_massive.linkSystemLibrary("ssl"); // Crypto dependency
-    stress_storage_massive.linkSystemLibrary("crypto");
+    // Link with OpenSSL (skip on Windows where it's not available in CI)
+    if (target.result.os.tag != .windows) {
+        stress_storage_massive.linkSystemLibrary("ssl"); // Crypto dependency
+        stress_storage_massive.linkSystemLibrary("crypto");
+    }
 
     const run_stress_storage = b.addRunArtifact(stress_storage_massive);
     // Only run if explicitly requested via filter or a separate step (optional: create "stress" step)
