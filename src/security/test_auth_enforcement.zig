@@ -567,3 +567,92 @@ test "TestAuthz_NoPrivilegeEscalation_CaseSensitiveChecks" {
     try testing.expect(user_management.hasPermission(admin1, .Write) == user_management.hasPermission(admin3, .Write));
     try testing.expect(user_management.hasPermission(admin1, .Schema) == user_management.hasPermission(admin3, .Schema));
 }
+
+// ============================================================================
+// UNICODE HOMOGRAPH / DOWNGRADE ATTACK PREVENTION TESTS
+// CANARY: REQ=REQ-AUTH-ENFORCE-029; FEATURE="AuthEnforcement"; ASPECT=UnicodeHomographPrevention; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// These tests verify that Unicode lookalike characters cannot be used to
+// escalate privileges (e.g., using Cyrillic "а" instead of Latin "a")
+// ============================================================================
+
+test "TestAuthz_NoPrivilegeEscalation_UnicodeHomographAttacks" {
+    // CRITICAL: These strings use Unicode lookalike characters that visually
+    // resemble "admin" but are NOT the same bytes
+
+    // Cyrillic lookalikes (а=U+0430 looks like a, о=U+043E looks like o, etc.)
+    try testing.expect(Role.fromString("аdmin") == null); // Cyrillic а (U+0430)
+    try testing.expect(Role.fromString("аdmіn") == null); // Cyrillic а + Ukrainian і
+    try testing.expect(Role.fromString("аdmіɳ") == null); // Multiple lookalikes
+    try testing.expect(Role.fromString("ɑdmin") == null); // Latin alpha (U+0251)
+
+    // Greek lookalikes
+    try testing.expect(Role.fromString("αdmin") == null); // Greek alpha (U+03B1)
+    try testing.expect(Role.fromString("admіn") == null); // Ukrainian і (U+0456)
+    try testing.expect(Role.fromString("admiո") == null); // Armenian n (U+0578)
+
+    // Full-width characters
+    try testing.expect(Role.fromString("ａｄｍｉｎ") == null); // Full-width latin
+    try testing.expect(Role.fromString("ＡＤＭＩＮ") == null); // Full-width capitals
+
+    // Mixed scripts that look like role names
+    try testing.expect(Role.fromString("rеadonly") == null); // Cyrillic е
+    try testing.expect(Role.fromString("reаdonly") == null); // Cyrillic а
+    try testing.expect(Role.fromString("readοnly") == null); // Greek omicron
+    try testing.expect(Role.fromString("readwrite") != null); // Legit - should work
+    try testing.expect(Role.fromString("rеadwrite") == null); // Cyrillic е in readwrite
+
+    // user role lookalikes
+    try testing.expect(Role.fromString("uѕer") == null); // Cyrillic ѕ (U+0455)
+    try testing.expect(Role.fromString("υser") == null); // Greek upsilon
+    try testing.expect(Role.fromString("usеr") == null); // Cyrillic е
+    try testing.expect(Role.fromString("useг") == null); // Cyrillic г
+}
+
+test "TestAuthz_NoPrivilegeEscalation_UnicodeControlCharacters" {
+    // Control characters that might be used to manipulate string parsing
+    try testing.expect(Role.fromString("admin\u{200B}") == null); // Zero-width space
+    try testing.expect(Role.fromString("\u{200B}admin") == null); // Leading zero-width space
+    try testing.expect(Role.fromString("ad\u{200B}min") == null); // Zero-width space in middle
+    try testing.expect(Role.fromString("admin\u{FEFF}") == null); // BOM character
+    try testing.expect(Role.fromString("\u{FEFF}admin") == null); // Leading BOM
+    try testing.expect(Role.fromString("admin\u{200C}") == null); // Zero-width non-joiner
+    try testing.expect(Role.fromString("admin\u{200D}") == null); // Zero-width joiner
+    try testing.expect(Role.fromString("admin\u{00AD}") == null); // Soft hyphen
+}
+
+test "TestAuthz_NoPrivilegeEscalation_UnicodeBidiOverride" {
+    // Bidirectional text override characters used in Trojan Source attacks
+    try testing.expect(Role.fromString("admin\u{202E}") == null); // Right-to-left override
+    try testing.expect(Role.fromString("\u{202E}admin") == null); // RTL override at start
+    try testing.expect(Role.fromString("admin\u{202D}") == null); // Left-to-right override
+    try testing.expect(Role.fromString("admin\u{202A}") == null); // LTR embedding
+    try testing.expect(Role.fromString("admin\u{202B}") == null); // RTL embedding
+    try testing.expect(Role.fromString("admin\u{202C}") == null); // Pop directional formatting
+}
+
+test "TestAuthz_NoPrivilegeEscalation_UnicodeNormalization" {
+    // Unicode normalization attacks - characters that normalize to different values
+    try testing.expect(Role.fromString("ﬁle") == null); // fi ligature (U+FB01)
+    try testing.expect(Role.fromString("ﬂag") == null); // fl ligature (U+FB02)
+
+    // Combining characters that might bypass checks
+    try testing.expect(Role.fromString("admin\u{0301}") == null); // Combining acute accent
+    try testing.expect(Role.fromString("a\u{0308}dmin") == null); // a with combining diaeresis
+}
+
+test "TestAuthz_NoPrivilegeEscalation_SpecialUnicodeCategories" {
+    // Mathematical and other special lookalikes
+    try testing.expect(Role.fromString("𝐚𝐝𝐦𝐢𝐧") == null); // Mathematical bold
+    try testing.expect(Role.fromString("𝑎𝑑𝑚𝑖𝑛") == null); // Mathematical italic
+    try testing.expect(Role.fromString("𝒂𝒅𝒎𝒊𝒏") == null); // Mathematical bold italic
+    try testing.expect(Role.fromString("𝖺𝖽𝗆𝗂𝗇") == null); // Mathematical sans-serif
+    try testing.expect(Role.fromString("𝚊𝚍𝚖𝚒𝚗") == null); // Mathematical monospace
+
+    // Subscript/superscript
+    try testing.expect(Role.fromString("ₐdmin") == null); // Subscript a
+    try testing.expect(Role.fromString("ᵃdmin") == null); // Modifier letter small a
+
+    // Enclosed alphanumerics
+    try testing.expect(Role.fromString("ⓐdmin") == null); // Circled a
+    try testing.expect(Role.fromString("🄰dmin") == null); // Squared latin capital A
+}
