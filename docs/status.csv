@@ -187,6 +187,10 @@ REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,TESTED,,,security,2025
 REQ-AUTH-CONFIG-001,UserAuthPolicy,ConfigurablePolicy,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-AUTH-DEFAULT-001,AuthDefault,UserCreation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUTH-DEFAULT-001,Default User Creation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-ENFORCE-001,AuthEnforcement,RUN_GQL_Guard,TESTED,,,security,2026-01-28,src/server/quic_connection_handler.zig
+REQ-AUTH-ENFORCE-002,AuthEnforcement,QueryReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
+REQ-AUTH-ENFORCE-003,AuthEnforcement,UnitTests,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
+REQ-AUTH-ENFORCE-004,AuthEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig
 REQ-AUTH-GUARD-001,Production Auth Guard,Security,TESTED,,,security,2026-01-15,src/cli/main.zig
 REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,TESTED,,,security,2025-10-16,src/security/geode_auth_lib.zig
 REQ-AUTH-HASH-002,Argon2id_Password_Hashing,Core,TESTED,,,security,2026-01-25,src/security/test_argon2id_hashing.zig
