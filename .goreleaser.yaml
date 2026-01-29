@@ -609,7 +609,7 @@ release:
 
     **macOS (Homebrew)**
     ```bash
-    brew tap codeprosorg/geode
+    brew tap geodedb/geode
     brew install geode
     ```
 
@@ -646,7 +646,7 @@ brews:
   homepage: https://gitlab.com/devnw/codepros/geode/geode
   description: ISO/IEC 39075:2024 GQL-compliant property-graph database
   license: Apache-2.0
-  skip_upload: false
+  skip_upload: auto
   test: |
     system "#{bin}/geode", "--version"
   install: |
