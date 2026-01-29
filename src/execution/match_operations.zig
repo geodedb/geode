@@ -1232,6 +1232,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         const left_labels = hop.left.labels;
         const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
         const right_labels = hop.right.labels;
+        // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=DirectionHandling; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
+        // Get relationship direction for proper edge traversal
+        const rel_dir = hop.rel.dir;
 
         // Find all matching relationships
         var node_iter = store.nodes.iterator();
@@ -1242,16 +1245,39 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             // Check left labels
             if (!matchesLabels(left_node, left_labels)) continue;
 
-            // Get outgoing edges
-            const edges = store.getEdgesFrom(left_node.id);
-            for (edges) |edge| {
+            // Get edges based on direction: outgoing for right/undirected, incoming for left/undirected
+            const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
+            const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+
+            // Process outgoing edges (for right-directed or undirected patterns)
+            for (outgoing_edges) |edge| {
                 // Check relationship type
                 if (rel_type) |rt| {
                     if (!std.mem.eql(u8, edge.label, rt)) continue;
                 }
 
-                // Get target node
+                // Get target node (to_id for outgoing edges)
                 if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                    if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                    if (!matchesLabels(right_node, right_labels)) continue;
+
+                    // Create binding with left and right nodes
+                    var binding = MatchBinding.init(allocator);
+                    if (hop.left.name) |v| try binding.vars.put(v, left_node);
+                    if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                    try bindings.append(allocator, binding);
+                }
+            }
+
+            // Process incoming edges (for left-directed or undirected patterns)
+            for (incoming_edges) |edge| {
+                // Check relationship type
+                if (rel_type) |rt| {
+                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+                }
+
+                // Get source node (from_id for incoming edges)
+                if (store.nodes.getPtr(edge.from_id)) |right_node| {
                     if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                     if (!matchesLabels(right_node, right_labels)) continue;
 
@@ -1286,6 +1312,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
         const right_labels = hop.right.labels;
         const right_var = hop.right.name;
+        // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SubsequentChains; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
+        const rel_dir = hop.rel.dir;
 
         // For each existing binding, try to extend with this chain
         // GAP-0220 FIX: Use try for proper error propagation
@@ -1296,14 +1324,34 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             const left_node = if (left_var) |lv| existing.vars.get(lv) else null;
 
             if (left_node) |ln| {
-                // Find edges from this node matching the relationship type
-                const edges = store.getEdgesFrom(ln.id);
-                for (edges) |edge| {
+                // Find edges from this node matching the relationship type and direction
+                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(ln.id) else &[_]graph_store.Edge{};
+                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(ln.id) else &[_]graph_store.Edge{};
+
+                // Process outgoing edges
+                for (outgoing_edges) |edge| {
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
 
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                        if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!matchesLabels(right_node, right_labels)) continue;
+
+                        // Clone existing binding and add new variable
+                        var new_binding = try existing.clone();
+                        if (right_var) |rv| try new_binding.vars.put(rv, right_node);
+                        try new_bindings.append(allocator, new_binding);
+                    }
+                }
+
+                // Process incoming edges
+                for (incoming_edges) |edge| {
+                    if (rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge.label, rt)) continue;
+                    }
+
+                    if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
 
@@ -1324,14 +1372,35 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (!std.mem.eql(u8, new_left_node.graph_name, filter_graph)) continue;
                     if (!matchesLabels(new_left_node, left_labels)) continue;
 
-                    // Find matching edges from this node
-                    const edges = store.getEdgesFrom(new_left_node.id);
-                    for (edges) |edge| {
+                    // Find matching edges from this node based on direction
+                    const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(new_left_node.id) else &[_]graph_store.Edge{};
+                    const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(new_left_node.id) else &[_]graph_store.Edge{};
+
+                    // Process outgoing edges
+                    for (outgoing_edges) |edge| {
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
 
                         if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                            if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                            if (!matchesLabels(right_node, right_labels)) continue;
+
+                            // Clone existing binding and add both new variables
+                            var new_binding = try existing.clone();
+                            if (left_var) |lv| try new_binding.vars.put(lv, new_left_node);
+                            if (right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            try new_bindings.append(allocator, new_binding);
+                        }
+                    }
+
+                    // Process incoming edges
+                    for (incoming_edges) |edge| {
+                        if (rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+
+                        if (store.nodes.getPtr(edge.from_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                             if (!matchesLabels(right_node, right_labels)) continue;
 
@@ -3912,20 +3981,24 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (!passes_props) continue;
                     }
 
-                    // Get edges based on direction
-                    const edges = if (rel_direction == 'l')
-                        store.getEdgesTo(left_node.id)
-                    else
-                        store.getEdgesFrom(left_node.id);
+                    // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=GroupByEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
+                    // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
+                    const outgoing_edges_1 = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
+                    const incoming_edges_1 = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
 
-                    for (edges) |edge| {
+                    // Helper to process edges with the given target node ID extractor
+                    const EdgeSets = struct { outgoing: []const graph_store.Edge, incoming: []const graph_store.Edge };
+                    const edge_sets_1 = EdgeSets{ .outgoing = outgoing_edges_1, .incoming = incoming_edges_1 };
+
+                    // Process outgoing edges (use to_id as target)
+                    for (edge_sets_1.outgoing) |edge| {
                         // Filter by relationship type
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
 
-                        // Get the target node based on direction
-                        const right_node_id = if (rel_direction == 'l') edge.from_id else edge.to_id;
+                        // Get the target node (to_id for outgoing edges)
+                        const right_node_id = edge.to_id;
                         const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
 
                         // Filter right node by labels
@@ -4064,6 +4137,156 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             allocator.free(group_key);
                         } else {
                             // GAP-0220 FIX: Use try for proper error propagation
+                            var new_list = try std.ArrayList(BindingRow).initCapacity(allocator, 4);
+                            new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
+                            binding_groups.put(group_key, new_list) catch {};
+                            group_keys_list.append(allocator, group_key) catch {};
+                        }
+                    }
+
+                    // Process incoming edges (use from_id as target) - for undirected patterns
+                    for (edge_sets_1.incoming) |edge| {
+                        // Filter by relationship type
+                        if (rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+
+                        // Get the target node (from_id for incoming edges)
+                        const right_node_id = edge.from_id;
+                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+
+                        // Filter right node by labels
+                        if (right_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (right_node_ptr.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        // Filter right node by properties
+                        if (right_props) |props| {
+                            var passes_props = true;
+                            for (props) |prop| {
+                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => |f| Value{ .Double = f },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+                                    };
+                                    const prop_env = eval.Env{
+                                        .names = param_names,
+                                        .values = param_values,
+                                        .allocator = allocator,
+                                    };
+                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                                        passes_props = false;
+                                        break;
+                                    };
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        passes_props = false;
+                                        break;
+                                    }
+                                } else {
+                                    passes_props = false;
+                                    break;
+                                }
+                            }
+                            if (!passes_props) continue;
+                        }
+
+                        // Build environment with matched elements
+                        var env_count: usize = 0;
+                        if (left_node_var != null) env_count += 1;
+                        if (rel_var != null) env_count += 1;
+                        if (right_node_var != null) env_count += 1;
+
+                        const env_names = try allocator.alloc([]const u8, env_count);
+                        const env_values = try allocator.alloc(Value, env_count);
+
+                        var env_idx: usize = 0;
+                        if (left_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = left_node };
+                            env_idx += 1;
+                        }
+                        if (rel_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            const edge_ptr = store.edges.getPtr(edge.id) orelse {
+                                env_values[env_idx] = Value{ .Null = {} };
+                                env_idx += 1;
+                                continue;
+                            };
+                            env_values[env_idx] = Value{ .Edge = edge_ptr };
+                            env_idx += 1;
+                        }
+                        if (right_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
+                            env_idx += 1;
+                        }
+
+                        const env = Env{
+                            .names = env_names,
+                            .values = env_values,
+                            .param_names = param_names,
+                            .param_values = param_values,
+                            .allocator = allocator,
+                        };
+
+                        // Evaluate WHERE clause
+                        if (q.where_clause) |where_expr| {
+                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
+                            const passes_where = switch (where_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                .Int => |i| i != 0,
+                                else => false,
+                            };
+                            if (!passes_where) {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                continue;
+                            }
+                        }
+
+                        // Evaluate GROUP BY key(s) and serialize to string
+                        var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
+                        const key_writer = key_buf.writer(allocator);
+                        for (group_by.keys, 0..) |key_expr, k| {
+                            if (k > 0) key_writer.writeAll("|") catch {};
+                            const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
+                            switch (key_val) {
+                                .Int => |i| key_writer.print("{d}", .{i}) catch {},
+                                .Str => |s| key_writer.writeAll(s) catch {},
+                                .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
+                                .Null => key_writer.writeAll("null") catch {},
+                                .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
+                                .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
+                                else => key_writer.writeAll("?") catch {},
+                            }
+                        }
+                        const group_key = key_buf.toOwnedSlice(allocator) catch "";
+
+                        // Add binding to its group
+                        if (binding_groups.getPtr(group_key)) |group_list| {
+                            group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
+                            allocator.free(group_key);
+                        } else {
                             var new_list = try std.ArrayList(BindingRow).initCapacity(allocator, 4);
                             new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
                             binding_groups.put(group_key, new_list) catch {};
@@ -4400,20 +4623,20 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (!has_all_labels) continue;
                     }
 
-                    // Get edges based on direction
-                    const edges = if (rel_direction == 'l')
-                        store.getEdgesTo(left_node.id)
-                    else
-                        store.getEdgesFrom(left_node.id);
+                    // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=AggregationEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
+                    // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
+                    const outgoing_edges_agg = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
+                    const incoming_edges_agg = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
 
-                    for (edges) |edge| {
+                    // Process outgoing edges (use to_id as target)
+                    for (outgoing_edges_agg) |edge| {
                         // Filter by relationship type
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
 
-                        // Get the target node based on direction
-                        const right_node_id = if (rel_direction == 'l') edge.from_id else edge.to_id;
+                        // Get the target node (to_id for outgoing edges)
+                        const right_node_id = edge.to_id;
                         const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
 
                         // Filter right node by labels
@@ -4438,6 +4661,94 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         // Build environment with matched elements
                         // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
                         // Order must match column order: left, rel, right
+                        var env_count: usize = 0;
+                        if (left_node_var != null) env_count += 1;
+                        if (rel_var != null) env_count += 1;
+                        if (right_node_var != null) env_count += 1;
+
+                        const env_names = try allocator.alloc([]const u8, env_count);
+                        const env_values = try allocator.alloc(Value, env_count);
+
+                        var env_idx: usize = 0;
+                        if (left_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = left_node };
+                            env_idx += 1;
+                        }
+                        if (rel_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            const edge_ptr = store.edges.getPtr(edge.id) orelse {
+                                env_values[env_idx] = Value{ .Null = {} };
+                                env_idx += 1;
+                                continue;
+                            };
+                            env_values[env_idx] = Value{ .Edge = edge_ptr };
+                            env_idx += 1;
+                        }
+                        if (right_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
+                            env_idx += 1;
+                        }
+
+                        const env = Env{
+                            .names = env_names,
+                            .values = env_values,
+                            .param_names = param_names,
+                            .param_values = param_values,
+                            .allocator = allocator,
+                        };
+
+                        // Evaluate WHERE clause
+                        if (q.where_clause) |where_expr| {
+                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
+                            const passes_where = switch (where_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                .Int => |i| i != 0,
+                                else => false,
+                            };
+                            if (!passes_where) {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                continue;
+                            }
+                        }
+
+                        try bindings.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
+                    }
+
+                    // Process incoming edges (use from_id as target) - for undirected patterns
+                    for (incoming_edges_agg) |edge| {
+                        // Filter by relationship type
+                        if (rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+
+                        // Get the target node (from_id for incoming edges)
+                        const right_node_id = edge.from_id;
+                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+
+                        // Filter right node by labels
+                        if (right_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (right_node_ptr.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        // Build environment with matched elements
                         var env_count: usize = 0;
                         if (left_node_var != null) env_count += 1;
                         if (rel_var != null) env_count += 1;
@@ -5845,22 +6156,21 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 } else {
                     // Standard single-hop edge traversal
-                    // CANARY: REQ=REQ-GQL-REL-DIRECTION-001; FEATURE="RelationshipDirection"; ASPECT=NonAggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-                    // Get edges based on direction - use getEdgesTo for incoming edges (<-), getEdgesFrom for outgoing (->)
-                    const edges = if (rel_direction == 'l')
-                        store.getEdgesTo(left_node.id)
-                    else
-                        store.getEdgesFrom(left_node.id);
+                    // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SingleHopEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
+                    // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
+                    const outgoing_edges_std = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
+                    const incoming_edges_std = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
                     // Note: edges are allocated by store's allocator, don't free here
 
-                    for (edges) |edge| {
+                    // Process outgoing edges (use to_id as target)
+                    for (outgoing_edges_std) |edge| {
                         // Filter by relationship type if specified
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
 
-                        // Get the target node based on direction
-                        const right_node_id = if (rel_direction == 'l') edge.from_id else edge.to_id;
+                        // Get the target node (to_id for outgoing edges)
+                        const right_node_id = edge.to_id;
                         const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
 
                         // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
@@ -6102,6 +6412,247 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             }
                         } else {
                             // Evaluate return items directly
+                            row = try allocator.alloc(Value, items.len);
+                            for (items, 0..) |item, i| {
+                                row[i] = try eval.evalExpr(allocator, item.expr, env);
+                            }
+                        }
+
+                        allocator.free(env_names);
+                        allocator.free(env_values);
+
+                        try rows.append(allocator, row);
+                    }
+
+                    // Process incoming edges (use from_id as target) - for undirected patterns
+                    for (incoming_edges_std) |edge| {
+                        // Filter by relationship type if specified
+                        if (rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+
+                        // Get the target node (from_id for incoming edges)
+                        const right_node_id = edge.from_id;
+                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+
+                        // Filter right node by labels if specified
+                        if (right_labels.len > 0) {
+                            var has_all_labels = true;
+                            for (right_labels) |required_label| {
+                                var found = false;
+                                for (right_node_ptr.labels) |node_label| {
+                                    if (std.mem.eql(u8, required_label, node_label)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    has_all_labels = false;
+                                    break;
+                                }
+                            }
+                            if (!has_all_labels) continue;
+                        }
+
+                        // Filter right node by inline properties if specified
+                        if (right_props) |props| {
+                            var passes_props = true;
+                            for (props) |prop| {
+                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = switch (node_prop_val) {
+                                        .Null => Value{ .Null = {} },
+                                        .Bool => |b| Value{ .Bool = b },
+                                        .Int => |i| Value{ .Int = i },
+                                        .String => |s| Value{ .Str = s },
+                                        .Float => |f| Value{ .Double = f },
+                                        .ExtValue => |ext| Value{ .ExtValue = ext },
+                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+                                    };
+                                    const prop_env = eval.Env{
+                                        .names = param_names,
+                                        .values = param_values,
+                                        .allocator = allocator,
+                                    };
+                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                                        passes_props = false;
+                                        break;
+                                    };
+                                    if (!valuesEqual(node_val, prop_val)) {
+                                        passes_props = false;
+                                        break;
+                                    }
+                                } else {
+                                    passes_props = false;
+                                    break;
+                                }
+                            }
+                            if (!passes_props) continue;
+                        }
+
+                        // Create environment with all matched elements
+                        var env_count: usize = 0;
+                        if (left_node_var != null) env_count += 1;
+                        if (rel_var != null) env_count += 1;
+                        if (right_node_var != null) env_count += 1;
+
+                        const env_names = try allocator.alloc([]const u8, env_count);
+                        const env_values = try allocator.alloc(Value, env_count);
+
+                        var env_idx: usize = 0;
+                        if (left_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = left_node };
+                            env_idx += 1;
+                        }
+                        if (rel_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            const edge_ptr = store.edges.getPtr(edge.id) orelse {
+                                env_values[env_idx] = Value{ .Null = {} };
+                                env_idx += 1;
+                                continue;
+                            };
+                            env_values[env_idx] = Value{ .Edge = edge_ptr };
+                            env_idx += 1;
+                        }
+                        if (right_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
+                            env_idx += 1;
+                        }
+
+                        const env = Env{
+                            .names = env_names,
+                            .values = env_values,
+                            .param_names = param_names,
+                            .param_values = param_values,
+                            .allocator = allocator,
+                            .owned = true,
+                        };
+
+                        // Evaluate WHERE clause if present
+                        if (q.where_clause) |where_expr| {
+                            const where_result = try eval.evalExpr(allocator, where_expr, env);
+                            const passes_where = switch (where_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                .Int => |i| i != 0,
+                                else => false,
+                            };
+
+                            if (!passes_where) {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                continue;
+                            }
+                        }
+
+                        // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
+                        if (q.filter_clause) |filter_expr| {
+                            const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                            const passes_filter = switch (filter_result) {
+                                .Bool => |b| b,
+                                .Null => false,
+                                .Int => |i| i != 0,
+                                else => false,
+                            };
+
+                            if (!passes_filter) {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                continue;
+                            }
+                        }
+
+                        // Apply SET clauses if present
+                        for (q.set_clauses) |set_clause| {
+                            switch (set_clause) {
+                                .Property => |prop| {
+                                    if (rel_var != null and std.mem.eql(u8, prop.target.object, rel_var.?)) {
+                                        const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                                        const value = try eval.evalExpr(allocator, prop.value, env);
+                                        const prop_value = switch (value) {
+                                            .Str => |s| blk: {
+                                                const final_value = try encryptEdgePropertyIfNeeded(
+                                                    allocator,
+                                                    edge_ptr.label,
+                                                    prop.target.property,
+                                                    s,
+                                                    edge_ptr.id,
+                                                );
+                                                break :blk graph_store.PropertyValue{ .String = final_value };
+                                            },
+                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                            else => graph_store.PropertyValue{ .Null = {} },
+                                        };
+                                        try store.setEdgeProperty(edge_ptr.id, prop.target.property, prop_value);
+                                    } else if (left_node_var != null and std.mem.eql(u8, prop.target.object, left_node_var.?)) {
+                                        const value = try eval.evalExpr(allocator, prop.value, env);
+                                        const prop_value = switch (value) {
+                                            .Str => |s| blk: {
+                                                const final_value = try encryptPropertyIfNeeded(
+                                                    allocator,
+                                                    left_node.labels,
+                                                    prop.target.property,
+                                                    s,
+                                                    left_node.id,
+                                                );
+                                                break :blk graph_store.PropertyValue{ .String = final_value };
+                                            },
+                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                            else => graph_store.PropertyValue{ .Null = {} },
+                                        };
+                                        try store.setNodeProperty(left_node.id, prop.target.property, prop_value);
+                                    } else if (right_node_var != null and std.mem.eql(u8, prop.target.object, right_node_var.?)) {
+                                        const value = try eval.evalExpr(allocator, prop.value, env);
+                                        const prop_value = switch (value) {
+                                            .Str => |s| blk: {
+                                                const final_value = try encryptPropertyIfNeeded(
+                                                    allocator,
+                                                    right_node_ptr.labels,
+                                                    prop.target.property,
+                                                    s,
+                                                    right_node_ptr.id,
+                                                );
+                                                break :blk graph_store.PropertyValue{ .String = final_value };
+                                            },
+                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
+                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
+                                            else => graph_store.PropertyValue{ .Null = {} },
+                                        };
+                                        try store.setNodeProperty(right_node_ptr.id, prop.target.property, prop_value);
+                                    }
+                                },
+                                .Labels => |label_set| {
+                                    if (left_node_var != null and std.mem.eql(u8, label_set.node, left_node_var.?)) {
+                                        for (label_set.labels) |label| {
+                                            try store.addNodeLabel(left_node.id, label);
+                                        }
+                                    } else if (right_node_var != null and std.mem.eql(u8, label_set.node, right_node_var.?)) {
+                                        for (label_set.labels) |label| {
+                                            try store.addNodeLabel(right_node_ptr.id, label);
+                                        }
+                                    }
+                                },
+                                .AllProperties => {},
+                            }
+                        }
+
+                        // Build row for result
+                        var row: []Value = undefined;
+                        if (has_with) {
+                            row = try allocator.alloc(Value, env_values.len);
+                            for (env_values, 0..) |val, i| {
+                                row[i] = val;
+                            }
+                        } else {
                             row = try allocator.alloc(Value, items.len);
                             for (items, 0..) |item, i| {
                                 row[i] = try eval.evalExpr(allocator, item.expr, env);

@@ -2167,7 +2167,6 @@ REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,,,engine,2025-1
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,,,distributed,2025-09-25,src/distributed/raft_persistent.zig
 REQ-GQL-REGEX-FIX-001,RegexMatching,OverflowPrevention,TESTED,,,eval,2026-01-09,src/eval.zig
 REQ-GQL-REL-AGG-NO-GROUPBY-001,RelationshipAggregationNoGroupBy,EdgeCollection,TESTED,,,execution,2025-12-28,src/execution/match_operations.zig
-REQ-GQL-REL-DIRECTION-001,RelationshipDirection,NonAggregation,TESTED,,,engine,2025-12-23,src/execution/match_operations.zig
 REQ-GQL-S3-001,S3 Cloud Backups,Storage,TESTED,,,storage,2026-01-17,src/storage/s3_backup.zig
 REQ-GQL-S3-001,S3CloudBackups,Storage,TESTED,,,storage,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GQL-SEC-KEYROT-001,KeyRotation,SECURITY,TESTED,,,security,2026-01-15,src/security/key_rotation.zig
@@ -2286,6 +2285,12 @@ REQ-GQL-TRIANGLE-COUNT-001,TriangleCounting,Statistics,TESTED,,,graph,2026-01-03
 REQ-GQL-TYPE-CONV-001,TypeConversionFunctions,Functionality,TESTED,,,eval,2025-01-05,docs/TYPE_CONVERSION_FUNCTIONS.md
 REQ-GQL-TYPE-CONV-001,TypeConversionFunctions,Functionality,TESTED,,,eval,"2025-01-05""",tests/type_conversion_functions_regression_test.sh
 REQ-GQL-TYPES,NetworkTypes,Implementation,TESTED,,,types-team,2025-10-03,src/types/network.zig
+REQ-GQL-UNDIRECTED-PATTERN-001,UndirectedPatternMatch,AggregationEdgeTraversal,TESTED,,,engine,2026-01-29,src/execution/match_operations.zig
+REQ-GQL-UNDIRECTED-PATTERN-001,UndirectedPatternMatch,DirectionHandling,TESTED,,,engine,2026-01-29,src/execution/match_operations.zig
+REQ-GQL-UNDIRECTED-PATTERN-001,UndirectedPatternMatch,GroupByEdgeTraversal,TESTED,,,engine,2026-01-29,src/execution/match_operations.zig
+REQ-GQL-UNDIRECTED-PATTERN-001,UndirectedPatternMatch,SingleHopEdgeTraversal,TESTED,,,engine,2026-01-29,src/execution/match_operations.zig
+REQ-GQL-UNDIRECTED-PATTERN-001,UndirectedPatternMatch,SubsequentChains,TESTED,,,engine,2026-01-29,src/execution/match_operations.zig
+REQ-GQL-UNDIRECTED-PATTERN-001,UndirectedPatternMatch,Testing,TESTED,,,engine,2026-01-29,geodetestlab/specs/undirected_pattern_matching.yml
 REQ-GQL-UNICODE-002,UnicodeTableGenerator,Tooling,TESTED,,,unicode,2025-09-27,tools/gen_unicode_tables.zig
 REQ-GQL-UNICODE-003,UnicodeGeneratedTables,Decomposition,TESTED,,,unicode,2026-01-15,src/unicode/generated/README.md
 REQ-GQL-UNICODE-003,UnicodeGeneratedTables,Decomposition,TESTED,,,unicode,"2025-09-27\n"")",tools/gen_unicode_tables.zig
