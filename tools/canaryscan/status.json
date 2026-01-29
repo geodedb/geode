@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-01-29T03:15:31.803716817Z",
+  "generated_at": "2026-01-29T03:17:18.565751077Z",
   "requirements": [
     {
       "id": "<req-id>",
@@ -5273,11 +5273,11 @@
           "aspect": "MathFunctions",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_batch4_comprehensive.zig"
+            "../../tests/test_gap_0193_batch3_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "builtins",
+          "owner": "functions",
           "updated": "2026-01-16"
         },
         {
@@ -5285,11 +5285,11 @@
           "aspect": "MathFunctions",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_batch3_comprehensive.zig"
+            "../../tests/test_gap_0193_batch4_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "functions",
+          "owner": "builtins",
           "updated": "2026-01-16"
         }
       ]
@@ -8265,24 +8265,24 @@
           "aspect": "CREATE",
           "status": "EXEMPT",
           "files": [
-            "../../src/execution/statement_dispatcher.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-10"
-        },
-        {
-          "feature": "ConstraintExecution",
-          "aspect": "CREATE",
-          "status": "EXEMPT",
-          "files": [
             "../../src/execution.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-09"
+        },
+        {
+          "feature": "ConstraintExecution",
+          "aspect": "CREATE",
+          "status": "EXEMPT",
+          "files": [
+            "../../src/execution/statement_dispatcher.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-10"
         }
       ]
     },
@@ -12863,6 +12863,18 @@
           "aspect": "Migration",
           "status": "TESTED",
           "files": [
+            "../../src/admin/fle_commands.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-01-16"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Migration",
+          "status": "TESTED",
+          "files": [
             "../../tests/test_gap_0193_high_priority.zig"
           ],
           "tests": [
@@ -12871,18 +12883,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "FieldLevelEncryption",
-          "aspect": "Migration",
-          "status": "TESTED",
-          "files": [
-            "../../src/admin/fle_commands.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-16"
         }
       ]
     },
@@ -18207,22 +18207,6 @@
           "aspect": "PredicateRangeDetection",
           "status": "BENCHED",
           "files": [
-            "../../src/transactions/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomDetection"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope"
-          ],
-          "owner": "txn",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "MVCC Phantom Prevention",
-          "aspect": "PredicateRangeDetection",
-          "status": "BENCHED",
-          "files": [
             "../../tests/canary_txn_phantom_anomaly.zig"
           ],
           "tests": [
@@ -18236,17 +18220,19 @@
         },
         {
           "feature": "MVCC Phantom Prevention",
-          "aspect": "RangeTracker",
-          "status": "TESTED",
+          "aspect": "PredicateRangeDetection",
+          "status": "BENCHED",
           "files": [
-            "../../tests/canary_txn_phantom_range.zig"
+            "../../src/transactions/manager.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
+            "TestCANARY_REQ_GQL_023_PhantomDetection"
           ],
-          "benches": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope"
+          ],
           "owner": "txn",
-          "updated": "2025-09-22"
+          "updated": "2025-09-26"
         },
         {
           "feature": "MVCC Phantom Prevention",
@@ -18276,6 +18262,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
           ],
+          "owner": "txn",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "RangeTracker",
+          "status": "TESTED",
+          "files": [
+            "../../tests/canary_txn_phantom_range.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
+          ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-22"
         }
@@ -21642,6 +21642,20 @@
         {
           "feature": "Shortest Paths",
           "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "../../src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
           "status": "BENCHED",
           "files": [
             "../../tests/benchmark_unweighted_bfs_paths.zig"
@@ -21652,20 +21666,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
           ],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "../../src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
         }
@@ -21830,7 +21830,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "../../tests/benchmark_flow_edmonds_karp.zig"
+            "../../src/graph/flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -21846,7 +21846,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "../../src/graph/flow_edmonds_karp.zig"
+            "../../tests/benchmark_flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -22963,20 +22963,6 @@
           "aspect": "AdaptiveEstimatorBias",
           "status": "TESTED",
           "files": [
-            "../../tests/debug/test_cost_model_adaptive_bias.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBias",
-          "status": "TESTED",
-          "files": [
             "../../src/planner/cost_seed.zig",
             "../../tests/debug/test_cost_model_adaptive_bias_parity.zig"
           ],
@@ -22986,6 +22972,20 @@
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-26"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "AdaptiveEstimatorBias",
+          "status": "TESTED",
+          "files": [
+            "../../tests/debug/test_cost_model_adaptive_bias.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-22"
         },
         {
           "feature": "Cost Model Enumeration Seed",
@@ -23118,20 +23118,6 @@
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "EstimatorPrimitives",
-          "status": "TESTED",
-          "files": [
-            "../../tests/cost_model_seed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "EstimatorPrimitives",
           "status": "BENCHED",
           "files": [
             "../../benchmarks/benchmark_cost_model_seed_variance.zig",
@@ -23143,6 +23129,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope"
           ],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "EstimatorPrimitives",
+          "status": "TESTED",
+          "files": [
+            "../../tests/cost_model_seed.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
+          ],
+          "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
         },
@@ -23778,20 +23778,6 @@
           "aspect": "ADAPTER_BRIDGE",
           "status": "TESTED",
           "files": [
-            "../../tests/canary_extended_builtins.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_082_AdapterBridgeUuidV4"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-27"
-        },
-        {
-          "feature": "ExtendedBuiltins",
-          "aspect": "ADAPTER_BRIDGE",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_extended_canary.zig"
           ],
           "tests": [
@@ -23800,6 +23786,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-26"
+        },
+        {
+          "feature": "ExtendedBuiltins",
+          "aspect": "ADAPTER_BRIDGE",
+          "status": "TESTED",
+          "files": [
+            "../../tests/canary_extended_builtins.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_082_AdapterBridgeUuidV4"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-27"
         },
         {
           "feature": "ExtendedBuiltins",
@@ -29679,20 +29679,6 @@
         {
           "feature": "MfaRecoveryCodeContention",
           "aspect": "VarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "../../benchmarks/benchmark_mfa_recovery_code_contention.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeContentionVariance"
-          ],
-          "owner": "security",
-          "updated": "2025-09-27"
-        },
-        {
-          "feature": "MfaRecoveryCodeContention",
-          "aspect": "VarianceEnvelope",
           "status": "TESTED",
           "files": [
             "../../tests/canary_mfa_recovery_code_contention.zig"
@@ -29701,6 +29687,20 @@
             "TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeContentionRatioBounds"
           ],
           "benches": [],
+          "owner": "security",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "MfaRecoveryCodeContention",
+          "aspect": "VarianceEnvelope",
+          "status": "BENCHED",
+          "files": [
+            "../../benchmarks/benchmark_mfa_recovery_code_contention.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeContentionVariance"
+          ],
           "owner": "security",
           "updated": "2025-09-27"
         },
@@ -32725,10 +32725,12 @@
           "files": [
             "../../src/storage/page_manager.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_tde_kms_integration.zig"
+          ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-12"
+          "updated": "2026-01-15"
         },
         {
           "feature": "AES256GCMOnly",
@@ -32737,12 +32739,10 @@
           "files": [
             "../../src/storage/page_manager.zig"
           ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-01-12"
         }
       ]
     },
@@ -32888,6 +32888,20 @@
         {
           "feature": "RemoteKMSPrototype",
           "aspect": "ConcurrencyStressVariance",
+          "status": "TESTED",
+          "files": [
+            "../../tests/canary_remote_kms_hardening.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "RemoteKMSPrototype",
+          "aspect": "ConcurrencyStressVariance",
           "status": "BENCHED",
           "files": [
             "../../benchmarks/benchmark_remote_kms_unwrap_concurrency.zig",
@@ -32897,20 +32911,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance"
           ],
-          "owner": "security",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "RemoteKMSPrototype",
-          "aspect": "ConcurrencyStressVariance",
-          "status": "TESTED",
-          "files": [
-            "../../tests/canary_remote_kms_hardening.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress"
-          ],
-          "benches": [],
           "owner": "security",
           "updated": "2025-09-26"
         },
@@ -33003,20 +33003,6 @@
         {
           "feature": "TDEOlptOverheadValidation",
           "aspect": "PERFORMANCE",
-          "status": "TESTED",
-          "files": [
-            "../../tests/test_tde_oltp_overhead_threshold.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold"
-          ],
-          "benches": [],
-          "owner": "perf",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "TDEOlptOverheadValidation",
-          "aspect": "PERFORMANCE",
           "status": "BENCHED",
           "files": [
             "../../benchmarks/benchmark_tde_oltp_overhead.zig"
@@ -33025,6 +33011,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_TDE_OLTP_PERF_001"
           ],
+          "owner": "perf",
+          "updated": "2025-09-26"
+        },
+        {
+          "feature": "TDEOlptOverheadValidation",
+          "aspect": "PERFORMANCE",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_tde_oltp_overhead_threshold.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold"
+          ],
+          "benches": [],
           "owner": "perf",
           "updated": "2025-09-26"
         },
@@ -34266,20 +34266,6 @@
           "aspect": "AggregationComputation",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_impl_verification.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_verification.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "AggregationComputation",
-          "status": "TESTED",
-          "files": [
             "../../src/execution.zig"
           ],
           "tests": [
@@ -34288,6 +34274,20 @@
           "benches": [],
           "owner": "execution",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "WithGroupByAggregation",
+          "aspect": "AggregationComputation",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_impl_verification.zig"
+          ],
+          "tests": [
+            "test_gap_0193_impl_verification.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-01-15"
         }
       ]
     },
@@ -37974,18 +37974,6 @@
           "aspect": "Storage",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_batch2_engine.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "crud_operations",
-          "updated": "2026-01-16"
-        },
-        {
-          "feature": "ListProperties",
-          "aspect": "Storage",
-          "status": "TESTED",
-          "files": [
             "../../src/execution/crud_operations.zig"
           ],
           "tests": [
@@ -37994,6 +37982,18 @@
           "benches": [],
           "owner": "crud_operations",
           "updated": "2025-12-27"
+        },
+        {
+          "feature": "ListProperties",
+          "aspect": "Storage",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_batch2_engine.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "crud_operations",
+          "updated": "2026-01-16"
         }
       ]
     },
@@ -40102,18 +40102,6 @@
           "aspect": "Storage",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_batch2_engine.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "crud_operations",
-          "updated": "2026-01-16"
-        },
-        {
-          "feature": "MapProperties",
-          "aspect": "Storage",
-          "status": "TESTED",
-          "files": [
             "../../src/execution/crud_operations.zig"
           ],
           "tests": [
@@ -40122,6 +40110,18 @@
           "benches": [],
           "owner": "crud_operations",
           "updated": "2026-01-09"
+        },
+        {
+          "feature": "MapProperties",
+          "aspect": "Storage",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_batch2_engine.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "crud_operations",
+          "updated": "2026-01-16"
         }
       ]
     },
@@ -41877,18 +41877,6 @@
           "aspect": "UseGraph",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_high_priority_comprehensive.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphSupport",
-          "aspect": "UseGraph",
-          "status": "TESTED",
-          "files": [
             "../../src/execution/statement_dispatcher.zig"
           ],
           "tests": [
@@ -41897,6 +41885,18 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-20"
+        },
+        {
+          "feature": "MultiGraphSupport",
+          "aspect": "UseGraph",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_high_priority_comprehensive.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         }
       ]
     },
@@ -41939,20 +41939,6 @@
           "aspect": "EdgeGraphTag",
           "status": "TESTED",
           "files": [
-            "../../src/graph_store.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "EdgeGraphTag",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority.zig",
             "../../tests/test_gap_0193_high_priority_comprehensive.zig"
           ],
@@ -41962,6 +41948,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "EdgeGraphTag",
+          "status": "TESTED",
+          "files": [
+            "../../src/graph_store.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -41982,20 +41982,6 @@
           "aspect": "NodeGraphTag",
           "status": "TESTED",
           "files": [
-            "../../src/graph_store.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "NodeGraphTag",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority_comprehensive.zig",
             "../../tests/test_gap_0193_priority_categories.zig"
           ],
@@ -42005,16 +41991,18 @@
           "updated": "2026-01-15"
         },
         {
-          "feature": "MultiGraphSupport",
-          "aspect": "CreateGraph",
+          "feature": "MultiGraphIsolation",
+          "aspect": "NodeGraphTag",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_high_priority_comprehensive.zig"
+            "../../src/graph_store.zig"
           ],
-          "tests": [],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-15"
+          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphSupport",
@@ -42029,6 +42017,18 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-20"
+        },
+        {
+          "feature": "MultiGraphSupport",
+          "aspect": "CreateGraph",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_high_priority_comprehensive.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         }
       ]
     },
@@ -42069,6 +42069,18 @@
           "aspect": "SessionGraph",
           "status": "TESTED",
           "files": [
+            "../../tests/test_gap_0193_high_priority_comprehensive.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphSupport",
+          "aspect": "SessionGraph",
+          "status": "TESTED",
+          "files": [
             "../../src/server/server_state.zig"
           ],
           "tests": [
@@ -42077,18 +42089,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-20"
-        },
-        {
-          "feature": "MultiGraphSupport",
-          "aspect": "SessionGraph",
-          "status": "TESTED",
-          "files": [
-            "../../tests/test_gap_0193_high_priority_comprehensive.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -42127,20 +42127,6 @@
           "aspect": "CreateEdge",
           "status": "TESTED",
           "files": [
-            "../../src/graph_store.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "CreateEdge",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority_comprehensive.zig",
             "../../tests/test_gap_0193_impl_verification.zig"
           ],
@@ -42150,6 +42136,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "CreateEdge",
+          "status": "TESTED",
+          "files": [
+            "../../src/graph_store.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphSupport",
@@ -42187,6 +42187,20 @@
           "aspect": "MatchFiltering",
           "status": "TESTED",
           "files": [
+            "../../src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "MatchFiltering",
+          "status": "TESTED",
+          "files": [
             "../../tests/test_gap_0193_high_priority_comprehensive.zig",
             "../../tests/test_gap_0193_impl_verification.zig"
           ],
@@ -42196,20 +42210,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "MatchFiltering",
-          "status": "TESTED",
-          "files": [
-            "../../src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -42259,6 +42259,18 @@
           "files": [
             "../../tests/test_gap_0193_high_priority_comprehensive.zig",
             "../../tests/test_gap_0193_priority_categories.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphSupport",
+          "aspect": "ServerHandler",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_high_priority_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
@@ -42278,18 +42290,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-20"
-        },
-        {
-          "feature": "MultiGraphSupport",
-          "aspect": "ServerHandler",
-          "status": "TESTED",
-          "files": [
-            "../../tests/test_gap_0193_high_priority_comprehensive.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -42301,27 +42301,27 @@
           "aspect": "EdgeGraphNameLoad",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_high_priority_comprehensive.zig",
-            "../../tests/test_gap_0193_priority_categories.zig"
+            "../../src/graph_store.zig"
           ],
-          "tests": [],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-15"
+          "updated": "2025-12-24"
         },
         {
           "feature": "MultiGraphIsolation",
           "aspect": "EdgeGraphNameLoad",
           "status": "TESTED",
           "files": [
-            "../../src/graph_store.zig"
+            "../../tests/test_gap_0193_high_priority_comprehensive.zig",
+            "../../tests/test_gap_0193_priority_categories.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-12-24"
+          "updated": "2026-01-15"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -42349,6 +42349,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-24"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "NodeFiltering",
+          "status": "TESTED",
+          "files": [
+            "../../src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -42364,20 +42378,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "NodeFiltering",
-          "status": "TESTED",
-          "files": [
-            "../../src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
         }
       ]
     },
@@ -42435,20 +42435,6 @@
           "aspect": "OptionalMatchFiltering",
           "status": "TESTED",
           "files": [
-            "../../src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "OptionalMatchFiltering",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority.zig"
           ],
           "tests": [
@@ -42457,6 +42443,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "OptionalMatchFiltering",
+          "status": "TESTED",
+          "files": [
+            "../../src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
         }
       ]
     },
@@ -42480,20 +42480,6 @@
           "aspect": "MatchCallFiltering",
           "status": "TESTED",
           "files": [
-            "../../src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "MatchCallFiltering",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority.zig"
           ],
           "tests": [
@@ -42502,6 +42488,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "MatchCallFiltering",
+          "status": "TESTED",
+          "files": [
+            "../../src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
         }
       ]
     },
@@ -42570,20 +42570,6 @@
           "aspect": "QueryExecution",
           "status": "TESTED",
           "files": [
-            "../../src/execution/query_execution.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "QueryExecution",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_impl_verification.zig"
           ],
           "tests": [
@@ -42592,26 +42578,26 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "QueryExecution",
+          "status": "TESTED",
+          "files": [
+            "../../src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
         }
       ]
     },
     {
       "id": "REQ-MULTI-GRAPH-013",
       "features": [
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "MatchCreate",
-          "status": "TESTED",
-          "files": [
-            "../../tests/test_gap_0193_high_priority.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
         {
           "feature": "MultiGraphIsolation",
           "aspect": "MatchCreate",
@@ -42625,6 +42611,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "MatchCreate",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_high_priority.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -42660,6 +42660,20 @@
           "aspect": "ValuesMatch",
           "status": "TESTED",
           "files": [
+            "../../src/execution/statement_handlers.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "ValuesMatch",
+          "status": "TESTED",
+          "files": [
             "../../tests/test_gap_0193_high_priority.zig",
             "../../tests/test_gap_0193_priority_categories.zig"
           ],
@@ -42669,40 +42683,12 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "ValuesMatch",
-          "status": "TESTED",
-          "files": [
-            "../../src/execution/statement_handlers.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
         }
       ]
     },
     {
       "id": "REQ-MULTI-GRAPH-015",
       "features": [
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "CreateQuery",
-          "status": "TESTED",
-          "files": [
-            "../../src/execution/crud_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
         {
           "feature": "MultiGraphIsolation",
           "aspect": "CreateQuery",
@@ -42716,6 +42702,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "CreateQuery",
+          "status": "TESTED",
+          "files": [
+            "../../src/execution/crud_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -42820,20 +42820,6 @@
           "aspect": "CreateForBatchWithTracking",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_high_priority.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "CreateForBatchWithTracking",
-          "status": "TESTED",
-          "files": [
             "../../src/execution/crud_operations.zig"
           ],
           "tests": [
@@ -42842,6 +42828,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "CreateForBatchWithTracking",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_high_priority.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -42865,20 +42865,6 @@
           "aspect": "ExecuteCreate",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_high_priority.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "ExecuteCreate",
-          "status": "TESTED",
-          "files": [
             "../../src/execution/crud_operations.zig"
           ],
           "tests": [
@@ -42887,6 +42873,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "ExecuteCreate",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_high_priority.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -42979,20 +42979,6 @@
           "aspect": "ExecuteMerge",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_impl_verification.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_verification.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "ExecuteMerge",
-          "status": "TESTED",
-          "files": [
             "../../src/execution/crud_operations.zig"
           ],
           "tests": [
@@ -43001,6 +42987,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "ExecuteMerge",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_impl_verification.zig"
+          ],
+          "tests": [
+            "test_gap_0193_impl_verification.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -43082,20 +43082,6 @@
           "aspect": "RelPatternFilter",
           "status": "TESTED",
           "files": [
-            "../../src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "RelPatternFilter",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority.zig"
           ],
           "tests": [
@@ -43104,6 +43090,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "RelPatternFilter",
+          "status": "TESTED",
+          "files": [
+            "../../src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -43208,20 +43208,6 @@
           "aspect": "SessionStateContext",
           "status": "TESTED",
           "files": [
-            "../../src/server/quic_connection_handler.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "SessionStateContext",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority.zig"
           ],
           "tests": [
@@ -43230,6 +43216,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "SessionStateContext",
+          "status": "TESTED",
+          "files": [
+            "../../src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -43358,20 +43358,6 @@
           "aspect": "StreamStateGraph",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_high_priority.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "StreamStateGraph",
-          "status": "TESTED",
-          "files": [
             "../../src/cli/main.zig"
           ],
           "tests": [
@@ -43380,6 +43366,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "StreamStateGraph",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_high_priority.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         }
       ]
     },
@@ -43509,20 +43509,6 @@
           "aspect": "DropGraphReset",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_high_priority.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "repl",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "DropGraphReset",
-          "status": "TESTED",
-          "files": [
             "../../src/client/repl/repl_dispatch.zig"
           ],
           "tests": [
@@ -43531,6 +43517,20 @@
           "benches": [],
           "owner": "repl",
           "updated": "2025-12-23"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "DropGraphReset",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_high_priority.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "repl",
+          "updated": "2026-01-15"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -43684,20 +43684,6 @@
           "aspect": "DeleteGraphFilter",
           "status": "TESTED",
           "files": [
-            "../../src/execution/crud_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-24"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "DeleteGraphFilter",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority.zig"
           ],
           "tests": [
@@ -43706,6 +43692,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "DeleteGraphFilter",
+          "status": "TESTED",
+          "files": [
+            "../../src/execution/crud_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-24"
         }
       ]
     },
@@ -46407,11 +46407,11 @@
           "aspect": "QueryPerformance",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_batch3_comprehensive.zig"
+            "../../tests/test_gap_0193_batch4_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "performance",
+          "owner": "perf",
           "updated": "2026-01-16"
         },
         {
@@ -46419,11 +46419,11 @@
           "aspect": "QueryPerformance",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_batch4_comprehensive.zig"
+            "../../tests/test_gap_0193_batch3_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "perf",
+          "owner": "performance",
           "updated": "2026-01-16"
         }
       ]
@@ -55624,6 +55624,20 @@
           "aspect": "UndoLogCore",
           "status": "TESTED",
           "files": [
+            "../../src/txn_undo_log.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "UndoLogCore",
+          "status": "TESTED",
+          "files": [
             "../../tests/test_gap_0193_high_priority.zig",
             "../../tests/test_gap_0193_high_priority_comprehensive.zig",
             "../../tests/test_gap_0193_priority_categories.zig"
@@ -55634,20 +55648,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "UndoLogCore",
-          "status": "TESTED",
-          "files": [
-            "../../src/txn_undo_log.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         }
       ]
     },
@@ -55708,6 +55708,20 @@
           "aspect": "LibExport",
           "status": "TESTED",
           "files": [
+            "../../src/lib.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "LibExport",
+          "status": "TESTED",
+          "files": [
             "../../tests/test_gap_0193_high_priority.zig",
             "../../tests/test_gap_0193_high_priority_comprehensive.zig",
             "../../tests/test_gap_0193_priority_categories.zig"
@@ -55718,20 +55732,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "LibExport",
-          "status": "TESTED",
-          "files": [
-            "../../src/lib.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         },
         {
           "feature": "TransactionUndoLog",
@@ -55771,6 +55771,20 @@
           "aspect": "ExecutionImport",
           "status": "TESTED",
           "files": [
+            "../../src/execution.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "ExecutionImport",
+          "status": "TESTED",
+          "files": [
             "../../tests/test_gap_0193_high_priority.zig",
             "../../tests/test_gap_0193_high_priority_comprehensive.zig"
           ],
@@ -55780,10 +55794,15 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
+        }
+      ]
+    },
+    {
+      "id": "REQ-TXN-UNDO-005",
+      "features": [
         {
           "feature": "TransactionUndoLog",
-          "aspect": "ExecutionImport",
+          "aspect": "BeginTransaction",
           "status": "TESTED",
           "files": [
             "../../src/execution.zig"
@@ -55794,12 +55813,7 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-23"
-        }
-      ]
-    },
-    {
-      "id": "REQ-TXN-UNDO-005",
-      "features": [
+        },
         {
           "feature": "TransactionUndoLog",
           "aspect": "BeginTransaction",
@@ -55815,20 +55829,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "BeginTransaction",
-          "status": "TESTED",
-          "files": [
-            "../../src/execution.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         }
       ]
     },
@@ -55875,20 +55875,6 @@
           "aspect": "RollbackTransaction",
           "status": "TESTED",
           "files": [
-            "../../src/execution.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "RollbackTransaction",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority.zig",
             "../../tests/test_gap_0193_high_priority_comprehensive.zig",
             "../../tests/test_gap_0193_priority_categories.zig"
@@ -55899,6 +55885,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "RollbackTransaction",
+          "status": "TESTED",
+          "files": [
+            "../../src/execution.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
         }
       ]
     },
@@ -55944,6 +55944,20 @@
           "aspect": "LogCreateNode",
           "status": "TESTED",
           "files": [
+            "../../src/execution/crud_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "LogCreateNode",
+          "status": "TESTED",
+          "files": [
             "../../tests/test_gap_0193_high_priority.zig",
             "../../tests/test_gap_0193_high_priority_comprehensive.zig",
             "../../tests/test_gap_0193_priority_categories.zig"
@@ -55954,20 +55968,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "LogCreateNode",
-          "status": "TESTED",
-          "files": [
-            "../../src/execution/crud_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         }
       ]
     },
@@ -56300,20 +56300,6 @@
           "aspect": "ServerIntegration",
           "status": "TESTED",
           "files": [
-            "../../tests/test_gap_0193_high_priority.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "ServerIntegration",
-          "status": "TESTED",
-          "files": [
             "../../src/server/transaction_handlers.zig"
           ],
           "tests": [
@@ -56322,6 +56308,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "ServerIntegration",
+          "status": "TESTED",
+          "files": [
+            "../../tests/test_gap_0193_high_priority.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         }
       ]
     },
@@ -56531,20 +56531,6 @@
           "aspect": "GraphStorageRemoveEdge",
           "status": "TESTED",
           "files": [
-            "../../src/types/graph_common.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "GraphStorageRemoveEdge",
-          "status": "TESTED",
-          "files": [
             "../../tests/test_gap_0193_high_priority.zig"
           ],
           "tests": [
@@ -56553,6 +56539,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "GraphStorageRemoveEdge",
+          "status": "TESTED",
+          "files": [
+            "../../src/types/graph_common.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
         }
       ]
     },
